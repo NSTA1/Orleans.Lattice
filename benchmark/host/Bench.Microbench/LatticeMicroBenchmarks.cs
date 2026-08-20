@@ -1430,12 +1430,13 @@ public class LatticeMicroBenchmarks
     /// <summary>
     /// Single <see cref="PnCounter.Merge(PnCounter, PnCounter)"/> of two
     /// identity-stable concurrent-replica states pre-built in the field
-    /// initialisers. <see cref="PnCounter.Merge"/> clones the left side and
-    /// folds the right in through <c>MergeFrom</c>; the clone uses the
-    /// dictionary copy constructor, presizing each backing store to the
-    /// source count exactly and bulk-copying rather than paying the
-    /// incremental <c>Resize()</c> grows the previous entry-by-entry fill
-    /// incurred. The inputs are never mutated, so the measured per-iteration
+    /// initialisers. <see cref="PnCounter.Merge"/> seeds each side from the
+    /// left operand via the dictionary copy constructor (presizing each
+    /// backing store to the source count exactly and bulk-copying rather than
+    /// paying the incremental <c>Resize()</c> grows the previous entry-by-entry
+    /// fill incurred) and folds the right in, handing the two merged stores to
+    /// a direct-assign constructor so no discarded empty-collection shell is
+    /// allocated. The inputs are never mutated, so the measured per-iteration
     /// allocation is the steady-state cost of one counter merge. Surfaced as
     /// <c>microbench_crdt_pncounter_merge_alloc_b</c>.
     /// </summary>
@@ -3797,7 +3798,10 @@ public class LatticeMicroBenchmarks
     /// allocation that <see cref="OrSet.Merge"/> pays on every fold via its
     /// internal <c>left.Clone()</c>. Presizing the two backing dictionaries to
     /// the source key counts removes the intermediate rehash grows the former
-    /// entry-by-entry fill paid, which this benchmark isolates from the fold.
+    /// entry-by-entry fill paid, and handing the filled dictionaries to a
+    /// direct-assign constructor removes the two discarded empty-collection
+    /// shells the former object initializer allocated - which this benchmark
+    /// isolates from the fold.
     /// </summary>
     [Benchmark(Description = "Crdt orset clone")]
     public OrSet OrSet_Clone() => _orSetLeft.Clone();
@@ -4249,10 +4253,12 @@ public class LatticeMicroBenchmarks
 
     /// <summary>
     /// Allocating pointwise-max merge of two multi-replica <see cref="GCounter"/>s.
-    /// <see cref="GCounter.Merge"/> clones the left operand and folds the right
-    /// in via the single-probe <c>GetValueRefOrAddDefault</c> pointwise-max -
-    /// the same fold surface <see cref="PnCounter"/> uses, so the two merge
-    /// instruments are directly comparable.
+    /// <see cref="GCounter.Merge"/> seeds the merged store from the left operand
+    /// via the dictionary copy constructor and folds the right in via the
+    /// single-probe <c>GetValueRefOrAddDefault</c> pointwise-max - the same fold
+    /// surface <see cref="PnCounter"/> uses, so the two merge instruments are
+    /// directly comparable. The merged store is handed to a direct-assign
+    /// constructor, so the merge allocates no discarded empty-collection shell.
     /// </summary>
     [Benchmark(Description = "Crdt gcounter merge")]
     public GCounter GCounter_Merge() => GCounter.Merge(_gCounterLeft, _gCounterRight);

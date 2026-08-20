@@ -41,14 +41,31 @@ public sealed class OrSet : ICrdt<OrSet>
     /// dot list (after subtracting <see cref="Tombstones"/>) is non-empty.
     /// </summary>
     [Id(0)]
-    public Dictionary<string, List<OrSetDot>> Adds { get; set; } = [];
+    public Dictionary<string, List<OrSetDot>> Adds { get; set; }
 
     /// <summary>
     /// Observed-remove dots, keyed identically to <see cref="Adds"/>. A dot
     /// in this map cancels the matching dot in <see cref="Adds"/> on merge.
     /// </summary>
     [Id(1)]
-    public Dictionary<string, List<OrSetDot>> Tombstones { get; set; } = [];
+    public Dictionary<string, List<OrSetDot>> Tombstones { get; set; }
+
+    /// <summary>Creates an empty observed-remove set.</summary>
+    public OrSet()
+    {
+        Adds = [];
+        Tombstones = [];
+    }
+
+    // Direct-assign constructor for the clone fast path: takes ownership of
+    // already-built backing stores so the clone allocates no discarded
+    // empty-collection shells from field initializers that an object
+    // initializer would immediately overwrite.
+    private OrSet(Dictionary<string, List<OrSetDot>> adds, Dictionary<string, List<OrSetDot>> tombstones)
+    {
+        Adds = adds;
+        Tombstones = tombstones;
+    }
 
     /// <summary>Returns <c>true</c> when no element has any live (un-tombstoned) dot.</summary>
     public bool IsEmpty
@@ -295,14 +312,13 @@ public sealed class OrSet : ICrdt<OrSet>
         // per-key dot-list copies are unchanged. Clone is on the OrSet.Merge
         // hot path (Merge clones the left operand before folding), so the
         // eliminated resize grows are paid on every replicated OR-set reconcile.
-        var copy = new OrSet
-        {
-            Adds = new Dictionary<string, List<OrSetDot>>(Adds.Count),
-            Tombstones = new Dictionary<string, List<OrSetDot>>(Tombstones.Count),
-        };
-        foreach (var (key, dots) in Adds) copy.Adds[key] = [.. dots];
-        foreach (var (key, dots) in Tombstones) copy.Tombstones[key] = [.. dots];
-        return copy;
+        // The direct-assign constructor takes the filled dictionaries as-is, so
+        // the clone allocates no discarded empty-collection shells.
+        var adds = new Dictionary<string, List<OrSetDot>>(Adds.Count);
+        foreach (var (key, dots) in Adds) adds[key] = [.. dots];
+        var tombstones = new Dictionary<string, List<OrSetDot>>(Tombstones.Count);
+        foreach (var (key, dots) in Tombstones) tombstones[key] = [.. dots];
+        return new OrSet(adds, tombstones);
     }
 
     /// <summary>

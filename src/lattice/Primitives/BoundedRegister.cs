@@ -146,11 +146,18 @@ public sealed class BoundedRegister : ICrdt<BoundedRegister>
         FoldCandidate(other.Value!, other.OrderKey!);
     }
 
-    /// <summary>Creates a deep, independent copy of this register.</summary>
+    /// <summary>
+    /// Creates a copy of this register. The value and order-key byte arrays are
+    /// referenced as-is, not deep-copied: they are treated as immutable
+    /// throughout this type (<see cref="Set"/> and the delta fold store the
+    /// caller's arrays by reference and never mutate them in place), so sharing
+    /// the references yields an equivalent, independent register without the two
+    /// defensive array allocations a deep copy would cost on every clone / merge.
+    /// </summary>
     public BoundedRegister Clone() => new()
     {
-        Value = Value is null ? null : (byte[])Value.Clone(),
-        OrderKey = OrderKey is null ? null : (byte[])OrderKey.Clone(),
+        Value = Value,
+        OrderKey = OrderKey,
         HasValue = HasValue,
         IsMin = IsMin,
     };

@@ -16,11 +16,28 @@ public sealed class PnCounter : ICrdt<PnCounter>
 {
     /// <summary>Per-replica cumulative positive component.</summary>
     [Id(0)]
-    public Dictionary<string, long> Increments { get; set; } = [];
+    public Dictionary<string, long> Increments { get; set; }
 
     /// <summary>Per-replica cumulative negative component.</summary>
     [Id(1)]
-    public Dictionary<string, long> Decrements { get; set; } = [];
+    public Dictionary<string, long> Decrements { get; set; }
+
+    /// <summary>Creates an empty positive-negative counter.</summary>
+    public PnCounter()
+    {
+        Increments = [];
+        Decrements = [];
+    }
+
+    // Direct-assign constructor for the clone/merge fast paths: takes ownership
+    // of already-built backing stores so the factory allocates exactly two
+    // dictionaries, with no discarded empty-collection shells from field
+    // initializers that an object initializer would immediately overwrite.
+    private PnCounter(Dictionary<string, long> increments, Dictionary<string, long> decrements)
+    {
+        Increments = increments;
+        Decrements = decrements;
+    }
 
     /// <inheritdoc />
     /// <remarks>
@@ -78,9 +95,23 @@ public sealed class PnCounter : ICrdt<PnCounter>
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var result = left.Clone();
-        result.MergeFrom(right);
-        return result;
+
+        // Seed each side from the left operand via the dictionary copy constructor
+        // (presizes to left.Count exactly and bulk-copies), then fold the right in.
+        // The direct-assign constructor takes the merged stores as-is, so the merge
+        // allocates no discarded empty-collection shells. Cloning left keeps each
+        // side right-sized when the operands share replicas - the common case -
+        // rather than presizing to the disjoint upper bound.
+        return new PnCounter(
+            MergeSides(left.Increments, right.Increments),
+            MergeSides(left.Decrements, right.Decrements));
+    }
+
+    private static Dictionary<string, long> MergeSides(Dictionary<string, long> left, Dictionary<string, long> right)
+    {
+        var merged = new Dictionary<string, long>(left);
+        MergeSide(merged, right);
+        return merged;
     }
 
     /// <summary>
@@ -103,12 +134,12 @@ public sealed class PnCounter : ICrdt<PnCounter>
         // source Count exactly and bulk-copies the entries, eliminating the
         // incremental Resize() grows the previous entry-by-entry fill paid as
         // replica components accumulated. string keys and long values are
-        // immutable, so the shallow per-entry copy is a deep copy.
-        new()
-        {
-            Increments = new Dictionary<string, long>(Increments),
-            Decrements = new Dictionary<string, long>(Decrements),
-        };
+        // immutable, so the shallow per-entry copy is a deep copy. The
+        // direct-assign constructor takes the copies as-is, so the clone
+        // allocates exactly two dictionaries with no discarded shells.
+        new(
+            new Dictionary<string, long>(Increments),
+            new Dictionary<string, long>(Decrements));
 
     /// <summary>
     /// Folds a <see cref="PnCounterDelta"/> into this counter: every

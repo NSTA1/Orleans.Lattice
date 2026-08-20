@@ -52,7 +52,7 @@ public sealed class RwSet : ICrdt<RwSet>
     /// grow-only and are never cancelled (the remove side gates membership).
     /// </summary>
     [Id(0)]
-    public Dictionary<string, List<OrSetDot>> Adds { get; set; } = [];
+    public Dictionary<string, List<OrSetDot>> Adds { get; set; }
 
     /// <summary>
     /// Per-element remove dots, keyed identically to <see cref="Adds"/>. A
@@ -60,7 +60,7 @@ public sealed class RwSet : ICrdt<RwSet>
     /// it via <see cref="Tombstones"/>.
     /// </summary>
     [Id(1)]
-    public Dictionary<string, List<OrSetDot>> Removes { get; set; } = [];
+    public Dictionary<string, List<OrSetDot>> Removes { get; set; }
 
     /// <summary>
     /// Per-element observed-add tombstones: remove dots that an
@@ -69,7 +69,29 @@ public sealed class RwSet : ICrdt<RwSet>
     /// merge.
     /// </summary>
     [Id(2)]
-    public Dictionary<string, List<OrSetDot>> Tombstones { get; set; } = [];
+    public Dictionary<string, List<OrSetDot>> Tombstones { get; set; }
+
+    /// <summary>Creates an empty remove-wins set.</summary>
+    public RwSet()
+    {
+        Adds = [];
+        Removes = [];
+        Tombstones = [];
+    }
+
+    // Direct-assign constructor for the clone fast path: takes ownership of
+    // already-built backing stores so the clone allocates no discarded
+    // empty-collection shells from field initializers that an object
+    // initializer would immediately overwrite.
+    private RwSet(
+        Dictionary<string, List<OrSetDot>> adds,
+        Dictionary<string, List<OrSetDot>> removes,
+        Dictionary<string, List<OrSetDot>> tombstones)
+    {
+        Adds = adds;
+        Removes = removes;
+        Tombstones = tombstones;
+    }
 
     /// <summary>Returns <c>true</c> when no element is currently a member.</summary>
     public bool IsEmpty
@@ -281,16 +303,17 @@ public sealed class RwSet : ICrdt<RwSet>
     /// <summary>Creates a deep copy of this set.</summary>
     public RwSet Clone()
     {
-        var copy = new RwSet
-        {
-            Adds = new Dictionary<string, List<OrSetDot>>(Adds.Count),
-            Removes = new Dictionary<string, List<OrSetDot>>(Removes.Count),
-            Tombstones = new Dictionary<string, List<OrSetDot>>(Tombstones.Count),
-        };
-        foreach (var (key, dots) in Adds) copy.Adds[key] = [.. dots];
-        foreach (var (key, dots) in Removes) copy.Removes[key] = [.. dots];
-        foreach (var (key, dots) in Tombstones) copy.Tombstones[key] = [.. dots];
-        return copy;
+        // Presize each backing dictionary to its source key count so the
+        // entry-by-entry fill never triggers an intermediate rehash grow, and
+        // hand the filled dictionaries to the direct-assign constructor so the
+        // clone allocates no discarded empty-collection shells.
+        var adds = new Dictionary<string, List<OrSetDot>>(Adds.Count);
+        foreach (var (key, dots) in Adds) adds[key] = [.. dots];
+        var removes = new Dictionary<string, List<OrSetDot>>(Removes.Count);
+        foreach (var (key, dots) in Removes) removes[key] = [.. dots];
+        var tombstones = new Dictionary<string, List<OrSetDot>>(Tombstones.Count);
+        foreach (var (key, dots) in Tombstones) tombstones[key] = [.. dots];
+        return new RwSet(adds, removes, tombstones);
     }
 
     /// <summary>
