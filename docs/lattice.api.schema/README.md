@@ -14,7 +14,7 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 ## Core properties
 
 - **Opt-in and absent by default.** Nothing registers unless the host calls `AddLatticeSchemaApi()` on the silo, and once added the facade does no background work until a method is called.
-- **Fail-closed by construction.** Every operation authorizes the tree's scope through the shared `SchemaAccessAuthorizer` before touching the admin plane. Reads require Read authority; mutations require SchemaAdmin authority.
+- **Fail-closed by construction.** Every operation authorizes the tree's scope through the schema engine's internal authorization component before touching the admin plane. Reads require Read authority; mutations require SchemaAdmin authority.
 - **Bounded-memory dead-letter streaming.** Dead-letter inspection can stream diverted schema-rejected writes without materializing the whole set in memory.
 - **Versioning stays separate.** Schema versioning is enabled by `AddLatticeSchemaVersioning(...)`. A version operation on a silo without versioning registered throws a clear `InvalidOperationException` at call time rather than failing dependency resolution.
 - **Read-only capability probe.** A caller can ask, with no side effects, which schema operations it may perform over a given tree. The probe runs fail-closed Read and SchemaAdmin checks and reports the result as capability flags, so a UI can grey out actions the caller cannot perform without ever mutating state. The probe is advisory only: it never replaces the per-operation authorization each real call still performs.
@@ -27,7 +27,7 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 ## Surface
 
-The facade operations (each reached over the gRPC binding as one RPC):
+The facade operations (each projected by the gRPC binding as one RPC when the sibling binding is registered):
 
 | Operation | Purpose |
 |---|---|

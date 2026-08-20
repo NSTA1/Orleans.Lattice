@@ -63,5 +63,5 @@ For a remote surface, add the matching binding (which consumes the same contract
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) / [`.Grpc`](../lattice.api.backup.grpc/README.md)
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) / [`.Grpc`](../lattice.api.schema.grpc/README.md)
 - [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/README.md) / [`.Grpc`](../lattice.api.replication.grpc/README.md)
-- [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md)
+- [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) / [`.Grpc`](../lattice.api.treeadmin.grpc/README.md)
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)

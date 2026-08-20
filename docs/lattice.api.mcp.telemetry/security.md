@@ -58,7 +58,7 @@ A range query is bounded so a single call cannot ask the backend for an unbounde
 
 ## Fail-clean surfacing
 
-Every fault path returns a structured result rather than throwing: a backend timeout, HTTP failure, non-success backend status, malformed payload, guardrail rejection, or metric-access denial arrives as `Success = false` with a human-readable `Error`. Only a genuine caller cancellation propagates as a cancellation. An agent therefore never sees a raw transport exception, and a denied metric is reported as a clear, actionable message.
+Every fault path returns a structured result rather than throwing: a backend timeout, HTTP failure, non-success backend status, malformed payload, guardrail rejection, or metric-access denial arrives as `Success = false` with a human-readable `Error`. The one deliberate exception is the metadata tool: a `404` from the backend metadata endpoint is treated as an absent metadata surface and degrades to `Success = true` with an empty `Metrics` list, not a failure. Only a genuine caller cancellation propagates as a cancellation. An agent therefore never sees a raw transport exception, and a denied metric is reported as a clear, actionable message.
 
 ## Next
 

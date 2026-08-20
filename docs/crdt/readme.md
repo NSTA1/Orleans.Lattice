@@ -51,8 +51,8 @@ primitive whose built-in resolution rule matches what your data means.
 | [OR-Set](orset.md) | `tree.OrSet(key)` | add-wins observed-remove | you need a distributed set where a concurrent add and remove should keep the element |
 | [RW-Set](rwset.md) | `tree.RwSet(key)` | remove-wins observed-remove | you need a set where a removal must win the tie (revocation lists, blocklists) |
 | [MV-Register](mvregister.md) | `tree.MvRegister<T>(key)` | keep concurrent values | you hold a single typed value but want to *see* concurrent writes instead of silently dropping one |
-| [Max-Register](maxregister.md) | `tree.MaxRegister<T>(key, orderKey)` | directional max (monotone) | a value only moves up (high-water mark, version ceiling, max-seen reading) |
-| [Min-Register](minregister.md) | `tree.MinRegister<T>(key, orderKey)` | directional min (monotone) | a value only moves down (latency floor, first-seen timestamp) |
+| [Max-Register](maxregister.md) | `tree.MaxRegister<T>(key, orderKeySelector)` | directional max (monotone) | a value only moves up (high-water mark, version ceiling, max-seen reading) |
+| [Min-Register](minregister.md) | `tree.MinRegister<T>(key, orderKeySelector)` | directional min (monotone) | a value only moves down (latency floor, first-seen timestamp) |
 | [Version Vector](versionvector.md) | `tree.VersionVector(key)` | per-replica max | you track causal history / "who has seen what" to detect concurrency |
 | [OR-Flag](orflag.md) | `tree.OrFlag(key)` | enable-wins | you track a boolean presence bit where a concurrent enable should beat a disable |
 | [RW-Flag](rwflag.md) | `tree.RwFlag(key)` | disable-wins | you track presence where a removal must win the tie (revocation lists, blocklists) |

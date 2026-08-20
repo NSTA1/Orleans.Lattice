@@ -154,6 +154,8 @@ assets, and the SignalR negotiate / hub endpoints alike:
 | `Content-Security-Policy` | includes `frame-ancestors 'none'` | Anti-clickjacking (CWE-1021): the authenticated admin console cannot be framed by a foreign origin. |
 | `X-Frame-Options` | `DENY` | Denies framing on older browsers that predate CSP `frame-ancestors`. |
 | `X-Content-Type-Options` | `nosniff` | Stops the browser MIME-sniffing a response away from its declared content type. |
+| `Referrer-Policy` | `no-referrer` | Keeps a request URL (which can carry tree, key, or subject context in its path or query) out of the `Referer` header on any outbound navigation to a foreign origin. |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), interest-cohort=()` | Disables browser features the console does not use (empty allow-list for every origin) and opts out of Topics/FLoC cohort computation. |
 
 The middleware is attached by `MapLatticeExplorer` (via `UseWhen` on the
 console's path prefix), so both the standalone head and any host that mounts the

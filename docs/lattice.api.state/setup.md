@@ -28,7 +28,7 @@ var builder = WebApplication.CreateBuilder();
 builder.Services.AddLatticeStateApiGrpc(o => o.RequireAuthorization = true);
 ```
 
-The binding **fails closed**. With `RequireAuthorization` left at its default and no authorizer registered, the default `DenyAllStateApiAuthorizer` rejects every call. Register a real authorizer (or, behind an already-authenticated outer boundary, an `AllowAllStateApiAuthorizer`) before the endpoint serves traffic - see [Security](security.md).
+The binding **fails closed**. With `RequireAuthorization` left at its default and no authorizer registered, the default `DenyAllStateApiAuthorizer` rejects every protected call; only the `GetAuthScheme` advertisement RPC is unauthenticated. Register a real authorizer (or, behind an already-authenticated outer boundary, an `AllowAllStateApiAuthorizer`) before the endpoint serves traffic - see [Security](security.md).
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();

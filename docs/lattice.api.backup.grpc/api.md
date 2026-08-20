@@ -43,8 +43,14 @@ Methods (one per RPC):
 | `GetAuthSchemeAsync` | `Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)` |
 | `ProbeCapabilitiesAsync` | `Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)` |
 | `ScheduleBackupAsync` | `Task<TimeSpan> ScheduleBackupAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default)` |
+| `CancelScheduleAsync` | `Task CancelScheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default)` |
+| `GetScopeStatusAsync` | `Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)` |
+| `IsHealthMonitoringAvailableAsync` | `Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)` |
+| `CheckBackupHealthAsync` | `Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)` |
+| `GetBackupHealthAsync` | `Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)` |
+| `ConfigureBackupHealthAsync` | `Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)` |
 
-`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, and `ExportArtifactAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` returns `null` when the server reports the backup absent. `ProbeCapabilitiesAsync` throws `ArgumentNullException` on a null scope and reports the caller's allowed-operation set (`BackupScopeCapabilities`) with no side effects, so a UI can grey out actions the caller cannot perform; it never replaces the fail-closed authorization each real RPC still performs. `ScheduleBackupAsync` throws `ArgumentNullException` on a null scope and `ArgumentOutOfRangeException` when `interval` is not strictly positive; it registers a recurring backup of the scope, authorized with the same grant as a capture, and returns the effective cadence actually registered (clamped up to the scheduler minimum when smaller). `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
+`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, and `RevertRestoreAsync` throw `ArgumentNullException` on a null request; `DescribeBackupAsync`, `DeleteBackupAsync`, `ExportArtifactAsync`, `CheckBackupHealthAsync`, `GetBackupHealthAsync`, and `ConfigureBackupHealthAsync` throw `ArgumentException` on a null or empty id. `DescribeBackupAsync` and `GetScopeStatusAsync` return `null` when the server reports the target absent; `GetBackupHealthAsync` returns `null` when no stored report exists. `ProbeCapabilitiesAsync`, `ScheduleBackupAsync`, `CancelScheduleAsync`, and `GetScopeStatusAsync` throw `ArgumentNullException` on a null scope. `ScheduleBackupAsync` throws `ArgumentOutOfRangeException` when `interval` is not strictly positive; it registers a recurring backup of the scope, authorized with the same grant as a capture, and returns the effective cadence actually registered (clamped up to the scheduler minimum when smaller). `CancelScheduleAsync` idempotently removes a runtime full or incremental schedule. `CheckBackupHealthAsync` verifies and persists a fresh report; `ConfigureBackupHealthAsync` also throws `ArgumentNullException` when `config` is null. `GetAuthSchemeAsync` is unauthenticated - callable before any credential is acquired.
 
 ## Server-side options
 
@@ -62,11 +68,11 @@ The transport meta-authorization seam. A host supplies an implementation to deci
 
 ### `DenyAllBackupApiAuthorizer` : `ILatticeBackupApiAuthorizer`
 
-The default authorizer, registered automatically, that rejects every call so a host that maps the surface without configuring authorization fails closed.
+The default authorizer, registered automatically, that rejects every protected call so a host that maps the surface without configuring authorization fails closed. The unauthenticated `GetAuthScheme` discovery RPC bypasses this authorizer.
 
 ### `AllowAllBackupApiAuthorizer` : `ILatticeBackupApiAuthorizer`
 
-An opt-in authorizer that permits every call, for trusted-network deployments behind a separate authentication boundary. Register explicitly to override the default-deny posture.
+An opt-in authorizer that permits every protected call, for trusted-network deployments behind a separate authentication boundary. Register explicitly to override the default-deny posture.
 
 ### `ILatticeBackupApiCredentialBridge`
 
@@ -82,7 +88,7 @@ Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns.
 
 ### `LatticeBackupApiOperation`
 
-Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, `ScheduleBackup`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
+Identifies which control-API operation an inbound call invokes, so an authorizer can make per-operation decisions. Values: `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `ListBackups`, `StreamBackups`, `DescribeBackup`, `DeleteBackup`, `RestoreBackup`, `RevertRestore`, `ExportArtifact`, `ScheduleBackup`, `CancelSchedule`, `GetScopeStatus`, `IsHealthMonitoringAvailable`, `CheckBackupHealth`, `GetBackupHealth`, `ConfigureBackupHealth`, and `Unknown` (an unrecognised method, presented so a deny-by-default policy refuses it rather than treating it as benign).
 
 ### `LatticeBackupApiAuthorizationContext`
 
@@ -95,7 +101,7 @@ A `readonly struct` describing an inbound call to the authorizer.
 
 ## Wire message records
 
-Each RPC's request and response is one of these Orleans-serialized records. Properties marked `required` must be set by the caller.
+Each RPC wraps the facade DTOs in one of these Orleans-serialized request / response records. Properties marked `required` must be set by the caller.
 
 | Record | Members |
 |---|---|
@@ -120,8 +126,19 @@ Each RPC's request and response is one of these Orleans-serialized records. Prop
 | `BackupCapabilityProbeRequest` | `required BackupScopeSelector Scope` - the scope the read-only capability probe reports on. |
 | `BackupScheduleRequestMessage` | `required BackupScopeSelector Scope`, `bool Incremental`, `long IntervalTicks` - the requested cadence between captures, sent as `TimeSpan.Ticks`. |
 | `BackupScheduleResponse` | `bool Scheduled`, `long EffectiveIntervalTicks` - the cadence actually registered (clamped up to the scheduler minimum), as `TimeSpan.Ticks`. |
+| `BackupCancelScheduleRequestMessage` | `required BackupScopeSelector Scope`, `bool Incremental` - the runtime schedule to remove. |
+| `BackupCancelScheduleResponse` | (empty). |
+| `BackupScopeStatusRequestMessage` | `required BackupScopeSelector Scope` - the scope whose status should be described. |
+| `BackupScopeStatusResponse` | `bool Found`, `BackupScopeSelector? Scope`, `bool FullScheduleRegistered`, `bool IncrementalScheduleRegistered`, `DateTimeOffset? LastFullRunUtc`, `DateTimeOffset? LastFullSuccessUtc`, `DateTimeOffset? LastIncrementalRunUtc`, `DateTimeOffset? LastIncrementalSuccessUtc`, `BackupScopeRunOutcome LastRunOutcome`, `int ChainDepth`, `long? RuntimeFullBackupIntervalTicks`, `long? RuntimeIncrementalBackupIntervalTicks`. |
+| `BackupHealthAvailabilityRequest` | (empty). |
+| `BackupHealthAvailabilityResponse` | `bool Available`. |
+| `BackupHealthCheckRequestMessage` | `required string BackupId`. |
+| `BackupHealthGetRequestMessage` | `required string BackupId`. |
+| `BackupHealthReportResponse` | `bool Found`, `BackupHealthReport? Report`. |
+| `BackupHealthConfigureRequestMessage` | `required string BackupId`, `bool MonitoringEnabled`, `long IntervalTicks`. |
+| `BackupHealthConfigureResponse` | (empty). |
 
-The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)). The `ScheduleBackup` RPC takes a `BackupScheduleRequestMessage` and returns a `BackupScheduleResponse`.
+The `RevertRestore` RPC reuses `RestoreResponse` as its request shape (the client sends back the restore result to revert) and returns `RevertRestoreResponse`. The `ProbeCapabilities` RPC takes a `BackupCapabilityProbeRequest` and returns a `BackupScopeCapabilities` (defined in [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md)). The schedule RPCs use `BackupScheduleRequestMessage` / `BackupScheduleResponse` and `BackupCancelScheduleRequestMessage` / `BackupCancelScheduleResponse`. The health RPCs use the `BackupHealth*` records above and facade DTOs from `Orleans.Lattice.Backup`.
 
 ## Serialization aliases
 

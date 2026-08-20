@@ -39,7 +39,9 @@ The decision counter and the decision-latency histogram carry three tags:
 
 ## The audit sink
 
-Beyond aggregate metrics, an operator can capture a per-decision **audit trail** by enabling the audit sink and registering an `ILatticeAuthAuditSink`. The gate hands each decision to the sink off the request path (it observes the returned task but does not await it), so auditing never adds latency to the operation.
+Beyond aggregate metrics, an operator can capture a per-decision **audit trail** by enabling the audit sink and registering an `ILatticeAuthAuditSink`. The gate does not await each sink's asynchronous completion - it hands off the returned task and observes only the ones that do not complete synchronously - but the synchronous portion of a sink's `WriteAsync` runs inline on the request path, so a sink must return promptly (offload slow work itself) to avoid adding latency to the operation.
+
+`AddLatticeAuth` always registers two built-in sinks: a logger sink that writes each decision event to the silo `ILogger` (denies at warning, allows at debug), and a durable audit-trail sink that appends events to a reserved append-only lattice tree but stays inert (writes nothing) until `EnableDurableAuditTrail` is set. Any `ILatticeAuthAuditSink` you register is **additive** - it runs alongside the built-ins, it does not replace them.
 
 Configure the sink through options:
 

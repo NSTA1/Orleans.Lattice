@@ -198,6 +198,43 @@ Paste the result into [jwt.ms](https://jwt.ms) and confirm `ver` is `2.0`, `aud`
 is your app id, `iss` ends in `/v2.0`, and an `oid` claim is present - that `oid`
 is the subject id Lattice resolves the caller to.
 
+## (Optional) Graph app-only setup for the identity directory
+
+The steps above provision **delegated (user) tokens** only - no client secret and
+no application permissions. The Microsoft Graph-backed group-overflow resolver and
+identity directory in
+[`Orleans.Lattice.Membership.Entra.Graph`](../lattice.membership.entra.graph/README.md)
+authenticate to Graph **app-only**, so they need extra setup on this same app
+registration: either a client secret (the confidential-client path) or a
+`TokenCredential` (the secret-less path), plus the `User.Read.All` and
+`Group.Read.All` Microsoft Graph **application** permissions with admin consent.
+
+Add a client secret for the confidential-client path (record the printed value
+once - it is not retrievable later):
+
+```powershell
+$graphSecret = az ad app credential reset --id $appId --append `
+  --display-name "lattice-graph-app-only" --query password -o tsv
+Write-Host "Graph client secret: $graphSecret"
+```
+
+Add the two Microsoft Graph application permissions and grant admin consent
+(`00000003-0000-0000-c000-000000000000` is the well-known Microsoft Graph app id;
+the two GUIDs are the `User.Read.All` and `Group.Read.All` **application** roles):
+
+```powershell
+az ad app permission add --id $appId `
+  --api 00000003-0000-0000-c000-000000000000 `
+  --api-permissions df021288-bdef-4463-88db-98f22de89214=Role `
+                    5b567255-7703-4780-807c-7be8301ae99b=Role
+az ad app permission admin-consent --id $appId
+```
+
+These map to the resolver options: `$tenantId` -> `TenantId`, `$appId` ->
+`ClientId`, `$graphSecret` -> `ClientSecret`. For the secret-less path, skip the
+secret and set `Credential` to a `TokenCredential` instead (the application
+permissions and admin consent are still required).
+
 ## Troubleshooting
 
 - **`AADSTS65001` / consent required** - Step 5 was skipped or targeted the wrong

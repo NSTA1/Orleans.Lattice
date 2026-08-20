@@ -6,7 +6,7 @@ This page describes the code-first gRPC binding and its two-layer, fail-closed a
 
 The binding defines its RPCs in C# rather than a `.proto`. A method-definition singleton builds one gRPC `Method` per operation from the Orleans serializers resolved out of DI, under the service name `orleans.lattice.api.schema`. The server-side service and the public `LatticeSchemaApiGrpcClient` share those definitions, so the wire contract is identical on both ends by construction and there is no generated stub to keep in sync.
 
-Every message is a `[GenerateSerializer]` record marshalled with the Orleans binary serializer. That is why the client's `Create` factory takes an `IServiceProvider` with `AddSerializer()` registered: the per-message marshallers are built from those serializers, so a client and server that share the Orleans serialization configuration cannot disagree on the wire format.
+RPC request and response contracts are `[GenerateSerializer]` records marshalled with the Orleans binary serializer. Most RPCs wrap facade DTOs in transport records such as `SetPolicyRequest` and `GetPolicyResponse`; the dead-letter stream and capability probe carry shared schema DTOs directly. That is why the client's `Create` factory takes an `IServiceProvider` with `AddSerializer()` registered: the per-message marshallers are built from those serializers, so a client and server that share the Orleans serialization configuration cannot disagree on the wire format.
 
 The operations map to two gRPC shapes: unary for policy, count, versioning, remediation, compliance, capability, and auth-scheme discovery; server-streaming for `StreamDeadLetters`. The streaming RPC is what lets a large dead-letter set move with bounded memory end to end - the facade streams, the service forwards each item as it arrives, and the client re-exposes it as an `IAsyncEnumerable<T>`.
 
@@ -22,7 +22,7 @@ An operation the interceptor does not recognise is not waved through. Unknown or
 
 ### 2. Facade scope authorization
 
-Once past the transport gate, the service invokes the control facade. The facade then authorizes the operation's tree scope through `SchemaAccessAuthorizer`, exactly as an in-process facade caller would. Reads require Read authority; mutations require SchemaAdmin authority. An anonymous or unauthorized caller is denied here even when the transport gate allowed the call.
+Once past the transport gate, the service invokes the control facade. The facade then authorizes the operation's tree scope through the schema engine's internal authorization component, exactly as an in-process facade caller would. Reads require Read authority; mutations require SchemaAdmin authority. An anonymous or unauthorized caller is denied here even when the transport gate allowed the call.
 
 The two gates are complementary, not redundant: the transport gate is a coarse edge control keyed by headers, operation, and target, while the facade gate is the engine's own fine-grained, per-tree, fail-closed authorization. A deployment can run a permissive transport gate behind a trusted boundary and still get full per-tree enforcement from the facade, or tighten both.
 

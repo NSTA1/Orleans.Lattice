@@ -29,41 +29,44 @@ enforcement, versioning, and dead-letter semantics belong to
 [`Orleans.Lattice.Schema`](../lattice.schema/README.md) and are not
 re-implemented here.
 
-## Per-tree, load first
+## Per-tree, selection auto-loads
 
-Schema state is per tree. Each tab starts empty; you type or pick a tree id and
-click **Load** to probe that tree. The area is capability-gated as a whole (see
-below), and the per-tree load also reports whether the specific tree is governed
-by a policy at all - a tree with no policy accepts all values, and the area says
-so rather than showing an error.
+Schema state is per tree. Each tab starts empty; picking a tree from the tree
+list immediately probes that tree (there is no separate **Load** button - selecting
+a tree loads it). The area is capability-gated as a whole (see below), and the
+per-tree load also reports whether the specific tree is governed by a policy at
+all - a tree with no policy accepts all values, and the area says so rather than
+showing an error.
 
-## The four tabs
+## The three tabs
 
 - **Policy** - view, set, and clear the tree's write-validation policy. A tree
   with no policy accepts every value; setting a policy turns on validation for
-  subsequent writes.
+  subsequent writes. When a policy is loaded, this tab also hosts a **Compliance**
+  action: a **read-only** audit that scans the tree's entries against its compiled
+  policy and reports how many values are compliant versus non-compliant, with a
+  breakdown of the reasons. It never mutates anything; a tree with no policy is
+  reported as ungoverned.
 - **Versions** - view, set, advance, migrate, and clear the tree's
   envelope-version config, and see the status of the last remediation run.
   Advancing the target version can either leave existing values in place or
   migrate them up to the new version. Version operations require the versioning
   add-on to be registered on the silo; when it is not, the area reports that
   clearly instead of failing opaquely.
-- **Compliance** - run a **read-only** audit that scans the tree's entries
-  against its compiled policy and reports how many values are compliant versus
-  non-compliant, with a breakdown of the reasons. It never mutates anything; a
-  tree with no policy is reported as ungoverned.
 - **Dead letters** - list the writes that strict-mode validation diverted (the
   schema-rejected entries), and show their count.
 
 ## Capability-aware, grey-out not hide
 
-The whole area is gated by a single coarse capability, **SchemaAllowed**,
-discovered with a fail-closed reachability probe. If the probe is denied or the
-endpoint is unreachable, the area entry stays visible but **disabled (greyed
-out)**. Inside the area, every mutating action - setting or clearing a policy,
-changing or advancing the version config, running remediation - is shown
-disabled, not hidden, whenever the capability is absent, no tree is loaded, or an
-action is already in flight.
+The area is gated in two layers. The coarse **SchemaAllowed** gate is endpoint
+**reachability**: the capability probe RPC returns an all-false set on an
+authorization denial rather than throwing, so the gate reports available whenever
+that probe completes without a transport fault; if the endpoint is unreachable the
+area entry stays visible but **disabled (greyed out)**. Inside the area, each
+mutating action - setting or clearing a policy, changing or advancing the version
+config, running remediation, scanning compliance - greys out from the **per-tree
+capability snapshot** the panel requests when a tree is loaded (and also whenever
+no tree is loaded or an action is already in flight), not from the coarse gate.
 
 ## Advisory, not a security boundary
 

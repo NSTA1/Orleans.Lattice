@@ -17,11 +17,15 @@ reason, the source, and a UTC timestamp. The source is one of:
 |---|---|
 | `Replication` | A replicated apply from a peer cluster failed strict validation. |
 | `Restore` | A backup restore item failed strict validation. |
-| `LocalRejected` | A locally rejected write captured for inspection. |
+| `LocalRejected` | Reserved for a rejected local write retained for inspection. Not produced by the current release, which fails local writes closed (see below). |
 
-A direct local write that violates a policy is *rejected* to the caller with
-`LatticeSchemaViolationException`; it is only mirrored to the DLQ as `LocalRejected`
-so the two views agree.
+A direct local write that violates a policy fails closed: it is *rejected* to the
+caller with `LatticeSchemaViolationException` and nothing is made durable. The
+rejected value is **not** mirrored to the DLQ. Only system-origin ingest
+(replication apply and restore) lands entries here, so in the current release
+every entry carries the `Replication` or `Restore` source. `LocalRejected` is a
+reserved source for a future opt-in that would also retain the rejected local
+value; no code path produces it today.
 
 ## Reading it from the schema admin
 

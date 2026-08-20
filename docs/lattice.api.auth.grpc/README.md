@@ -1,16 +1,16 @@
 # Orleans.Lattice.Api.Auth.Grpc
 
-Code-first gRPC binding for [Orleans.Lattice.Api.Auth](../lattice.api.auth/README.md) - projects the membership and authorization-policy admin facade onto a long-lived gRPC service and a public typed client, over the same Orleans-serialized records, with no hand-written `.proto`.
+Code-first gRPC binding for [Orleans.Lattice.Api.Auth](../lattice.api.auth/README.md) - projects the membership and authorization-policy admin facade onto a long-lived gRPC service and a public typed client, marshalled with the Orleans binary serializer over code-first request and response records (which wrap the facade DTOs), with no hand-written `.proto`.
 
 ## What is it?
 
-`Orleans.Lattice.Api.Auth.Grpc` is the remote transport for the cluster's control plane. Hosts reference it when a remote admin tool, a CLI, or a dashboard needs to administer users, groups, membership, and authorization rules - and introspect verdicts - over the network rather than in-process.
+`Orleans.Lattice.Api.Auth.Grpc` is the remote transport for the cluster's control plane. Hosts reference it when a remote admin tool, a CLI, or a dashboard needs to administer groups, membership, and authorization rules - and search the identity directory and introspect verdicts - over the network rather than in-process. (The identity directory is search / resolve only; there is no user create/update/delete surface here.)
 
 It provides:
 
 - **A code-first gRPC service.** A unary RPC per facade operation, bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeAuthApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
-- **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
+- **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record - either one of this package's own request/response envelopes (for example `AuthGroupRef`, `AuthPutRule`, `AuthAck`) or a facade DTO reused directly (for example `AuthGroupPage`, `AuthExplanation`) - serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
 - **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge, and the facade's own administrator check re-authorizes the resolved caller. Both default to deny.
 
 Administering authorization is the most sensitive surface in the cluster, so the binding fails closed: with no authorizer registered, every admin call is rejected with `PermissionDenied`.
@@ -24,26 +24,58 @@ Administering authorization is the most sensitive surface in the cluster, so the
 
 ## RPCs
 
-| RPC | Facade method |
-|-----|---------------|
-| `UpsertGroup` | `UpsertGroupAsync` |
-| `GetGroup` | `GetGroupAsync` |
-| `RemoveGroup` | `RemoveGroupAsync` |
-| `ListGroups` | `ListGroupsAsync` |
-| `AddMember` | `AddMemberAsync` |
-| `RemoveMember` | `RemoveMemberAsync` |
-| `ListGroupMembers` | `ListGroupMembersAsync` |
-| `ListSubjectGroups` | `ListSubjectGroupsAsync` |
-| `PutRule` | `PutRuleAsync` |
-| `GetRule` | `GetRuleAsync` |
-| `RemoveRule` | `RemoveRuleAsync` |
-| `ListRules` | `ListRulesAsync` |
-| `ListRulesForTree` | `ListRulesForTreeAsync` |
-| `Explain` | `ExplainAsync` |
-| `EffectivePermissions` | `EffectivePermissionsAsync` |
-| `SearchDirectory` | `SearchDirectoryAsync` |
-| `ResolveDirectoryPrincipal` | `ResolveDirectoryPrincipalAsync` |
-| `GetAccessModel` | `GetAccessModelAsync` |
+The service is exposed under the fully-qualified gRPC service name **`orleans.lattice.api.auth`**. It is a flat set of unary RPCs, one per facade operation. Each RPC carries a request and a response message: most operations wrap their facade arguments in one of this package's own envelope records (see [Request and response envelopes](#request-and-response-envelopes) below), while a few reuse a facade DTO directly.
+
+| RPC | Facade method | Request message | Response message |
+|-----|---------------|-----------------|------------------|
+| `UpsertGroup` | `UpsertGroupAsync` | `AuthGroup` | `AuthAck` |
+| `GetGroup` | `GetGroupAsync` | `AuthGroupRef` | `AuthGroupResult` |
+| `RemoveGroup` | `RemoveGroupAsync` | `AuthGroupRef` | `AuthAck` |
+| `ListGroups` | `ListGroupsAsync` | `AuthPageRequest` | `AuthGroupPage` |
+| `AddMember` | `AddMemberAsync` | `AuthMemberEdge` | `AuthAck` |
+| `RemoveMember` | `RemoveMemberAsync` | `AuthMemberEdge` | `AuthAck` |
+| `ListGroupMembers` | `ListGroupMembersAsync` | `AuthGroupRef` | `AuthStringList` |
+| `ListSubjectGroups` | `ListSubjectGroupsAsync` | `AuthMemberRef` | `AuthStringList` |
+| `PutRule` | `PutRuleAsync` | `AuthPutRule` | `AuthAck` |
+| `GetRule` | `GetRuleAsync` | `AuthRuleRef` | `AuthRuleResult` |
+| `RemoveRule` | `RemoveRuleAsync` | `AuthRuleRef` | `AuthRuleRemoved` |
+| `ListRules` | `ListRulesAsync` | `AuthPageRequest` | `AuthRulePage` |
+| `ListRulesForTree` | `ListRulesForTreeAsync` | `AuthTreeRulesPage` | `AuthRulePage` |
+| `Explain` | `ExplainAsync` | `AuthExplainQuery` | `AuthExplanation` |
+| `EffectivePermissions` | `EffectivePermissionsAsync` | `AuthSubjectRef` | `AuthEffectivePermissions` |
+| `SearchDirectory` | `SearchDirectoryAsync` | `DirectorySearchRequest` | `DirectorySearchResult` |
+| `ResolveDirectoryPrincipal` | `ResolveDirectoryPrincipalAsync` | `AuthPrincipalRef` | `AuthDirectoryPrincipalResult` |
+| `GetAccessModel` | `GetAccessModelAsync` | `AuthAccessModelQuery` | `AccessModelDescriptor` |
+
+### Request and response envelopes
+
+The gRPC contract does **not** send the facade method arguments as bare scalars; it wraps them in code-first `[GenerateSerializer]` records (public, in the `Orleans.Lattice.Api.Auth.Grpc` namespace) so the wire shape can version additively. A few RPCs reuse a facade DTO from `Orleans.Lattice.Api.Auth` directly as their message (`AuthGroup`, `AuthPageRequest`, `AuthGroupPage`, `AuthRulePage`, `AuthExplanation`, `AuthEffectivePermissions`, `DirectorySearchRequest`, `DirectorySearchResult`, `AccessModelDescriptor`); the rest use the envelopes below.
+
+Request envelopes:
+
+| Record | Fields |
+|---|---|
+| `AuthGroupRef` | `GroupId: string` |
+| `AuthMemberEdge` | `GroupId: string`, `MemberId: string`, `MemberKind: MembershipMemberKind` (default `User`) |
+| `AuthMemberRef` | `MemberId: string` |
+| `AuthPutRule` | `Rule: LatticeAuthorizationRule` |
+| `AuthRuleRef` | `TreeId: string`, `RuleId: string` |
+| `AuthTreeRulesPage` | `TreeId: string`, `Page: AuthPageRequest` |
+| `AuthExplainQuery` | `SubjectId: string`, `Operation: LatticeOperation`, `Scope: LatticeScope`, `SubjectKind: LatticeSubjectSelectorKind` (default `User`) |
+| `AuthSubjectRef` | `SubjectId: string`, `SubjectKind: LatticeSubjectSelectorKind` (default `User`) |
+| `AuthPrincipalRef` | `PrincipalId: string` |
+| `AuthAccessModelQuery` | (empty marker) |
+
+Response envelopes:
+
+| Record | Fields |
+|---|---|
+| `AuthAck` | (empty acknowledgement for write RPCs) |
+| `AuthGroupResult` | `Group: AuthGroup?` (null when no such group) |
+| `AuthStringList` | `Values: IReadOnlyList<string>` |
+| `AuthRuleResult` | `Rule: LatticeAuthorizationRule?` (null when no such rule) |
+| `AuthRuleRemoved` | `Removed: bool` |
+| `AuthDirectoryPrincipalResult` | `Principal: DirectoryPrincipalDescriptor?` (null when unresolved) |
 
 ## Public surface
 

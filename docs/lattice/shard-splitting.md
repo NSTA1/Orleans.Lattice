@@ -25,9 +25,9 @@ slots.
 stateDiagram-v2
     [*] --> BeginShadowWrite : SplitAsync(sourceShard)
     BeginShadowWrite --> Drain : S.BeginSplitAsync(target, slots, virt)
-    Drain --> Swap : forward all moved-slot entries (live + tombstones) to T
-    Swap --> Reject : registry.SetShardMapAsync(newMap)
-    Reject --> Complete : S.EnterRejectPhaseAsync()
+    Drain --> Reject : forward all moved-slot entries (live + tombstones) to T
+    Reject --> Swap : S.EnterRejectPhaseAsync() + final drain pass
+    Swap --> Complete : registry.SetShardMapAsync(newMap)
     Complete --> [*] : final drain pass + S.CompleteSplitAsync()
 ```
 
@@ -61,14 +61,22 @@ stateDiagram-v2
    bounds peak memory on the coordinator regardless of source shard size,
    and avoids transferring non-moved entries over the wire. Idempotent under
    retry - re-running merges only converges to the same state.
-3. **Swap** - Coordinator persists a new `ShardMap` in the registry that
-   redirects moved slots to *T*. New `LatticeGrain` activations immediately
-   route the moved slots to *T*; stale activations still cache the old map.
-4. **Reject** - Coordinator calls `S.EnterRejectPhaseAsync()`. From this
+3. **Reject** - Coordinator marks the source leaves moved-away and calls
+   `S.EnterRejectPhaseAsync()` **before** the registry map flips. From this
    point any read or write to *S* for a moved-slot key throws
-   `StaleShardRoutingException`. `LatticeGrain` catches the exception,
-   invalidates its cached map, fetches the fresh map from the registry, and
-   retries against *T* - a single transparent retry per call.
+   `StaleShardRoutingException`, which freezes the source's committed state
+   for the migrating slots. The coordinator then runs one final authoritative
+   drain pass to *T*, so the destination is synchronised with the source's
+   now-frozen committed state before any reader can route to *T*. Reversing
+   this order - flipping the map before the source rejects - would open a
+   window in which a stale-routing reader could still be served the pre-split
+   value by the source.
+4. **Swap** - Coordinator persists a new `ShardMap` in the registry that
+   redirects moved slots to *T*. New `LatticeGrain` activations immediately
+   route the moved slots to *T*; stale activations that still cache the old
+   map hit the source's reject gate, catch `StaleShardRoutingException`,
+   invalidate their cached map, fetch the fresh map from the registry, and
+   retry against *T* - a single transparent retry per call.
 5. **Complete** - Coordinator runs one final drain pass to capture any
    tombstones written during shadow that were not mirrored on the hot path,
    then calls `S.CompleteSplitAsync()` and clears its own state.
@@ -95,8 +103,9 @@ provides - including under concurrent splits - see
 Point reads and writes (`GetAsync`, `SetAsync`, `DeleteAsync`,
 `SetIfVersionAsync`, `GetOrSetAsync`, etc.) continue to serve traffic
 throughout the split: every successful write is mirrored to the new
-owner during the shadow phase and the post-swap reject phase causes
-stale activations to transparently retry against the correct shard. The
+owner during the shadow phase and the reject phase (which precedes the map
+swap) causes stale activations to transparently retry against the correct
+shard. The
 post-Complete permanent `MovedAwaySlots` rejection extends this for the
 lifetime of the source shard.
 

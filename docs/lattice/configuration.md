@@ -181,7 +181,7 @@ siloBuilder.ConfigureLattice("bulk-ingest", o => o.AdmissionAdvisoryLiveKeys = 1
 
 ### `AtomicWriteRetention`
 
-Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. See [Atomic Writes](atomic-writes.md).
+Retention window for completed `SetManyAtomicAsync` saga state (default: 48 hours). After a saga reaches a terminal state, its coordinator grain retains its persisted progress for this window so duplicate submissions with the same operation ID are idempotent. A retention reminder fires at the end of the window and clears the state. Minimum effective interval is **1 minute** (Orleans reminder granularity); smaller non-infinite values are effectively floored at that granularity. Set `Timeout.InfiniteTimeSpan` to disable automatic cleanup. See [Atomic Writes](atomic-writes.md).
 
 This option can be changed freely at any time.
 
@@ -691,6 +691,8 @@ This option can be changed freely at any time.
 ### `VersionVectorRetention`
 
 How long to retain version vectors for deleted keys (default: `InfiniteTimeSpan`, disabled). When a key is deleted, its version vector is retained in the `LeafCacheGrain` for this duration to support historical scans. After the retention window, the vector is expunged from the cache.
+
+There is an advisory lower bound, `LatticeOptions.DefaultMinVersionVectorRetention` (1 hour). It is **not enforced** - it is provided only as a reference constant - but a finite `VersionVectorRetention` below it is typically unsafe on networks where clock skew exceeds the window, because pruning may then drop entries that are still causally relevant (a short-retention replica keeps reinstating entries from a long-retention peer).
 
 This option can be changed freely at any time.
 

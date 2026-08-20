@@ -47,7 +47,7 @@ The layer assumes the following trust model:
 | Surface | Entry point | Enforcement |
 |---|---|---|
 | Data plane (external) | gRPC state / data API to the `ILattice` facade grain | The facade calls the registered access gate on every operation. |
-| Control plane (external) | The admin API (`ILatticeAuthAdmin`) | Every mutating admin call is authorized against the reserved authorization namespace, which is fail-closed (see finding A2). |
+| Control plane (external) | The admin API (`ILatticeAuthAdmin`) | Every auth-admin call, reads included, is authorized against the reserved authorization namespace, which is fail-closed (see finding A2). |
 | Read catalog (external) | State-API catalog and structure endpoints | Existence of a tree/view/key is hidden from a caller who cannot read the underlying source (see finding A1). |
 | Explorer (operator tool) | The Explorer's gRPC client to the state API | Credentials only attach over a transport gRPC can confirm is secure (see finding A3). |
 | Internal grain calls | Direct in-cluster calls to the shard / leaf grains | Defense-in-depth internal-origin assertion (see finding A4). |
@@ -110,11 +110,16 @@ Two mechanisms harden this boundary:
 
 The in-silo hosted client that in-silo infrastructure uses (for example the
 co-hosted gRPC gateway and the authorization initializer) is a client from the
-Orleans runtime's point of view, but it is inside the trust boundary. It is
-distinguished from a genuine external client by the Orleans hosted-client grain
-id prefix, so the filter exempts it from stripping and lets it establish the
-internal capabilities it legitimately needs, while still stripping forged
-capabilities from genuine external clients.
+Orleans runtime's point of view, but it is inside the trust boundary. The
+Orleans hosted-client grain id prefix (`hosted-`) alone is not a trust signal:
+the caller's source id is client-supplied and unvalidated, so an external client
+can announce an arbitrary `hosted-*` id. Recognition therefore requires the
+`hosted-` prefix **plus** validation that the silo address embedded in the id is
+either this silo's own address or a currently active member of the local
+cluster. Only then does the filter exempt the call from stripping and let it
+establish the internal capabilities it legitimately needs; a forged `hosted-*`
+id whose embedded address is not a live cluster silo is treated as an external
+client and has its forged capabilities stripped.
 
 ## Bootstrap administrators (break-glass root of trust)
 

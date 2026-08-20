@@ -49,6 +49,8 @@ material effect on which rules apply to a caller.
 | `TokenOnly` | Token-asserted groups only | The local directory is **ignored for group membership**. The IdP is the sole authority; local group edits (including in the Explorer Access area) are inert. |
 | `DirectoryOnly` | Directory-derived groups only | Token-asserted groups are **ignored**. The local directory is the sole authority; the IdP's group claims are not trusted for membership. |
 
+Unless the mode is `TokenOnly`, token-asserted and claim-projected seed groups are not taken at face value: the merged set is run back through the local directory's transitive closure, so a token that carries only a child group still picks up that group's directory-derived ancestor groups. Under `TokenOnly` the directory is bypassed entirely, so token groups are used exactly as asserted.
+
 **Choosing a mode.** Use `Union` when either source may legitimately contribute
 groups. Use `TokenOnly` when the IdP is authoritative and the local directory is
 only a display-name registry. Use `DirectoryOnly` when you curate membership
@@ -103,6 +105,8 @@ public sealed class DirectorySeeder(ILatticeMembershipDirectory directory)
     }
 }
 ```
+
+Removal is **non-cascading**: `RemoveGroupAsync` deletes only the group record, not the membership edges that reference the group (as a parent or as a nested member). Remove those edges explicitly with `RemoveMemberAsync` when retiring a group, or an orphaned edge can keep contributing the deleted group id to a subject's closure.
 
 ## Concepts
 

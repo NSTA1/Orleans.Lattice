@@ -15,6 +15,7 @@ Registers the Microsoft.Identity.Web OpenID Connect app (auth-code + PKCE, cooki
 - **Throws** `ArgumentNullException` when `services` or `configure` is null, and `InvalidOperationException` when a required option is missing (validation runs during this call).
 - The auth method and token acquirer are registered **scoped** for per-circuit credential isolation.
 - The fallback authorization policy is installed only when `RequireAuthenticatedUser` is true; the circuit handler only when `AutoSignIn` is true.
+- **CSP side effect.** When `SignOutPath` is set, the call also publishes it as the core `ExplorerSignOutOptions.FederatedSignOutPath` and, when `Instance` parses as an absolute http(s) authority, adds that Entra authority origin to the Explorer web head's Content-Security-Policy `form-action` sources (via `ExplorerContentSecurityPolicyOptions.AdditionalFormActionSources`) so the federated sign-out form's redirect to Entra's end-session URL is not blocked by the default `form-action 'self'`. A malformed `Instance` contributes nothing (fail closed).
 
 ## `ExplorerEntraWebEndpointRouteBuilderExtensions`
 
@@ -64,6 +65,28 @@ A `readonly record struct` holding the acquired access token, its `ExpiresOn` in
 
 The public sealed `IExplorerAuthMethod` for the `entra` scheme. Registered scoped by `AddLatticeExplorerEntraWebAuth`; resolves the State API scope from `Scopes` or, when empty, from the advertised audience (appending `/.default` to a bare resource id), and wires token renewal so a re-auth-required signal latches the credential as revoked.
 
+```csharp
+public EntraWebExplorerAuthMethod(
+    IExplorerWebTokenAcquirer acquirer,
+    IOptionsMonitor<ExplorerEntraWebOptions> options)
+
+public string SchemeId { get; }
+public bool CanHandle(string advertisedScheme)
+public Task<ExplorerAuthSignIn> ChallengeAsync(
+    ExplorerAuthChallengeContext context,
+    CancellationToken cancellationToken = default)
+```
+
+`SchemeId` returns the `entra` scheme id; `CanHandle` matches that scheme case-insensitively; `ChallengeAsync` acquires the initial downstream token and returns a bearer sign-in whose renewal delegate latches the credential as revoked on a re-auth-required signal.
+
 ## `ExplorerWebReauthRequiredException`
 
 Thrown when the browser must complete (or repeat) the interactive OIDC sign-in before a State API token can be acquired.
+
+```csharp
+public ExplorerWebReauthRequiredException()
+public ExplorerWebReauthRequiredException(string message)
+public ExplorerWebReauthRequiredException(string message, Exception innerException)
+```
+
+A `sealed` exception deriving directly from `System.Exception` with the three standard constructors (default message, custom message, and message-plus-inner-exception).
