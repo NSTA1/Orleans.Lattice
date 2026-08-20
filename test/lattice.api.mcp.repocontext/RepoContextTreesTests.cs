@@ -71,4 +71,27 @@ public sealed class RepoContextTreesTests
     [Test]
     public void Tree_names_are_non_empty()
         => Assert.That(RepoContextTrees.All, Is.All.Not.Empty);
+
+    [Test]
+    [TestCase("repo-context-vector-metadata")]
+    [TestCase("repo-context-vector-membership")]
+    public void IsRebuildableVectorTree_is_true_for_the_two_rebuildable_vector_projections(string treeName)
+        => Assert.That(RepoContextTrees.IsRebuildableVectorTree(treeName), Is.True);
+
+    [Test]
+    [TestCase("repo-context-vector-payload")]
+    [TestCase("repo-context-structural")]
+    [TestCase("repo-context-symbol")]
+    [TestCase("repo-context-memory")]
+    [TestCase("repo-context-content")]
+    [TestCase("repo-context-xref")]
+    [TestCase("repo-context-session")]
+    [TestCase("some-unknown-tree")]
+    [TestCase("")]
+    public void IsRebuildableVectorTree_is_false_for_every_other_tree_failing_closed(string treeName)
+        => Assert.That(RepoContextTrees.IsRebuildableVectorTree(treeName), Is.False);
+
+    [Test]
+    public void IsRebuildableVectorTree_is_false_for_null_failing_closed()
+        => Assert.That(RepoContextTrees.IsRebuildableVectorTree(null), Is.False);
 }

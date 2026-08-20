@@ -107,6 +107,36 @@ internal static class RepoContextTrees
     };
 
     /// <summary>
+    /// The fail-closed allow-list of derived vector-plane trees the self-healing
+    /// re-derivation may reset when one falls terminally off its write-ahead log.
+    /// It contains exactly the two <b>rebuildable</b> vector projections
+    /// (<see cref="VectorMetadata"/> and <see cref="VectorMembership"/>) whose full
+    /// content can be regenerated from the store-of-record structural, symbol, and
+    /// memory trees plus the working files. The content-addressed, write-once
+    /// <see cref="VectorPayload"/> tree is intentionally excluded (it has no
+    /// in-place deletes and cannot be re-derived by a drop-and-re-embed), as are
+    /// every store-of-record tree - resetting one of those would be real data loss.
+    /// The set is the single authoritative classification the re-deriver consults;
+    /// anything not listed here is refused.
+    /// </summary>
+    private static readonly IReadOnlySet<string> RebuildableVectorTrees =
+        new HashSet<string>(StringComparer.Ordinal) { VectorMetadata, VectorMembership };
+
+    /// <summary>
+    /// Reports whether <paramref name="treeName"/> is a rebuildable derived
+    /// vector-plane tree the self-healer is permitted to auto-reset. Fails closed:
+    /// a null, empty, unknown, store-of-record, or write-once
+    /// (<see cref="VectorPayload"/>) name returns <see langword="false"/>, so the
+    /// re-derivation can never touch a tree that holds primary data. This is the
+    /// narrowest classification seam and is checked against local constants only -
+    /// never against a tree id parsed from a wire- or exception-supplied string.
+    /// </summary>
+    /// <param name="treeName">The tree name to classify. May be <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> only for <see cref="VectorMetadata"/> or <see cref="VectorMembership"/>.</returns>
+    internal static bool IsRebuildableVectorTree(string? treeName)
+        => treeName is not null && RebuildableVectorTrees.Contains(treeName);
+
+    /// <summary>
     /// Resolves the named tree that stores records of the given
     /// <paramref name="kind"/>. Structural kinds (repo, package, file) map to
     /// <see cref="Structural"/>; <see cref="RepoContextRecordKind.Symbol"/> maps to
