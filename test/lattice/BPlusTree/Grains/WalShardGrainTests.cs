@@ -60,6 +60,42 @@ public partial class WalShardGrainTests
     };
 
     /// <summary>
+    /// Reads from <paramref name="fromSequence"/> until the page surfaces at
+    /// least <paramref name="minEntries"/> entries, then returns it.
+    /// <see cref="WalShardGrain.ReadAsync"/> bounds every page at the
+    /// durable-contiguous tail (<c>DurableContiguousTailOffset</c>), which
+    /// advances a beat after each append's durability ack returns: the
+    /// in-flight flush window is removed from the tail computation in the
+    /// flush completion's terminal step, just after the caller's ack is set,
+    /// not before it. A read issued the instant the last append returns can
+    /// therefore momentarily observe the previous offset as the tail and come
+    /// back one entry short. That one-poll-tick deferral is by design - it
+    /// stops a cursor-advancing reader stranding a still-in-flight lower
+    /// offset behind a transient prefix hole - and real shipper and
+    /// materialiser consumers poll and catch up at-least-once rather than
+    /// reading exactly once. Polling here makes the assertion deterministic
+    /// instead of racing the watermark (see issue #1559). The appended
+    /// entries are already durable (every append was awaited to its ack), so
+    /// the watermark is guaranteed to catch up once the flush completion's
+    /// finally runs; the attempt bound only guards against a pathological
+    /// hang.
+    /// </summary>
+    private static async Task<WalShardPage> ReadUntilAtLeastAsync(
+        WalShardGrain grain,
+        long fromSequence,
+        int minEntries,
+        int maxAttempts = 200)
+    {
+        var page = await grain.ReadAsync(fromSequence, 10, CancellationToken.None);
+        for (var attempt = 0; attempt < maxAttempts && page.Entries.Count < minEntries; attempt++)
+        {
+            await Task.Delay(10);
+            page = await grain.ReadAsync(fromSequence, 10, CancellationToken.None);
+        }
+        return page;
+    }
+
+    /// <summary>
     /// Permissive <see cref="ILatticeMergeModeResolver"/> stub that reports
     /// every tree as <see cref="LatticeMergeMode.LwwRegister"/>. Tests
     /// that exercise per-tree mode dispatch supply their own.
@@ -388,7 +424,10 @@ public partial class WalShardGrainTests
         await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
         await grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
 
-        var page = await grain.ReadAsync(1, 10, CancellationToken.None);
+        // Poll until the durable read watermark catches up with the acked
+        // appends rather than reading exactly once immediately after the last
+        // append; see ReadUntilAtLeastAsync and issue #1559.
+        var page = await ReadUntilAtLeastAsync(grain, fromSequence: 1, minEntries: 2);
 
         Assert.Multiple(() =>
         {
