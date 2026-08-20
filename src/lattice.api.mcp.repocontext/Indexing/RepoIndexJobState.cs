@@ -58,11 +58,16 @@ internal sealed class RepoIndexJobState
     [Id(10)]
     public int FilesEmbedded { get; set; }
 
-    /// <summary>How many times this job has been started or resumed.</summary>
+    /// <summary>
+    /// The cumulative number of index runs started for this repository. It counts
+    /// run starts, not retries: the first onboarding, then every re-drive (each
+    /// periodic reconcile, gap back-fill, failed-run re-drive, and reminder-driven
+    /// resume) adds one, so it rises steadily on a healthy repository.
+    /// </summary>
     [Id(11)]
     public int Attempt { get; set; }
 
-    /// <summary>When the current (or most recent) attempt started, in UTC.</summary>
+    /// <summary>When the current (or most recent) index run started, in UTC.</summary>
     [Id(12)]
     public DateTimeOffset? StartedAt { get; set; }
 

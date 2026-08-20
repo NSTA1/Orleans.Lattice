@@ -112,37 +112,76 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             return 0;
         }
 
-        var toEmbed = await SelectFilesToEmbedAsync(repoId, changedFiles, unchangedFiles, cancellationToken)
-            .ConfigureAwait(false);
+        var coverage = await _writer.LoadCoverageAsync(repoId, cancellationToken).ConfigureAwait(false);
+        var toEmbed = SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
         if (toEmbed.Count == 0)
         {
             return 0;
         }
 
         var sources = new List<EmbeddingSource>(toEmbed.Count);
+        List<string>? contentlessToMark = null;
+        List<string>? contentfulToUnmark = null;
         foreach (var file in toEmbed)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var sourceKey = RepoContextKeys.File(repoId, file.RelativePath);
             var text = await ReadContentAsync(repoRoot, file.RelativePath, cancellationToken).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(text))
+            if (text is null)
             {
-                // Skip a file that could not be read (null) or that carries no
-                // embeddable content. A contentless file still has its structural
-                // record from the walk, so keyword recall keeps covering it.
+                // A transient read failure (IO or permission), not a contentless
+                // file: leave it uncovered so a later pass retries it once the file
+                // is readable, rather than marking it considered.
                 continue;
             }
 
-            var windows = RepoContextTextChunker.Chunk(text);
+            var windows = string.IsNullOrWhiteSpace(text)
+                ? Array.Empty<string>()
+                : RepoContextTextChunker.Chunk(text);
             if (windows.Count == 0)
             {
+                // Read, but with no embeddable passage (empty or whitespace-only, or
+                // it chunked to zero windows). Record a "considered, no passages"
+                // marker so the always-on gap sweep and the unchanged-file selection
+                // stop treating this file as a missing embedding and re-driving the
+                // index on every reconcile. Skip the write when it is already marked.
+                if (!coverage.Contentless.Contains(VectorCodec.SourceId(sourceKey)))
+                {
+                    (contentlessToMark ??= new List<string>()).Add(sourceKey);
+                }
+
                 continue;
             }
 
-            sources.Add(new EmbeddingSource(RepoContextKeys.File(repoId, file.RelativePath), windows));
+            // The file carries content. If it was previously marked contentless (it
+            // just gained content), clear that marker so its real embedding covers
+            // it - and so a failed embed leaves it uncovered and retryable rather
+            // than falsely covered by a stale marker.
+            var sourceId = VectorCodec.SourceId(sourceKey);
+            if (coverage.Contentless.Contains(sourceId))
+            {
+                (contentfulToUnmark ??= new List<string>()).Add(sourceId);
+            }
+
+            sources.Add(new EmbeddingSource(sourceKey, windows));
         }
 
         var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress, cancellationToken)
             .ConfigureAwait(false);
+
+        if (contentlessToMark is not null)
+        {
+            await _writer.MarkContentlessAsync(repoId, contentlessToMark, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (contentfulToUnmark is not null)
+        {
+            foreach (var sourceId in contentfulToUnmark)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await _writer.UnmarkContentlessAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         if (embedded == 0 && sources.Count > 0)
         {
@@ -378,38 +417,33 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
     /// <summary>
     /// Builds the list of files to embed: every changed file (its content moved,
-    /// so any prior vector is stale) plus every unchanged file that has no live
-    /// embedding yet. The unchanged set heals a vectorise a prior run left
-    /// incomplete - the structural digest was committed but the embedding never
-    /// landed - without re-embedding the files that already have a vector.
+    /// so any prior vector is stale) plus every unchanged file that is not yet
+    /// covered. The unchanged set heals a vectorise a prior run left incomplete -
+    /// the structural digest was committed but the embedding never landed - without
+    /// re-embedding the files that already have a vector.
     /// <para>
-    /// Presence is judged from the add-wins membership set, which holds only
-    /// 16-character source identifiers and never the embeddings themselves, loaded
-    /// once for the repository and probed in memory with a single reused buffer.
-    /// That avoids both an existence round-trip per unchanged file and pulling any
-    /// vector payload back across the grain boundary.
+    /// Coverage is judged from the add-wins membership set (loaded once by the
+    /// caller), which holds only 16-character source identifiers and never the
+    /// embeddings themselves. A file is covered when it has a real embedding or a
+    /// contentless "considered, no passages" marker, so an empty or whitespace-only
+    /// file is not re-selected on every reconcile once it has been considered. That
+    /// avoids both an existence round-trip per unchanged file and pulling any vector
+    /// payload back across the grain boundary.
     /// </para>
     /// </summary>
-    private async Task<List<RepoFileEntry>> SelectFilesToEmbedAsync(
+    private static List<RepoFileEntry> SelectFilesToEmbed(
         string repoId,
+        RepoContextEmbeddingCoverage coverage,
         IReadOnlyList<RepoFileEntry> changedFiles,
-        IReadOnlyList<RepoFileEntry> unchangedFiles,
-        CancellationToken cancellationToken)
+        IReadOnlyList<RepoFileEntry> unchangedFiles)
     {
         var toEmbed = new List<RepoFileEntry>(changedFiles.Count + unchangedFiles.Count);
         toEmbed.AddRange(changedFiles);
 
-        if (unchangedFiles.Count == 0)
-        {
-            return toEmbed;
-        }
-
-        var embedded = await _writer.LoadEmbeddedMembersAsync(repoId, cancellationToken).ConfigureAwait(false);
         foreach (var file in unchangedFiles)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             var sourceId = VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath));
-            if (!embedded.Contains(sourceId))
+            if (!coverage.IsCovered(sourceId))
             {
                 toEmbed.Add(file);
             }
