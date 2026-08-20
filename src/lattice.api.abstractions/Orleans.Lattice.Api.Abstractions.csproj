@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Abstractions</PackageId>
-    <Version>9.0.0</Version>
+    <Version>9.1.0</Version>
     <Description>Shared contract package for the Orleans.Lattice API facades. Holds the transport-agnostic service interfaces (state query, data, auth admin, backup control, schema control) and their request/response models, so binding packages (for example the gRPC surfaces and the MCP server) depend on a public, versioned contract instead of another package's internals. Contains no implementation and starts nothing; the facade packages implement these contracts and are registered separately.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
