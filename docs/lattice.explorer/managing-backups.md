@@ -19,30 +19,30 @@ rather than a shell rewrite. Each registered area carries its display label and
 an advisory rule that decides whether the area is currently available to the
 connected user.
 
-## Capability-aware, grey-out not hide
+## Area entry: grey-out not hide
 
-An area or action the connected user cannot use is shown **disabled (greyed
-out)**, not hidden. The Backups area entry is enabled when the connected
-endpoint reports at least list / read backup access; otherwise it stays visible
-but greyed, so the user can see the capability exists without being able to
-enter it. Inside the Backups area, the capture and incremental controls enable
-or disable from the capability report for the scope(s) selected for capture,
-while each listed backup's own restore and delete buttons gate on that backup's
-scope - so a backup the caller may read and restore is actionable regardless of
-what scope is currently selected for a new capture.
+An area the connected user cannot use is shown **disabled (greyed out)**, not
+hidden. The Backups area entry is enabled when the connected endpoint reports at
+least list / read backup access; otherwise it stays visible but greyed, so the
+user can see the capability exists without being able to enter it. This
+area-entry check is the one advisory capability gate on the backups path.
 
-The capture-scope capability report is gathered on demand for the selected
-scope; each listed backup's scope capability is probed when the list loads and
-cached per tree for the session, and the cache is cleared on an explicit
-refresh so a permission change is picked up - never re-probed on every render.
+Inside the Backups area there is **no client-side permission pre-check**: the
+capture, schedule, restore, and delete controls enable or disable purely on local
+UI state - whether an operation is in flight, whether a valid capture scope and
+name are selected, and (for a restore) whether a restore target is present - not
+on any per-scope capability report. The controls simply submit, and the server is
+the fail-closed authorization point (see below), so a backup the caller may read
+and restore is actionable regardless of what scope is currently selected for a new
+capture, and a denial is folded into a clean "not permitted" status message.
 
 ## Advisory, not a security boundary
 
-The grey-out is a usability affordance only. The **server remains the
+The area-entry grey-out is a usability affordance only. The **server remains the
 fail-closed enforcement point**: every real backup or restore action is
-authorized on the server when it runs, regardless of what the cached capability
-report said. If the report was over-optimistic - for example the grant changed
-after it was cached - the action still fails closed on the server, and the
+authorized on the server when it runs, regardless of what the cached area-entry
+capability report said. If the report was over-optimistic - for example the grant
+changed after it was cached - the action still fails closed on the server, and the
 Explorer surfaces a clean "not permitted" message rather than an unhandled
 error. The capability probe itself has no side effects; it never captures,
 restores, or deletes anything.
@@ -155,6 +155,30 @@ newest-first order, one page at a time. The index is maintained automatically
 and kept in step with the catalog; you do not create, refresh, or manage it. It
 can be turned off in configuration, in which case the same list is served by a
 slower full scan with identical results.
+
+## Backup health monitoring
+
+When the configured backup sink is durable and external, the Explorer surfaces an
+optional **health** column in the Existing Backups list. Availability is probed
+once against the server; when health monitoring is not available (an in-process or
+non-durable sink, or the probe is denied), the column is hidden entirely.
+
+- Each row shows a health indicator: an unknown/not-yet-verified marker, a
+  healthy marker (with the last verification time), or a warning marker for a
+  backup whose manifest is missing or unresolvable. Clicking a warning opens a
+  details dialog that names the missing-or-uncommitted artifacts and any
+  content-hash mismatches, reports when the backup was last checked, and offers a
+  **Re-check now** button to run a fresh on-demand verification.
+- The per-backup schedule dialog carries a **Health monitoring** section: tick to
+  verify that backup's sink payload periodically, choose an interval in hours and
+  minutes, and click **Save**.
+
+The corresponding `IBackupCatalogReader` members drive this: availability
+(`IsHealthMonitoringAvailableAsync`), the latest stored report
+(`GetHealthAsync`), an on-demand verification (`CheckHealthAsync`), and the
+per-backup monitor override (`ConfigureHealthAsync`). Each folds a denial or
+transport failure into a safe empty/false result rather than throwing, and the
+server remains the fail-closed authorization point for every health action.
 
 ## See also
 

@@ -147,8 +147,7 @@ only.
 
 ## Enabling the surface
 
-All of these tools are read-only and are contributed to any caller holding the
-repository-context read grant; none requires `enableWrites`. Register the module as
+All of these tools are read-only and are contributed to any caller whose data read-or-write permission unlocks the repository-context group; none requires `enableWrites`. Register the module as
 a companion to `AddLatticeMcp`, exactly as for the rest of the surface:
 
 ```csharp verify

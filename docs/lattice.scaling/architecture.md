@@ -8,14 +8,14 @@ the storage axis can never move a replica.
 ```
              per silo, every SampleInterval
   +---------------------------------------------------+
-  |  ComputePressureCollector    StoragePressureCollector
+  |  compute-pressure collector  storage-pressure collector
   |     |                              |
   |     v                              v
   |  ComputePressure               StoragePressure
   |     \                              /
   |      \                            /
   |       v                          v
-  |            ScalingSignalComputer
+  |            scaling-signal computer
   |          (max-dimension, EWMA, scale-in gate, floor)
   |                     |
   |                     v
@@ -29,14 +29,14 @@ the storage axis can never move a replica.
 
 The live facade (`ILatticeScalingSignal`) runs as an `IHostedService`. On a timer
 (`SampleInterval`) it samples both collectors, folds them through the
-`ScalingSignalComputer`, and caches the resulting `ScalingSignal`. Every scrape -
+scaling-signal computer, and caches the resulting `ScalingSignal`. Every scrape -
 whether from the HTTP endpoint, the health check, or a direct
 `GetScalingSignalAsync` call - reads the cached snapshot, so scrapes are cheap and
 never fan out to the cluster.
 
 ## Compute axis
 
-`ComputePressureCollector` produces a cluster-aggregate `ComputePressure` with
+The compute-pressure collector produces a cluster-aggregate `ComputePressure` with
 three normalised dimensions, each `0.0` (idle) to `1.0` (saturated):
 
 - **Activation** - the per-silo grain-activation working set from Orleans
@@ -53,7 +53,7 @@ check independently of the ratios.
 
 ## Aggregating to a scalar
 
-`ScalingSignalComputer` reduces the compute axis to one replica-demand scalar:
+The scaling-signal computer reduces the compute axis to one replica-demand scalar:
 
 1. **Dominant dimension, not sum.** The raw scalar is
    `max(activation, resource, walDispatch) * replicaCount`. Taking the maximum
@@ -90,7 +90,7 @@ point at any replica's endpoint and read a coherent whole-cluster `scaleValue`.
 
 ## Storage axis, and the invariant
 
-`StoragePressureCollector` produces `StoragePressure` independently: an
+The storage-pressure collector produces `StoragePressure` independently: an
 over-threshold flag, aggregate retained WAL bytes, a per-account
 `WalAccountPressure` breakdown, and an optional `WalRebalanceRecommendation`. See
 [storage pressure](storage-pressure.md) for the classification and remediation

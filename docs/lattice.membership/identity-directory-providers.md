@@ -44,7 +44,10 @@ source that has nothing to return.
 `LatticeIdentityDirectoryOptions` bounds every provider uniformly:
 
 ```csharp verify
-siloBuilder.ConfigureLatticeMembership(_ => { });
+// AddLatticeMembership registers the identity-directory providers and the
+// default directory; ConfigureLatticeMembership only layers options, so the
+// directory registration is assumed already in place here.
+siloBuilder.AddLatticeMembership();
 siloBuilder.Services.Configure<LatticeIdentityDirectoryOptions>(options =>
 {
     // Page size used when a query does not request one.
@@ -151,12 +154,12 @@ Microsoft Graph permissions, each granted admin consent:
 
 **Graph unavailability.** On the normal path the provider returns
 `DirectoryPrincipal`s carrying the id, display name, and kind (it does not attach a
-claim bag). If the app-only token cannot be minted, or a Graph call is denied or
-fails, the provider degrades cleanly rather than throwing: a search returns an
-empty page and a resolve returns `null`. The provider stays registered, so the
-directory is still reported as configured - a search simply surfaces no matches,
-and an id that cannot be resolved is blocked as an unknown principal rather than
-created.
+claim bag). A Graph call that Graph itself denies (an `ODataError`) degrades
+cleanly rather than throwing: a search returns an empty page and a resolve returns
+`null`. Token-acquisition failures and non-OData transport failures are not caught
+and currently propagate. The provider stays registered, so the directory is still
+reported as configured - a denied search surfaces no matches, and an id that
+cannot be resolved is blocked as an unknown principal rather than created.
 
 For the app-registration walkthrough (ids, secret, permission GUIDs) see
 [Entra setup](../lattice.membership.entra/entra-setup.md), and for a runnable

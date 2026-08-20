@@ -1,6 +1,6 @@
 # Surfaces
 
-The state API exposes read-only surfaces: discovery, structure, entry inspection, change history, change observation, metrics, and cluster info. Each is a facade verb with a one-to-one gRPC RPC. The examples below drive them through `LatticeStateApiGrpcClient`; the same request/response records flow when you consume the facade in-process.
+The state API exposes read-only surfaces: discovery, structure, entry inspection, change history, dead letters, change observation, metrics, and cluster info. The gRPC binding exposes RPCs for the remotely supported read surfaces; facade-only summary helpers such as `GetTreeSummaryAsync`, `GetShardSummariesAsync`, and `GetPhysicalShardCountAsync` are available only to in-process consumers. The examples below drive the remote surface through `LatticeStateApiGrpcClient`; the facade DTOs flow directly or inside gRPC wrapper records when you consume the facade remotely.
 
 Every example assumes a client built like this (see [Client](client.md)):
 
@@ -155,6 +155,20 @@ do
 }
 while (continuation is not null);
 ```
+
+## Dead letters
+
+The state facade exposes two read-only strict-mode schema-enforcement dead-letter operations:
+
+- `Task<int> GetDeadLetterCountAsync(string treeId, CancellationToken cancellationToken = default)` counts retained dead-letter entries for a tree.
+- `Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)` lists the queue in append (time) order.
+
+The gRPC client exposes the corresponding RPCs:
+
+- `Task<DeadLetterCountResponse> GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)` over the `GetDeadLetterCount` unary RPC.
+- `Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)` over the `ListDeadLetters` unary RPC.
+
+`DeadLetterQueueRequest` carries `TreeId`, `PageSize` (default `100`, clamped to `1000`), and `PageToken`; `DeadLetterQueuePage` returns `Entries` and `NextPageToken`. Each `DeadLetterEntryRecord` carries the diverted key, size-bounded value preview, full value length, validation reason, ingest source, UTC timestamp, and whether the preview was truncated. The listing never mutates tree data and never replays or requeues diverted items. A hidden tree, a cluster without schema enforcement, or an empty queue returns `0` or an empty page rather than disclosing more.
 
 ## Change observation
 

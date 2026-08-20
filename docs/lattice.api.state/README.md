@@ -9,7 +9,7 @@ A read-only cluster state-API add-on for [Orleans.Lattice](../../README.md) - qu
 It is built in two layers:
 
 - **A transport-agnostic facade.** `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` expose discovery, structure, entry inspection, change observation, and metrics over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one. The facade interfaces live in the shared `Orleans.Lattice.Api.Abstractions` contract package and are `public`, so an out-of-package in-process host reuses them by referencing that package and resolving them from DI directly, or by co-hosting the gRPC binding and dialing it over a loopback channel - see [Client](client.md#in-process-reuse).
-- **A code-first gRPC binding.** `Orleans.Lattice.Api.State.Grpc` projects the facade onto a long-lived gRPC service whose messages are the same Orleans-serialized records, plus a public `LatticeStateApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
+- **A code-first gRPC binding.** `Orleans.Lattice.Api.State.Grpc` projects the facade onto a long-lived gRPC service whose messages are Orleans-serialized C# records that wrap or reuse the facade DTOs, plus a public `LatticeStateApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 It covers:
 
@@ -18,7 +18,8 @@ It covers:
 - **Entries.** Scan a key-ordered, snapshot-isolated page of entries (forward or reverse, predicate-filtered, with a value-preview budget) or fetch one key's full record.
 - **Change observation.** Subscribe to a tree's live mutation stream - point writes, deletes, and range deletes - as a server-streamed feed.
 - **Metrics.** Read a one-shot metrics snapshot per tree, or subscribe to a delta-coalesced live metric feed (live keys, shard count, optional shard hotness and view lag).
-- **Security.** A fail-closed authorization seam (`ILatticeStateApiAuthorizer`) gates the gRPC surface; the default denies every call until an authorizer is registered or enforcement is explicitly turned off.
+- **Dead letters.** Count and page strict-mode schema-enforcement dead-letter queues without replaying or requeueing diverted items.
+- **Security.** A fail-closed authorization seam (`ILatticeStateApiAuthorizer`) gates the protected gRPC surface; the default denies protected calls until an authorizer is registered or enforcement is explicitly turned off. `GetAuthScheme` stays unauthenticated for scheme discovery.
 
 The package is **strictly read-only**: every surface observes state, none of them mutates it.
 
@@ -27,7 +28,7 @@ The package is **strictly read-only**: every surface observes state, none of the
 - **Read-only by construction.** There is no write, delete, split, or reconfigure verb anywhere on the surface. The facade and the gRPC service expose observation verbs only.
 - **Strongly-consistent reads.** Entry scans run under the core library's snapshot-isolated cursor machinery, so a page reflects a coherent point-in-time view even during concurrent writes and rebalancing. Structure and metric counts are not cursor-bound: they come from the pushed-up topology digest and the metrics sampler, which report the latest published aggregate rather than a scan-pinned snapshot.
 - **Transport-agnostic.** The facade is the contract; gRPC is one binding. The same records flow to an in-process consumer and a remote one, so the `Orleans.Lattice.Api.Mcp` MCP server reuses the facade with zero re-modelling.
-- **Fail-closed.** The gRPC surface authorizes every call. Left unconfigured it denies all traffic, so an endpoint is never accidentally exposed unauthenticated.
+- **Fail-closed.** The gRPC surface authorizes every protected state read or observation call. Left unconfigured it denies protected traffic, while `GetAuthScheme` remains open only to advertise how to sign in.
 - **Low ambient cost.** Discovery, structure, and metrics sampling coalesce shared work: many concurrent subscribers to the same metric request share a single sampling loop, and a cluster with no readers does no sampling at all.
 
 ## Features
@@ -39,8 +40,9 @@ The package is **strictly read-only**: every surface observes state, none of the
 | **Entry inspection** | Key-ordered, snapshot-isolated entry scans (forward / reverse, predicate-filtered, value-preview-budgeted) and single-key record fetch. | [Surfaces](surfaces.md#entries) |
 | **Change observation** | A server-streamed feed of a tree's live mutations - sets, deletes, and range deletes - with optional maintenance-rewrite inclusion. | [Surfaces](surfaces.md#change-observation) |
 | **Metrics observation** | A one-shot per-tree metrics snapshot, or a delta-coalesced live feed of live keys, shard count, shard hotness, and view lag. | [Surfaces](surfaces.md#metrics) |
-| **Code-first gRPC binding** | A long-lived gRPC service and a public typed client over the same Orleans-serialized records - no hand-written `.proto`. | [gRPC Contract](grpc-contract.md) |
-| **Fail-closed authorization** | A per-call authorization seam that denies by default until an authorizer is registered or enforcement is explicitly disabled. | [Security](security.md) |
+| **Code-first gRPC binding** | A long-lived gRPC service and a public typed client over Orleans-serialized C# records that wrap or reuse facade DTOs - no hand-written `.proto`. | [gRPC Contract](grpc-contract.md) |
+| **Fail-closed authorization** | A per-call authorization seam that denies protected calls by default until an authorizer is registered or enforcement is explicitly disabled. | [Security](security.md) |
+| **Dead-letter inspection** | Count and page strict-mode schema-enforcement dead-letter queues as read-only state. | [Surfaces](surfaces.md#dead-letters) |
 | **Shared sampling** | Concurrent subscribers to the same metric request share one sampling loop; a reader-less cluster samples nothing. | [Efficiency](efficiency.md) |
 
 ## Quick Start
@@ -58,7 +60,7 @@ builder.Host.UseOrleans(silo =>
 });
 
 // Expose the read-only state surface over gRPC. The default authorizer denies
-// every call, so register a real one (or disable enforcement behind an outer
+// protected calls, so register a real one (or disable enforcement behind an outer
 // boundary) before the endpoint serves traffic.
 builder.Services.AddLatticeStateApiGrpc(o => o.RequireAuthorization = true);
 builder.Services.AddSingleton<ILatticeStateApiAuthorizer, AllowAllStateApiAuthorizer>();

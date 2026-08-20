@@ -21,7 +21,7 @@ The facade adds no transport of its own and no bespoke, un-authorized write path
 
 ## Fail-closed authorization on every operation
 
-Every facade operation authorizes before it touches the admin plane, through the shared `SchemaAccessAuthorizer`:
+Every facade operation authorizes before it touches the admin plane, through the schema engine's internal authorization component:
 
 - **Policy reads**, **dead-letter reads**, **version-config reads**, **remediation-status reads**, and **compliance scans** require Read authority for the tree.
 - **Policy mutations**, **version-config mutations**, **target-version advances**, **version migrations**, and **remediation** require SchemaAdmin authority for the tree.

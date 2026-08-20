@@ -4,7 +4,7 @@ The package has four public options types. `LatticeMembershipOptions` and `Latti
 
 ## `LatticeMembershipOptions`
 
-The token-vs-directory group merge policy, the per-silo resolution-cache lifetime, and the durable per-key history retention applied to the `sys-membership-*` trees. Bind it through `AddLatticeMembership(configure)`.
+The token-vs-directory group merge policy, the per-silo resolution-cache lifetime, and the durable per-key history retention applied to the `sys-membership-*` trees. Bind it through `AddLatticeMembership(configure)`, or layer an additional configuration delegate after registration with `ConfigureLatticeMembership(configure)`.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|

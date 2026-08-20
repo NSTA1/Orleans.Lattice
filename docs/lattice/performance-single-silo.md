@@ -188,14 +188,15 @@ tick frames, event sourcing batches, periodic flush windows), use
 The `SetAsync (point write + async materialised view)` row drives the
 *identical* point-write path as the plain `SetAsync` row, at the same
 offered load, with a key-preserving materialised view attached over the
-tree. Its sustained source-write throughput is unchanged (~1.2 k keys/s)
+tree. Its sustained source-write throughput is nearly unchanged
+(903 keys/s, versus the plain row's 984 keys/s)
 because the view is maintained **asynchronously, off the caller's
 critical path**: the foreground `SetAsync` returns as soon as the source
 tree's write is durable, and the view maintainer applies its coalesced
 background batches afterwards (in the benchmark the view kept up with
 zero apply lag). The only measurable cost is a modest widening of the
-caller-visible latency tail (p50 ~28 ms vs ~20 ms, p99 ~221 ms vs
-~79 ms), because the background view applies contend with the foreground
+caller-visible latency tail (p50 ~39.26 ms vs ~24.4 ms, p99 ~232.59 ms vs
+~150.05 ms), because the background view applies contend with the foreground
 writes for the same silo CPU, WAL-flush slots, and single Azure Tables
 account budget. The takeaway for capacity planning: maintaining a view
 costs a bounded latency-tail overhead on the source writes, not a

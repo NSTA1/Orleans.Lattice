@@ -6,7 +6,7 @@ The package has one public server-side options type, `LatticeBackupApiGrpcOption
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| `RequireAuthorization` | `bool` | `true` | Whether the authorization interceptor enforces `ILatticeBackupApiAuthorizer` on every inbound call. Default-deny: the binding fails closed unless a host registers a permissive authorizer or turns enforcement off. Set to `false` only when an outer authentication boundary already guards the endpoint. |
+| `RequireAuthorization` | `bool` | `true` | Whether the authorization interceptor enforces `ILatticeBackupApiAuthorizer` on protected inbound calls. The unauthenticated `GetAuthScheme` discovery RPC is exempt. Default-deny: the binding fails closed unless a host registers a permissive authorizer or turns enforcement off. Set to `false` only when an outer authentication boundary already guards the endpoint. |
 | `CredentialHeaderName` | `string` | `authorization` | The inbound request-header (gRPC metadata) name carrying the caller's credential token, bridged into the ambient Lattice credential so the backup access gate can resolve the caller's subject. Only consulted when auth-backed backup control is active (the `Orleans.Lattice.Auth` add-on is registered). |
 | `CredentialScheme` | `string` | `Bearer` | The authentication scheme stamped on the bridged credential, matched by a registered credential authenticator to resolve the caller's subject. A case-insensitive scheme prefix on the header value (for example `"Bearer "`) is stripped before the remaining token is used. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | The auth schemes the endpoint advertises from its unauthenticated `GetAuthScheme` RPC, in preference order. Empty by default (the endpoint advertises nothing, so a client falls back to manual or Basic selection). Each descriptor must carry only public configuration - never a secret. |
@@ -15,7 +15,7 @@ The package has one public server-side options type, `LatticeBackupApiGrpcOption
 
 ## Fail-closed defaults
 
-Out of the box the binding registers `DenyAllBackupApiAuthorizer` and leaves `RequireAuthorization` at `true`, so every call is rejected with `PermissionDenied` until the host opts in - either by registering a permissive authorizer (or the built-in `AllowAllBackupApiAuthorizer`) or by setting `RequireAuthorization = false` behind a trusted boundary. See [Architecture](architecture.md) for how the transport gate and the facade's own scope authorization combine.
+Out of the box the binding registers `DenyAllBackupApiAuthorizer` and leaves `RequireAuthorization` at `true`, so every protected call is rejected with `PermissionDenied` until the host opts in - either by registering a permissive authorizer (or the built-in `AllowAllBackupApiAuthorizer`) or by setting `RequireAuthorization = false` behind a trusted boundary. `GetAuthScheme` remains reachable without a credential so clients can discover how to sign in. See [Architecture](architecture.md) for how the transport gate and the facade's own scope authorization combine.
 
 ## Client transport
 

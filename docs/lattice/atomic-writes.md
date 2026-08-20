@@ -181,10 +181,20 @@ NotStarted --> Prepare --> Execute --> registry.MarkCommitted --> fan-out --> Co
                               +--> Compensate --> registry.MarkAborted --> fan-out --> Completed   (failure)
 ```
 
-The persisted `AtomicWritePhase` enum tracks `NotStarted, Prepare,
-Execute, Compensate, Completed`; the `registry.Mark*` and `fan-out`
-steps run synchronously inside `RunSagaAsync` between the
-Execute / Compensate phase exit and the final `Phase = Completed`
+The saga's persisted phase advances through the states shown above - not
+started, prepare, execute, compensate, and completed - plus two further
+states that the happy-path diagram omits. The first is a terminal
+**precondition-failed** state: a guard predicate evaluated against the
+pre-saga snapshot failed for at least one key, so the saga aborted before any
+write and committed nothing; it is memoized distinctly from ordinary
+completion so a guarded caller re-reads the precondition-miss outcome on
+re-attach. The second is a **prepared / paused** state used by cross-tree
+sagas: every write has been staged into the leaf pending buckets (hidden from
+readers) and the per-tree registry has delegated this saga's txid to the
+cross-tree coordinator, and the saga waits there until the coordinator
+finalizes it into commit (execute-tail) or abort (compensate). The
+`registry.Mark*` and `fan-out` steps run synchronously inside `RunSagaAsync`
+between the execute / compensate phase exit and the final completed-phase
 write. **The registry write is the single tree-wide visibility flip**
 (see [Consistency: Atomic
 visibility](consistency.md#atomic-visibility));

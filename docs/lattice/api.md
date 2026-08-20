@@ -1503,8 +1503,10 @@ constraints, and per-tree overrides via the
 > are mutable only through `ILattice.ResizeAsync` and
 > `ILattice.ReshardAsync`. Callers who want non-default sizing should
 > either call `ResizeAsync` / `ReshardAsync` on a freshly-created
-> tree (empty-tree fast-path) or pre-register the pin via
-> `ILatticeRegistry.RegisterAsync` before first use.
+> tree (empty-tree fast-path) or register per-tree overrides at silo
+> startup with `ConfigureLattice("tree-name", ...)`, which the
+> registry consults when it seeds the tree on first use (see
+> [tree registry](tree-registry.md) for the resolution order).
 
 > **The virtual shard space is not a runtime option.** It is a
 > compile-time constant, `LatticeConstants.DefaultVirtualShardCount = 4096`.
@@ -1647,7 +1649,7 @@ they are implementation details not intended for direct use.
 | `LatticeQuotaExceededException` | `ol.lqe` | public | Typed `InvalidOperationException` subclass thrown by the `ILattice` write surface when a locally-authored write is refused because the tree reached its configured `MaxLiveKeys` / `MaxEstimatedBytes` admission cap. Carries `TreeId`, `Dimension` (`keys`/`bytes`), `Current`, and `Limit`. See [Admission back-pressure](#admission-back-pressure---latticequotaexceededexception) and [Metrics](metrics.md#per-tree-admission-control). |
 | `LatticeIdempotencyKeyMismatchException` | `ol.ikm` | public | Typed `InvalidOperationException` subclass thrown by the atomic-write saga and the cross-tree transaction coordinator when a caller-supplied `operationId` is re-submitted with a different key set (or, cross-tree, a different tree set or key set) than its first submission. A deterministic caller error - distinct from a genuine server-side saga failure - so the API bindings map it to a client-error status. Carries the offending `OperationId`. See [Atomic Writes - Key-set stability](atomic-writes.md#key-set-stability). |
 | `LatticeCrdtShapeNotRegisteredException` | `ol.csn` | public | Typed `InvalidOperationException` subclass thrown by the leaf grain's typed CRDT apply and prepared-fold paths when an OR-Map verb targets a tree whose host never registered the `(TKey, TValue)` shape via `ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName)`. A deterministic host-configuration precondition - distinct from a genuine server fault - so the API bindings map it to a client-error status (for example gRPC `FailedPrecondition`). Carries the offending `TreeId`. Closed-shape modes never raise it (they resolve through the global registry fallback). |
-| `LatticeTreeBatch` | `ol.ltb` | public | `readonly record struct` - one tree's slice of a cross-tree atomic write (`TreeId`, `Entries`, optional `Predicate`). Deliberately **not** `[Immutable]` (mutable members). See [Cross-tree atomic writes](#cross-tree-atomic-writes). |
+| `LatticeTreeBatch` | `ol.ltb` | public | `readonly record struct` - one tree's slice of a cross-tree atomic write (`TreeId`, `Entries`, optional `Predicate`, optional `EntryDeltas`, optional `EntryDeletes`). Deliberately **not** `[Immutable]` (mutable members). See [Cross-tree atomic writes](#cross-tree-atomic-writes). |
 | `CrossTreeAtomicWriteOutcome` | `ol.cto` | public | Enum: `Committed`, `PreconditionFailed`. Terminal outcome of a cross-tree atomic write. |
 
 ## Public but not usable

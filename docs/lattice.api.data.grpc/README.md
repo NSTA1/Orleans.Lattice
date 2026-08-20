@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Data.Grpc
 
-Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/README.md) - projects the write-capable data-API facade onto a gRPC service and a public typed client, over the same Orleans-serialized records, with no hand-written `.proto`.
+Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/README.md) - projects the write-capable data-API facade onto a gRPC service and a public typed client, using Orleans-serialized request / response records that wrap the facade DTOs, with no hand-written `.proto`.
 
 ## What is it?
 
@@ -10,7 +10,7 @@ It provides:
 
 - **A code-first gRPC service.** Ten unary RPCs - point read, range read, set, delete, range delete, non-atomic bulk upsert, the two atomic multi-key writes (single-tree and cross-tree), typed CRDT write, and typed CRDT read - bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeDataApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
-- **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
+- **Shared Orleans marshalling.** Wire messages are the package's `[GenerateSerializer]` request / response records, serialized with the Orleans binary serializer and wrapping facade DTOs where needed, so client and server stay in lock-step by construction.
 - **Fail-closed authorization.** A per-call `ILatticeDataApiAuthorizer` seam gates every RPC; the default denies all traffic until a host configures one.
 
 The package has no external broker and no `.proto` file to maintain.

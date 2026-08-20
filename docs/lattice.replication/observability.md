@@ -169,6 +169,18 @@ These counters are **opt-in** and fire only when shared-dictionary compression i
 
 Read the achieved ratio as `rate(compress_dictionary_bytes_out) / rate(compress_dictionary_bytes_in)` per `tree`: a value well below `1.0` is the dictionary saving (lower is better; `1.0` means no saving). Compare it against the dictionary-less `Zstd` baseline on the same workload to decide whether a given dictionary id is worth shipping. The counters are emitted on the framing encode path only, so a frame that gracefully degrades to plain `Zstd` (because the dictionary could not be resolved locally) does not contribute - which keeps the ratio honest about the dictionary path specifically. The `peer` tag is not available at the encode seam, so these counters are tagged by `tree` only.
 
+## Shared-dictionary convergence (`ship.dictionary_convergence`)
+
+This counter is **opt-in** and fires only when the auto-distributing shared dictionary is enabled: it is incremented once per shared-dictionary pull attempt the shipper makes against a peer-advertised dictionary id it does not yet hold, so an operator can watch how a fleet converges onto a shared trained dictionary and spot fingerprint rejections.
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.ship.dictionary_convergence` | `LatticeReplicationMetrics.DictionaryConvergenceName` | `{pull}` | `tree`, `peer`, `outcome` | Once per shared-dictionary pull attempt against a peer-advertised id the shipper does not yet hold. `outcome` is one of `installed` (the peer served bytes whose fingerprint matched the advertised fingerprint and they were installed locally), `rejected` (the served bytes' fingerprint did not match, or a local id collision rejected the install, so they were discarded), or `unavailable` (the peer or transport did not serve the pull - an un-upgraded peer, a momentarily unreachable hop, or the peer no longer holds the id - so the shipper leaves it uninstalled and retries on a later tick). |
+
+Read the convergence health as `rate(ship_dictionary_convergence{outcome="installed"}) / rate(ship_dictionary_convergence)` per `(tree, peer)`: a ratio climbing toward `1` as a newly trained dictionary propagates confirms the fleet is converging, while a sustained `rejected` fraction flags a fingerprint mismatch worth investigating and a sustained `unavailable` fraction flags peers that have not yet upgraded or cannot serve the id.
+
+> Note: the dashboards package (`docs/lattice.dashboards`) owns the metrics-to-panel map; a corresponding panel + map row for this counter is maintained there, not in this package.
+
 ## Subscribing
 
 Wire `LatticeReplicationMetrics.MeterName` into an OpenTelemetry `MeterProviderBuilder.AddMeter(...)` call, or attach a `MeterListener` directly:

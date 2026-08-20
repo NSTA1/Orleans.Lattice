@@ -57,9 +57,9 @@ See [Configuration](configuration.md) for the full table. Properties: `bool Requ
 
 ## Authorization behaviour
 
-### `LatticeSchemaApiGrpcAuthInterceptor`
+### Authorization interceptor
 
-The fail-closed authorization interceptor. It denies by default, exempts only `GetAuthScheme`, and maps unknown or unmapped failures to safe gRPC status codes. A host must configure authorization deliberately or place the endpoint behind a trusted boundary and set `RequireAuthorization = false`.
+The internal fail-closed authorization interceptor denies by default, exempts only `GetAuthScheme`, and maps unknown or unmapped failures to safe gRPC status codes. A host must configure authorization deliberately or place the endpoint behind a trusted boundary and set `RequireAuthorization = false`.
 
 `GetAuthScheme` advertises the configured public auth schemes to unauthenticated callers. It must never return secrets or user-specific data.
 

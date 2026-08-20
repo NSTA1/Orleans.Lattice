@@ -14,7 +14,8 @@ using Orleans.Lattice.Schema;
 
 siloBuilder.AddLatticeSchemaEnforcement(options =>
 {
-    // Re-validate replicated / restored items instead of trusting them.
+    // The global half of strict ingest: let the interceptor inspect replicated /
+    // restored writes. Each tree's policy must also opt in (see below).
     options.StrictIngest = true;
 
     // Also validate the result of a CRDT merge (default off).
@@ -84,9 +85,22 @@ its origin. That keeps ingest fail-open - it must never block.
 Opt into re-validation with `StrictIngest`. In strict mode an ingested item that
 violates the policy is diverted to the tree's [dead-letter
 queue](dead-letter-queue.md) instead of being applied, so a bad item is neither
-silently accepted nor allowed to stall the ingest stream. `StrictIngest` can be
-set globally on the options, or per policy via the
-`LatticeSchemaPolicy(rules, strictIngest: true)` constructor.
+silently accepted nor allowed to stall the ingest stream.
+
+Strict ingest requires **two** flags to line up, and takes effect only when both
+are set:
+
+- the **global** switch on the options (`StrictIngest = true`), which is what makes
+  the interceptor inspect system-origin (replication apply / restore) writes at
+  all; and
+- the **per-tree** flag on that tree's policy, set via the
+  `LatticeSchemaPolicy(rules, strictIngest: true)` constructor.
+
+With the global switch off, system-origin writes are never inspected, so a
+per-tree strict flag has no effect. With the global switch on but a tree's policy
+leaving strict off, that tree's ingest is still trusted and its items are applied
+as-is. Only a tree whose policy sets the per-tree flag, on a silo whose options
+enable the global switch, dead-letters a non-compliant ingested item.
 
 ## Bringing existing data into compliance
 

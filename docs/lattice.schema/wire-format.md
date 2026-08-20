@@ -44,12 +44,19 @@ it on trees storing arbitrary opaque binary values.
 
 ## Forward compatibility
 
-A value stamped with a **newer** schema version than a reader's target version, or
-one whose format version the reader does not recognise, surfaces
-`NotSupportedException` on read - the same behaviour as an unknown compressor. This
+A value stamped with a **newer** schema version than a reader's target version - or
+one whose stored version cannot be upcast to the target - surfaces
+`NotSupportedException` on read, the same behaviour as an unknown compressor. This
 is deliberate: rather than silently mis-decode, the reader fails loudly so an
-operator upgrades the reader's registry or target version. The reserved
-`FormatVersion` byte lets a future header shape coexist with `0x01`.
+operator upgrades the reader's registry or target version.
+
+An **unrecognised format version** is handled differently: it does **not** throw.
+The envelope check requires *both* the magic byte and the recognised
+`FormatVersion` (`0x01`), so a value whose second byte is any other format version
+fails the check, is treated as an un-stamped (plain) body, and is passed through
+verbatim. The reserved `FormatVersion` byte therefore lets a future header shape
+coexist with `0x01`: a reader that does not recognise the newer format falls
+through and returns the payload unchanged rather than failing.
 
 ## See also
 

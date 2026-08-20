@@ -18,7 +18,7 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 
 - **Read-only over the data plane.** The console observes cluster state and drives only the backup, access, and schema *control* facades. There is no direct write, delete, split, or reconfigure path into a tree's data.
 - **Out-of-cluster by construction.** The Explorer reaches a cluster purely over its gRPC endpoints, so it can be deployed and scaled independently and never taxes Orleans membership or the silo's activation budget.
-- **Fail-closed and capability-gated.** Each admin area is hidden until a capability probe proves the endpoint exposes it and the principal may use it; an unconfigured or unauthorized area is never surfaced.
+- **Fail-closed and capability-gated.** Each admin area whose capability probe does not prove the endpoint exposes it and the principal may use it renders **visible but disabled (greyed out)**, not hidden; the grey-out is advisory and the server still enforces access when an action runs. An area is omitted from the switcher entirely only when configuration withholds it (for example the Schema area, off unless `EnableSchemaArea` is set).
 - **Head-agnostic core.** The connection, configuration, session, capability, and navigation services live in `Orleans.Lattice.Explorer.Core` and depend only on the public read-only state-API gRPC client, so every head renders the same behaviour.
 - **Embeddable without wiring.** The shared UI ships its static web assets at `_content/Orleans.Lattice.Explorer.UI/`, served automatically; a host mounts the whole console with two extension calls under a configurable base path.
 
@@ -70,7 +70,7 @@ See [Running and hosting the Explorer](running-the-explorer.md) for the full hos
 
 - [Running and hosting the Explorer](running-the-explorer.md) - standalone and embedded hosting, package shape, and deployment without taxing cluster scaling.
 - [Multi-replica and failover hosting](multi-replica-hosting.md) - opt-in durable auth state (shared Data Protection key ring, estate-global token cache) and graceful re-authentication for a multi-replica deployment.
-- [Configuration](configuration.md) - every public options property, its type, and its default.
+- [Configuration](configuration.md) - the primary hosting and configuration options properties, their types, and their defaults.
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) - selecting a login method and attaching a bearer token.
 - [Adding a custom auth method](adding-a-custom-auth-method.md) - implementing `IExplorerAuthMethod` for a bespoke sign-in.
 - [Managing backups from the Explorer](managing-backups.md) - the Backups area and its capability gating.

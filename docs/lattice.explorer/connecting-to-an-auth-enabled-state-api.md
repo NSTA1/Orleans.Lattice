@@ -65,18 +65,21 @@ var services = new ServiceCollection();
 services.AddExplorerAuth();
 services.AddExplorerEntraAuth(options =>
 {
-    // These are public OIDC parameters. When the endpoint advertises them,
-    // the advertised values take precedence and no static configuration is
-    // needed here.
+    // These are public OIDC parameters. The advertised authority and client id
+    // take precedence over these static values, but a configured Scopes list
+    // overrides the advertised audience (the advertised audience is used only
+    // when Scopes is left empty).
     options.Authority = "https://login.microsoftonline.com/<tenant>";
     options.ClientId = "<public-client-id>";
     options.Scopes.Add("api://<state-api-app-id>/.default");
 });
 ```
 
-When the endpoint advertises the Entra authority, client id, and audience, the
-static options above are optional: the Explorer resolves the parameters from the
-advertisement at connect time.
+The advertised authority and client id take precedence over the static options,
+so when the endpoint advertises them those fields are optional. The audience is
+the exception: a configured `Scopes` list overrides the advertised audience, and
+the advertised audience is resolved (into the resource's `/.default` scope) only
+when `Scopes` is left empty.
 
 ## Token freshness
 

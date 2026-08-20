@@ -18,6 +18,7 @@ Register the three layers in order on the silo: the core lattice, then membershi
 
 ```csharp verify
 siloBuilder
+    .AddLattice((silo, name) => silo.AddMemoryGrainStorage(name))
     .AddLatticeMembership()
     .AddLatticeAuth(options =>
     {
@@ -82,6 +83,7 @@ A `LatticeScope` names how broadly a rule applies within a tree, from broadest t
 | Tree | `LatticeScope.Tree(treeId)` | Every key in the tree. |
 | Prefix | `LatticeScope.Prefix(treeId, prefix)` | Every key that starts with the prefix. |
 | Key | `LatticeScope.Key(treeId, key)` | Exactly one key. |
+| Cluster-wide | `LatticeScope.ClusterWide()` | A scopeless, all-trees grant over the `*` sentinel tree id, used for a capability not attached to any single tree (notably `LatticeOperation.Telemetry`). |
 
 ### Precedence
 
@@ -102,7 +104,7 @@ The policy store and the membership directory are ordinary `ILattice` trees. In 
 
 ### Consistency modes
 
-Policy propagation is **eventually consistent** by default: a rule change is visible once the destination's compiled snapshot rebuilds off the updated policy tree, which happens continuously in the background. A tree that needs a caller to observe a policy change before its next operation can opt into a **strict epoch fence** by naming the tree in `StrictConsistencyTrees`; gated operations on a fenced tree wait for the policy epoch to catch up before proceeding.
+Policy propagation is **eventually consistent** by default: a rule change is visible once the destination's compiled snapshot rebuilds off the updated policy tree, which happens continuously in the background. A tree that needs a caller to observe a policy change before its next operation can opt into a **strict epoch fence** by naming the tree in `StrictConsistencyTrees`; while a fenced tree's local compiled policy epoch is below the required floor, opted-in user writes to it are rejected (denied) rather than made to wait. Reads, system-origin writes, and replication-applied writes are never fenced.
 
 ```csharp verify
 siloBuilder.AddLatticeAuth(options =>
