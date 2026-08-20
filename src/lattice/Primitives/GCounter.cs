@@ -19,7 +19,16 @@ public sealed class GCounter : ICrdt<GCounter>
 {
     /// <summary>Per-replica cumulative grow-only component.</summary>
     [Id(0)]
-    public Dictionary<string, long> Increments { get; set; } = [];
+    public Dictionary<string, long> Increments { get; set; }
+
+    /// <summary>Creates an empty grow-only counter.</summary>
+    public GCounter() => Increments = [];
+
+    // Direct-assign constructor for the clone/merge fast paths: takes ownership
+    // of an already-built backing store so the factory allocates exactly one
+    // dictionary, with no discarded empty-collection shell from a field
+    // initializer that an object initializer would immediately overwrite.
+    private GCounter(Dictionary<string, long> increments) => Increments = increments;
 
     /// <inheritdoc />
     /// <remarks>
@@ -63,9 +72,18 @@ public sealed class GCounter : ICrdt<GCounter>
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var result = left.Clone();
-        result.MergeFrom(right);
-        return result;
+
+        // Seed from the left operand via the dictionary copy constructor (presizes
+        // to left.Count exactly and bulk-copies), then fold the right in through
+        // the single-probe pointwise-max. The direct-assign constructor takes the
+        // merged store as-is, so the merge allocates no discarded empty-collection
+        // shell (the field-initializer dictionary an object initializer would
+        // immediately overwrite). Cloning left keeps the result right-sized when
+        // the operands share replicas - the common case - rather than presizing to
+        // the disjoint upper bound and over-allocating.
+        var merged = new Dictionary<string, long>(left.Increments);
+        MergeSide(merged, right.Increments);
+        return new GCounter(merged);
     }
 
     /// <summary>
@@ -84,13 +102,11 @@ public sealed class GCounter : ICrdt<GCounter>
     /// <summary>Creates a deep copy of this counter.</summary>
     public GCounter Clone() =>
         // The dictionary copy constructor presizes the backing store to the
-        // source Count exactly and bulk-copies the entries. string keys and
+        // source Count exactly and bulk-copies the entries; string keys and
         // long values are immutable, so the shallow per-entry copy is a deep
-        // copy.
-        new()
-        {
-            Increments = new Dictionary<string, long>(Increments),
-        };
+        // copy. The direct-assign constructor takes the copy as-is, so the
+        // clone allocates exactly one dictionary with no discarded shell.
+        new(new Dictionary<string, long>(Increments));
 
     /// <summary>
     /// Folds a <see cref="GCounterDelta"/> into this counter: every per-replica
