@@ -15,7 +15,16 @@ using System.Runtime.InteropServices;
 public sealed class VersionVector : ICrdt<VersionVector>
 {
     [Id(0)]
-    public Dictionary<string, HybridLogicalClock> Entries { get; set; } = [];
+    public Dictionary<string, HybridLogicalClock> Entries { get; set; }
+
+    /// <summary>Creates an empty version vector.</summary>
+    public VersionVector() => Entries = [];
+
+    // Direct-assign constructor for the clone/merge fast paths: takes ownership
+    // of an already-built backing store so the factory allocates exactly one
+    // dictionary, with no discarded empty-collection shell from a field
+    // initializer that an object initializer would immediately overwrite.
+    private VersionVector(Dictionary<string, HybridLogicalClock> entries) => Entries = entries;
 
     /// <inheritdoc />
     /// <remarks>
@@ -60,13 +69,13 @@ public sealed class VersionVector : ICrdt<VersionVector>
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var result = new VersionVector();
 
-        // Seed the result from the left vector via the dictionary copy
-        // constructor: it presizes the backing store to left.Entries.Count
-        // exactly and bulk-copies, avoiding the 2-3 incremental Resize() grows
-        // the previous entry-by-entry fill paid. The right-hand fold below then
-        // only grows the dictionary for replica ids unique to the right.
+        // Seed from the left operand via the dictionary copy constructor (presizes
+        // to left.Entries.Count exactly and bulk-copies), then fold the right in.
+        // The direct-assign constructor takes the merged store as-is, so the merge
+        // allocates no discarded empty-collection shell. Cloning left keeps the
+        // result right-sized when the operands share replicas - the common case in
+        // a stable cluster - rather than presizing to the disjoint upper bound.
         var merged = new Dictionary<string, HybridLogicalClock>(left.Entries);
 
         // Single-probe fold: GetValueRefOrAddDefault hashes each id once and
@@ -84,8 +93,7 @@ public sealed class VersionVector : ICrdt<VersionVector>
             if (!existed || clock > slot) slot = clock;
         }
 
-        result.Entries = merged;
-        return result;
+        return new VersionVector(merged);
     }
 
     /// <summary>
@@ -134,17 +142,14 @@ public sealed class VersionVector : ICrdt<VersionVector>
     }
 
     /// <summary>Creates a deep copy of this version vector.</summary>
-    public VersionVector Clone()
-    {
+    public VersionVector Clone() =>
         // The dictionary copy constructor presizes to Entries.Count exactly and
         // bulk-copies the entries, eliminating the incremental Resize() grows
         // the previous entry-by-entry fill paid. HybridLogicalClock is an
-        // immutable value type, so a shallow per-entry copy is a deep copy.
-        return new VersionVector
-        {
-            Entries = new Dictionary<string, HybridLogicalClock>(Entries),
-        };
-    }
+        // immutable value type, so a shallow per-entry copy is a deep copy. The
+        // direct-assign constructor takes the copy as-is, so the clone allocates
+        // exactly one dictionary with no discarded shell.
+        new(new Dictionary<string, HybridLogicalClock>(Entries));
 
     /// <summary>
     /// Folds a <see cref="VersionVectorDelta"/> into this vector. For

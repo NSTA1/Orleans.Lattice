@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -66,8 +67,148 @@ internal sealed class LeafSnapshotStorageGrain(
         ArgumentNullException.ThrowIfNull(blob);
         cancellationToken.ThrowIfCancellationRequested();
 
-        state.State = blob;
+        // Coverage-monotonicity invariant. The durable blob is what authorises
+        // the coverage-gated WAL GC trim floor (a leaf reports its durable pin
+        // as min(checkpoint, per-partition covered offset) from
+        // BPlusLeafGrain.ResolveDurablePinForPartition), and once the GC has
+        // trimmed a partition's [0, N] prefix the ONLY durable recovery of that
+        // prefix is a snapshot that still covers >= N. A blind last-writer-wins
+        // overwrite lets a later capture - one whose recomputed per-partition
+        // coverage REGRESSED below an earlier blob (a partition checkpoint
+        // lowered by a rehydrate reset or a projection rebuild, then recomputed
+        // from current state on the next capture) - shrink the durable coverage
+        // below the offset the earlier blob already authorised the GC to trim to.
+        // The in-memory monotonic-max pin (RecordDurableSnapshotCoverage) cannot
+        // regress, so the trim outlives the durable coverage that justified it,
+        // and the next cold restart rehydrates from the under-covering blob,
+        // advances the partition checkpoint only to the lower offset, and the
+        // tail replay finds the WAL trimmed past checkpoint + 1
+        // (LeafProjectionStaleException - "fall off the log"). Merge the incoming
+        // blob with the stored one so per-partition coverage is monotonic
+        // non-decreasing and the retained rows back the higher coverage; the
+        // rehydrate path already relies on exactly this ("Coverage is monotonic
+        // and we always load the latest blob" in TryRehydrateFromSnapshotAsync).
+        state.State = MergeMonotone(state.State, blob);
         await state.WriteStateAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Returns a blob whose per-partition coverage is the element-wise maximum of
+    /// <paramref name="existing"/> and <paramref name="incoming"/>, backed by the
+    /// last-writer-wins union of both row sets so the retained higher coverage is
+    /// always row-backed. The common case (the incoming capture advances every
+    /// partition, or there is no prior durable prefix) returns
+    /// <paramref name="incoming"/> verbatim so a normal save stays a plain
+    /// overwrite; the row-merging slow path runs only when a partition would
+    /// otherwise regress.
+    /// </summary>
+    private static LeafSnapshotBlob MergeMonotone(LeafSnapshotBlob existing, LeafSnapshotBlob incoming)
+    {
+        // No durable prefix yet (first capture, or post-clear): the incoming blob
+        // is authoritative verbatim. Preserves the exact first-save contract the
+        // capture round-trip tests and the byte-size lazy back-fill rely on.
+        if (!HasCapturedPrefix(existing))
+        {
+            return incoming;
+        }
+
+        var slots = Math.Max(
+            Math.Max(EffectiveLength(existing), EffectiveLength(incoming)),
+            1);
+
+        // Fast path: the incoming capture covers every partition at least as far
+        // as the stored blob, so its projection is a superset and a plain
+        // overwrite cannot regress coverage. This is the steady-state case
+        // (captures normally advance), so it stays allocation-free beyond the
+        // pre-existing overwrite.
+        var regresses = false;
+        for (var p = 0; p < slots; p++)
+        {
+            if (EffectiveOffset(existing, p) > EffectiveOffset(incoming, p))
+            {
+                regresses = true;
+                break;
+            }
+        }
+        if (!regresses)
+        {
+            return incoming;
+        }
+
+        // Slow path: the incoming capture would lower coverage for at least one
+        // partition. Take the element-wise Math.Max of the per-partition coverage
+        // and LWW-merge the two row sets (a CRDT join that cannot lose data), so
+        // the partition whose coverage is retained from the stored blob keeps the
+        // rows that back it while any partition the incoming blob advanced keeps
+        // the fresher rows.
+        var mergedOffsets = new long[slots];
+        for (var p = 0; p < slots; p++)
+        {
+            mergedOffsets[p] = Math.Max(EffectiveOffset(existing, p), EffectiveOffset(incoming, p));
+        }
+
+        var mergedRows = new Dictionary<string, LeafSnapshotRow>(StringComparer.Ordinal);
+        foreach (var row in existing.Rows)
+        {
+            mergedRows[row.Key] = row;
+        }
+        foreach (var row in incoming.Rows)
+        {
+            if (mergedRows.TryGetValue(row.Key, out var prior))
+            {
+                // LWW.Merge returns one of its two arguments verbatim, so the
+                // winning row is the one whose value the merge kept - preserving
+                // that row's per-key MergeMode discriminator alongside its value.
+                var winner = LwwValue<byte[]>.Merge(prior.Value, row.Value);
+                mergedRows[row.Key] = EqualityComparer<LwwValue<byte[]>>.Default.Equals(winner, row.Value)
+                    ? row
+                    : prior;
+            }
+            else
+            {
+                mergedRows[row.Key] = row;
+            }
+        }
+
+        var rows = new List<LeafSnapshotRow>(mergedRows.Count);
+        rows.AddRange(mergedRows.Values);
+
+        return new LeafSnapshotBlob
+        {
+            SnapshotOffset = mergedOffsets[0],
+            Rows = rows,
+            CapturedAtTicks = Math.Max(existing.CapturedAtTicks, incoming.CapturedAtTicks),
+            // The row set changed, so the incoming blob's precomputed footprint no
+            // longer describes it. Leave the slot at 0 so GetSnapshotByteSizeAsync
+            // lazily recomputes and caches the correct total from the merged rows.
+            SnapshotBytes = 0L,
+            SnapshotOffsetsByPartition = mergedOffsets,
+        };
+    }
+
+    /// <summary>
+    /// Effective per-partition coverage array length for <paramref name="blob"/>:
+    /// the explicit per-partition array length, or <c>1</c> for a legacy blob that
+    /// carries only the scalar partition-0 offset.
+    /// </summary>
+    private static int EffectiveLength(LeafSnapshotBlob blob)
+        => blob.SnapshotOffsetsByPartition is { Length: > 0 } perPartition ? perPartition.Length : 1;
+
+    /// <summary>
+    /// Effective covered offset of partition <paramref name="partition"/> for
+    /// <paramref name="blob"/>, folding the legacy scalar-only shape (a
+    /// <see langword="null"/> per-partition array covers only partition 0 at the
+    /// scalar <see cref="LeafSnapshotBlob.SnapshotOffset"/>) into the same view as
+    /// an explicit per-partition array.
+    /// </summary>
+    private static long EffectiveOffset(LeafSnapshotBlob blob, int partition)
+    {
+        var perPartition = blob.SnapshotOffsetsByPartition;
+        if (perPartition is not null && partition < perPartition.Length)
+        {
+            return perPartition[partition];
+        }
+        return partition == 0 ? blob.SnapshotOffset : -1L;
     }
 
     /// <inheritdoc />
