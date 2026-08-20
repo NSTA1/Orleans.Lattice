@@ -13,7 +13,7 @@ It is the interactive counterpart to [`Orleans.Lattice.Explorer.Entra.Web`](../l
 - **No public API change to the released Explorer.** The package plugs into the core `IExplorerAuthMethod` seam for the `entra` scheme; the existing sign-in dialog already renders a "Sign in with Entra ID" button when the State API advertises that scheme.
 - **MSAL isolated to this package.** `AddExplorerEntraAuth` registers the Entra `IExplorerAuthMethod` alongside the built-in Basic provider without the core Explorer taking any dependency on MSAL.
 - **Client-only OIDC parameters.** Every configured value (authority, tenant, client id, scopes) is a public OIDC parameter; no client secret is ever configured on the Explorer.
-- **Advertised parameters take precedence.** When the State API advertises its Entra authority, tenant, client id, and audience, those advertised values take precedence over the static options, so the static configuration can be omitted.
+- **Advertised parameters take precedence, except the audience.** When the State API advertises its Entra authority, tenant, and client id, those advertised values take precedence over the static options, so that static configuration can be omitted. The audience is the exception: a configured `Scopes` list overrides the advertised audience, which is used only when `Scopes` is left empty.
 - **Interactive or headless.** The default is an interactive browser redirect; set `UseDeviceCode` to switch to the device-code flow for headless or CLI hosts, with a `DeviceCodeCallback` to surface the prompt text.
 
 ## Setup
@@ -22,10 +22,12 @@ Register the Explorer's auth methods, then add the Entra provider. Supplying the
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Entra;
 
 var services = new ServiceCollection();
 
+services.AddExplorerAuth();
 services.AddExplorerEntraAuth(options =>
 {
     options.Authority = "https://login.microsoftonline.com/<tenant>";
@@ -47,7 +49,7 @@ services.AddExplorerEntraAuth(options =>
 | `UseDeviceCode` | `bool` | `false` | When `true`, sign-in uses the device-code flow (for headless/CLI hosts) instead of an interactive browser redirect. |
 | `DeviceCodeCallback` | `Func<string, CancellationToken, Task>?` | `null` | Invoked with the device-code prompt text when `UseDeviceCode` is enabled, so a host can surface it however it likes. Defaults to writing to the console. |
 
-Statically supplied values may be discovered instead at connect time from the State API's auth-scheme advertisement; the advertised parameters take precedence.
+Statically supplied `Authority`/`TenantId` and `ClientId` may be discovered instead at connect time from the State API's auth-scheme advertisement, and the advertised values take precedence over the static options. The audience is the exception: a configured `Scopes` list overrides the advertised audience, which is resolved only when `Scopes` is empty.
 
 ## Reference
 

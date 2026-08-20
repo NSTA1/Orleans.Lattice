@@ -4,7 +4,7 @@ The package has one public options type, `LatticeAuthOptions`, which configures 
 
 ## `LatticeAuthOptions`
 
-Configures how the decision engine compiles and evaluates rules, how policy history is retained, and how decisions are audited. Bind it through `AddLatticeAuth(configure)`.
+Configures how the decision engine compiles and evaluates rules, how policy history is retained, and how decisions are audited. Bind it through `AddLatticeAuth(configure)`, or layer an additional configuration delegate after registration with `ConfigureLatticeAuth(configure)`.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|

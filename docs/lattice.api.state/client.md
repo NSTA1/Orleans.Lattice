@@ -1,6 +1,6 @@
 # Client
 
-`LatticeStateApiGrpcClient` is the public, strongly-typed client for the state-API gRPC surface. It is the consumer half of the [gRPC contract](grpc-contract.md): one method per RPC, over the same Orleans-serialized records the server binds.
+`LatticeStateApiGrpcClient` is the public, strongly-typed client for the state-API gRPC surface. It is the consumer half of the [gRPC contract](grpc-contract.md): one method per RPC, over Orleans-serialized C# request/response records that either reuse facade DTOs directly or wrap facade arguments and results for transport.
 
 ## Building a client
 
@@ -44,6 +44,8 @@ The unary RPCs return a `Task<TResponse>`; the streaming RPCs return an `IAsyncE
 - `ScanEntriesAsync` / `GetEntryAsync` - snapshot-isolated entry inspection.
 - `GetEntryHistoryAsync` - per-key change-history timeline.
 - `CancelScanAsync` - release a server-side scan cursor early.
+- `GetDeadLetterCountAsync(DeadLetterCountRequest request, CancellationToken cancellationToken = default)` - count strict-mode dead-letter entries for one tree.
+- `ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)` - page a tree's strict-mode dead-letter queue.
 - `GetMetricsSnapshotAsync` - one-shot metrics.
 - `GetClusterInfoAsync` - connected-cluster identity (cluster id, service id).
 - `GetAuthSchemeAsync` - the endpoint's advertised auth schemes (unauthenticated; callable before a credential is acquired).

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.State.Grpc
 
-Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/README.md) - projects the read-only state-API facade onto a long-lived gRPC service and a public typed client, over the same Orleans-serialized records, with no hand-written `.proto`.
+Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/README.md) - projects the read-only state-API facade onto a long-lived gRPC service and a public typed client, over Orleans-serialized C# records that wrap or reuse facade DTOs, with no hand-written `.proto`.
 
 ## What is it?
 
@@ -8,10 +8,10 @@ Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/REA
 
 It provides:
 
-- **A code-first gRPC service.** A unary RPC per read-only facade verb plus two server-streaming subscriptions (change and metric observation) and an unauthenticated auth-scheme advertisement RPC, all bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** Unary RPCs for the remotely supported read-only facade operations, including dead-letter count and listing, plus two server-streaming subscriptions (change and metric observation) and an unauthenticated auth-scheme advertisement RPC, all bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeStateApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
-- **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
-- **Fail-closed authorization.** A per-call `ILatticeStateApiAuthorizer` seam gates every RPC; the default denies all traffic until configured.
+- **Shared Orleans marshalling.** Every message is a `[GenerateSerializer]` C# record, serialized with the Orleans binary serializer; gRPC-specific envelopes wrap scalar facade arguments or results where needed, so client and server stay in lock-step by construction.
+- **Fail-closed authorization.** A per-call `ILatticeStateApiAuthorizer` seam gates every protected RPC; the default denies protected traffic until configured. `GetAuthScheme` is unauthenticated for scheme discovery.
 
 The package is **read-only** and has no external broker and no `.proto` file to maintain.
 
@@ -20,7 +20,7 @@ The package is **read-only** and has no external broker and no `.proto` file to 
 - **Read-only by construction.** The service exposes observation verbs only - discovery, structure, entries, change feeds, and metrics.
 - **Public client, internal service.** Callers consume `LatticeStateApiGrpcClient`; the service, marshallers, and method definitions are internal.
 - **No transport policy in the client.** Address, TLS, retries, deadlines, and credentials live on the caller's `GrpcChannel` / `CallInvoker`.
-- **Fail-closed.** Unconfigured, the binding denies every call rather than serving it unauthenticated.
+- **Fail-closed.** Unconfigured, the binding denies every protected call rather than serving state unauthenticated; only `GetAuthScheme` remains open to advertise sign-in options.
 
 ## Features
 

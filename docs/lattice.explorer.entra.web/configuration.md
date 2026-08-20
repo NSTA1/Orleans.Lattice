@@ -35,7 +35,7 @@ The options are validated at registration time (`AddLatticeExplorerEntraWebAuth`
 
 | Member | Meaning |
 |---|---|
-| `InMemory` | A per-process in-memory token cache. Correct for a single-replica host. On a multi-replica host a user's cached token is not shared across replicas, so a request routed to a cold replica re-acquires silently. |
+| `InMemory` | A per-process in-memory token cache. Correct for a single-replica host. The cache is per process, so on a multi-replica host a user's cached token is not shared across replicas: a request routed to a cold replica cannot silently acquire a downstream token (it holds a valid session cookie but no redeemed code), so silent renewal latches the credential as revoked and drives a fresh interactive re-authentication. Use `Distributed` with a shared `IDistributedCache` for seamless failover. |
 | `Distributed` | A Microsoft.Identity.Web distributed token cache over the registered `IDistributedCache`. Register a shared cache (for example `Orleans.Lattice.Caching.AzureBlob`) so a multi-replica host shares one token cache and tokens survive a replica restart. |
 
 ## Secret-less production configuration

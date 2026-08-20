@@ -9,9 +9,9 @@ A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md
 It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same way, in two layers:
 
 - **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert, single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
-- **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are the same Orleans-serialized records, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
+- **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are Orleans-serialized request / response records that wrap the facade DTOs, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
-Every operation is served by fetching the cluster grain with `GetGrain<ILattice>(treeId)` and calling the **same public `ILattice` method** the in-cluster client calls. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
+Single-tree operations fetch the target `ILattice` grain with `GetGrain<ILattice>(treeId)` and call the same public method the in-cluster client calls. Cross-tree atomic batches are different: the facade converts each tree slice into a cross-tree batch and calls the grain-factory cross-tree coordinator surface. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
 
 ## Core properties
 
@@ -29,11 +29,51 @@ Every operation is served by fetching the cluster grain with `GetGrain<ILattice>
 | Range delete | `DeleteRangeAsync` | `DeleteRange` | the resilient range-delete drain (`DeleteRangeAsync(startInclusive, endExclusive)` extension over the delete-range cursor) |
 | Non-atomic bulk upsert | `SetManyAsync` | `SetMany` | `SetManyAsync(pairs)` |
 | Single-tree atomic batch | `SetManyAtomicAsync` | `SetManyAtomic` | `SetManyAtomicAsync(upserts, deletes, operationId)` |
-| Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the cross-tree atomic coordinator surface |
+| Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the grain-factory cross-tree coordinator surface |
 | Point read | `GetAsync` | `Get` | `GetAsync(key)` |
 | Bounded range-read page | `ReadRangeAsync` | `ReadRange` | the paged entry-cursor surface (`OpenEntryCursorAsync` / `NextEntriesAsync` / `CloseCursorAsync`) |
 | Typed CRDT write | `CounterIncrementAsync`, `SetAddAsync`, `OrFlagEnableAsync`, `RwFlagEnableAsync`, `GCounterIncrementAsync`, `GSetAddAsync`, `RwSetAddAsync`, `VersionVectorTickAsync`, `RegisterSetAsync`, `MaxRegisterSetAsync`, `MinRegisterSetAsync`, `SequenceInsertAtAsync`, `MapSetAsync`, and their matching mutation verbs | `CrdtWrite` | the typed CRDT facade extension surface |
 | Typed CRDT read | `CounterGetAsync`, `SetGetAsync`, `OrFlagGetAsync`, `RwFlagGetAsync`, `GCounterGetAsync`, `GSetGetAsync`, `RwSetGetAsync`, `VersionVectorGetAsync`, `RegisterGetAsync`, `MaxRegisterGetAsync`, `MinRegisterGetAsync`, `SequenceGetAsync`, `MapGetAsync` | `CrdtRead` | the typed CRDT read surface |
+
+### Typed CRDT facade verbs
+
+The typed CRDT facade exposes these exact public methods. Mutating verbs go over the unified `CrdtWrite` RPC; read verbs go over `CrdtRead`.
+
+| Primitive | Method signature |
+|---|---|
+| PN-counter | `Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)` |
+| PN-counter | `Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)` |
+| PN-counter | `Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| OR-Set | `Task SetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)` |
+| OR-Set | `Task SetRemoveAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)` |
+| OR-Set | `Task<IReadOnlyList<byte[]>> SetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| OR-Flag | `Task OrFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)` |
+| OR-Flag | `Task OrFlagDisableAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| OR-Flag | `Task<bool> OrFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| RW-Flag | `Task RwFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)` |
+| RW-Flag | `Task RwFlagDisableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)` |
+| RW-Flag | `Task<bool> RwFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| G-counter | `Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)` |
+| G-counter | `Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| G-Set | `Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)` |
+| G-Set | `Task<IReadOnlyList<byte[]>> GSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| RW-Set | `Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)` |
+| RW-Set | `Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)` |
+| RW-Set | `Task<IReadOnlyList<byte[]>> RwSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| Version vector | `Task VersionVectorTickAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)` |
+| Version vector | `Task<IReadOnlyDictionary<string, string>> VersionVectorGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| MV-register | `Task RegisterSetAsync(string treeId, string key, string replicaId, byte[] value, CancellationToken cancellationToken = default)` |
+| MV-register | `Task<IReadOnlyList<byte[]>> RegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| Max register | `Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)` |
+| Max register | `Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| Min register | `Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)` |
+| Min register | `Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| Sequence | `Task SequenceInsertAtAsync(string treeId, string key, int index, string replicaId, byte[] value, CancellationToken cancellationToken = default)` |
+| Sequence | `Task SequenceRemoveAtAsync(string treeId, string key, int index, CancellationToken cancellationToken = default)` |
+| Sequence | `Task<IReadOnlyList<byte[]>> SequenceGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
+| OR-Map | `Task MapSetAsync(string treeId, string key, string field, string replicaId, byte[] value, CancellationToken cancellationToken = default)` |
+| OR-Map | `Task MapRemoveAsync(string treeId, string key, string field, CancellationToken cancellationToken = default)` |
+| OR-Map | `Task<IReadOnlyDictionary<string, IReadOnlyList<byte[]>>> MapGetAsync(string treeId, string key, CancellationToken cancellationToken = default)` |
 
 ### Explicitly deferred
 

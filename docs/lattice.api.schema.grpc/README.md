@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Schema.Grpc
 
-Code-first gRPC binding for [Orleans.Lattice.Api.Schema](../lattice.api.schema/README.md) - projects the schema-management control facade onto a gRPC service and a public typed client, over the same Orleans-serialized records, with no hand-written `.proto`.
+Code-first gRPC binding for [Orleans.Lattice.Api.Schema](../lattice.api.schema/README.md) - projects the schema-management control facade onto a gRPC service and a public typed client, using code-first Orleans-serialized request and response records that wrap or carry the facade DTOs, with no hand-written `.proto`.
 
 ## What is it?
 
@@ -8,10 +8,10 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Schema](../lattice.api.schema/R
 
 It provides:
 
-- **A code-first gRPC service.** One RPC per facade operation - unary for policy, count, versioning, remediation, compliance, capability, and auth-scheme calls, and server-streaming for dead-letter draining - bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** One RPC for each facade operation, plus the unauthenticated `GetAuthScheme` discovery RPC - unary for policy, count, versioning, remediation, compliance, capability, and auth-scheme calls, and server-streaming for dead-letter draining - bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeSchemaApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
-- **Shared Orleans marshalling.** Every wire message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
-- **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge, and the facade's own scope authorization re-authorizes the resolved caller. Both default to deny.
+- **Shared Orleans marshalling.** The binding's request and response wrappers are `[GenerateSerializer]` records serialized with the Orleans binary serializer. Shared DTOs streamed or returned directly use their existing Orleans serialization aliases, so client and server stay in lock-step by construction.
+- **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every protected RPC at the edge; `GetAuthScheme` is exempt for unauthenticated discovery, and the facade's own scope authorization re-authorizes the resolved caller. Both protected layers default to deny.
 
 Schema administration changes write-validation rules and can rewrite existing values, so the binding fails closed: with no authorizer registered, every protected call is rejected with `PermissionDenied`.
 

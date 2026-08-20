@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Backup.Grpc
 
-Code-first gRPC binding for [Orleans.Lattice.Api.Backup](../lattice.api.backup/README.md) - projects the backup / restore control facade onto a gRPC service and a public typed client, over the same Orleans-serialized records, with no hand-written `.proto`.
+Code-first gRPC binding for [Orleans.Lattice.Api.Backup](../lattice.api.backup/README.md) - projects the backup / restore control facade onto a gRPC service and a public typed client, using Orleans-serialized request / response records that wrap the facade DTOs, with no hand-written `.proto`.
 
 ## What is it?
 
@@ -8,12 +8,12 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Backup](../lattice.api.backup/R
 
 It provides:
 
-- **A code-first gRPC service.** One RPC per facade operation - unary for capture / list / describe / delete / restore / revert / auth-scheme, and server-streaming for whole-catalog draining and artifact export - bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** RPCs for the remote-safe facade subset - unary for capture, backup-set capture, list, describe, delete, restore, revert, auth-scheme, schedule / cancel, scope status, capability, and health operations, plus server-streaming whole-catalog draining and artifact export - bound from C# definitions rather than a `.proto`. Some facade and engine operations remain in-process-only and have no RPC, including inventory, catalog rebuild / scrub, cold restore, and backup-set restore.
 - **A public typed client.** `LatticeBackupApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC `CallInvoker`.
-- **Shared Orleans marshalling.** Every message is one of the package's `[GenerateSerializer]` records, serialized with the Orleans binary serializer, so client and server stay in lock-step by construction.
-- **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge, and the facade's own scope authorization re-authorizes the resolved caller. Both default to deny.
+- **Shared Orleans marshalling.** Wire messages are the package's `[GenerateSerializer]` request / response records, serialized with the Orleans binary serializer and wrapping facade DTOs where needed, so client and server stay in lock-step by construction.
+- **Two-layer, fail-closed authorization.** A transport meta-authorizer gates every RPC at the edge except the unauthenticated `GetAuthScheme` discovery RPC, and the facade's own scope authorization re-authorizes the resolved caller. Both default to deny for protected operations.
 
-Backup and restore are among the most sensitive operations in a cluster, so the binding fails closed: with no authorizer registered, every call is rejected with `PermissionDenied`.
+Backup and restore are among the most sensitive operations in a cluster, so the binding fails closed: with no authorizer registered, every protected call is rejected with `PermissionDenied`. `GetAuthScheme` stays unauthenticated so a client can discover how to sign in.
 
 ## Core properties
 
@@ -30,6 +30,7 @@ The gRPC service name is `orleans.lattice.api.backup`.
 |---|---|---|
 | `CreateBackup` | unary | Create backup |
 | `CreateIncrementalBackup` | unary | Create incremental backup |
+| `CreateBackupSet` | unary | Create backup set |
 | `ListBackups` | unary | List backups (paged) |
 | `StreamBackups` | server-streaming | Stream backups (whole catalog) |
 | `DescribeBackup` | unary | Describe backup |
@@ -39,6 +40,13 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `ExportArtifact` | server-streaming | Export artifact |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes |
 | `ProbeCapabilities` | unary | Probe capabilities (read-only, no side effects) |
+| `ScheduleBackup` | unary | Register or update a runtime recurring schedule |
+| `CancelSchedule` | unary | Remove a runtime recurring schedule |
+| `GetScopeStatus` | unary | Read scope schedule and last-run status |
+| `IsHealthMonitoringAvailable` | unary | Report whether health monitoring applies |
+| `CheckBackupHealth` | unary | Verify one backup now and persist the report |
+| `GetBackupHealth` | unary | Read the latest stored health report |
+| `ConfigureBackupHealth` | unary | Override one backup's health-monitor settings |
 
 ## Quick Start
 

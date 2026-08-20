@@ -12,7 +12,7 @@ Static extension method on `ISiloBuilder`.
 
 - `ISiloBuilder AddLatticeSchemaApi(this ISiloBuilder builder, Action<LatticeApiSchemaOptions>? configure = null)`
 
-  Adds the transport-agnostic schema-management control facade: binds `LatticeApiSchemaOptions`, registers the internal `LatticeSchemaControl` singleton every transport binding adapts over, and an idempotency marker. Adds no transport behaviour of its own. Must be called after `AddLatticeSchemaEnforcement(...)`; throws `InvalidOperationException` when called first. Throws `ArgumentNullException` when `builder` is null. Idempotent.
+  Adds the transport-agnostic schema-management control facade: binds `LatticeApiSchemaOptions`, registers the internal silo singleton that every transport binding adapts over, and an idempotency marker. Adds no transport behaviour of its own. Must be called after `AddLatticeSchemaEnforcement(...)`; throws `InvalidOperationException` when called first. Throws `ArgumentNullException` when `builder` is null. Idempotent.
 
 ## Options
 
@@ -24,25 +24,25 @@ It currently has no tunable properties.
 
 ## Facade operations
 
-The control facade exposes these operations; each is projected as one RPC by the [gRPC binding](../lattice.api.schema.grpc/api.md). Every operation authorizes its tree scope fail-closed before touching the admin plane.
+The control facade exposes these methods. Each method corresponds to one RPC in the [gRPC binding](../lattice.api.schema.grpc/api.md), with `ListDeadLettersAsync` projected as the server-streaming `StreamDeadLetters` RPC. Every facade method authorizes its tree scope fail-closed before touching the admin plane.
 
-| Operation | Shape | Returns |
-|---|---|---|
-| Set policy | takes a tree id and `LatticeSchemaPolicy` | (void) |
-| Clear policy | takes a tree id | `bool` (true when one was present) |
-| Get policy | takes a tree id | `LatticeSchemaPolicy?` (null when absent) |
-| List dead letters | streams for a tree id | `IAsyncEnumerable<LatticeSchemaDeadLetterEntry>` |
-| Count dead letters | takes a tree id | `int` |
-| Set version config | takes a tree id and `LatticeSchemaVersionConfig` | (void) |
-| Get version config | takes a tree id | `LatticeSchemaVersionConfig?` (null when absent) |
-| Advance target version | takes a tree id and a target version | `LatticeSchemaVersionConfig` |
-| Advance and migrate | takes a tree id and a target version | `LatticeSchemaRemediationReport` |
-| Migrate to target version | takes a tree id | `LatticeSchemaRemediationReport` |
-| Clear version config | takes a tree id | `bool` (true when one was present) |
-| Remediate | takes a tree id, `LatticeValueTransform`, and target `LatticeSchemaPolicy` | `LatticeSchemaRemediationReport` |
-| Get remediation status | takes a tree id | `LatticeSchemaRemediationReport` |
-| Scan compliance | takes a tree id | `LatticeSchemaComplianceReport` |
-| Probe capabilities | takes a tree id | `LatticeSchemaCapabilities` |
+| Method | Signature |
+|---|---|
+| `SetPolicyAsync` | `Task SetPolicyAsync(string treeId, LatticeSchemaPolicy policy, CancellationToken cancellationToken = default)` |
+| `ClearPolicyAsync` | `Task<bool> ClearPolicyAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `GetPolicyAsync` | `Task<LatticeSchemaPolicy?> GetPolicyAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ListDeadLettersAsync` | `IAsyncEnumerable<LatticeSchemaDeadLetterEntry> ListDeadLettersAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `CountDeadLettersAsync` | `Task<int> CountDeadLettersAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `SetVersionConfigAsync` | `Task SetVersionConfigAsync(string treeId, LatticeSchemaVersionConfig config, CancellationToken cancellationToken = default)` |
+| `GetVersionConfigAsync` | `Task<LatticeSchemaVersionConfig?> GetVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `AdvanceTargetVersionAsync` | `Task<LatticeSchemaVersionConfig> AdvanceTargetVersionAsync(string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)` |
+| `AdvanceAndMigrateAsync` | `Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)` |
+| `MigrateToTargetVersionAsync` | `Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ClearVersionConfigAsync` | `Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `RemediateAsync` | `Task<LatticeSchemaRemediationReport> RemediateAsync(string treeId, LatticeValueTransform transform, LatticeSchemaPolicy targetPolicy, CancellationToken cancellationToken = default)` |
+| `GetRemediationStatusAsync` | `Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ScanComplianceAsync` | `Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)` |
+| `ProbeCapabilitiesAsync` | `Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
 Policy operations manage a tree's write-validation policy. `SetPolicyAsync` and `ClearPolicyAsync` require SchemaAdmin authority; `GetPolicyAsync` requires Read authority. The policy type and its enforcement semantics are defined in [`Orleans.Lattice.Schema`](../lattice.schema/README.md).
 

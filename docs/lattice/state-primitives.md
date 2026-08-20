@@ -312,7 +312,7 @@ OrMap<TKey, TValue> = {
 - A key is observable iff at least one of its `Adds` entries survived; otherwise the key is absent.
 - `Get(key)` folds every surviving entry's `Value` through `MergeFrom` to produce a single converged `TValue`.
 
-Because the recursion bottoms out at primitives that are themselves commutative-associative-idempotent, the whole structure is a join-semilattice. `IsBottom` is `Adds.Count == 0 && Tombstones.Count == 0` so an `OrMap` of `PnCounter`s, for example, can distinguish "no key has ever been written" from "every key's counter currently sums to zero".
+Because the recursion bottoms out at primitives that are themselves commutative-associative-idempotent, the whole structure is a join-semilattice. `IsBottom` is true exactly when no key has any live (un-tombstoned) entry - tombstones may still be present and are preserved for causal history - so an `OrMap` of `PnCounter`s, for example, can distinguish "no key has ever been written" from "every key's counter currently sums to zero".
 
 **Example use case:** a per-user feature-flag override map (`OrMap<UserId, OrSet>`). Different silos toggle flags for different users concurrently; one silo removes a user from the override list while another adds new flags for that same user. The OR-Map keeps the new flags (add-wins), folds concurrent flag-set edits together at the value level, and lets removed users stay removed - all without coordination.
 

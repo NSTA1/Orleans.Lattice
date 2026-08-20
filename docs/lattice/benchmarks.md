@@ -206,7 +206,8 @@ workload filter (full suite), in `benchmark/scenarios/microbench.env`.
 
 The available workload method names are listed by running
 `./benchmark.ps1 microbench -Workloads '*'` and reading the BDN summary
-table. The suite currently ships 24 `[Benchmark]` methods covering point
+table. The suite currently ships a broad set of `[Benchmark]` methods (on the
+order of ninety) covering point
 reads / writes (`PointRead`, `PointWrite`, `PointReadWithVersion`,
 `PointExists`), multi-key reads (`PointGetMany`, `PointGetMany_BatchSize`
 parameterised over batch sizes 1-64), bulk and multi-key writes
@@ -216,8 +217,8 @@ and bulk paths, atomic-write sagas (`SetManyAtomic`, `SetManyAtomic_4Shards`,
 `SetManyAtomic_Concurrent` parameterised over concurrency 1-64),
 atomic-tree reads (`PointRead_AtomicTreeIdle`,
 `PointRead_AtomicTreeWithActiveSaga`), WAL-encoder microbenchmarks
-(`WalEncodeBatch_AzureTable`), and the replication ship-envelope
-microbenchmarks (`ShipTypedEnvelope`, `ShipFramingOnly`).
+(`EncodeWalBatch_AzureTable`), and the replication ship-envelope
+microbenchmarks (`Ship_TypedEnvelope`, `Ship_FramingOnly`).
 
 ### Per-method allocation and CPU profiling
 

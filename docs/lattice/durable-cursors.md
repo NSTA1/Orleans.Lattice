@@ -250,7 +250,11 @@ stalled point-in-time cursor can occupy:
 |-----------|-----------|
 | `OpenAsync(pointInTime: true)` would push the registry pinned-decision count past `MaxPinnedSagaDecisions` | `LatticeCursorRegistryPinExhaustedException` |
 | `NextKeysAsync` / `NextEntriesAsync` on a point-in-time cursor whose pin has been evicted (TTL elapsed or registry reaper ran) | `LatticeCursorSnapshotExpiredException` |
-| `OpenDeleteRangeCursorAsync` with `pointInTime: true` (range deletes are mutations, not snapshot reads) | `ArgumentException` |
+
+A delete-range cursor cannot be opened in point-in-time mode:
+`OpenDeleteRangeCursorAsync` exposes no `pointInTime` option at all, because
+range deletes are mutations rather than snapshot reads. Point-in-time pinning
+applies only to the read cursors opened via `OpenAsync`.
 
 ### Cost vs. live mode
 

@@ -58,7 +58,7 @@ caller-supplied origin would silently misroute loop-suppression,
 per-origin merge resolution, and WAL / observer audit, so the slot is
 deliberately not exposed.
 
-The default constructor is `LatticeIdempotencyKey.Fresh()`, which ticks
+The static factory `LatticeIdempotencyKey.Fresh()` mints a new key by ticking
 a fresh `HybridLogicalClock`. Use it for ad-hoc callers that mint one
 key per logical operation:
 
@@ -160,11 +160,15 @@ Two storage paths participate:
   the same HLC, so the receiver's LWW resolution treats the retry as a
   tie and the stored value does not advance.
 - **PnCounter accessor.** `PnCounterAccessor.IncrementAsync` /
-  `DecrementAsync` read the stored version on each CAS attempt and
-  drop the mutation if the stored version equals the ambient
-  idempotency key's HLC and a value is already present. This is
-  necessary because a counter is otherwise a non-idempotent delta
-  type - applying the same `+5` twice would advance by 10.
+  `DecrementAsync` no longer run a read-modify-write CAS loop - the leaf
+  grain is the single writer authority per key, so each call performs a
+  single read plus one delta apply. The idempotency dedup guard now runs
+  on the grain's delta-apply path rather than in the accessor: when an
+  idempotency scope is active, the apply drops the mutation if the stored
+  version already equals the ambient idempotency key's HLC and a value is
+  already present. This is necessary because a counter is otherwise a
+  non-idempotent delta type - applying the same `+5` twice would advance
+  by 10.
 
 For replicated trees, the same identity flows through the
 `Orleans.Lattice.Replication` push transport's WAL dedup, so a retry

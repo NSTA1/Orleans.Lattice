@@ -23,7 +23,7 @@ Because the core `LoginDialog` already renders a generic "Sign in with Entra ID"
 
 ## Token acquisition without an HttpContext
 
-A remote Blazor Server circuit runs over SignalR and has **no ambient `HttpContext`**, so Microsoft.Identity.Web cannot infer the user. `IdentityWebExplorerTokenAcquirer` (internal) therefore:
+A remote Blazor Server circuit runs over SignalR and has **no ambient `HttpContext`**, so Microsoft.Identity.Web cannot infer the user. The internal Microsoft.Identity.Web-backed token acquirer therefore:
 
 - reads the current `ClaimsPrincipal` from the scoped `AuthenticationStateProvider`;
 - throws `ExplorerWebReauthRequiredException` immediately if the browser session is not authenticated;
@@ -44,7 +44,7 @@ The method wires the core `ExplorerAccessTokenSource` with a renewal delegate th
 
 ## Auto-sign-in circuit handler
 
-When `AutoSignIn` is enabled (the default), `ExplorerEntraWebAutoSignInCircuitHandler` (internal) runs on `OnConnectionUpAsync`:
+When `AutoSignIn` is enabled (the default), an internal best-effort Blazor Server circuit handler runs on `OnConnectionUpAsync`:
 
 1. If the session is already authenticated, do nothing.
 2. If the browser principal is anonymous, log a warning and return - the circuit is unauthenticated even though the page rendered, which is the signal that the cascading authentication state is missing or the cookie session did not flow into the circuit.

@@ -14,7 +14,7 @@ The package fails closed on all three by default. Custom secret sources, plainte
 
 ## Default surface: environment variables
 
-`AddLatticeReplication(...)` registers `EnvironmentVariableSecretSource` as the default `ILatticeReplicationSecretSource`. It reads the following variables (all prefixed `LATTICE_REPLICATION_`):
+`AddLatticeReplication(...)` registers an environment-variable-backed secret source as the default `ILatticeReplicationSecretSource`. It reads the following variables (all prefixed `LATTICE_REPLICATION_`):
 
 | Variable | Purpose |
 |---|---|

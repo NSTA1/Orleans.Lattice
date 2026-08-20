@@ -11,8 +11,11 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(b => b
         .AddMeter("orleans.lattice")              // Overview, CommitPath, AtomicWrites, MaterialisedViews
         .AddMeter("orleans.lattice.replication")  // Replication (only if the replication package is registered)
+        .AddMeter("orleans.lattice.replication.grpc") // ReplicationGrpc (only if the gRPC replication transport is registered)
         .AddMeter("orleans.lattice.auth")         // Authorization (only if the auth package is registered)
         .AddMeter("orleans.lattice.membership")   // Authorization (only if the membership package is registered)
+        .AddMeter("orleans.lattice.backup")       // Backup (only if the backup package is registered)
+        .AddMeter("orleans.lattice.scaling")      // Scaling (only if the scaling package is registered)
         .AddPrometheusExporter());
 ```
 
@@ -20,7 +23,10 @@ builder.Services.AddOpenTelemetry()
 |---|---|---|
 | `orleans.lattice` | the core library, always | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews` |
 | `orleans.lattice.replication` | the replication package, only when registered on the silo | `Replication` |
+| `orleans.lattice.replication.grpc` | the gRPC replication transport, only when registered on the silo | `ReplicationGrpc` |
 | `orleans.lattice.auth`, `orleans.lattice.membership` | the auth / membership packages, only when registered on the silo | `Authorization` |
+| `orleans.lattice.backup` | the backup package, only when registered on the silo | `Backup` |
+| `orleans.lattice.scaling` | the scaling package, only when registered on the silo | `Scaling` |
 
 If you do not register the replication package, omit the replication meter and do not import the `Replication` dashboard - its panels would resolve to no data.
 
@@ -38,6 +44,10 @@ var kinds = new[]
     LatticeDashboardKind.AtomicWrites,
     LatticeDashboardKind.MaterialisedViews, // add when materialised views are registered
     // LatticeDashboardKind.Replication, // add when replication is registered
+    // LatticeDashboardKind.ReplicationGrpc, // add when the gRPC replication transport is registered
+    // LatticeDashboardKind.Authorization, // add when the auth / membership packages are registered
+    // LatticeDashboardKind.Backup, // add when the backup package is registered
+    // LatticeDashboardKind.Scaling, // add when the scaling package is registered
 };
 
 foreach (var kind in kinds)

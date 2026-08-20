@@ -54,7 +54,7 @@ Takes no arguments. Returns a `TelemetryMetricListResult` carrying the backend m
 |---|---|---|
 | `metric` | `string?` | Optional metric name to look up; `null` returns metadata for every metric the caller may see. |
 
-Returns a `TelemetryMetricMetadataResult` carrying, per metric, its `Type`, `Help`, and `Unit`. A named metric the allow-list does not admit is rejected with a clean failure; an unnamed call returns only the admitted metrics.
+Returns a `TelemetryMetricMetadataResult` carrying, per metric, its `Type`, `Help`, and `Unit`. A named metric the allow-list does not admit is rejected with a clean failure; an unnamed call returns only the admitted metrics. This lookup keys on the **OTEL base instrument name**, not the Prometheus exposition name that `list_metrics` returns, so pass the base name and drop any `_total`/`_bucket`/`_count`/`_sum` suffix. A named lookup that resolves to no metadata comes back successful but empty, carrying a `Notice` advisory that flags the likely exposition-name-versus-base-name mismatch; and a `404` from the backend metadata endpoint degrades to a successful empty result rather than a failure.
 
 ## Result shapes
 
@@ -62,9 +62,9 @@ The tool results are plain records projected to structured JSON by the MCP SDK (
 
 - `TelemetryQueryResult` - `Success`, `Error`, `ResultType`, and `Series` (each `TelemetrySeries` carries its `Labels` and its `Samples`, and each `TelemetrySample` a `Timestamp` and `Value`).
 - `TelemetryMetricListResult` - `Success`, `Error`, and `Metrics`.
-- `TelemetryMetricMetadataResult` - `Success`, `Error`, and `Metrics` (each `TelemetryMetricMetadata` carries `Metric`, `Type`, `Help`, and `Unit`).
+- `TelemetryMetricMetadataResult` - `Success`, `Error`, `Metrics` (each `TelemetryMetricMetadata` carries `Metric`, `Type`, `Help`, and `Unit`), and a non-fatal `Notice` advisory. `Notice` is populated when a named lookup resolves to no metadata - typically because a Prometheus exposition name (with a `_total`/`_bucket`/`_count`/`_sum` suffix) was passed where the OTEL base instrument name is expected - so an unrecognised name is distinguishable from an admitted-but-genuinely-empty listing.
 
-A backend timeout, HTTP failure, non-success status, or malformed payload is caught and surfaced on `Error`, so the agent always observes a structured result rather than a transport fault. A genuine caller cancellation still propagates.
+A backend timeout, HTTP failure, non-success status, or malformed payload is caught and surfaced on `Error`, so the agent always observes a structured result rather than a transport fault. The one deliberate exception is `metric_metadata`: a `404` from the backend metadata endpoint degrades to `Success = true` with an empty `Metrics` list rather than an error. A genuine caller cancellation still propagates.
 
 ## Next
 

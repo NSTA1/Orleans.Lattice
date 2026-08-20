@@ -13,7 +13,7 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeDashboards` | static class | Retrieves the bundled Grafana dashboard JSON. | `GetGrafanaDashboardJson(LatticeDashboardKind)`, `All` |
-| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, `Authorization` |
+| `LatticeDashboardKind` | enum | Identifies one bundled dashboard, each resolving to a focused operator workflow. | `Overview`, `CommitPath`, `Replication`, `AtomicWrites`, `MaterialisedViews`, `Authorization`, `Backup`, `Scaling`, `ReplicationGrpc` |
 
 ### `LatticeDashboards`
 
@@ -32,6 +32,9 @@ string json = LatticeDashboards.GetGrafanaDashboardJson(LatticeDashboardKind.Ove
 | `AtomicWrites` | `orleans.lattice` | `SetManyAtomicAsync` saga deep-dive: outcome rate, saga duration and batch-size percentiles, per-tree committed throughput, and a dedicated saga-failure-rate panel. |
 | `MaterialisedViews` | `orleans.lattice` | Cluster-wide materialised-view health: apply-lag and drain-backlog-depth percentiles, filter / re-project and aggregation apply throughput, and warning panels for lag-budget evictions, re-key collisions, atomic-staging backstop fall-backs, and cross-tree joint-atomicity violations. Keyed by view name (and cluster); no per-silo filter, because a view's maintainer is a single grain activation that migrates between silos. Does not require the replication package. |
 | `Authorization` | `orleans.lattice.auth`, `orleans.lattice.membership` | Identity and authorization operator view: enforcement-gate decision throughput (by effect and operation), decision-latency percentiles, compiled-snapshot rebuild rate and the snapshot epoch / age gauges, plus subject-resolution cache hit-ratio and hit / miss throughput. Useful only when the authentication / authorization packages are registered on the silo. |
+| `Backup` | `orleans.lattice.backup` | Backup / restore operator view: capture / restore throughput and duration percentiles, per-backup size / artifact / entry distributions, cumulative processed throughput, retention reclaim and prune rates, incremental lag behind the base cut, capture / restore failure rates by reason, scheduler skipped-run and overrun counters, cross-tree-consistent fence selection / drain counters, and the inventory gauges. Useful only when the backup package is registered on the silo. |
+| `Scaling` | `orleans.lattice.scaling` | Autoscaling-signal operator view: the smoothed scale-in-gated and raw instantaneous scale-value gauges, the three normalised compute-pressure dimensions (activation / host-resource / WAL-dispatch), the recommended silo replica count, and the storage-axis stats. Useful only when the scaling package is registered on the silo. |
+| `ReplicationGrpc` | `orleans.lattice.replication.grpc` | Replication gRPC transport-security view: the insecure (plaintext) channel construction counter as a cumulative total and a per-second rate, broken out by peer cluster id and transport (push / saga_control / snapshot), so an accidental plaintext downgrade under `AllowPlaintextEndpoints` is visible. Useful only when the gRPC replication transport is registered on the silo. |
 
 ## Enumerating every dashboard
 

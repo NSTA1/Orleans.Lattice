@@ -25,7 +25,7 @@ The read-bounding knobs the control facade honours for its paged catalog listing
 
 ## Facade operations
 
-The control facade exposes these operations; each is projected as one RPC by the [gRPC binding](../lattice.api.backup.grpc/api.md). Every operation authorizes its scope fail-closed before touching data.
+The control facade exposes these operations. The [gRPC binding](../lattice.api.backup.grpc/api.md) projects the remote-safe subset as RPCs; inventory, catalog rebuild / scrub, and cold restore are in-process-only today. Operations that touch backup data authorize their scope fail-closed before touching data; advisory capability and availability probes report state without mutating data.
 
 | Operation | Shape | Returns |
 |---|---|---|
@@ -50,12 +50,15 @@ The control facade exposes these operations; each is projected as one RPC by the
 | Get scope status | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
 | Probe capabilities | takes a `BackupScopeSelector` | `BackupScopeCapabilities` |
 | Schedule backup | takes a `LatticeBackupScheduleRequest` | (void) |
+| Cancel schedule | takes a `BackupScopeSelector` and `bool incremental` | (void) |
 
 Create backup set captures one full backup per distinct tree scope under a single set manifest, so an operator can back up several trees as one unit; it authorizes every member scope fail-closed before any capture, so a set that names one forbidden scope is rejected whole. When cross-tree consistency is requested the members share one consistency fence. The `LatticeBackupSetCaptureRequest` / `LatticeBackupSetCaptureResult` and `BackupSetManifest` types are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
-Schedule backup registers (or updates) a recurring backup of one scope: the scheduler grain persists the scope and registers an Orleans reminder that fires every interval, capturing a full or an incremental backup per the request. It authorizes the scope with the same grant as a capture, and clamps a sub-minimum interval up to the scheduler minimum. A runtime schedule registered this way overrides the startup-configured cadence for the chosen kind. The `LatticeBackupScheduleRequest` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
+Schedule backup registers (or updates) a recurring backup of one scope: the scheduler grain persists the scope and registers an Orleans reminder that fires every interval, capturing a full or an incremental backup per the request. It authorizes the scope with the same grant as a capture, and clamps a sub-minimum interval up to the scheduler minimum. A runtime schedule registered this way overrides the startup-configured cadence for the chosen kind. Cancel schedule removes that runtime full or incremental schedule for the scope and is idempotent. The `LatticeBackupScheduleRequest` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 
-The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below.
+Backup-set restore is exposed by the backup engine restore service, not by `ILatticeBackupControl` or the gRPC binding. Its public shape is `Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync(string setId, CancellationToken cancellationToken = default)`: it restores every member tree in the captured set as one unit, using shadow-cutover restores for the members and a coordinated all-or-nothing saga when replicated members require it.
+
+The request / result types prefixed `LatticeBackup*` / `LatticeRestore*` and `BackupManifest` / `BackupScopeSelector` are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md); the package's own model records are documented below. `BackupManifest` includes `string? CapturingClusterId`, the id of the cluster that authored the capture and owns the WAL cursor lineage; legacy manifests can carry `null`, which readers treat as the local cluster.
 
 Rebuild catalog from sink re-registers every self-describing manifest the durable sink holds into the reserved `sys-backup-catalog` tree, so the sink is the single source of truth and the catalog a rebuildable, self-healing projection over it. It is a high-privilege administrative action authorized fail-closed with the Restore (author / bulk-load) grant over the catalog tree, and is idempotent: a manifest already catalogued is reconciled in place (keeping its immutable capture timestamp) rather than duplicated, and a catalog missing rows the sink has is repopulated. It returns a `BackupCatalogRebuildReport` summarizing how many manifests were scanned, freshly added, and reconciled. The `BackupCatalogRebuildReport` type is defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 

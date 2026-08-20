@@ -107,6 +107,55 @@ The add-on `orleans.lattice.replication.grpc` meter is charted by the bundled Re
 | `orleans.lattice.view.atomic_staging_backstop` | counter | `view` | MaterialisedViews | Atomic-staging backstop fall-backs (rate) |
 | `orleans.lattice.view.cross_tree_joint_violation` | counter | `view` | MaterialisedViews | Cross-tree joint-atomicity violations (rate) |
 | `orleans.lattice.view.source_backpressure` | counter | `view`, `state` | MaterialisedViews | Source back-pressure self-throttle (rate) |
+| `orleans.lattice.get.duration` | histogram (ms) | `tree` | Overview | GetAsync / GetManyAsync envelope p50 (ms); GetAsync / GetManyAsync envelope p95 / p99 (ms) |
+| `orleans.lattice.get.stage.duration` | histogram (ms) | `tree`, `stage` | Overview | GetAsync stage breakdown p95 (ms) |
+| `orleans.lattice.get_many.duration` | histogram (ms) | `tree` | Overview | GetAsync / GetManyAsync envelope p50 (ms); GetAsync / GetManyAsync envelope p95 / p99 (ms) |
+| `orleans.lattice.get_many.stage.duration` | histogram (ms) | `tree`, `stage` | Overview | GetManyAsync stage breakdown p95 (ms) |
+| `orleans.lattice.exists.duration` | histogram (ms) | `tree` | Overview | ExistsAsync / GetWithVersionAsync envelope p95 (ms) |
+| `orleans.lattice.get_with_version.duration` | histogram (ms) | `tree` | Overview | ExistsAsync / GetWithVersionAsync envelope p95 (ms) |
+| `orleans.lattice.set.duration` | histogram (ms) | `tree` | CommitPath | SetAsync / SetManyAsync envelope p50 (ms); SetAsync / SetManyAsync envelope p95 (ms) |
+| `orleans.lattice.set.stage.duration` | histogram (ms) | `tree`, `stage` | CommitPath | SetAsync stage breakdown p95 (ms) |
+| `orleans.lattice.set_many.duration` | histogram (ms) | `tree` | CommitPath | SetAsync / SetManyAsync envelope p50 (ms); SetAsync / SetManyAsync envelope p95 (ms) |
+| `orleans.lattice.set_many.stage.duration` | histogram (ms) | `tree`, `stage` | CommitPath | SetManyAsync stage breakdown p95 (ms) |
+| `orleans.lattice.shard_root.set_many.leaf_rpc.duration` | histogram (ms) | `tree` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
+| `orleans.lattice.shard_root.set_many.local_apply.duration` | histogram (ms) | `tree` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
+| `orleans.lattice.shard_root.set_many.shadow_forward.duration` | histogram (ms) | `tree` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
+| `orleans.lattice.warmup.invocations` | counter (`{call}`) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
+| `orleans.lattice.warmup.duration` | histogram (ms) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
+| `orleans.lattice.leaf.commit.in_flight` | histogram (`{commit}`) | `tree` | CommitPath | Leaf commit concurrency (in-flight) p95 |
+| `orleans.lattice.leaf.digest.publishes` | counter (`{publish}`) | `tree`, `path` | CommitPath | Digest publish path attribution (ops/s) - coalescing efficacy |
+| `orleans.lattice.provider.commit.duration` | histogram (ms) | `tree`, `shard`, `phase`, `pipeline_phase2` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |
+| `orleans.lattice.provider.phase2.batch_size` | histogram (`{commit}`) | `tree`, `shard` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |
+| `orleans.lattice.provider.retry.attempts` | counter (`{attempt}`) | `status` | CommitPath | Storage-provider retries (ops/s) - attempts vs exhausted vs idempotent-replays vs phase1-transient |
+| `orleans.lattice.provider.retry.exhausted` | counter (`{call}`) | `tree`, `shard`, `phase`, `status` | CommitPath | Storage-provider retries (ops/s) - attempts vs exhausted vs idempotent-replays vs phase1-transient |
+| `orleans.lattice.provider.idempotent_replays` | counter (`{call}`) | `tree`, `shard`, `phase` | CommitPath | Storage-provider retries (ops/s) - attempts vs exhausted vs idempotent-replays vs phase1-transient |
+| `orleans.lattice.wal.append.turn_wait` | histogram (ms) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL append latency p95 (ms) - turn-wait / provider / dispatch |
+| `orleans.lattice.wal.append.provider.duration` | histogram (ms) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL append latency p95 (ms) - turn-wait / provider / dispatch |
+| `orleans.lattice.wal.append.in_flight` | histogram (`{flush}`) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL pipeline depth p95 - in-flight flushes / queue depth |
+| `orleans.lattice.wal.append.queue_depth` | histogram (`{entry}`) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL pipeline depth p95 - in-flight flushes / queue depth |
+| `orleans.lattice.wal.append.batch_entries` | histogram (`{entry}`) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL batch shape p95 - entries / bytes / dispatch-entries |
+| `orleans.lattice.wal.append.batch_bytes` | histogram (`By`) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL batch shape p95 - entries / bytes / dispatch-entries |
+| `orleans.lattice.wal.shard.dispatch.duration` | histogram (ms) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath | WAL append latency p95 (ms) - turn-wait / provider / dispatch |
+| `orleans.lattice.wal.shard.dispatch.entries` | histogram (`{entry}`) | `tree`, `shard`, `wal_partitions`, `wal_max_pending_batches` | CommitPath, Replication | WAL batch shape p95 - entries / bytes / dispatch-entries; Log-tailing producer: leaf WAL append vs ship rate (ops/s) |
+| `orleans.lattice.wal.saturation.state` | observable gauge (0/1/2) | `tree` | Overview | WAL saturation regime - % time non-Healthy (1h); WAL saturation regime - current state per tree |
+| `orleans.lattice.wal.saturation.transitions` | counter (`{transition}`) | `tree`, `shard`, `partition`, `state`, `previous_state` | Overview | WAL saturation regime - per-partition attribution (heat-map); WAL saturation regime - transition rate by direction (ops/s) |
+| `orleans.lattice.storage.wal.uncompressed_bytes` | counter (`By`) | `tree` | Overview | WAL compression savings ratio by tree |
+| `orleans.lattice.storage.wal.stored_bytes` | counter (`By`) | `tree` | Overview | WAL compression savings ratio by tree |
+| `orleans.lattice.storage.wal.compression_skipped` | counter (`{row}`) | `tree`, `reason` | Overview | WAL compression skips by reason |
+| `orleans.lattice.saga.prepare.duration` | histogram (ms) | `tree`, `wal_partitions` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
+| `orleans.lattice.saga.terminal_decision.duration` | histogram (ms) | `tree`, `wal_partitions` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
+| `orleans.lattice.saga.broadcast.duration` | histogram (ms) | `tree`, `wal_partitions` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
+| `orleans.lattice.saga.broadcast.shard.duration` | histogram (ms) | `tree`, `shard` | AtomicWrites | Saga broadcast sub-attribution p95 (ms) - per-shard / per-leaf / per-shard-stage |
+| `orleans.lattice.saga.broadcast.leaf.duration` | histogram (ms) | `tree`, `shard` | AtomicWrites | Saga broadcast sub-attribution p95 (ms) - per-shard / per-leaf / per-shard-stage |
+| `orleans.lattice.saga.broadcast.shard.stage.duration` | histogram (ms) | `tree`, `shard`, `stage` | AtomicWrites | Saga broadcast sub-attribution p95 (ms) - per-shard / per-leaf / per-shard-stage |
+| `orleans.lattice.saga.checkpoint.duration` | histogram (ms) | `tree`, `phase` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
+| `orleans.lattice.saga.reminder.duration` | histogram (ms) | `tree`, `phase` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
+| `orleans.lattice.saga.perkey.duration` | histogram (ms) | `tree`, `wal_partitions` | AtomicWrites | Per-key saga work - p95 per-key duration vs serial-gap wait (ms) |
+| `orleans.lattice.saga.wait.serial_gap` | histogram (ms) | `tree` | AtomicWrites | Per-key saga work - p95 per-key duration vs serial-gap wait (ms) |
+| `orleans.lattice.saga.fanout.size` | histogram (`{entry}`) | `tree`, `wal_partitions` | AtomicWrites | Saga fan-out size (entries per saga) |
+| `orleans.lattice.atomic_write.cross_tree.completed` | counter (`{saga}`) | `outcome`, `tree_count` | AtomicWrites | Cross-tree atomic write outcomes (rate); Cross-tree failure rate (%) |
+| `orleans.lattice.atomic_write.cross_tree.duration` | histogram (ms) | `outcome` | AtomicWrites | Cross-tree coordinator duration (p50/p95/p99 ms) |
+| `orleans.lattice.atomic_write.cross_tree.participants` | histogram (`{tree}`) | `outcome` | AtomicWrites | Cross-tree participant fan-out (trees per saga) |
 
 ## `orleans.lattice.replication` meter
 

@@ -145,7 +145,7 @@ Long-running or multi-step operations are managed by dedicated coordination grai
 |---|---|---|---|---|
 | Adaptive shard split | `TreeShardSplitGrain` | `{treeId}/{shardIndex}` | `TreeShardSplitState` - source/dest shard, migrating slots, drain cursor, phase | Yes |
 | Online reshard | `TreeReshardGrain` | `{treeId}` | `TreeReshardState` - target shard count, eligibility queue, dispatch budget, phase | Yes |
-| Hot-shard monitoring | `HotShardMonitorGrain` | `{treeId}` | None (polls `ShardRootGrain.GetHotnessAsync` on each tick) | Yes |
+| Hot-shard monitoring | `HotShardMonitorGrain` | `{treeId}` | `HotShardMonitorState` - first-activation timestamp so the auto-split grace period survives silo restarts (polls `ShardRootGrain.GetHotnessAsync` on each tick) | Yes |
 | Tree merge | `TreeMergeGrain` | `{treeId}` | `TreeMergeState` - source tree, per-shard progress | Yes |
 | Snapshot | `TreeSnapshotGrain` | `{treeId}` | `TreeSnapshotState` - destination tree, per-shard progress, phase | Yes |
 | Resize | `TreeResizeGrain` | `{treeId}` | `TreeResizeState` - old/new tree IDs, sizing overrides, phase | Yes |
@@ -160,7 +160,7 @@ These grains carry the per-shard write-ahead log, leaf-projection replay, cursor
 
 | Purpose | Orleans Grain | Key Format | Persistent State |
 |---|---|---|---|
-| Per-shard WAL | `WalShardGrain` | `{treeId}/{partition}` (partition = stable hash of key mod `WalPartitions`) | `WalShardState` - monotonic sequence, retained `WalEntry` range, trim watermark |
+| Per-shard WAL | `WalShardGrain` | `{treeId}/{partition}` (partition = stable hash of key mod `WalPartitions`) | None as grain state - appends `WalRecord` entries directly to the configured `IWalStorageProvider` (the append is the commit point) and recovers its next offset from the provider on activation |
 | Leaf replay coordinator | `LeafReplayCoordinatorGrain` | `{leafGrainId}` | Per-leaf replay cursor: how far into the WAL the leaf has consumed during activation replay |
 | Cursor pagination | `LatticeCursorGrain` | `{treeId}/{cursorId}` | Cursor position (key bound + reverse flag + scan kind); released on `CloseCursorAsync` |
 | Tree stats | `LatticeStatsGrain` | `{treeId}` | None (aggregates over the live shard / leaf grains for `DiagnoseAsync`) |

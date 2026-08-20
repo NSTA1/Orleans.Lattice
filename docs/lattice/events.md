@@ -29,6 +29,7 @@ DateTimeOffset at = evt.AtUtc;                // silo-side timestamp
 | `AtomicWriteCompleted` | `null` | `null` | The atomic-write coordinator on terminal success only. `OperationId` is the saga's idempotency key. Rolled-back sagas do **not** publish a completion event. |
 | `SplitCommitted` | `null` | source shard | The shard-split coordinator after the finalise phase. |
 | `CompactionCompleted` | `null` | compacted shard | The tombstone-compaction pass after a successful run. |
+| `CompactionTriggered` | `null` | affected shard | Reserved / not yet emitted. A declared kind for a leaf asking the tree's compaction grain to schedule an out-of-cycle pass; no producer currently publishes it. |
 | `SnapshotCompleted` | `null` | `null` | The snapshot coordinator on terminal success. |
 | `ResizeCompleted` | `null` | `null` | The tree-resize coordinator on terminal success. |
 | `ReshardCompleted` | `null` | `null` | The reshard coordinator on terminal success. |
@@ -102,7 +103,16 @@ await handle.UnsubscribeAsync();
 
 ### Missing provider
 
-If the silo has `PublishEvents = true` but no matching `IStreamProvider` registered, `SubscribeToEventsAsync` throws `InvalidOperationException` with an actionable message ("register one via siloBuilder.AddMemoryStreams/AddEventHubStreams/etc."). This is the one hard-fail in the pipeline - publication itself continues to noop, but subscribing on a mis-configured client is treated as a programming error.
+If `PublishEvents = true` but no matching `IStreamProvider` is registered on the cluster client, `SubscribeToEventsAsync` throws `InvalidOperationException` with an actionable message ("register one via clientBuilder.AddMemoryStreams(...) (or the Event Hub / Azure Queue equivalent), and ensure every silo hosting Lattice grains has the same provider registered"). This is the one hard-fail in the pipeline - publication itself continues to noop, but subscribing on a mis-configured client is treated as a programming error.
+
+## Metrics
+
+The publish pipeline emits two counters under the `orleans.lattice` meter:
+
+| Instrument | Type | Unit | Tags | Meaning |
+|---|---|---|---|---|
+| `orleans.lattice.events.published` | `Counter<long>` | `{event}` | `kind` = the event kind name (e.g. `Set`, `SnapshotCompleted`) | Incremented once per `LatticeTreeEvent` successfully dispatched to the configured stream provider. |
+| `orleans.lattice.events.dropped` | `Counter<long>` | `{event}` | `reason` = `missing_provider` (no stream provider by the configured name) or `publish_error` (the stream provider threw during dispatch) | Incremented once per event drop. |
 
 ## Per-tree override
 

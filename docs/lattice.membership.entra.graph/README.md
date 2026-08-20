@@ -8,7 +8,7 @@ Microsoft Graph-backed group-overflow resolver for [Orleans.Lattice.Membership.E
 
 ## What it does
 
-When an inbound Entra token's group membership overflows and the authenticator needs the caller's full transitive group set, it delegates to the registered group resolver. The Graph-backed resolver answers that request by calling the caller's transitive member-groups endpoint through Microsoft Graph and returning the resolved group ids. It is consulted only on the overflow path, so an application whose tokens carry their groups inline makes no Graph call.
+When an inbound Entra token's group membership overflows and the authenticator needs the caller's full transitive group set, it delegates to the registered group resolver. The Graph-backed resolver answers that request by calling the caller's transitive member-groups endpoint through Microsoft Graph and returning the resolved group ids. It is consulted only on the overflow path, so an application whose tokens carry their groups inline makes no Graph call. Unlike the identity-directory search/resolve path (below), the overflow resolver does **not** degrade: a token-acquisition or Graph-call failure on this path propagates through authentication rather than resolving to an empty group set, so a caller whose overflow lookup fails is not silently authorized with no groups.
 
 ## Transparent app-token management
 
@@ -35,7 +35,7 @@ siloBuilder.AddEntraGraphGroupResolver(options =>
 });
 ```
 
-**Secret-less path** - for deployments that want no client secret to store, rotate, or leak. Set `LatticeEntraGraphOptions.Credential` to any `Azure.Core` `TokenCredential` (for example `DefaultAzureCredential` or a `ManagedIdentityCredential` bound to a user-assigned managed identity that carries a federated credential on the app registration). The shared app-only Graph client is then built directly from that credential and the configured scopes, and no client secret is acquired, cached, or refreshed; `TenantId`, `ClientId`, and `ClientSecret` are ignored:
+**Secret-less path** - for deployments that want no client secret to store, rotate, or leak. Set `LatticeEntraGraphOptions.Credential` to any `Azure.Core` `TokenCredential` (for example `DefaultAzureCredential` or a `ManagedIdentityCredential` bound to a user-assigned managed identity that carries a federated credential on the app registration). The shared app-only Graph client is then built directly from that credential and the configured scopes, and no client secret is acquired, cached, or refreshed; `TenantId` and `ClientId` are ignored, and `ClientSecret` must be left unset (supplying both a `Credential` and a `ClientSecret` fails validation as ambiguous):
 
 ```
 siloBuilder.AddEntraGraphGroupResolver(options =>
@@ -55,10 +55,11 @@ The same registration also installs a Microsoft Graph-backed
 identity source that the Explorer Access area searches and validates against when
 an operator picks or creates a subject. It searches users and groups in the tenant
 over the same app-only Graph token described above, requiring the `User.Read.All`
-and `Group.Read.All` application permissions. When the token cannot be minted or a
-Graph call is denied, it degrades cleanly rather than throwing: a search returns an
-empty page and a resolve returns `null`, so the Access area keeps working without
-an unhandled fault.
+and `Group.Read.All` application permissions. A Graph call that Graph itself
+denies (an `ODataError`) degrades cleanly rather than throwing: a search returns
+an empty page and a resolve returns `null`, so the Access area keeps working
+without an unhandled fault. Token-acquisition failures and non-OData transport
+failures are not caught on this path and currently propagate.
 
 See [Identity-directory providers](../lattice.membership/identity-directory-providers.md)
 for the seam, the static and custom alternatives, and the fail-closed create flow.
