@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -68,6 +70,24 @@ internal sealed partial class BPlusInternalGrain(
         Console.WriteLine($"[diag persist] kind=internal caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' recordExists={state.RecordExists} etag={etag}");
     }
 
+    /// <summary>
+    /// Cached typed logger resolved on first use, for the best-effort
+    /// first-create-race convergence debug line emitted by
+    /// <see cref="TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync{TState}"/>.
+    /// </summary>
+    private ILogger<BPlusInternalGrain>? _logger;
+
+    private ILogger<BPlusInternalGrain>? ResolveLogger()
+    {
+        if (_logger is not null)
+            return _logger;
+
+        _logger = context.ActivationServices?
+            .GetService<ILoggerFactory>()?
+            .CreateLogger<BPlusInternalGrain>();
+        return _logger;
+    }
+
     private ResolvedLatticeOptions? _options;
     private ValueTask<ResolvedLatticeOptions> GetOptionsAsync() =>
         _options is not null
@@ -101,7 +121,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist(nameof(InitializeAsync));
-            await state.WriteStateAsync();
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
         }
         catch
         {
@@ -138,7 +158,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist(nameof(InitializeWithChildrenAsync));
-            await state.WriteStateAsync();
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
         }
         catch
         {
@@ -402,7 +422,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist(nameof(SetTreeIdAsync));
-            await state.WriteStateAsync();
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
         }
         catch
         {

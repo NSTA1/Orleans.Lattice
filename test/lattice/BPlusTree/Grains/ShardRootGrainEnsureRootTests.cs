@@ -5,6 +5,7 @@ using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -257,5 +258,87 @@ public class ShardRootGrainEnsureRootTests
                 "Concurrent first-touch seeded the root more than once; "
                 + "the init gate did not serialise the seed sequence.");
         });
+    }
+
+    [Test]
+    public async Task EnsureRoot_converges_when_concurrent_first_write_wins_the_create_race()
+    {
+        // #1566: the cross-activation first-create race on the brand-new
+        // shard-root row. Two activations of this deterministic shard-root id
+        // both pass the defensive re-read (storage genuinely empty), both seed
+        // the deterministic single-leaf root, and both issue their first
+        // WriteStateAsync as an insert. The loser's write throws the empty/empty
+        // InconsistentStateException; it must converge by adopting the winner's
+        // durably-committed seed, not fail first-touch with a spurious abort.
+        var (grain, state) = CreateGrain();
+
+        // The row does not exist yet, so the seed write is an insert.
+        state.RecordExistsValue = false;
+
+        // First ReadStateAsync is EnsureRootSlowAsync's defensive re-read: it
+        // must find storage still empty so seeding proceeds. The second read is
+        // the benign-race adopt inside WriteShardStateAsync's persist helper,
+        // which surfaces the winner's committed root (a different id than this
+        // activation's deterministic seed, to prove the adopt actually took).
+        var winnerRoot = GrainId.Create("leaf", "winner-seed-root");
+        state.OnReadState = s =>
+        {
+            if (s.ReadCount >= 2)
+            {
+                s.State.RootNodeId = winnerRoot;
+                s.State.RootIsLeaf = true;
+                s.State.IsRegistered = true;
+                s.RecordExistsValue = true;
+            }
+        };
+        state.ThrowOnWrite = new InconsistentStateException(
+            "Version conflict (WriteState): ETag=. Expected Etag= Received Etag=",
+            storedEtag: string.Empty,
+            currentEtag: string.Empty);
+
+        Assert.DoesNotThrowAsync(
+            async () => await grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>()),
+            "A benign empty/empty first-create lost race on the brand-new "
+            + "shard-root row must converge by adopting the winner's seed, "
+            + "not fail first-touch initialisation.");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.RootNodeId, Is.EqualTo(winnerRoot),
+                "The shard root must converge on the winner's durably-"
+                + "committed root, adopting it via re-read.");
+            Assert.That(state.ReadCount, Is.GreaterThanOrEqualTo(2),
+                "The benign-race resolution must re-read storage to adopt "
+                + "the winner's committed row.");
+            Assert.That(state.WriteCount, Is.Zero,
+                "The loser must not blindly re-issue a write over the "
+                + "winner's row; adopting via re-read is sufficient.");
+        });
+    }
+
+    [Test]
+    public void EnsureRoot_still_throws_on_a_genuine_stale_state_conflict()
+    {
+        // Guards the fail-loud contract on the shard root: a conflict carrying
+        // non-empty etags is NOT the benign first-create race and must still
+        // surface (and revert the in-memory seed), so the #1566 convergence
+        // cannot mask a real version conflict.
+        var (grain, state) = CreateGrain();
+
+        state.RecordExistsValue = false;
+        state.ThrowOnWrite = new InconsistentStateException(
+            "Version conflict (WriteState) on an existing row.",
+            storedEtag: "7",
+            currentEtag: "9");
+
+        Assert.ThrowsAsync<InconsistentStateException>(
+            async () => await grain.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>()),
+            "A genuine stale-state conflict on the shard-root row must still "
+            + "surface loudly and not be swallowed as a benign create race.");
+
+        Assert.That(state.State.RootNodeId, Is.Null,
+            "A non-benign write failure must revert the in-memory root seed, "
+            + "so a retry re-runs the seed rather than short-circuiting on a "
+            + "root id storage never accepted.");
     }
 }
