@@ -14,7 +14,18 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
 
     public T State { get; set; } = new();
     public string Etag => SimulateEtagChecks ? _currentEtag.ToString(System.Globalization.CultureInfo.InvariantCulture) : string.Empty;
-    public bool RecordExists => true;
+
+    /// <summary>
+    /// Backing value returned by <see cref="RecordExists"/>. Defaults to
+    /// <c>true</c> so the vast majority of unit tests - which model a
+    /// grain whose storage row already exists - keep their behaviour.
+    /// Set to <c>false</c> to model a brand-new grain whose row has not
+    /// yet been created, so a first <see cref="WriteStateAsync"/> is an
+    /// insert (the first-create-race window exercised by #1557).
+    /// </summary>
+    public bool RecordExistsValue { get; set; } = true;
+
+    public bool RecordExists => RecordExistsValue;
 
     /// <summary>Number of times <see cref="WriteStateAsync"/> has been called.</summary>
     public int WriteCount { get; private set; }

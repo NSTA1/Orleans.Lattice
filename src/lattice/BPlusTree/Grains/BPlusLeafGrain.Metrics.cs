@@ -106,10 +106,45 @@ internal sealed partial class BPlusLeafGrain
                 : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
             Console.WriteLine($"[diag persist] kind=leaf caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' shard={state.State.ShardIndex} recordExists={state.RecordExists} etag={etag}");
         }
+        // #1557: capture whether this write is an initial create BEFORE the
+        // attempt. A brand-new leaf whose storage row does not yet exist
+        // (RecordExists == false) issues its first WriteStateAsync as an
+        // insert with a null/empty expected etag. On a fresh volume / cold
+        // silo the grain-directory warmup can transiently materialise two
+        // activations of this leaf's deterministic grain id, so both issue
+        // that first insert and the loser of the storage insert
+        // compare-and-swap throws InconsistentStateException with BOTH
+        // etags empty. The per-activation _splitGate cannot serialise that
+        // race - it is cross-activation. See the benign-race catch below.
+        var creatingRow = !state.RecordExists;
         var startTicks = Stopwatch.GetTimestamp();
         try
         {
             await state.WriteStateAsync();
+        }
+        catch (Orleans.Storage.InconsistentStateException ex)
+            when (creatingRow
+                && string.IsNullOrEmpty(ex.StoredEtag)
+                && string.IsNullOrEmpty(ex.CurrentEtag))
+        {
+            // Benign first-create lost race (#1557). This activation never
+            // read an existing row (creatingRow), and BOTH etags are empty,
+            // so this is provably an insert-vs-insert race, not a
+            // stale-state conflict on an existing row (which carries
+            // non-empty etags and must still surface - preserving the
+            // #1560 fall-off-the-log fail-loud contract). The only writers
+            // of a leaf's deterministic grain id are the shard root seeding
+            // the same tree, and data mutations are gated behind TreeId (see
+            // ResolveCommitLogWriter), so the very first state-row write is
+            // always the idempotent topology seed. The winner's durably-
+            // committed row therefore already satisfies the seed this
+            // activation intended: adopt it by re-reading and converge,
+            // rather than failing the cold-start bulk apply with a spurious
+            // fail-level run abort that only self-heals on a retry.
+            await state.ReadStateAsync();
+            ResolveLogger()?.LogDebug(
+                "Leaf {GrainId} converged a benign first-create write race (#1557) by adopting the concurrently-committed row.",
+                context.GrainId);
         }
         finally
         {
