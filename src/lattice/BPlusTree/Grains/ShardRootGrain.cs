@@ -203,7 +203,16 @@ internal sealed partial class ShardRootGrain(
         await _stateWriteGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            await state.WriteStateAsync();
+            // #1566: converge a benign cold-start first-create write race
+            // (both etags empty on the brand-new shard-root row) by adopting
+            // the concurrently-committed seed. The guard self-selects only the
+            // genuine insert-vs-insert case; every later write (RecordExists ==
+            // true) and every stale-state conflict on an existing row still
+            // surfaces unchanged, so each call site's snapshot/revert catch is
+            // unaffected. The shard-root seed's root leaf uses a deterministic
+            // id (see EnsureRootSlowAsync), so adopting the winner's row
+            // reuses the same leaf identity - no orphan.
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, logger, context.GrainId);
         }
         finally
         {

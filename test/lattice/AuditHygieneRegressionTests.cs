@@ -75,21 +75,28 @@ public class AuditHygieneRegressionTests
     /// (<c>MergeEntriesAsync</c>, <c>MergeManyAsync</c>), and the
     /// tombstone-reap compactor (<c>CompactTombstonesAsync</c>) -
     /// must route durability through <c>ICommitLogWriter</c> (per-shard
-    /// WAL) rather than the legacy <c>state.WriteStateAsync()</c> call.
+    /// WAL) rather than a raw <c>state.WriteStateAsync()</c> call.
     /// Scans every partial of the <c>BPlusLeafGrain</c> class for
     /// <c>state.WriteStateAsync(</c> call sites (after stripping
-    /// comments) and asserts the only surviving site is the dedicated
-    /// <c>PersistAsync</c> seam in <c>BPlusLeafGrain.Metrics.cs</c>,
-    /// which centralises the projection-checkpoint flush helper invoked
-    /// from <c>OnDeactivateAsync</c>, coalesced checkpoint paths, and
-    /// topology-only persistence (split-recovery state-row flush) -
-    /// all orthogonal to the foreground commit path. Any new
-    /// <c>state.WriteStateAsync</c> call site introduced by a future
-    /// refactor fails this gate and must be either rerouted through
-    /// the WAL or, if legitimately a state-row flush, routed through
-    /// the central <c>PersistAsync</c> seam (raising the allow-list
-    /// constant is reserved for a structural change that genuinely
-    /// adds a second flush helper).
+    /// comments) and asserts there are none: the leaf's sole state-row
+    /// flush is the <c>PersistAsync</c> seam in
+    /// <c>BPlusLeafGrain.Metrics.cs</c>, which centralises the
+    /// projection-checkpoint flush invoked from <c>OnDeactivateAsync</c>,
+    /// coalesced checkpoint paths, and topology-only persistence
+    /// (split-recovery state-row flush) - all orthogonal to the foreground
+    /// commit path - and delegates the actual write to the shared
+    /// <c>TopologySeedPersist</c> helper. That helper is the single
+    /// state-row flush seam shared by all three topology-seed grains
+    /// (leaf, internal, shard-root), so the cold-start first-create write
+    /// race is converged uniformly through one code path. The one
+    /// remaining raw <c>state.WriteStateAsync(</c> in the topology-grain
+    /// source therefore lives in <c>TopologySeedPersist.cs</c>, and this
+    /// gate pins it there. Any new <c>state.WriteStateAsync</c> call site
+    /// introduced by a future refactor fails this gate and must be either
+    /// rerouted through the WAL or, if legitimately a state-row flush,
+    /// routed through the shared <c>TopologySeedPersist</c> seam (raising
+    /// the allow-list constant is reserved for a structural change that
+    /// genuinely adds a second flush helper).
     /// </summary>
     [Test]
     public void Foreground_leaf_commit_paths_route_through_WAL_not_WriteStateAsync()
@@ -124,13 +131,53 @@ public class AuditHygieneRegressionTests
         Assert.That(partials, Is.Not.Empty,
             "expected at least one BPlusLeafGrain*.cs partial under src/lattice/BPlusTree/Grains");
 
-        // Legitimate sites: exactly one - the `PersistAsync` helper in
-        // BPlusLeafGrain.Metrics.cs. Every other code path that needs
-        // to flush the state row routes through that helper so the
-        // LeafWriteDuration histogram observes a uniform emission.
+        // No leaf partial may hold a raw state.WriteStateAsync( site: the
+        // leaf's PersistAsync seam delegates the actual flush to the shared
+        // TopologySeedPersist helper, so every leaf commit path routes
+        // through the WAL and then through that single shared seam.
+        var leafHits = ScanWriteStateSites(partials);
+        Assert.That(leafHits, Is.Empty,
+            "expected zero raw state.WriteStateAsync( sites in the BPlusLeafGrain partials "
+            + "(the PersistAsync seam delegates to the shared TopologySeedPersist helper), but found "
+            + $"{leafHits.Count}: {string.Join(", ", leafHits)}. The WAL append is the sole commit "
+            + "point for foreground writes; a new state.WriteStateAsync site must either route "
+            + "through ICommitLogWriter or, if legitimately a state-row flush, be routed through "
+            + "the shared TopologySeedPersist seam.");
+
+        // The single shared state-row flush seam: exactly one raw
+        // state.WriteStateAsync( site must survive across the topology-grain
+        // source, and it must live in the shared helper so all three
+        // topology-seed grains converge the cold-start first-create race
+        // through one code path.
         const int ExpectedLegitimateSites = 1;
+        var seamFile = Path.Combine(grainsDir!, "TopologySeedPersist.cs");
+        Assert.That(File.Exists(seamFile), Is.True,
+            "expected the shared state-row flush seam at "
+            + "src/lattice/BPlusTree/Grains/TopologySeedPersist.cs");
+        var seamHits = ScanWriteStateSites(new[] { seamFile });
+        Assert.That(seamHits.Count, Is.EqualTo(ExpectedLegitimateSites),
+            $"expected exactly {ExpectedLegitimateSites} legitimate state.WriteStateAsync( site "
+            + "in the shared TopologySeedPersist seam, but found "
+            + $"{seamHits.Count}: {string.Join(", ", seamHits)}. Raising the allow-list "
+            + "constant is reserved for a structural change that genuinely adds a second flush helper.");
+
+        // Pin the surviving site to the shared helper so a refactor that
+        // moves the seam without rerouting still fails the gate.
+        var surviving = seamHits.Single();
+        Assert.That(surviving, Does.StartWith("TopologySeedPersist.cs"),
+            $"the surviving state.WriteStateAsync site must remain in TopologySeedPersist.cs "
+            + $"(the shared topology-seed flush helper); instead it lives in {surviving}.");
+    }
+
+    /// <summary>
+    /// Scans each of <paramref name="files"/> for raw
+    /// <c>state.WriteStateAsync(</c> call sites (after stripping comments),
+    /// returning a "file (offset N)" label per hit.
+    /// </summary>
+    private static List<string> ScanWriteStateSites(IEnumerable<string> files)
+    {
         var hits = new List<string>();
-        foreach (var file in partials)
+        foreach (var file in files)
         {
             var source = File.ReadAllText(file);
             var codeOnly = StripComments(source);
@@ -140,22 +187,7 @@ public class AuditHygieneRegressionTests
                 hits.Add($"{Path.GetFileName(file)} (offset {m.Index})");
             }
         }
-
-        Assert.That(hits.Count, Is.EqualTo(ExpectedLegitimateSites),
-            $"expected exactly {ExpectedLegitimateSites} legitimate state.WriteStateAsync( site "
-            + "(BPlusLeafGrain.Metrics.cs PersistAsync), but found "
-            + $"{hits.Count}: {string.Join(", ", hits)}. The WAL append is the sole commit "
-            + "point for foreground writes; a new state.WriteStateAsync site must either route "
-            + "through ICommitLogWriter or, if legitimately a state-row flush, be approved by "
-            + "raising the ExpectedLegitimateSites constant in this test.");
-
-        // Pin the surviving site to the metrics partial so a refactor
-        // that moves PersistAsync without rerouting still fails the
-        // gate.
-        var surviving = hits.Single();
-        Assert.That(surviving, Does.StartWith("BPlusLeafGrain.Metrics.cs"),
-            $"the surviving state.WriteStateAsync site must remain in BPlusLeafGrain.Metrics.cs "
-            + $"(PersistAsync helper); instead it lives in {surviving}.");
+        return hits;
     }
 
     /// <summary>
