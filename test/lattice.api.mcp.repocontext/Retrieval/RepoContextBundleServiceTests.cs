@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
@@ -378,7 +379,8 @@ public sealed partial class RepoContextBundleServiceTests
             Substitute.For<IRepoIndexRunner>(),
             Serializer,
             new RepoContextVectorWriter(grainFactory, Serializer, Substitute.For<ILatticeReplicationContext>(),
-                new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions())),
+                new RepoContextVectorCache(TimeProvider.System, new RepoContextIndexingOptions()),
+                RepoContextVectorPlaneTestDoubles.ReDeriver(grainFactory)),
             Substitute.For<IOptionsMonitor<RepoContextTtlOptions>>(),
             TimeProvider.System);
 

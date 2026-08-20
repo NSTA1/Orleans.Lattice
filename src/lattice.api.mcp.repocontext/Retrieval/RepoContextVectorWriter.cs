@@ -89,28 +89,54 @@ internal sealed class RepoContextVectorWriter
     private readonly Serializer _serializer;
     private readonly ILatticeReplicationContext _replication;
     private readonly RepoContextVectorCache _cache;
+    private readonly RepoContextVectorPlaneReDeriver _reDeriver;
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
     /// <param name="serializer">The Orleans serializer used to decode and re-encode vector records. Must not be <see langword="null"/>.</param>
     /// <param name="replication">The replication context that reports whether, and in what merge mode, the membership tree is replicated. Must not be <see langword="null"/>.</param>
     /// <param name="cache">The warm decoded-candidate cache invalidated after every local mutation. Must not be <see langword="null"/>.</param>
+    /// <param name="reDeriver">The vector-plane self-healer that detects, meters, and re-derives a rebuildable vector tree that fell terminally off its write-ahead log. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public RepoContextVectorWriter(
         IGrainFactory grainFactory,
         Serializer serializer,
         ILatticeReplicationContext replication,
-        RepoContextVectorCache cache)
+        RepoContextVectorCache cache,
+        RepoContextVectorPlaneReDeriver reDeriver)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(replication);
         ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(reDeriver);
         _grainFactory = grainFactory;
         _serializer = serializer;
         _replication = replication;
         _cache = cache;
+        _reDeriver = reDeriver;
     }
+
+    // ── Vector-plane self-heal guards ──────────────────────────────────────
+    // Every operation against a rebuildable vector tree funnels through one of
+    // these so a terminal LeafProjectionStaleException (the tree fell off its
+    // write-ahead log) is detected at the narrowest seam where the target tree is
+    // a known local constant, surfaced (logged + metered), and triggers a bounded
+    // single-flight re-derivation before the fault is re-thrown. The payload tree
+    // is not guarded: it is write-once and content-addressed, out of the
+    // re-derivation allow-list, so its faults propagate unchanged.
+
+    private Task GuardMetadataAsync(Func<Task> operation, CancellationToken cancellationToken)
+        => _reDeriver.GuardAsync(RepoContextTrees.VectorMetadata, operation, cancellationToken);
+
+    private Task<T> GuardMetadataAsync<T>(Func<Task<T>> operation, CancellationToken cancellationToken)
+        => _reDeriver.GuardAsync(RepoContextTrees.VectorMetadata, operation, cancellationToken);
+
+    private Task GuardMembershipAsync(Func<Task> operation, CancellationToken cancellationToken)
+        => _reDeriver.GuardAsync(RepoContextTrees.VectorMembership, operation, cancellationToken);
+
+    private Task<T> GuardMembershipAsync<T>(Func<Task<T>> operation, CancellationToken cancellationToken)
+        => _reDeriver.GuardAsync(RepoContextTrees.VectorMembership, operation, cancellationToken);
 
     /// <summary>
     /// Stores <paramref name="vectors"/> as the current embedding of
@@ -225,22 +251,24 @@ internal sealed class RepoContextVectorWriter
         _cache.Invalidate(repoId);
     }
 
-    private async Task DeleteVectorsAsync(string repoId, string sourceId, CancellationToken cancellationToken)
-    {
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
-
-        // Every presence key for the source shares the prefix "{sourceId}." within
-        // the repository's vector range, so a single range delete retires the whole
-        // source in one call - no prefix scan and no per-key point deletes.
-        var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
-        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
-        if (endExclusive is null)
+    private Task DeleteVectorsAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+        => GuardMetadataAsync(async () =>
         {
-            return;
-        }
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
 
-        await tree.DeleteRangeAsync(prefix, endExclusive, cancellationToken).ConfigureAwait(false);
-    }
+            // Every presence key for the source shares the prefix "{sourceId}." within
+            // the repository's vector range, so a single range delete retires the whole
+            // source in one call - no prefix scan and no per-key point deletes.
+            var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
+            var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+            if (endExclusive is null)
+            {
+                return;
+            }
+
+            await tree.DeleteRangeAsync(prefix, endExclusive, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
     private async Task WritePayloadAsync(
         string repoId, string contentAddress, EmbeddingSpaceTag tag, byte[] payload, CancellationToken cancellationToken)
     {
@@ -260,70 +288,72 @@ internal sealed class RepoContextVectorWriter
         await tree.SetAsync(key, _serializer.SerializeToArray(record), cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task WriteMetadataAsync(
+    private Task WriteMetadataAsync(
         string repoId,
         string vectorId,
         string sourceKey,
         string contentAddress,
         EmbeddingSpaceTag tag,
         CancellationToken cancellationToken)
-    {
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
-        var key = RepoContextKeys.Vector(repoId, vectorId);
-        var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
-
-        var record = new VectorMetadataRecord
+        => GuardMetadataAsync(async () =>
         {
-            RepoId = repoId,
-            VectorId = vectorId,
-            Space = tag,
-            SourceKey = RepoContextValues.Lww(sourceKey, clock),
-            ContentAddress = RepoContextValues.Lww(contentAddress, clock),
-            CreatedAt = RepoContextValues.Lww(DateTime.UtcNow.Ticks, clock),
-        };
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
+            var key = RepoContextKeys.Vector(repoId, vectorId);
+            var clock = HybridLogicalClock.Tick(HybridLogicalClock.Zero);
 
-        var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
-        var merged = existing is null
-            ? record
-            : VectorMetadataRecord.Merge(record, _serializer.Deserialize<VectorMetadataRecord>(existing));
-        await tree.SetAsync(key, _serializer.SerializeToArray(merged), cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task RetireStaleAsync(
-        string repoId, string sourceId, IReadOnlySet<string> keep, CancellationToken cancellationToken)
-    {
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
-        var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
-
-        string? token = null;
-        var stale = new List<string>();
-        do
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var page = await RepoContextPortability
-                .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
-                .ConfigureAwait(false);
-
-            foreach (var record in page.Records)
+            var record = new VectorMetadataRecord
             {
-                if (RepoContextKeys.TryParse(record.Key, out var parsed)
-                    && parsed.Kind == RepoContextRecordKind.VectorMetadata
-                    && parsed.VectorId is not null
-                    && !keep.Contains(parsed.VectorId))
-                {
-                    stale.Add(record.Key);
-                }
-            }
+                RepoId = repoId,
+                VectorId = vectorId,
+                Space = tag,
+                SourceKey = RepoContextValues.Lww(sourceKey, clock),
+                ContentAddress = RepoContextValues.Lww(contentAddress, clock),
+                CreatedAt = RepoContextValues.Lww(DateTime.UtcNow.Ticks, clock),
+            };
 
-            token = page.HasMore ? page.ContinuationToken : null;
-        }
-        while (token is not null);
+            var existing = await tree.GetAsync(key, cancellationToken).ConfigureAwait(false);
+            var merged = existing is null
+                ? record
+                : VectorMetadataRecord.Merge(record, _serializer.Deserialize<VectorMetadataRecord>(existing));
+            await tree.SetAsync(key, _serializer.SerializeToArray(merged), cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
 
-        foreach (var key in stale)
+    private Task RetireStaleAsync(
+        string repoId, string sourceId, IReadOnlySet<string> keep, CancellationToken cancellationToken)
+        => GuardMetadataAsync(async () =>
         {
-            await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
-        }
-    }
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
+            var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
+
+            string? token = null;
+            var stale = new List<string>();
+            do
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var page = await RepoContextPortability
+                    .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                    .ConfigureAwait(false);
+
+                foreach (var record in page.Records)
+                {
+                    if (RepoContextKeys.TryParse(record.Key, out var parsed)
+                        && parsed.Kind == RepoContextRecordKind.VectorMetadata
+                        && parsed.VectorId is not null
+                        && !keep.Contains(parsed.VectorId))
+                    {
+                        stale.Add(record.Key);
+                    }
+                }
+
+                token = page.HasMore ? page.ContinuationToken : null;
+            }
+            while (token is not null);
+
+            foreach (var key in stale)
+            {
+                await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            }
+        }, cancellationToken);
 
     /// <summary>
     /// Records embedded presence for a whole batch of sources, one enable-wins flag
@@ -351,14 +381,17 @@ internal sealed class RepoContextVectorWriter
             return;
         }
 
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var replicaId = ReplicaId();
-        foreach (var sourceKey in sourceKeys)
+        await GuardMembershipAsync(async () =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var key = RepoContextKeys.VectorMembership(repoId, VectorCodec.SourceId(sourceKey));
-            await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
-        }
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var replicaId = ReplicaId();
+            foreach (var sourceKey in sourceKeys)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var key = RepoContextKeys.VectorMembership(repoId, VectorCodec.SourceId(sourceKey));
+                await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
 
         // Membership does not feed the gather, but a batch's membership write always
         // trails its StoreAsync vectors, so invalidate defensively to keep the cache
@@ -366,15 +399,16 @@ internal sealed class RepoContextVectorWriter
         _cache.Invalidate(repoId);
     }
 
-    private async Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
-    {
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var key = RepoContextKeys.VectorMembership(repoId, sourceId);
+    private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+        => GuardMembershipAsync(async () =>
+        {
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var key = RepoContextKeys.VectorMembership(repoId, sourceId);
 
-        // Disable rather than delete so the removal carries causal history and
-        // converges add-wins against a concurrent enable on another cluster.
-        await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
-    }
+            // Disable rather than delete so the removal carries causal history and
+            // converges add-wins against a concurrent enable on another cluster.
+            await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
 
     /// <summary>
     /// Records a "considered, no passages" marker for each contentless source in a
@@ -401,15 +435,18 @@ internal sealed class RepoContextVectorWriter
             return;
         }
 
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var replicaId = ReplicaId();
-        foreach (var sourceKey in sourceKeys)
+        await GuardMembershipAsync(async () =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var key = RepoContextKeys.VectorMembership(
-                repoId, ContentlessMarkerPrefix + VectorCodec.SourceId(sourceKey));
-            await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
-        }
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var replicaId = ReplicaId();
+            foreach (var sourceKey in sourceKeys)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var key = RepoContextKeys.VectorMembership(
+                    repoId, ContentlessMarkerPrefix + VectorCodec.SourceId(sourceKey));
+                await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -422,15 +459,18 @@ internal sealed class RepoContextVectorWriter
     /// <param name="sourceId">The 16-character source identifier whose marker to clear. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> or <paramref name="sourceId"/> is null.</exception>
-    public async Task UnmarkContentlessAsync(
+    public Task UnmarkContentlessAsync(
         string repoId, string sourceId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(sourceId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var key = RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId);
-        await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
+        return GuardMembershipAsync(() =>
+        {
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var key = RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId);
+            return tree.OrFlag(key).DisableAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -518,50 +558,51 @@ internal sealed class RepoContextVectorWriter
     /// in <see cref="MembershipProbeBatchSize"/>-sized chunks, and decodes each
     /// returned row exactly as a whole-set scan would.
     /// </summary>
-    private async Task<RepoContextEmbeddingCoverage> ProbeMembershipAsync(
+    private Task<RepoContextEmbeddingCoverage> ProbeMembershipAsync(
         string repoId,
         IReadOnlyList<string> candidateSourceKeys,
         bool includeContentless,
         CancellationToken cancellationToken)
-    {
-        var embedded = new HashSet<string>(StringComparer.Ordinal);
-        var contentless = new HashSet<string>(StringComparer.Ordinal);
-        if (candidateSourceKeys.Count == 0)
+        => GuardMembershipAsync(async () =>
         {
-            return new RepoContextEmbeddingCoverage(embedded, contentless);
-        }
-
-        var sourceIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var key in candidateSourceKeys)
-        {
-            sourceIds.Add(VectorCodec.SourceId(key));
-        }
-
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var batch = new List<string>(MembershipProbeBatchSize);
-        foreach (var sourceId in sourceIds)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            batch.Add(RepoContextKeys.VectorMembership(repoId, sourceId));
-            if (includeContentless)
+            var embedded = new HashSet<string>(StringComparer.Ordinal);
+            var contentless = new HashSet<string>(StringComparer.Ordinal);
+            if (candidateSourceKeys.Count == 0)
             {
-                batch.Add(RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId));
+                return new RepoContextEmbeddingCoverage(embedded, contentless);
             }
 
-            if (batch.Count >= MembershipProbeBatchSize)
+            var sourceIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var key in candidateSourceKeys)
+            {
+                sourceIds.Add(VectorCodec.SourceId(key));
+            }
+
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var batch = new List<string>(MembershipProbeBatchSize);
+            foreach (var sourceId in sourceIds)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                batch.Add(RepoContextKeys.VectorMembership(repoId, sourceId));
+                if (includeContentless)
+                {
+                    batch.Add(RepoContextKeys.VectorMembership(repoId, ContentlessMarkerPrefix + sourceId));
+                }
+
+                if (batch.Count >= MembershipProbeBatchSize)
+                {
+                    await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
+                    batch.Clear();
+                }
+            }
+
+            if (batch.Count > 0)
             {
                 await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
-                batch.Clear();
             }
-        }
 
-        if (batch.Count > 0)
-        {
-            await ProbeBatchAsync(tree, batch, embedded, contentless, cancellationToken).ConfigureAwait(false);
-        }
-
-        return new RepoContextEmbeddingCoverage(embedded, contentless);
-    }
+            return new RepoContextEmbeddingCoverage(embedded, contentless);
+        }, cancellationToken);
 
     private static async Task ProbeBatchAsync(
         ILattice tree,
@@ -636,41 +677,44 @@ internal sealed class RepoContextVectorWriter
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The embedded and contentless-marker source-identifier sets.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public async Task<RepoContextEmbeddingCoverage> LoadCoverageAsync(
+    public Task<RepoContextEmbeddingCoverage> LoadCoverageAsync(
         string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
-        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
-        var embedded = new HashSet<string>(StringComparer.Ordinal);
-        var contentless = new HashSet<string>(StringComparer.Ordinal);
-        if (endExclusive is null)
+        return GuardMembershipAsync(async () =>
         {
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+            var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+            var embedded = new HashSet<string>(StringComparer.Ordinal);
+            var contentless = new HashSet<string>(StringComparer.Ordinal);
+            if (endExclusive is null)
+            {
+                return new RepoContextEmbeddingCoverage(embedded, contentless);
+            }
+
+            await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                    || !TryReadSourceId(entry.Key, out var collection))
+                {
+                    continue;
+                }
+
+                if (collection.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+                {
+                    contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
+                }
+                else
+                {
+                    embedded.Add(collection);
+                }
+            }
+
             return new RepoContextEmbeddingCoverage(embedded, contentless);
-        }
-
-        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
-                || !TryReadSourceId(entry.Key, out var collection))
-            {
-                continue;
-            }
-
-            if (collection.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
-            {
-                contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
-            }
-            else
-            {
-                embedded.Add(collection);
-            }
-        }
-
-        return new RepoContextEmbeddingCoverage(embedded, contentless);
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -712,31 +756,34 @@ internal sealed class RepoContextVectorWriter
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The set of live embedded source identifiers.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public async Task<IReadOnlySet<string>> LoadEmbeddedMembersAsync(string repoId, CancellationToken cancellationToken)
+    public Task<IReadOnlySet<string>> LoadEmbeddedMembersAsync(string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
-        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
-        var members = new HashSet<string>(StringComparer.Ordinal);
-        if (endExclusive is null)
+        return GuardMembershipAsync<IReadOnlySet<string>>(async () =>
         {
-            return members;
-        }
-
-        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
-                && TryReadSourceId(entry.Key, out var sourceId)
-                && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+            var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+            var members = new HashSet<string>(StringComparer.Ordinal);
+            if (endExclusive is null)
             {
-                members.Add(sourceId);
+                return members;
             }
-        }
 
-        return members;
+            await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                    && TryReadSourceId(entry.Key, out var sourceId)
+                    && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+                {
+                    members.Add(sourceId);
+                }
+            }
+
+            return members;
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -752,31 +799,34 @@ internal sealed class RepoContextVectorWriter
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The number of live embedded sources.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public async Task<long> CountEmbeddedAsync(string repoId, CancellationToken cancellationToken)
+    public Task<long> CountEmbeddedAsync(string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
 
-        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
-        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
-        if (endExclusive is null)
+        return GuardMembershipAsync(async () =>
         {
-            return 0L;
-        }
-
-        var enabled = 0L;
-        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
-                && TryReadSourceId(entry.Key, out var sourceId)
-                && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+            var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+            if (endExclusive is null)
             {
-                enabled++;
+                return 0L;
             }
-        }
 
-        return enabled;
+            var enabled = 0L;
+            await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                    && TryReadSourceId(entry.Key, out var sourceId)
+                    && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+                {
+                    enabled++;
+                }
+            }
+
+            return enabled;
+        }, cancellationToken);
     }
 
     /// <summary>

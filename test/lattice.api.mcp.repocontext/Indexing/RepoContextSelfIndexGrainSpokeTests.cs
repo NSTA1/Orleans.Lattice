@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Runtime;
 using Orleans.Serialization;
 using Orleans.Storage;
@@ -44,7 +45,8 @@ public sealed class RepoContextSelfIndexGrainSpokeTests
         var options = new RepoContextIndexingOptions { Role = role };
         var replication = Substitute.For<ILatticeReplicationContext>();
         var cache = new RepoContextVectorCache(TimeProvider.System, options);
-        var writer = new RepoContextVectorWriter(grainFactory, Serializer, replication, cache);
+        var writer = new RepoContextVectorWriter(
+            grainFactory, Serializer, replication, cache, RepoContextVectorPlaneTestDoubles.ReDeriver(grainFactory));
         var gapScanner = new RepoContextEmbeddingGapScanner(grainFactory, writer);
         var runAuthority = Substitute.For<IRepoIndexRunAuthority>();
         state = new FakeSelfIndexState();
