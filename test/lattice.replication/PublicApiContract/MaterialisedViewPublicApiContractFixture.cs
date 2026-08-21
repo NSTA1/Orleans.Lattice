@@ -109,6 +109,7 @@ internal sealed class MaterialisedViewPublicApiContractFixture
             {
                 views.AddView(FilterViewName, FilterSourceTreeId, AdultFilter());
                 views.AddAggregationView(AggregationViewName, AggregationSourceTreeId, AmountByCustomer());
+                MaterialisedViewRuntimeProjectionProvider.Configure(views);
             });
 
             // A long coalesce window keeps the background drain timer dormant; the

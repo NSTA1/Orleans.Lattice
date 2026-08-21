@@ -47,7 +47,11 @@ public class MaterialisedViewAggregationIntegrationTests
         var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(sourceTreeId);
         var projection = new AggregationLatticeViewProjection(kind, Team, "v1", valueSelector: Score);
-        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+        var definition = new LatticeViewDefinition(viewName, projection);
+        return factory.Create(
+            source,
+            viewName,
+            MaterialisedViewRuntimeProjectionProvider.DescriptorFor(definition));
     }
 
     private async Task<ILattice> DrainToZeroAsync(string viewName)
@@ -286,7 +290,11 @@ public class MaterialisedViewAggregationIntegrationTests
                 },
             },
             foldVersion: "compliance-v1");
-        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+        var definition = new LatticeViewDefinition(viewName, projection);
+        return factory.Create(
+            source,
+            viewName,
+            MaterialisedViewRuntimeProjectionProvider.DescriptorFor(definition));
     }
 
     private static byte[] FactValue(string part, string kind) =>

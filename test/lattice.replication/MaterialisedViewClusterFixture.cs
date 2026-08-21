@@ -62,7 +62,7 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
-            siloBuilder.AddLatticeViews();
+            siloBuilder.AddLatticeViews(MaterialisedViewRuntimeProjectionProvider.Configure);
 
             // Pin a long coalesce window for every view so the maintainer's
             // background drain timer stays dormant during the test and
