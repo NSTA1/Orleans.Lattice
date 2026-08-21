@@ -30,7 +30,9 @@ public static class LatticeViewsServiceCollectionExtensions
     /// <c>AddLatticeReplication</c> is <i>not</i> required for a local
     /// (<see cref="LatticeViewReplicationMode.DeriveLocally"/>) view; it is only
     /// needed when a view ships its tree across clusters
-    /// (<see cref="LatticeViewReplicationMode.ShipView"/>).
+    /// (<see cref="LatticeViewReplicationMode.ShipView"/>). A ShipView whose source
+    /// is also replicated must designate exactly one maintainer through
+    /// <see cref="LatticeViewOptions.ShipViewProducerClusterId"/>.
     /// </para>
     /// </summary>
     /// <param name="builder">The silo builder.</param>

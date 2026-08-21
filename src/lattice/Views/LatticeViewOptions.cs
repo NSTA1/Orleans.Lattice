@@ -211,15 +211,32 @@ public sealed class LatticeViewOptions
     /// default <see cref="LatticeViewReplicationMode.DeriveLocally"/> runs the
     /// maintainer on every cluster and never replicates the view's data;
     /// <see cref="LatticeViewReplicationMode.ShipView"/> runs the maintainer only on
-    /// the producer cluster(s) that host the source locally and replicates the view
-    /// tree to thin consumer clusters. A <see cref="LatticeViewReplicationMode.ShipView"/>
-    /// view's <c>view-{name}</c> tree must be declared in the replication
-    /// configuration's replicated-trees map (so consumers receive it), and a
+    /// one producer and replicates the view tree to consumers. When the source tree
+    /// is also replicated, <see cref="ShipViewProducerClusterId"/> must explicitly
+    /// select that producer; otherwise local source-WAL ownership identifies it. A
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> view's
+    /// <c>view-{name}</c> tree must be declared in the replication configuration's
+    /// replicated-trees map (so consumers receive it), and a
     /// <see cref="LatticeViewReplicationMode.DeriveLocally"/> view's tree must
     /// <i>not</i> be (it would create a second writer); the registered startup
-    /// validator rejects either misconfiguration at silo start.
+    /// validator rejects either misconfiguration at silo start. Replication mode
+    /// and producer identity are fixed for a view name; create a new view name when
+    /// changing topology so pre-existing view WAL history is never reclassified.
     /// </summary>
     public LatticeViewReplicationMode ReplicationMode { get; set; } = LatticeViewReplicationMode.DeriveLocally;
+
+    /// <summary>
+    /// Stable replication cluster id of the single maintainer for a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> whose source tree is also
+    /// replicated. Compared case-sensitively with
+    /// <see cref="ILatticeReplicationContext.LocalReplicaId"/>. Must be
+    /// <see langword="null"/> when the source tree is not replicated, because that
+    /// source-less-consumer topology infers its producer from local source-WAL
+    /// ownership. The startup and runtime topology guards reject either an
+    /// ambiguous replicated-source view without this value or an explicit value
+    /// on a non-replicated source.
+    /// </summary>
+    public string? ShipViewProducerClusterId { get; set; }
 
     /// <summary>
     /// Opt-in upper bound, in committed-but-unapplied source entries, on how far a

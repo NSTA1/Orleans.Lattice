@@ -32,10 +32,23 @@ public class LatticeViewReplicationStartupValidatorTests
         return monitor;
     }
 
+    private static IOptionsMonitor<LatticeViewOptions> ShipViewOptions(
+        string viewName,
+        string producerClusterId)
+    {
+        var monitor = ViewOptions();
+        monitor.Get(viewName).Returns(new LatticeViewOptions
+        {
+            ReplicationMode = LatticeViewReplicationMode.ShipView,
+            ShipViewProducerClusterId = producerClusterId,
+        });
+        return monitor;
+    }
+
     private static IOptionsMonitor<LatticeReplicationOptions> ReplicationOptions(
         params string[] replicatedTrees)
     {
-        var options = new LatticeReplicationOptions();
+        var options = new LatticeReplicationOptions { ClusterId = "site-a" };
         if (replicatedTrees.Length > 0)
         {
             options.ReplicatedTrees = replicatedTrees.ToDictionary(t => t, _ => LatticeMergeMode.LwwRegister);
@@ -49,7 +62,8 @@ public class LatticeViewReplicationStartupValidatorTests
     private static Task StartAsync(
         IReadOnlyList<StartupViewRegistration>? registrations,
         IOptionsMonitor<LatticeViewOptions> viewOptions,
-        IOptionsMonitor<LatticeReplicationOptions> replicationOptions)
+        IOptionsMonitor<LatticeReplicationOptions> replicationOptions,
+        ILatticeReplicationContext? replicationContext = null)
     {
         var services = new ServiceCollection();
         if (registrations is not null)
@@ -57,9 +71,22 @@ public class LatticeViewReplicationStartupValidatorTests
             services.AddSingleton(registrations);
         }
 
+        replicationContext ??= ReplicationContext(replicationOptions.CurrentValue);
         return new LatticeViewReplicationStartupValidator(
-                services.BuildServiceProvider(), viewOptions, replicationOptions)
+                services.BuildServiceProvider(), viewOptions, replicationOptions, replicationContext)
             .StartAsync(CancellationToken.None);
+    }
+
+    private static ILatticeReplicationContext ReplicationContext(LatticeReplicationOptions options)
+    {
+        var context = Substitute.For<ILatticeReplicationContext>();
+        context.IsReplicationEnabled.Returns(true);
+        context.LocalReplicaId.Returns(options.ClusterId);
+        context.ResolveMergeMode(Arg.Any<string>()).Returns(call =>
+            options.ReplicatedTrees?.TryGetValue(call.Arg<string>(), out var mode) == true
+                ? mode
+                : null);
+        return context;
     }
 
     [Test]
@@ -69,6 +96,22 @@ public class LatticeViewReplicationStartupValidatorTests
         var replicationOptions = ReplicationOptions();
 
         Assert.DoesNotThrowAsync(() => StartAsync(null, viewOptions, replicationOptions));
+    }
+
+    [Test]
+    public void Start_uses_the_effective_replication_context()
+    {
+        var replicationOptions = ReplicationOptions();
+        var replicationContext = ReplicationContext(replicationOptions.CurrentValue);
+        replicationContext.ResolveMergeMode("view-adults").Returns(LatticeMergeMode.LwwRegister);
+
+        Assert.That(
+            async () => await StartAsync(
+                [Registration("adults")],
+                ViewOptions(),
+                replicationOptions,
+                replicationContext),
+            Throws.InvalidOperationException.With.Message.Contains("multiple writers"));
     }
 
     [Test]
@@ -100,6 +143,19 @@ public class LatticeViewReplicationStartupValidatorTests
             () => StartAsync(registrations, viewOptions, replicationOptions));
 
         Assert.That(ex!.Message, Does.Contain("view-adults#g3"));
+    }
+
+    [Test]
+    public void Start_uses_effective_context_for_generation_tree_conflicts()
+    {
+        var registrations = new[] { Registration("adults") };
+        var viewOptions = ViewOptions(("adults", LatticeViewReplicationMode.DeriveLocally));
+        var replicationOptions = ReplicationOptions("view-adults#g3");
+        var replicationContext = ReplicationContext(replicationOptions.CurrentValue);
+        replicationContext.ResolveMergeMode("view-adults#g3").Returns((LatticeMergeMode?)null);
+
+        Assert.DoesNotThrowAsync(
+            () => StartAsync(registrations, viewOptions, replicationOptions, replicationContext));
     }
 
     [Test]
@@ -138,6 +194,57 @@ public class LatticeViewReplicationStartupValidatorTests
         var replicationOptions = ReplicationOptions("view-adults");
 
         Assert.DoesNotThrowAsync(() => StartAsync(registrations, viewOptions, replicationOptions));
+    }
+
+    [Test]
+    public void Start_throws_when_ship_view_source_and_view_are_replicated_without_producer()
+    {
+        var registrations = new[] { Registration("adults", "people") };
+        var viewOptions = ViewOptions(("adults", LatticeViewReplicationMode.ShipView));
+        var replicationOptions = ReplicationOptions("people", "view-adults");
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => StartAsync(registrations, viewOptions, replicationOptions));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain(nameof(LatticeViewOptions.ShipViewProducerClusterId)));
+            Assert.That(ex.Message, Does.Contain("people"));
+            Assert.That(ex.Message, Does.Contain("view-adults"));
+        });
+    }
+
+    [Test]
+    public void Start_passes_when_replicated_source_has_explicit_local_producer()
+    {
+        var registrations = new[] { Registration("adults", "people") };
+        var viewOptions = ShipViewOptions("adults", "site-a");
+        var replicationOptions = ReplicationOptions("people", "view-adults");
+
+        Assert.DoesNotThrowAsync(() => StartAsync(registrations, viewOptions, replicationOptions));
+    }
+
+    [Test]
+    public void Start_passes_when_replicated_source_has_explicit_remote_producer()
+    {
+        var registrations = new[] { Registration("adults", "people") };
+        var viewOptions = ShipViewOptions("adults", "remote-producer");
+        var replicationOptions = ReplicationOptions("people", "view-adults");
+
+        Assert.DoesNotThrowAsync(() => StartAsync(registrations, viewOptions, replicationOptions));
+    }
+
+    [Test]
+    public void Start_throws_when_source_less_topology_sets_explicit_producer()
+    {
+        var registrations = new[] { Registration("adults", "people") };
+        var viewOptions = ShipViewOptions("adults", LatticeReplicationOptions.DefaultClusterId);
+        var replicationOptions = ReplicationOptions("view-adults");
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => StartAsync(registrations, viewOptions, replicationOptions));
+
+        Assert.That(ex!.Message, Does.Contain("Source-less-consumer topology"));
     }
 
     [Test]

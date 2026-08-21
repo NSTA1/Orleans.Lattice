@@ -177,6 +177,14 @@ public class MaterialisedViewReplicationLifecycleTests
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
         await maintainer.EnsureActiveAsync();
         await maintainer.DrainAsync();
+        await maintainer.RebuildAsync();
+        var stableViewTree = _fixture.Cluster.Client.GetGrain<ILattice>($"view-{view}");
+        using (ViewWriteContext.BeginScope())
+        {
+            await stableViewTree.DeleteAsync("a");
+        }
+
+        Assert.That(await maintainer.ReconcileAsync(), Is.True);
 
         await Assert.MultipleAsync(async () =>
         {
@@ -197,6 +205,8 @@ public class MaterialisedViewReplicationLifecycleTests
         // The source WAL is never written on this cluster, so the ShipView maintainer
         // is suppressed at activation: it receives the view via replication instead.
         var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        Assert.That(await maintainer.ReconcileAsync(), Is.False);
+        await maintainer.RebuildAsync();
         await maintainer.EnsureActiveAsync();
 
         var applied = await maintainer.DrainAsync();
@@ -205,6 +215,9 @@ public class MaterialisedViewReplicationLifecycleTests
         {
             Assert.That(applied, Is.Zero, "a suppressed consumer maintainer's drain is a no-op");
             Assert.That(await HasCursorPinAsync(tree, view), Is.False, "a suppressed consumer maintainer must not pin the source WAL");
+            Assert.That(
+                async () => await maintainer.GetLagAsync(),
+                Throws.InvalidOperationException);
 
             // A suppressed consumer cannot run source-digest reconcile (producer-only);
             // drift is repaired via replication anti-entropy, so it reports no repair.
@@ -244,6 +257,161 @@ public class MaterialisedViewReplicationLifecycleTests
         {
             Assert.That(await HasCursorPinAsync(tree, view), Is.True, "once the source becomes readable the producer must un-suppress and pin the source WAL");
             Assert.That(await ViewKeyCountAsync(view), Is.EqualTo(2), "the un-suppressed producer should derive the filtered view");
+        });
+    }
+
+    [Test]
+    public async Task ShipView_explicit_producer_maintains_replicated_source()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        var tree = MaterialisedViewClusterFixture.ShipViewExplicitProducerSourceTreeId;
+        var view = MaterialisedViewClusterFixture.ShipViewExplicitProducerViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        RegisterView(view, tree);
+        await source.SetAsync("a", Person(30));
+        await source.SetAsync("b", Person(10));
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        await maintainer.EnsureActiveAsync();
+        await maintainer.DrainAsync();
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await ViewKeyCountAsync(view), Is.EqualTo(1));
+            Assert.That(await HasCursorPinAsync(tree, view), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task ShipView_history_rebuild_applies_retention_shaping()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        const string tree = "mv-shipview-history-src";
+        var viewName = MaterialisedViewClusterFixture.ShipViewHistoryViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        await source.SetAsync("a", new byte[] { 1, 2, 3, 4 });
+
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        _ = factory.Create(
+            source,
+            viewName,
+            LatticeHistoryView.Definition(viewName, _fixture.SiloServices));
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.EnsureActiveAsync();
+        await maintainer.RebuildAsync();
+
+        var viewTree = await _fixture.ActiveViewTreeAsync(viewName);
+        var rows = new List<HistoryRow>();
+        await foreach (var entry in viewTree.EntriesAsync())
+        {
+            rows.Add(_fixture.SiloServices.GetRequiredService<HistoryRowCodec>().Decode(entry.Value));
+        }
+
+        Assert.That(rows, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows[0].Value, Is.Null);
+            Assert.That(rows[0].ValueLength, Is.EqualTo(4));
+            Assert.That(rows[0].RetentionShape, Is.EqualTo(HistoryRetentionMode.MetadataOnly));
+        });
+    }
+
+    [Test]
+    public async Task ShipView_explicit_consumer_suppresses_despite_readable_replicated_source()
+    {
+        using var viewReadScope = ViewReadContext.BeginScope();
+        var tree = MaterialisedViewClusterFixture.ShipViewExplicitConsumerSourceTreeId;
+        var view = MaterialisedViewClusterFixture.ShipViewExplicitConsumerViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        RegisterView(view, tree);
+        await source.SetAsync("consumer-can-read-source", Person(30));
+
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+        Assert.That(await maintainer.ReconcileAsync(), Is.False);
+        await maintainer.RebuildAsync();
+        await maintainer.EnsureActiveAsync();
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await maintainer.DrainAsync(), Is.Zero);
+            Assert.That(await HasCursorPinAsync(tree, view), Is.False);
+            Assert.That(await ViewKeyCountAsync(view), Is.Zero);
+            Assert.That(
+                async () => await maintainer.GetLagAsync(),
+                Throws.InvalidOperationException);
+            Assert.That(
+                async () => await maintainer.CaptureSourceHeadHlcAsync(),
+                Throws.InvalidOperationException);
+            Assert.That(
+                async () => await maintainer.WaitForSourceHlcAsync(
+                    new HybridLogicalClock { WallClockTicks = 1 },
+                    TimeSpan.FromMilliseconds(10)),
+                Throws.InvalidOperationException);
+            Assert.That(
+                async () => await maintainer.WaitForSourceHlcAsync(
+                    HybridLogicalClock.Zero,
+                    TimeSpan.FromMilliseconds(10)),
+                Throws.InvalidOperationException);
+            Assert.That(
+                async () => await maintainer.WaitForSourceHeadAsync(TimeSpan.FromMilliseconds(10)),
+                Throws.InvalidOperationException);
+        });
+    }
+
+    [Test]
+    public void ShipView_replicated_source_without_producer_fails_closed()
+    {
+        var tree = MaterialisedViewClusterFixture.ShipViewAmbiguousSourceTreeId;
+        var view = MaterialisedViewClusterFixture.ShipViewAmbiguousViewName;
+        RegisterView(view, tree);
+        var maintainer = _fixture.Cluster.Client.GetGrain<IViewMaintainerGrain>(view);
+
+        Assert.That(
+            async () => await maintainer.EnsureActiveAsync(),
+            Throws.TypeOf<InvalidOperationException>()
+                .With.Message.Contains(nameof(LatticeViewOptions.ShipViewProducerClusterId)));
+    }
+
+    [Test]
+    public void Runtime_create_rejects_ambiguous_ship_view_before_catalog_registration()
+    {
+        var tree = MaterialisedViewClusterFixture.ShipViewRuntimeAmbiguousSourceTreeId;
+        var view = MaterialisedViewClusterFixture.ShipViewRuntimeAmbiguousViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var catalog = _fixture.SiloServices.GetRequiredService<IViewCatalog>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await factory.CreateAsync(
+                    source,
+                    view,
+                    new LatticeViewDefinition(view, new PredicateLatticeViewProjection())),
+                Throws.TypeOf<InvalidOperationException>()
+                    .With.Message.Contains(nameof(LatticeViewOptions.ShipViewProducerClusterId)));
+            Assert.That(catalog.TryGet(view), Is.Null);
+        });
+    }
+
+    [Test]
+    public void Runtime_create_with_descriptor_rejects_ambiguous_ship_view_before_catalog_registration()
+    {
+        var tree = MaterialisedViewClusterFixture.ShipViewRuntimeAmbiguousSourceTreeId;
+        var view = MaterialisedViewClusterFixture.ShipViewRuntimeAmbiguousViewName;
+        var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
+        var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var catalog = _fixture.SiloServices.GetRequiredService<IViewCatalog>();
+        var definition = new LatticeViewDefinition(view, new PredicateLatticeViewProjection());
+        var descriptor = MaterialisedViewRuntimeProjectionProvider.DescriptorFor(definition);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await factory.CreateAsync(source, view, descriptor),
+                Throws.TypeOf<InvalidOperationException>()
+                    .With.Message.Contains(nameof(LatticeViewOptions.ShipViewProducerClusterId)));
+            Assert.That(catalog.TryGet(view), Is.Null);
         });
     }
 }

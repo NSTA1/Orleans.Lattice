@@ -67,6 +67,21 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.MaxLagBudget)} must not be negative (was {options.MaxLagBudget}; 0 disables lag-budget eviction).");
         }
 
+        if (options.ShipViewProducerClusterId is { } producerClusterId)
+        {
+            if (string.IsNullOrWhiteSpace(producerClusterId))
+            {
+                failures.Add($"{nameof(LatticeViewOptions.ShipViewProducerClusterId)} must be non-empty when set.");
+            }
+            else if (options.ReplicationMode != LatticeViewReplicationMode.ShipView)
+            {
+                failures.Add(
+                    $"{nameof(LatticeViewOptions.ShipViewProducerClusterId)} may be set only when "
+                    + $"{nameof(LatticeViewOptions.ReplicationMode)} is "
+                    + $"{nameof(LatticeViewReplicationMode.ShipView)}.");
+            }
+        }
+
         if (options.ThrottledBatchRatio is < 0d or > 1d)
         {
             failures.Add($"{nameof(LatticeViewOptions.ThrottledBatchRatio)} must be within [0, 1] (was {options.ThrottledBatchRatio}).");

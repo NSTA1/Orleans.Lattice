@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
 using Orleans.TestingHost;
@@ -193,9 +194,10 @@ internal sealed class CoordinatedRestoreClusterFixture
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
             siloBuilder.AddLatticeBackup();
 
-            // Ad-hoc tree ids: opt every tree in to LwwRegister so the merge-mode
-            // resolver does not need each id enumerated on the configurator.
-            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
+            // Ad-hoc data-tree ids: opt every non-view tree in to LwwRegister so the
+            // resolver does not need each id enumerated on the configurator. Internal
+            // backup views remain local, matching DeriveLocally topology.
+            siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowDataTreesLwwRegisterResolver>();
 
             if (channel is not null)
             {
@@ -216,9 +218,12 @@ internal sealed class CoordinatedRestoreClusterFixture
         }
     }
 
-    private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
+    private sealed class AllowDataTreesLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) =>
+            treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal)
+                ? null
+                : LatticeMergeMode.LwwRegister;
     }
 
     /// <summary>

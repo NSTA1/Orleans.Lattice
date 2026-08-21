@@ -10,7 +10,11 @@ public class LatticeViewConfigurationTests
         var options = new LatticeViewOptions();
 
         Assert.That(options.BatchSize, Is.EqualTo(256));
-        Assert.That(options.CoalesceWindow, Is.EqualTo(TimeSpan.FromMilliseconds(50)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.CoalesceWindow, Is.EqualTo(TimeSpan.FromMilliseconds(50)));
+            Assert.That(options.ShipViewProducerClusterId, Is.Null);
+        });
     }
 
     [Test]
@@ -90,5 +94,41 @@ public class LatticeViewConfigurationTests
             .Validate(null, new LatticeViewOptions { SaturatedBatchSize = 0 });
 
         Assert.That(result.Failed, Is.True);
+    }
+
+    [TestCase("")]
+    [TestCase(" ")]
+    public void Validator_rejects_blank_ship_view_producer(string producerClusterId)
+    {
+        var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()
+            .Validate(null, new LatticeViewOptions
+            {
+                ReplicationMode = LatticeViewReplicationMode.ShipView,
+                ShipViewProducerClusterId = producerClusterId,
+            });
+
+        Assert.That(result.Failed, Is.True);
+    }
+
+    [Test]
+    public void Validator_rejects_ship_view_producer_for_derive_locally()
+    {
+        var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()
+            .Validate(null, new LatticeViewOptions { ShipViewProducerClusterId = "site-a" });
+
+        Assert.That(result.Failed, Is.True);
+    }
+
+    [Test]
+    public void Validator_accepts_ship_view_producer_for_ship_view()
+    {
+        var result = new Orleans.Lattice.Views.LatticeViewOptionsValidator()
+            .Validate(null, new LatticeViewOptions
+            {
+                ReplicationMode = LatticeViewReplicationMode.ShipView,
+                ShipViewProducerClusterId = "site-a",
+            });
+
+        Assert.That(result.Succeeded, Is.True);
     }
 }
