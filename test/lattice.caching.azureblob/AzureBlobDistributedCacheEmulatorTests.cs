@@ -9,39 +9,28 @@ namespace Orleans.Lattice.Caching.AzureBlob.Tests;
 /// against an Azure Blob Storage endpoint - canonically
 /// <see href="https://learn.microsoft.com/azure/storage/common/storage-use-azurite">Azurite</see>
 /// on the default development connection string. Gated under the
-/// <c>AzureBlobEmulator</c> NUnit category so the default dev loop skips them when
+/// <c>AzureStorageEmulator</c> NUnit category so the default dev loop skips them when
 /// no emulator is running; <see cref="OneTimeSetUp"/> probes reachability and
 /// falls through to <see cref="Assert.Inconclusive(string)"/> when unreachable.
-/// The client is pinned to a blob-service API version the shared emulator accepts
-/// (the SDK's newest default can outrun the emulator build), so the suite runs
-/// against the shared Azurite rather than skipping.
+/// The client is pinned via <see cref="AzuriteEmulator"/> to a blob-service API
+/// version the shared emulator accepts (the SDK's newest default can outrun the
+/// emulator build), so the suite runs against the shared Azurite rather than
+/// skipping.
 /// A <see cref="MutableTimeProvider"/> makes expiry and sliding deterministic.
 /// </summary>
 [TestFixture]
-[Category("AzureBlobEmulator")]
+[Category("AzureStorageEmulator")]
 public sealed class AzureBlobDistributedCacheEmulatorTests
 {
-    private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
-
-    // Pinned to the newest blob-service API version the CI Azurite build (3.36.0)
-    // accepts (2025-11-05). Without a pin the SDK default outruns the emulator, the
-    // reachability probe throws, and every test here self-skips. Kept identical to
-    // the sibling versioned fixtures so all blob suites make the same assumption.
-    private const BlobClientOptions.ServiceVersion EmulatorApiVersion =
-        BlobClientOptions.ServiceVersion.V2025_11_05;
-
     private BlobServiceClient _adminClient = null!;
     private string _containerName = null!;
     private MutableTimeProvider _clock = null!;
     private IDistributedCache _cache = null!;
 
-    private static BlobServiceClient CreateServiceClient() =>
-        new(AzuriteConnectionString, new BlobClientOptions(EmulatorApiVersion));
-
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _adminClient = CreateServiceClient();
+        _adminClient = AzuriteEmulator.CreateServiceClient();
         try
         {
             await foreach (var _ in _adminClient.GetBlobContainersAsync())
@@ -52,8 +41,8 @@ public sealed class AzureBlobDistributedCacheEmulatorTests
         catch (Exception ex)
         {
             Assert.Inconclusive(
-                $"Azurite is not reachable on the default development endpoint ({AzuriteConnectionString}). "
-                + "Start it via 'azurite --silent --location <dir>' or skip the AzureBlobEmulator category. "
+                $"Azurite is not reachable on the default development endpoint ({AzuriteEmulator.ConnectionString}). "
+                + "Start it via 'azurite --silent --location <dir>' or skip the AzureStorageEmulator category. "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }
@@ -65,7 +54,7 @@ public sealed class AzureBlobDistributedCacheEmulatorTests
         _clock = new MutableTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
         var options = new LatticeAzureBlobCacheOptions
         {
-            ServiceClient = CreateServiceClient(),
+            ServiceClient = AzuriteEmulator.CreateServiceClient(),
             ContainerName = _containerName,
         };
         _cache = new AzureBlobDistributedCache(options.BuildContainerClient(), options.KeyPrefix, _clock);
@@ -179,7 +168,7 @@ public sealed class AzureBlobDistributedCacheEmulatorTests
     {
         var shared = new LatticeAzureBlobCacheOptions
         {
-            ServiceClient = CreateServiceClient(),
+            ServiceClient = AzuriteEmulator.CreateServiceClient(),
             ContainerName = _containerName,
         };
         var cacheA = new AzureBlobDistributedCache(shared.BuildContainerClient(), "a/", _clock);

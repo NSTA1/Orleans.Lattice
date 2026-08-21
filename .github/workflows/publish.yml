@@ -99,7 +99,7 @@ jobs:
       id-token: write
 
     # Azurite supplies the local Azure Storage endpoints for the
-    # AzureTableEmulator-category tests (storage.azuretable, caching.azureblob,
+    # AzureStorageEmulator-category tests (storage.azuretable, caching.azureblob,
     # backup.azureblob) so a release of those packages actually runs their emulator
     # tests instead of skipping them. Harmless for packages that define no such
     # tests. Pinned to the version validated locally; default command binds
@@ -222,7 +222,7 @@ jobs:
             dotnet build "${{ steps.parse.outputs.CSPROJ }}" --no-restore --configuration Release
           fi
 
-      # Ensure Azurite is accepting connections before the AzureTableEmulator
+      # Ensure Azurite is accepting connections before the AzureStorageEmulator
       # tests run (they self-skip on a connection failure). Build precedes this,
       # so it is normally already satisfied; cheap guard against a cold start.
       - name: Wait for Azurite
@@ -240,9 +240,9 @@ jobs:
 
       - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
-      # The AzureTableEmulator category runs here against the job's Azurite
+      # The AzureStorageEmulator category runs here against the job's Azurite
       # service container (see `services:` above). The chaos step excludes it so
       # the Azure chaos suite stays out of the release gate; the deterministic
       # emulator integration tests run. Harmless for packages without the category.

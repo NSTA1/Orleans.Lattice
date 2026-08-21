@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// Pure-logic tests for <see cref="AzureTableWalStorageProvider"/>'s
 /// internal helpers. Behavioural end-to-end coverage against a live
 /// Azure Tables endpoint or Azurite is gated separately under the
-/// <c>AzureTableEmulator</c> category so it does not run on the
+/// <c>AzureStorageEmulator</c> category so it does not run on the
 /// default dev loop.
 /// </summary>
 [TestFixture]

@@ -20,32 +20,18 @@ namespace Orleans.Lattice.Caching.AzureBlob.Tests;
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public sealed class AzureBlobDistributedCacheAzuriteTests
 {
-    private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
-
-    // Pinned to the newest blob-service API version the CI Azurite build (3.36.0)
-    // accepts (2025-11-05). The SDK's default API version outruns the emulator, so
-    // an unpinned client is rejected; pinning to the emulator's ceiling keeps this
-    // suite deterministic without being stuck on a stale version. Kept identical to
-    // the sibling backup.azureblob versioned-emulator fixture so both blob suites
-    // make the same assumption.
-    private const BlobClientOptions.ServiceVersion EmulatorApiVersion =
-        BlobClientOptions.ServiceVersion.V2025_11_05;
-
     private BlobServiceClient _adminClient = null!;
     private string _containerName = null!;
     private MutableTimeProvider _clock = null!;
-
-    private static BlobServiceClient CreateServiceClient() =>
-        new(AzuriteConnectionString, new BlobClientOptions(EmulatorApiVersion));
 
     private AzureBlobDistributedCache CreateCache(string keyPrefix = "")
     {
         var options = new LatticeAzureBlobCacheOptions
         {
-            ServiceClient = CreateServiceClient(),
+            ServiceClient = AzuriteEmulator.CreateServiceClient(),
             ContainerName = _containerName,
         };
         return new AzureBlobDistributedCache(options.BuildContainerClient(), keyPrefix, _clock);
@@ -54,7 +40,7 @@ public sealed class AzureBlobDistributedCacheAzuriteTests
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _adminClient = CreateServiceClient();
+        _adminClient = AzuriteEmulator.CreateServiceClient();
         try
         {
             await foreach (var _ in _adminClient.GetBlobContainersAsync())
@@ -65,7 +51,7 @@ public sealed class AzureBlobDistributedCacheAzuriteTests
         catch (Exception ex)
         {
             Assert.Inconclusive(
-                $"Azurite is not reachable on the default development endpoint ({AzuriteConnectionString}). "
+                $"Azurite is not reachable on the default development endpoint ({AzuriteEmulator.ConnectionString}). "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }

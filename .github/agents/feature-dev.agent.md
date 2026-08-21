@@ -119,7 +119,7 @@ The agent **must invoke each command below verbatim** and **paste the tail of it
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~MojibakeHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 
-7. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureTableEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
+7. **Integration-category hygiene.** Every `[TestFixture]` that spins up a cluster, host, or gRPC channel must carry one of the slow-category tags (`Integration`, `Chaos`, or `AzureStorageEmulator`) so the strict-delta Tier 3 filter (`TestCategory=Integration|TestCategory=Docs`) covers it. `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category` lives as a sibling copy in every test project that hosts cluster-based fixtures; run it in each project whose source you touched:
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~IntegrationCategoryHygieneTests" --nologo --verbosity quiet --blame-hang-timeout 2m --blame-hang-dump-type none

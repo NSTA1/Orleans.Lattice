@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
-    # AzureTableEmulator-category integration tests (in storage.azuretable,
+    # AzureStorageEmulator-category integration tests (in storage.azuretable,
     # caching.azureblob, and backup.azureblob) drive via `UseDevelopmentStorage=true`.
     # Without it those tests self-skip (Assert.Inconclusive) and never validate their
     # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
@@ -440,7 +440,7 @@ jobs:
               testName=$(basename "$testProj" .csproj)
               echo "::group::Test sample: $sampleName / $testName"
               dotnet test "$testProj" --no-build --configuration Release \
-                --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+                --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
                 --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
                 --logger "trx;LogFileName=samples-${sampleName}-${testName}.trx"
               echo "::endgroup::"
@@ -484,7 +484,7 @@ jobs:
             testName=$(basename "$testProj" .csproj)
             echo "::group::Test $testName"
             dotnet test "$testProj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=refarch-${testName}.trx"
             echo "::endgroup::"
@@ -576,7 +576,7 @@ jobs:
             echo "::endgroup::"
             echo "::group::Test $testName"
             dotnet test "$testProj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=apps-${testName}.trx"
             echo "::endgroup::"
@@ -632,7 +632,7 @@ jobs:
       # Convention: tests at `test/{name}/*.Tests.csproj`. A discovered package
       # without a matching test project is silently skipped (e.g. a future
       # `src/foo/` that has no `test/foo/`).
-      # Ensure Azurite is accepting connections before the AzureTableEmulator
+      # Ensure Azurite is accepting connections before the AzureStorageEmulator
       # tests run (they self-skip on a connection failure, so a not-yet-ready
       # emulator would silently drop that coverage rather than fail). The service
       # starts at job start and restore/build precede this, so it is normally
@@ -668,7 +668,7 @@ jobs:
             fi
             echo "::group::Test ${name} (chaos)"
             dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory=Chaos&TestCategory!=AzureTableEmulator" \
+              --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-chaos.trx"
             echo "::endgroup::"

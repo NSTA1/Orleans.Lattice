@@ -9,30 +9,20 @@ namespace Orleans.Lattice.Backup.AzureBlob.Tests;
 /// <summary>
 /// Behavioural coverage for <see cref="AzureBlobLatticeBackupSink"/> driven against
 /// a real Azure Blob Storage endpoint (canonically Azurite on the development
-/// connection string). Unlike the sibling
-/// <see cref="AzureBlobLatticeBackupSinkEmulatorTests"/>, this fixture pins the
-/// Azure SDK <see cref="BlobClientOptions.ServiceVersion"/> to a value the shared
-/// emulator understands, so it exercises the sink even when the SDK's newest
-/// default API version outruns the emulator build. It supplies the pre-built
-/// <see cref="BlobServiceClient"/> via the options' <c>ServiceClient</c> mode.
+/// connection string). The client is pinned via <see cref="AzuriteEmulator"/> to a
+/// blob-service API version the shared emulator accepts, so the suite exercises the
+/// sink even when the SDK's newest default API version outruns the emulator build.
+/// It supplies the pre-built <see cref="BlobServiceClient"/> via the options'
+/// <c>ServiceClient</c> mode.
 /// <para>
 /// Every test uses a fresh, uniquely prefixed container so concurrent runners do
 /// not collide, and tears it down afterward.
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public sealed class AzureBlobLatticeBackupSinkVersionedEmulatorTests
 {
-    private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
-
-    // Pinned to the newest blob-service API version the CI Azurite build (3.36.0)
-    // accepts (2025-11-05); the SDK default advertises a newer API version than the
-    // emulator supports. Kept identical to the sibling caching.azureblob versioned
-    // fixture so both blob suites make the same assumption.
-    private const BlobClientOptions.ServiceVersion PinnedVersion =
-        BlobClientOptions.ServiceVersion.V2025_11_05;
-
     private ServiceProvider _services = null!;
     private Serializer<BackupManifest> _serializer = null!;
     private BlobServiceClient _serviceClient = null!;
@@ -47,7 +37,7 @@ public sealed class AzureBlobLatticeBackupSinkVersionedEmulatorTests
             .AddSerializer(b => b.AddAssembly(typeof(BackupManifest).Assembly))
             .BuildServiceProvider();
         _serializer = _services.GetRequiredService<Serializer<BackupManifest>>();
-        _serviceClient = new BlobServiceClient(AzuriteConnectionString, new BlobClientOptions(PinnedVersion));
+        _serviceClient = AzuriteEmulator.CreateServiceClient();
 
         try
         {
@@ -59,7 +49,7 @@ public sealed class AzureBlobLatticeBackupSinkVersionedEmulatorTests
         catch (Exception ex)
         {
             Assert.Inconclusive(
-                $"Azure Blob endpoint is not reachable on the default development endpoint ({AzuriteConnectionString}). "
+                $"Azure Blob endpoint is not reachable on the default development endpoint ({AzuriteEmulator.ConnectionString}). "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }
@@ -225,6 +215,22 @@ public sealed class AzureBlobLatticeBackupSinkVersionedEmulatorTests
 
         await _sut.WriteArtifactAsync("artifact-1", ToAsync(chunks));
         var read = await CollectAsync(_sut.ReadArtifactAsync("artifact-1"));
+
+        Assert.That(read.Select(c => c.ToArray()), Is.EqualTo(chunks));
+    }
+
+    [Test]
+    public async Task ReadArtifactAsync_preserves_boundaries_for_chunks_larger_than_the_read_buffer()
+    {
+        // Each chunk exceeds the sink's internal streaming read buffer, proving a
+        // large chunk is reconstructed whole from the framed stream instead of
+        // being split across read boundaries (which would break per-chunk decode).
+        var first = Enumerable.Range(0, 200_000).Select(i => (byte)(i % 251)).ToArray();
+        var second = Enumerable.Range(0, 150_000).Select(i => (byte)((i * 7) % 253)).ToArray();
+        var chunks = new[] { first, second };
+
+        await _sut.WriteArtifactAsync("artifact-big-read", ToAsync(chunks));
+        var read = await CollectAsync(_sut.ReadArtifactAsync("artifact-big-read"));
 
         Assert.That(read.Select(c => c.ToArray()), Is.EqualTo(chunks));
     }
