@@ -176,6 +176,34 @@ public sealed class GrpcLatticeTreeAdminTests
     }
 
     [Test]
+    public async Task CreateViewAsync_forwards_provider_payload_and_unwraps_response()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeViewStatus
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            ProviderKey = "app.region.v1",
+            ProjectionVersion = "v1",
+        });
+
+        var result = await Adapter(invoker).CreateViewAsync(
+            "orders-by-region",
+            "orders",
+            "app.region.v1",
+            [1, 2, 3]);
+
+        var sent = (TreeAdminCreateViewRequest)invoker.LastRequest!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(sent.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(sent.ProviderKey, Is.EqualTo("app.region.v1"));
+            Assert.That(sent.Payload, Is.EqualTo(new byte[] { 1, 2, 3 }));
+            Assert.That(result.ProjectionVersion, Is.EqualTo("v1"));
+        });
+    }
+
+    [Test]
     public async Task CheckTreeExistsAsync_forwards_request_and_unwraps_response()
     {
         var invoker = new FakeCallInvoker(_ => new TreeExistenceResult { TreeId = "orders", Exists = true });

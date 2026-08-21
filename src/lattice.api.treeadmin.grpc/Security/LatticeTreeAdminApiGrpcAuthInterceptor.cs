@@ -132,6 +132,7 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTreeAdminGrpcMethods.GetTreeConfigMethodName => LatticeTreeAdminApiOperation.GetTreeConfig,
             LatticeTreeAdminGrpcMethods.SetTreeConfigMethodName => LatticeTreeAdminApiOperation.SetTreeConfig,
             LatticeTreeAdminGrpcMethods.GetShardMapMethodName => LatticeTreeAdminApiOperation.GetShardMap,
+            LatticeTreeAdminGrpcMethods.CreateViewMethodName => LatticeTreeAdminApiOperation.CreateView,
             _ => LatticeTreeAdminApiOperation.Unknown,
         };
 
@@ -153,6 +154,7 @@ internal sealed class LatticeTreeAdminApiGrpcAuthInterceptor : Interceptor
             TreeAdminWalMovePlanRequest wpl => wpl.TreeId,
             TreeAdminWalMoveExecuteRequest wmv => wmv.TreeId,
             TreeAdminWalReclaimRequest wrc => wrc.TreeId,
+            TreeAdminCreateViewRequest view => view.SourceTreeId,
             TreeAdminSetRetentionRequest ret => ret.TreeId,
             TreeRestoreResult rev => rev.TargetTreeId,
             _ => null,

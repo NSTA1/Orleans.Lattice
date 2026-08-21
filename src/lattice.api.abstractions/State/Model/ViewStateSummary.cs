@@ -44,4 +44,16 @@ public sealed record ViewStateSummary
     /// its source tree, rather than directly inspectable value / CRDT data.
     /// </summary>
     [Id(6)] public bool IsHistory { get; init; }
+
+    /// <summary>
+    /// The host-registered runtime projection provider key, or
+    /// <see langword="null"/> for a startup-only or legacy view.
+    /// </summary>
+    [Id(7)] public string? ProjectionProviderKey { get; init; }
+
+    /// <summary>
+    /// The persisted runtime projection version, or <see langword="null"/> for a
+    /// startup-only view.
+    /// </summary>
+    [Id(8)] public string? ProjectionVersion { get; init; }
 }

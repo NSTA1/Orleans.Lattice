@@ -1,3 +1,6 @@
+using Grpc.Core;
+using NSubstitute;
+
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
 /// <summary>
@@ -517,6 +520,81 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
         Assert.That(
             async () => await _host.Client.ListViewsAsync(),
             Throws.Exception);
+    }
+
+    [Test]
+    public async Task create_view_maps_client_payload_to_facade_and_returns_status_without_payload()
+    {
+        var control = Substitute.For<ILatticeTreeAdmin>();
+        control.CreateViewAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<byte[]>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new TreeViewStatus
+            {
+                ViewName = "orders-by-region",
+                SourceTreeId = "orders",
+                ProviderKey = "provider-a",
+                ProjectionVersion = "v3",
+            });
+        await using var host = await _fixture.CreateGrpcHostAsync(
+            new AllowAllTreeAdminApiAuthorizer(),
+            controlOverride: control);
+
+        var status = await host.Client.CreateViewAsync(
+            "orders-by-region",
+            "orders",
+            "provider-a",
+            [1, 2, 3]);
+
+        await control.Received(1).CreateViewAsync(
+            "orders-by-region",
+            "orders",
+            "provider-a",
+            Arg.Is<byte[]>(p => p.SequenceEqual(new byte[] { 1, 2, 3 })),
+            Arg.Any<CancellationToken>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.ProviderKey, Is.EqualTo("provider-a"));
+            Assert.That(status.ProjectionVersion, Is.EqualTo("v3"));
+            Assert.That(status.GetType().GetProperty("Payload"), Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task create_view_oversized_wire_payload_maps_to_invalid_argument()
+    {
+        var control = Substitute.For<ILatticeTreeAdmin>();
+        await using var host = await _fixture.CreateGrpcHostAsync(
+            new AllowAllTreeAdminApiAuthorizer(),
+            controlOverride: control);
+
+        var exception = Assert.ThrowsAsync<RpcException>(
+            async () =>
+            {
+                using var call = host.Channel.CreateCallInvoker().AsyncUnaryCall(
+                    host.Methods.CreateView,
+                    host: null,
+                    new CallOptions(),
+                    new TreeAdminCreateViewRequest
+                    {
+                        ViewName = "orders-by-region",
+                        SourceTreeId = "orders",
+                        ProviderKey = "provider-a",
+                        Payload = new byte[LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes + 1],
+                    });
+                await call.ResponseAsync;
+            });
+
+        Assert.That(exception!.StatusCode, Is.EqualTo(StatusCode.InvalidArgument));
+        await control.DidNotReceiveWithAnyArgs().CreateViewAsync(
+            default!,
+            default!,
+            default!,
+            default!,
+            default);
     }
 
     [Test]

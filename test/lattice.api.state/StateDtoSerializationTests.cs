@@ -118,11 +118,15 @@ public sealed class StateDtoSerializationTests
             LastDigest = "deadbeef",
             IsAggregation = true,
             IsHistory = true,
+            ProjectionProviderKey = "app.orders.v1",
+            ProjectionVersion = "v3",
         };
 
         var roundTripped = RoundTrip(original);
         Assert.That(roundTripped, Is.EqualTo(original));
         Assert.That(roundTripped.IsHistory, Is.True, "the additive IsHistory flag must survive the wire round-trip");
+        Assert.That(roundTripped.ProjectionProviderKey, Is.EqualTo("app.orders.v1"));
+        Assert.That(roundTripped.ProjectionVersion, Is.EqualTo("v3"));
     }
 
     [Test]

@@ -463,6 +463,61 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.ListViewsAsync(cancellationToken);
     }
 
+    /// <summary>Creates a durable runtime materialised view through a host-registered projection provider.</summary>
+    public static Task<TreeViewStatus> CreateViewAsync(
+        ILatticeTreeAdmin treeAdmin,
+        [Description("The logical materialised-view name to create. Must not be null or empty.")]
+        string viewName,
+        [Description("The directly writable source tree whose WAL the view tails. Must not be null, empty, or another view tree.")]
+        string sourceTreeId,
+        [Description("The stable runtime projection provider key configured on the target cluster.")]
+        string providerKey,
+        [Description("The provider's opaque persisted payload encoded as base64. Decoded content is limited to 65536 bytes and is never returned by status or list operations.")]
+        string providerPayloadBase64,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(treeAdmin);
+        ArgumentNullException.ThrowIfNull(providerPayloadBase64);
+
+        const int maxEncodedLength =
+            ((LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes + 2) / 3) * 4;
+        if (providerPayloadBase64.Length > maxEncodedLength)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(providerPayloadBase64),
+                providerPayloadBase64.Length,
+                $"The encoded runtime projection payload cannot exceed {maxEncodedLength} characters.");
+        }
+
+        byte[] payload;
+        try
+        {
+            payload = Convert.FromBase64String(providerPayloadBase64);
+        }
+        catch (FormatException ex)
+        {
+            throw new ArgumentException(
+                "The runtime projection payload must be valid base64.",
+                nameof(providerPayloadBase64),
+                ex);
+        }
+
+        if (payload.Length > LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(providerPayloadBase64),
+                payload.Length,
+                $"The decoded runtime projection payload cannot exceed {LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes} bytes.");
+        }
+
+        return treeAdmin.CreateViewAsync(
+            viewName,
+            sourceTreeId,
+            providerKey,
+            payload,
+            cancellationToken);
+    }
+
     /// <summary>Reads a materialised view's status (source tree, apply lag, active generation tree id).</summary>
     public static Task<TreeViewStatus> GetViewStatusAsync(
         ILatticeTreeAdmin treeAdmin,

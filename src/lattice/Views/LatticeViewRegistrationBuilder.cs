@@ -13,8 +13,41 @@ namespace Orleans.Lattice;
 public sealed class LatticeViewRegistrationBuilder
 {
     private readonly List<StartupViewRegistration> _registrations = [];
+    private readonly List<RuntimeViewProjectionProviderRegistration> _runtimeProviders = [];
 
     internal IReadOnlyList<StartupViewRegistration> Registrations => _registrations;
+    internal IReadOnlyList<RuntimeViewProjectionProviderRegistration> RuntimeProviders => _runtimeProviders;
+
+    /// <summary>
+    /// Registers a keyed provider that reconstructs durable runtime-created view
+    /// definitions from bounded opaque state.
+    /// </summary>
+    /// <param name="providerKey">The stable non-empty provider key.</param>
+    /// <param name="provider">The definition factory invoked during create and rehydration.</param>
+    public LatticeViewRegistrationBuilder AddRuntimeProjectionProvider(
+        string providerKey,
+        Func<IServiceProvider, LatticeRuntimeViewProjectionContext, LatticeViewDefinition> provider)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(providerKey);
+        ArgumentNullException.ThrowIfNull(provider);
+        if (string.Equals(
+            providerKey,
+            PredicateRuntimeViewProjectionCodec.ProviderKey,
+            StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Runtime view projection provider key '{providerKey}' is reserved by Orleans.Lattice.");
+        }
+
+        if (_runtimeProviders.Any(r => string.Equals(r.ProviderKey, providerKey, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"A runtime view projection provider with key '{providerKey}' is already registered.");
+        }
+
+        _runtimeProviders.Add(new RuntimeViewProjectionProviderRegistration(providerKey, provider));
+        return this;
+    }
 
     /// <summary>
     /// Declares a view maintained by the supplied projection instance.

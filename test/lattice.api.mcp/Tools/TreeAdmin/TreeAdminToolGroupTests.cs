@@ -95,6 +95,7 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_snapshot",
         "lattice_treeadmin_wal_move_execute",
         "lattice_treeadmin_wal_move_reclaim",
+        "lattice_treeadmin_view_create",
         "lattice_treeadmin_view_rebuild",
         "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_drop",

@@ -596,6 +596,87 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
+    public async Task CreateViewAsync_decodes_payload_and_forwards_the_request()
+    {
+        var admin = TreeAdmin();
+        var expected = new TreeViewStatus
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            ProviderKey = "app.region.v1",
+            ProjectionVersion = "v1",
+        };
+        admin.CreateViewAsync(
+                "orders-by-region",
+                "orders",
+                "app.region.v1",
+                Arg.Any<byte[]>(),
+                Arg.Any<CancellationToken>())
+            .Returns(expected);
+
+        var result = await TreeAdminLifecycleToolHandlers.CreateViewAsync(
+            admin,
+            "orders-by-region",
+            "orders",
+            "app.region.v1",
+            Convert.ToBase64String([1, 2, 3]),
+            CancellationToken.None);
+
+        Assert.That(result, Is.SameAs(expected));
+        await admin.Received(1).CreateViewAsync(
+            "orders-by-region",
+            "orders",
+            "app.region.v1",
+            Arg.Is<byte[]>(payload => payload.SequenceEqual(new byte[] { 1, 2, 3 })),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void CreateViewAsync_malformed_base64_rejects_before_facade_call()
+    {
+        var admin = TreeAdmin();
+
+        Assert.That(
+            async () => await TreeAdminLifecycleToolHandlers.CreateViewAsync(
+                admin, "view", "orders", "app.v1", "not-base64!", CancellationToken.None),
+            Throws.TypeOf<ArgumentException>());
+        admin.DidNotReceiveWithAnyArgs().CreateViewAsync(default!, default!, default!, default!, default);
+    }
+
+    [Test]
+    public void CreateViewAsync_oversized_base64_rejects_before_facade_call()
+    {
+        var admin = TreeAdmin();
+        var encoded = Convert.ToBase64String(
+            new byte[LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes + 1]);
+
+        Assert.That(
+            async () => await TreeAdminLifecycleToolHandlers.CreateViewAsync(
+                admin, "view", "orders", "app.v1", encoded, CancellationToken.None),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+        admin.DidNotReceiveWithAnyArgs().CreateViewAsync(default!, default!, default!, default!, default);
+    }
+
+    [Test]
+    public void CreateViewAsync_oversized_encoded_text_rejects_before_decoding()
+    {
+        var admin = TreeAdmin();
+        var maxEncodedLength =
+            ((LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes + 2) / 3) * 4;
+
+        Assert.That(
+            async () => await TreeAdminLifecycleToolHandlers.CreateViewAsync(
+                admin,
+                "view",
+                "orders",
+                "app.v1",
+                new string('A', maxEncodedLength + 1),
+                CancellationToken.None),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+        admin.DidNotReceiveWithAnyArgs().CreateViewAsync(default!, default!, default!, default!, default);
+    }
+
+    [Test]
     public async Task GetViewStatusAsync_forwards_the_view_name_and_returns_the_status()
     {
         var admin = TreeAdmin();

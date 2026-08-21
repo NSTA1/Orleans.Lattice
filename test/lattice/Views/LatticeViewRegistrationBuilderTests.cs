@@ -83,4 +83,48 @@ public class LatticeViewRegistrationBuilderTests
             () => builder.AddFoldedView("chained", "view-adults", _ => Fold()),
             Throws.InvalidOperationException);
     }
+
+    [Test]
+    public void AddRuntimeProjectionProvider_registers_keyed_factory()
+    {
+        var builder = new LatticeViewRegistrationBuilder();
+
+        var returned = builder.AddRuntimeProjectionProvider(
+            "app.orders.v1",
+            (_, context) => new LatticeViewDefinition(context.ViewName, Filter()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(returned, Is.SameAs(builder));
+            Assert.That(builder.RuntimeProviders, Has.Count.EqualTo(1));
+            Assert.That(builder.RuntimeProviders[0].ProviderKey, Is.EqualTo("app.orders.v1"));
+        });
+    }
+
+    [Test]
+    public void AddRuntimeProjectionProvider_rejects_duplicate_key()
+    {
+        var builder = new LatticeViewRegistrationBuilder();
+        builder.AddRuntimeProjectionProvider(
+            "app.orders.v1",
+            (_, context) => new LatticeViewDefinition(context.ViewName, Filter()));
+
+        Assert.That(
+            () => builder.AddRuntimeProjectionProvider(
+                "app.orders.v1",
+                (_, context) => new LatticeViewDefinition(context.ViewName, Filter())),
+            Throws.InvalidOperationException);
+    }
+
+    [Test]
+    public void AddRuntimeProjectionProvider_rejects_reserved_predicate_key()
+    {
+        var builder = new LatticeViewRegistrationBuilder();
+
+        Assert.That(
+            () => builder.AddRuntimeProjectionProvider(
+                "orleans.lattice.predicate.v1",
+                (_, context) => new LatticeViewDefinition(context.ViewName, Filter())),
+            Throws.InvalidOperationException);
+    }
 }

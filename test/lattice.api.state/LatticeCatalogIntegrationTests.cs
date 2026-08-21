@@ -1,4 +1,6 @@
 using Orleans.Lattice.BPlusTree;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Api.State.Tests;
 
@@ -219,6 +221,60 @@ public sealed class LatticeCatalogIntegrationTests
         var view = page.Entries.Single(e => e.ViewName == "orders-agg-hist");
         Assert.That(view.IsAggregation, Is.True);
         Assert.That(view.IsHistory, Is.False, "an aggregation view is not a history view");
+        Assert.That(view.ProjectionProviderKey, Is.EqualTo("tests.state.count.v1"));
+        Assert.That(view.ProjectionVersion, Is.Not.Null.And.Not.Empty);
+    }
+
+    [Test]
+    public async Task ListViewsAsync_startupViewDoesNotInheritShadowedRuntimeMetadata()
+    {
+        const string startupName = "startup-shadow";
+        const string legacyName = "legacy-runtime";
+        var services = _fixture.SiloServices;
+        var startupRegistrations = (IList<StartupViewRegistration>)services
+            .GetRequiredService<IReadOnlyList<StartupViewRegistration>>();
+        var startup = new StartupViewRegistration(
+            startupName,
+            "startup-source",
+            _ => new PredicateLatticeViewProjection());
+        startupRegistrations.Add(startup);
+        var catalog = services.GetRequiredService<IViewCatalog>();
+        catalog.Register(startup.Resolve(services));
+        catalog.Register(new ViewRegistration(
+            legacyName,
+            "legacy-source",
+            new PredicateLatticeViewProjection()));
+        var registry = services.GetRequiredService<IGrainFactory>()
+            .GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
+        await registry.RegisterAsync(new RuntimeViewRegistration
+        {
+            ViewName = startupName,
+            SourceTreeId = "stale-runtime-source",
+            ProjectionTypeName = typeof(PredicateLatticeViewProjection).FullName!,
+            ProjectionVersion = "stale-version",
+            ProjectionProviderKey = "stale-provider",
+            ProjectionProviderPayload = [],
+        });
+        await registry.RegisterAsync(new RuntimeViewRegistration
+        {
+            ViewName = legacyName,
+            SourceTreeId = "legacy-source",
+            ProjectionTypeName = typeof(PredicateLatticeViewProjection).FullName!,
+            ProjectionVersion = "legacy-version",
+        });
+
+        var page = await _fixture.Query.ListViewsAsync(new CatalogRequest());
+
+        var startupView = page.Entries.Single(entry => entry.ViewName == startupName);
+        var legacyView = page.Entries.Single(entry => entry.ViewName == legacyName);
+        Assert.Multiple(() =>
+        {
+            Assert.That(startupView.SourceTreeId, Is.EqualTo("startup-source"));
+            Assert.That(startupView.ProjectionProviderKey, Is.Null);
+            Assert.That(startupView.ProjectionVersion, Is.Null);
+            Assert.That(legacyView.ProjectionProviderKey, Is.Null);
+            Assert.That(legacyView.ProjectionVersion, Is.EqualTo("legacy-version"));
+        });
     }
 
     [Test]

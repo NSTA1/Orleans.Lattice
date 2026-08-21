@@ -115,6 +115,10 @@ public sealed class PredicateLatticeViewProjection : ILatticeViewProjection
     /// <inheritdoc />
     public string ProjectionVersion => _projectionVersion;
 
+    internal LatticePredicateNode? Filter => _filter;
+    internal bool HasValueSelector => _valueSelector is not null;
+    internal bool HasKeySelector => _keySelector is not null;
+
     /// <summary>
     /// Creates a predicate projection whose value transform runs against the
     /// deserialized value type <typeparamref name="T"/> instead of raw

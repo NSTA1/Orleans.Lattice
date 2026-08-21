@@ -21,14 +21,33 @@ internal sealed class ViewRegistryGrain(
     {
         ArgumentNullException.ThrowIfNull(registration);
 
-        if (state.State.Registrations.TryGetValue(registration.ViewName, out var existing)
-            && existing == registration)
+        var hadExisting = state.State.Registrations.TryGetValue(registration.ViewName, out var existing);
+        if (hadExisting)
         {
-            return;
+            if (existing!.Equals(registration))
+            {
+                return;
+            }
         }
 
         state.State.Registrations[registration.ViewName] = registration;
-        await state.WriteStateAsync();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (hadExisting)
+            {
+                state.State.Registrations[registration.ViewName] = existing!;
+            }
+            else
+            {
+                state.State.Registrations.Remove(registration.ViewName);
+            }
+
+            throw;
+        }
     }
 
     /// <inheritdoc />

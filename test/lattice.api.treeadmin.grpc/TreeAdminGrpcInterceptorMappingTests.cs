@@ -18,6 +18,17 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
     private static string Method(string name) => Svc + name;
 
     [Test]
+    public void Operation_values_preserve_unknown_and_append_create_view()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That((int)LatticeTreeAdminApiOperation.GetShardMap, Is.EqualTo(13));
+            Assert.That((int)LatticeTreeAdminApiOperation.Unknown, Is.EqualTo(14));
+            Assert.That((int)LatticeTreeAdminApiOperation.CreateView, Is.EqualTo(15));
+        });
+    }
+
+    [Test]
     public void DescribeCall_maps_probe_capabilities_to_its_operation()
     {
         var (operation, targetId) = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
@@ -389,6 +400,22 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
                 new TreeAdminViewRequest { ViewName = "orders-by-region" }),
                 Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
         });
+    }
+
+    [Test]
+    public void DescribeCall_create_view_maps_operation_and_authorizes_the_source_tree()
+    {
+        var result = LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
+            Method(LatticeTreeAdminGrpcMethods.CreateViewMethodName),
+            new TreeAdminCreateViewRequest
+            {
+                ViewName = "orders-by-region",
+                SourceTreeId = "orders",
+                ProviderKey = "provider-a",
+                Payload = [1],
+            });
+
+        Assert.That(result, Is.EqualTo((LatticeTreeAdminApiOperation.CreateView, "orders")));
     }
 
     [Test]

@@ -90,6 +90,9 @@ public static class GrpcTreeAdminTypeAliases
     /// <summary>Alias for <see cref="TreeAdminViewListRequest"/>.</summary>
     public const string TreeAdminViewListRequest = "oitg.vwlreq";
 
+    /// <summary>Alias for <see cref="TreeAdminCreateViewRequest"/>.</summary>
+    public const string TreeAdminCreateViewRequest = "oitg.vwcreq";
+
     /// <summary>Alias for <see cref="TreeAdminTagIndexRequest"/>.</summary>
     public const string TreeAdminTagIndexRequest = "oitg.tgreq";
 

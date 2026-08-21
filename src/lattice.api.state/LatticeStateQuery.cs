@@ -442,6 +442,8 @@ internal sealed class LatticeStateQuery(
                 EntryCount = entryCount,
                 IsAggregation = registration.IsAggregation,
                 IsHistory = registration.IsHistory,
+                ProjectionProviderKey = registration.ProjectionProviderKey,
+                ProjectionVersion = registration.ProjectionVersion,
             });
         }
 
@@ -2134,7 +2136,9 @@ internal sealed class LatticeStateQuery(
                     registration.ViewName,
                     registration.SourceTreeId,
                     registration.IsAggregation,
-                    registration.Accumulative);
+                    registration.Accumulative,
+                    registration.ProjectionProviderKey,
+                    registration.ProjectionVersion);
             }
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
@@ -2146,20 +2150,42 @@ internal sealed class LatticeStateQuery(
         var catalog = _services.GetService<IViewCatalog>();
         if (catalog is not null)
         {
+            var startupNames = _services
+                .GetRequiredService<IReadOnlyList<StartupViewRegistration>>()
+                .Select(registration => registration.ViewName)
+                .ToHashSet(StringComparer.Ordinal);
             foreach (var registration in catalog.All())
             {
+                byName.TryGetValue(registration.ViewName, out var runtime);
+                var isStartup = startupNames.Contains(registration.ViewName);
+                var providerKey = isStartup
+                    ? null
+                    : registration.ProjectionProviderKey ?? runtime.ProjectionProviderKey;
+                var projectionVersion = isStartup
+                    ? null
+                    : registration.ProjectionProviderKey is not null
+                        ? registration.ProjectionVersion
+                        : runtime.ProjectionVersion;
                 byName[registration.ViewName] = new ViewListing(
                     registration.ViewName,
                     registration.SourceTreeId,
                     registration.IsAggregation,
-                    registration.Accumulative);
+                    registration.Accumulative,
+                    providerKey,
+                    projectionVersion);
             }
         }
 
         return byName.Values;
     }
 
-    private readonly record struct ViewListing(string ViewName, string SourceTreeId, bool IsAggregation, bool IsHistory);
+    private readonly record struct ViewListing(
+        string ViewName,
+        string SourceTreeId,
+        bool IsAggregation,
+        bool IsHistory,
+        string? ProjectionProviderKey,
+        string? ProjectionVersion);
 
     private TreeCatalogEntry MapCatalogEntry(string treeId, TreeRegistryEntry? entry, bool isDeleted)
     {

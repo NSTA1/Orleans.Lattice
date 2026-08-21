@@ -28,4 +28,13 @@ public sealed record TreeViewInfo
 
     /// <summary>Whether the view is append-only (a durable history substrate).</summary>
     [Id(3)] public bool Accumulative { get; init; }
+
+    /// <summary>
+    /// The host-registered runtime projection provider key, or <see langword="null"/>
+    /// when the registration predates provider-backed reconstruction.
+    /// </summary>
+    [Id(4)] public string? ProviderKey { get; init; }
+
+    /// <summary>The durable projection version produced by the server-side provider.</summary>
+    [Id(5)] public string? ProjectionVersion { get; init; }
 }

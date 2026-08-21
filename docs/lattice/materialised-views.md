@@ -72,23 +72,49 @@ siloBuilder.AddLatticeViews(views => views.AddView(
         LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
 ```
 
-**At runtime** - resolve `ILatticeViewFactory` and call `Create` with the source
-tree, the view name, and the definition. Prefer this when the view shape is only
-known at runtime; it returns the same `ILatticeView` handle used for reads:
+**At runtime** - resolve `ILatticeViewFactory` and call `CreateAsync` with the
+source tree, the view name, and the definition. Prefer this when the view shape
+is only known at runtime; it returns the same `ILatticeView` handle used for
+reads after the runtime registration is durable. A
+filter-only `PredicateLatticeViewProjection` is captured automatically so the
+filter survives restart:
 
 ```csharp verify
 var viewFactory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
 var people = grainFactory.GetGrain<ILattice>("people");
 
-ILatticeView adults = viewFactory.Create(
+ILatticeView adults = await viewFactory.CreateAsync(
     people,
     "adults",
     new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
         LatticePredicateTranslator.Translate<User>(u => u.Age >= 18))));
 ```
 
+For application-defined state, register a stable provider key at host startup and
+persist only the bounded data it needs. The provider runs locally and returns the
+complete definition, so a remote caller cannot assert projection kind or version:
+
+```csharp verify
+var viewFactory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
+var people = grainFactory.GetGrain<ILattice>("people");
+
+siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
+    "app.adults.v1",
+    (_, context) => new LatticeViewDefinition(
+        context.ViewName,
+        new PredicateLatticeViewProjection())));
+
+var descriptor = new LatticeRuntimeViewProjectionDescriptor(
+    "app.adults.v1",
+    Array.Empty<byte>());
+ILatticeView providerBacked = await viewFactory.CreateAsync(people, "provider-adults", descriptor);
+```
+
 Either way the view materialises under its own `view-{name}` tree and converges
-toward the source as the maintainer applies projected writes.
+toward the source as the maintainer applies projected writes. The synchronous
+`Create` overload remains for compatibility, but it persists and activates in
+the background and therefore cannot report a durable-registration failure to
+the caller. Prefer `CreateAsync` for runtime creation.
 
 A view's source must be a directly-writable tree, **not another view**: chaining a
 view onto another view's `view-*` tree is unsupported (it compounds apply lag at
@@ -223,17 +249,29 @@ has no views and is unaffected.
 
 ## Durability across restarts
 
-A view created at runtime through `ILatticeViewFactory.Create` records a durable
-registration (its source tree id, projection type, and projection version)
-alongside its checkpoint, so its maintainer resumes automatically after a silo
-restart without the application re-calling `Create`. Because a projection
-instance is not serialisable, only the projection's concrete type identity is
-persisted; the projection is re-resolved from dependency injection on restart. A
-runtime view therefore survives a restart only when its projection type is
-resolvable from the container - registered in DI, or constructable through its
-public constructor with dependency-injection-satisfiable arguments. Views
+A view created at runtime through `ILatticeViewFactory.CreateAsync` records a durable
+registration alongside its checkpoint. New stateful runtime views use a
+`LatticeRuntimeViewProjectionDescriptor`: a stable host-registered provider key
+plus an opaque payload of at most 64 KiB. On creation and every activation, the
+server invokes only that configured provider and requires the reconstructed view
+name, projection kind, accumulative flag, and `ProjectionVersion` to match the
+persisted registration exactly. Missing providers, malformed state, empty or
+mismatched versions, and provider failures leave the maintainer dormant rather
+than rebuilding through different logic.
+
+Filter-only `PredicateLatticeViewProjection` definitions receive the built-in
+predicate descriptor automatically. Predicate value/key selectors, aggregation
+delegates, folds, and other application state require an explicit provider. The
+provider payload is copied defensively and is never returned by status, catalog,
+State API, MCP, or Explorer surfaces.
+
+Legacy records without a provider key retain the allow-listed type/DI resolution
+path, but they now activate only when the reconstructed version exactly matches
+the persisted version. Re-call `Create` with a descriptor to migrate a legacy
+stateful registration. `Create` rejects a new runtime view before catalog or
+durable mutation when restart-faithful reconstruction cannot be proven. Views
 declared at startup with `AddLatticeViews(...)` are always re-registered from the
-declaration and carry no such constraint.
+declaration and carry no runtime-provider constraint.
 
 ## Changing a projection
 
@@ -671,6 +709,46 @@ ordering is unaffected - appends remain serialised among themselves; only the
 read no longer holds the activation turn for the duration of its storage
 round-trip.
 
+### Relative cost by view shape
+
+Runtime creation and provider-backed reconstruction do not add a separate
+steady-state data-path cost: after activation, runtime-created and
+startup-declared views use the same maintainer. Projection shape determines the
+cost. A two-run, single-silo reference-architecture cohort using the Azure
+Storage emulator observed the following relative costs after 256 seed writes and
+256 rewrites (32 groups for aggregates):
+
+| Shape | Source write rate vs no view | View bytes vs source bytes | Additional peak silo memory | Stored view rows |
+|-------|------------------------------|----------------------------|-----------------------------|------------------|
+| Pass-through | 0.23-0.43x | 1.00x | 6-12 MiB | 256 visible |
+| Approximately 10% selective filter | 0.43-0.72x | 0.11x | 8-9 MiB | 20-23 visible |
+| Count, 32 groups | 0.04-0.06x | 4.12x | 34-42 MiB | 32 visible + 288 internal |
+| Sum, 32 groups | 0.05-0.07x | 4.12x | 33-41 MiB | 32 visible + 288 internal |
+| Exact set-union, 32 groups | 0.11-0.16x | 3.59x | 11-16 MiB | 32 visible + 288 internal |
+
+These are relative observations, not production capacity limits: local Docker,
+the emulator, entry size, group cardinality, storage latency, and concurrent
+work all affect the absolute rates. Measure the intended projection and data
+shape in the target environment.
+
+Selective filters reduce stored bytes in proportion to the surviving rows, but
+the maintainer still reads and evaluates every source mutation. Aggregates retain
+one membership row per source key plus accumulator or inverse rows and visible
+group rows. Count and sum also perform crash-idempotent atomic
+membership/accumulator updates for each contribution; in this cohort that
+serial read-before-write path cost more than exact set-union despite set-union's
+larger exact per-group state. `AggregationMaxGroupEntries` can bound set-union,
+min, and max state by accepting approximate results. Increasing
+`AggregationFanout` spreads hot-group writes but also makes each materialisation
+read more accumulator shards, so treat it as a contention control rather than a
+free throughput improvement.
+
+Initial backfill uses the same path. A large aggregate backfill can therefore
+hold a maintainer turn long enough for an immediate create/status request to hit
+a transport timeout even though the durable registration succeeded and the
+view continues converging. Treat creation as asynchronous: poll view status and
+apply lag, and do not infer rollback from a create-time timeout.
+
 ## Configuration
 
 `LatticeViewOptions` is resolved per view name via
@@ -753,11 +831,11 @@ cost. See [Durable per-key history views](history-views.md).
 - **Approximate set-union cardinality is a bounded sample, not HyperLogLog.**
   `AggregationMaxGroupEntries` bounds `SetUnion` with a distinct sample; a true
   HyperLogLog estimator is a later phase.
-- **A runtime view survives a restart only with a DI-resolvable projection.**
-  Only the projection's concrete type identity is persisted, so a view created at
-  runtime resumes after a silo restart only when that type can be resolved from
-  dependency injection. Startup-declared views are exempt - they are rebuilt from
-  their declaration.
+- **A runtime view must be restart-faithful.** Filter-only predicate state is
+  persisted automatically. Other stateful or delegate-backed projections need a
+  host-registered provider and a payload no larger than 64 KiB. Creation and
+  activation fail closed unless the reconstructed shape and version match exactly.
+  Startup-declared views are exempt - they are rebuilt from their declaration.
 - **Startup-declared views cannot be deleted at runtime.** `DeleteAsync` rejects a
   view that was declared through `AddLatticeViews(...)`, because the declaration
   would re-create it on the next start. Remove the declaration instead.

@@ -9,8 +9,9 @@ namespace Orleans.Lattice;
 /// every source mutation into a revision row at <c>{sourceKey}/{encodedHlc}</c>.
 /// <para>
 /// A history view must be created the <em>runtime</em> way - passed to
-/// <see cref="ILatticeViewFactory.Create"/> - rather than declared at startup via
-/// <c>AddLatticeViews</c>, because only a runtime-created view can be torn down
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>
+/// - rather than declared at startup via <c>AddLatticeViews</c>, because only a
+/// runtime-created view can be torn down
 /// again with <see cref="ILatticeViewFactory.DeleteAsync"/> (the issue's
 /// enable/disable contract). The projection depends on the internal history-row
 /// codec, so this helper resolves it from the silo service provider; the

@@ -55,6 +55,7 @@ public static class LatticeViewsServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeViewOptions>, LatticeViewOptionsValidator>());
 
         builder.Services.TryAddSingleton<HistoryRowCodec>();
+        builder.Services.TryAddSingleton<PredicateRuntimeViewProjectionCodec>();
         builder.Services.TryAddSingleton(
             static sp => new HistoryLatticeViewProjection(sp.GetRequiredService<HistoryRowCodec>()));
         builder.Services.TryAddSingleton<IViewCatalog, ViewCatalog>();
@@ -62,6 +63,19 @@ public static class LatticeViewsServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeViewFactory, LatticeViewFactory>();
         builder.Services.TryAddSingleton<IReadOnlyList<StartupViewRegistration>>(
             _ => registrationBuilder.Registrations);
+        builder.Services.TryAddSingleton<IReadOnlyList<RuntimeViewProjectionProviderRegistration>>(
+            sp =>
+            {
+                var providers = registrationBuilder.RuntimeProviders.ToList();
+                var codec = sp.GetRequiredService<PredicateRuntimeViewProjectionCodec>();
+                providers.Add(new RuntimeViewProjectionProviderRegistration(
+                    PredicateRuntimeViewProjectionCodec.ProviderKey,
+                    (_, context) => new LatticeViewDefinition(
+                        context.ViewName,
+                        new PredicateLatticeViewProjection(codec.Decode(context.PayloadSpan)))));
+                return providers;
+            });
+        builder.Services.TryAddSingleton<RuntimeViewProjectionProviderCatalog>();
 
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ViewActivationService>());

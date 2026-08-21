@@ -746,6 +746,34 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Creates a runtime materialised view named <paramref name="viewName"/> over
+    /// <paramref name="sourceTreeId"/> using the host-registered projection provider
+    /// identified by <paramref name="providerKey"/>. The opaque
+    /// <paramref name="payload"/> is interpreted only by that provider and is never
+    /// returned by this API. The source is authorized for whole-tree
+    /// <see cref="LatticeOperation.Admin"/> before the provider is invoked.
+    /// </summary>
+    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="sourceTreeId">The directly writable source tree id. A materialised-view tree cannot be a source.</param>
+    /// <param name="providerKey">The non-empty host-registered projection provider key.</param>
+    /// <param name="payload">Opaque provider state, limited to 64 KiB.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The server-derived status of the created view.</returns>
+    /// <exception cref="ArgumentException">A name or provider key is empty, or the source is a materialised-view tree.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="payload"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="payload"/> exceeds 64 KiB.</exception>
+    /// <exception cref="InvalidOperationException">The view subsystem or provider is unavailable.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks whole-tree admin authority over the source.</exception>
+    Task<TreeViewStatus> CreateViewAsync(
+        string viewName,
+        string sourceTreeId,
+        string providerKey,
+        byte[] payload,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "This tree-administration implementation does not support runtime view creation.");
+
+    /// <summary>
     /// Reads the status of the materialised view named <paramref name="viewName"/> -
     /// its source tree, apply lag, and active view tree id - after resolving the view's
     /// source tree and authorizing whole-tree <see cref="LatticeOperation.Read"/> over

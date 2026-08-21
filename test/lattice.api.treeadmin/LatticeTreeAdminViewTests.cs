@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.Api.Schema;
@@ -21,6 +23,68 @@ namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 [TestFixture]
 public sealed class LatticeTreeAdminViewTests
 {
+    [Test]
+    public void CreateViewAsync_defaultInterfaceImplementation_throwsNotSupported()
+    {
+        var admin = CreateLegacyImplementation();
+
+        Assert.That(
+            async () => await admin.CreateViewAsync("view", "source", "provider", []),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    private static ILatticeTreeAdmin CreateLegacyImplementation()
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("LegacyTreeAdminTests"),
+            AssemblyBuilderAccess.Run);
+        var type = assembly
+            .DefineDynamicModule("LegacyTreeAdminTests")
+            .DefineType(
+                "LegacyTreeAdmin",
+                TypeAttributes.Public | TypeAttributes.Sealed,
+                typeof(object),
+                [typeof(ILatticeTreeAdmin)]);
+        type.DefineDefaultConstructor(MethodAttributes.Public);
+
+        foreach (var contract in typeof(ILatticeTreeAdmin)
+                     .GetMethods()
+                     .Where(method => method.IsAbstract))
+        {
+            var method = type.DefineMethod(
+                contract.Name,
+                MethodAttributes.Public
+                | MethodAttributes.Virtual
+                | MethodAttributes.Final
+                | MethodAttributes.HideBySig
+                | MethodAttributes.NewSlot,
+                contract.ReturnType,
+                contract.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
+            var il = method.GetILGenerator();
+            if (contract.ReturnType == typeof(void))
+            {
+                il.Emit(OpCodes.Ret);
+            }
+            else if (contract.ReturnType.IsValueType)
+            {
+                var value = il.DeclareLocal(contract.ReturnType);
+                il.Emit(OpCodes.Ldloca_S, value);
+                il.Emit(OpCodes.Initobj, contract.ReturnType);
+                il.Emit(OpCodes.Ldloc, value);
+                il.Emit(OpCodes.Ret);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldnull);
+                il.Emit(OpCodes.Ret);
+            }
+
+            type.DefineMethodOverride(method, contract);
+        }
+
+        return (ILatticeTreeAdmin)Activator.CreateInstance(type.CreateType()!)!;
+    }
+
     private const string ViewName = "orders-by-region";
     private const string SourceTree = "orders";
 
@@ -68,7 +132,11 @@ public sealed class LatticeTreeAdminViewTests
     }
 
     private static RuntimeViewRegistration Registration(
-        string viewName = ViewName, string sourceTreeId = SourceTree, bool isAggregation = false, bool accumulative = false)
+        string viewName = ViewName,
+        string sourceTreeId = SourceTree,
+        bool isAggregation = false,
+        bool accumulative = false,
+        string? providerKey = "test-provider")
         => new()
         {
             ViewName = viewName,
@@ -77,6 +145,7 @@ public sealed class LatticeTreeAdminViewTests
             ProjectionVersion = "v1",
             IsAggregation = isAggregation,
             Accumulative = accumulative,
+            ProjectionProviderKey = providerKey,
         };
 
     // ----- ListViews -----
@@ -98,8 +167,139 @@ public sealed class LatticeTreeAdminViewTests
             Assert.That(catalog.Views[0].ViewName, Is.EqualTo("v1"));
             Assert.That(catalog.Views[0].SourceTreeId, Is.EqualTo("s1"));
             Assert.That(catalog.Views[0].Accumulative, Is.True);
+            Assert.That(catalog.Views[0].ProviderKey, Is.EqualTo("test-provider"));
+            Assert.That(catalog.Views[0].ProjectionVersion, Is.EqualTo("v1"));
+            Assert.That(catalog.Views[0].GetType().GetProperty("Payload"), Is.Null);
             Assert.That(catalog.Views[1].IsAggregation, Is.True);
         });
+    }
+
+    // ----- CreateView -----
+
+    [Test]
+    public async Task CreateViewAsync_authorizes_source_before_invoking_factory_and_returns_server_metadata()
+    {
+        var calls = new List<string>();
+        var gate = Substitute.For<ILatticeAccessGate>();
+        gate.AuthorizeAsync(Arg.Any<LatticeAccessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls.Add("authorize");
+                return new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow());
+            });
+        var factory = Substitute.For<IGrainFactory>();
+        var source = Substitute.For<ILattice>();
+        factory.GetGrain<ILattice>(SourceTree).Returns(source);
+        var projection = Substitute.For<ILatticeViewProjection>();
+        projection.ProjectionVersion.Returns("provider-v3");
+        var catalog = Substitute.For<IViewCatalog>();
+        catalog.TryGet(ViewName).Returns(new ViewRegistration(
+            ViewName,
+            SourceTree,
+            projection,
+            ProjectionProviderKey: "provider-a"));
+        var maintainer = WireMaintainer(factory, ViewName, lag: 7, activeTreeId: "view-orders-by-region");
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        viewFactory.CreateAsync(
+                source,
+                ViewName,
+                Arg.Any<LatticeRuntimeViewProjectionDescriptor>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                calls.Add("factory");
+                return Task.FromResult(Substitute.For<ILatticeView>());
+            });
+        var facade = new LatticeTreeAdmin(
+            Substitute.For<ILatticeSchemaControl>(),
+            factory,
+            new TreeAdminAccessAuthorizer(gate),
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            viewCatalog: catalog,
+            viewFactory: viewFactory);
+
+        var status = await facade.CreateViewAsync(
+            ViewName,
+            SourceTree,
+            "provider-a",
+            [1, 2, 3]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(new[] { "authorize", "factory" }));
+            Assert.That(status.ProviderKey, Is.EqualTo("provider-a"));
+            Assert.That(status.ProjectionVersion, Is.EqualTo("provider-v3"));
+            Assert.That(status.ApplyLag, Is.EqualTo(7));
+            Assert.That(status.GetType().GetProperty("Payload"), Is.Null);
+        });
+        await viewFactory.Received(1).CreateAsync(
+            source,
+            ViewName,
+            Arg.Is<LatticeRuntimeViewProjectionDescriptor>(d =>
+                d.ProviderKey == "provider-a" && d.Payload.SequenceEqual(new byte[] { 1, 2, 3 })),
+            Arg.Any<CancellationToken>());
+        await maintainer.Received(1).GetLagAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void CreateViewAsync_denied_source_does_not_invoke_factory()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        var facade = Create(factory, allow: false, viewFactory: viewFactory);
+
+        Assert.That(
+            async () => await facade.CreateViewAsync(ViewName, SourceTree, "provider-a", []),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        viewFactory.DidNotReceive().CreateAsync(
+            Arg.Any<ILattice>(),
+            Arg.Any<string>(),
+            Arg.Any<LatticeRuntimeViewProjectionDescriptor>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [TestCase("", SourceTree, "provider-a")]
+    [TestCase(ViewName, "", "provider-a")]
+    [TestCase(ViewName, SourceTree, "")]
+    [TestCase(ViewName, "view-source", "provider-a")]
+    public void CreateViewAsync_invalid_names_do_not_invoke_factory(
+        string viewName,
+        string sourceTreeId,
+        string providerKey)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        var facade = Create(factory, viewFactory: viewFactory);
+
+        Assert.That(
+            async () => await facade.CreateViewAsync(viewName, sourceTreeId, providerKey, []),
+            Throws.TypeOf<ArgumentException>());
+        viewFactory.DidNotReceive().CreateAsync(
+            Arg.Any<ILattice>(),
+            Arg.Any<string>(),
+            Arg.Any<LatticeRuntimeViewProjectionDescriptor>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void CreateViewAsync_oversized_payload_does_not_invoke_factory()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        var facade = Create(factory, viewFactory: viewFactory);
+
+        Assert.That(
+            async () => await facade.CreateViewAsync(
+                ViewName,
+                SourceTree,
+                "provider-a",
+                new byte[LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes + 1]),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+        viewFactory.DidNotReceive().CreateAsync(
+            Arg.Any<ILattice>(),
+            Arg.Any<string>(),
+            Arg.Any<LatticeRuntimeViewProjectionDescriptor>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -142,6 +342,8 @@ public sealed class LatticeTreeAdminViewTests
             Assert.That(status.IsAggregation, Is.True);
             Assert.That(status.ApplyLag, Is.EqualTo(42));
             Assert.That(status.ActiveTreeId, Is.EqualTo("view-orders-by-region"));
+            Assert.That(status.ProviderKey, Is.EqualTo("test-provider"));
+            Assert.That(status.ProjectionVersion, Is.EqualTo("v1"));
         });
     }
 
@@ -151,14 +353,18 @@ public sealed class LatticeTreeAdminViewTests
         var factory = Substitute.For<IGrainFactory>();
         var registry = WireRegistry(factory); // empty registry
         var catalog = Substitute.For<IViewCatalog>();
+        var projection = Substitute.For<ILatticeViewProjection>();
+        projection.ProjectionVersion.Returns("startup-v2");
         catalog.TryGet(ViewName).Returns(new ViewRegistration(
-            ViewName, SourceTree, Substitute.For<ILatticeViewProjection>()));
+            ViewName, SourceTree, projection));
         WireMaintainer(factory, ViewName);
         var facade = Create(factory, viewCatalog: catalog);
 
         var status = await facade.GetViewStatusAsync(ViewName);
 
         Assert.That(status.SourceTreeId, Is.EqualTo(SourceTree));
+        Assert.That(status.ProviderKey, Is.Null);
+        Assert.That(status.ProjectionVersion, Is.EqualTo("startup-v2"));
         await registry.DidNotReceive().ListAsync();
     }
 

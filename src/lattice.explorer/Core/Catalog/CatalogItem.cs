@@ -60,6 +60,18 @@ public sealed record CatalogItem
     public bool IsHistory { get; init; }
 
     /// <summary>
+    /// For runtime views, the host-registered projection provider key;
+    /// <see langword="null"/> for startup-only views and non-view items.
+    /// </summary>
+    public string? ProjectionProviderKey { get; init; }
+
+    /// <summary>
+    /// For runtime views, the persisted projection version;
+    /// <see langword="null"/> for startup-only views and non-view items.
+    /// </summary>
+    public string? ProjectionVersion { get; init; }
+
+    /// <summary>
     /// For tag indexes, the logical index name (the membership tree id with its
     /// reserved <c>tag-</c> prefix removed); <see langword="null"/> otherwise.
     /// </summary>

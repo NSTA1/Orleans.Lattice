@@ -121,6 +121,14 @@
                                     {
                                         <span class="explorer-badge explorer-badge-muted" title="Source tree">@item.SourceTreeId</span>
                                     }
+                                    @if (item.ProjectionProviderKey is not null)
+                                    {
+                                        <span class="explorer-badge explorer-badge-muted" title="Runtime projection provider">@item.ProjectionProviderKey</span>
+                                    }
+                                    @if (item.ProjectionVersion is not null)
+                                    {
+                                        <span class="explorer-badge explorer-badge-muted" title="Projection version">@item.ProjectionVersion</span>
+                                    }
                                 }
                             </span>
                         </button>

@@ -140,6 +140,9 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Lists the cluster's runtime materialised views on the wrapped facade.</summary>
     public abstract Task<TreeViewCatalog> ListViews(TreeAdminViewListRequest request, ServerCallContext context);
 
+    /// <summary>Creates a provider-backed runtime materialised view on the wrapped facade.</summary>
+    public abstract Task<TreeViewStatus> CreateView(TreeAdminCreateViewRequest request, ServerCallContext context);
+
     /// <summary>Reads a materialised view's status from the wrapped facade.</summary>
     public abstract Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context);
 
@@ -227,6 +230,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.ExecuteWalMove, (UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>?)null);
             binder.AddMethod(methods.ReclaimMovedWalSource, (UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>?)null);
             binder.AddMethod(methods.ListViews, (UnaryServerMethod<TreeAdminViewListRequest, TreeViewCatalog>?)null);
+            binder.AddMethod(methods.CreateView, (UnaryServerMethod<TreeAdminCreateViewRequest, TreeViewStatus>?)null);
             binder.AddMethod(methods.GetViewStatus, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
             binder.AddMethod(methods.RebuildView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
             binder.AddMethod(methods.ReconcileView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>?)null);
@@ -278,6 +282,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.ExecuteWalMove, new UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(serviceImpl.ExecuteWalMove));
         binder.AddMethod(methods.ReclaimMovedWalSource, new UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(serviceImpl.ReclaimMovedWalSource));
         binder.AddMethod(methods.ListViews, new UnaryServerMethod<TreeAdminViewListRequest, TreeViewCatalog>(serviceImpl.ListViews));
+        binder.AddMethod(methods.CreateView, new UnaryServerMethod<TreeAdminCreateViewRequest, TreeViewStatus>(serviceImpl.CreateView));
         binder.AddMethod(methods.GetViewStatus, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.GetViewStatus));
         binder.AddMethod(methods.RebuildView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.RebuildView));
         binder.AddMethod(methods.ReconcileView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>(serviceImpl.ReconcileView));
@@ -503,6 +508,29 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// <inheritdoc />
     public override Task<TreeViewCatalog> ListViews(TreeAdminViewListRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.ListViewsAsync(ct));
+
+    /// <inheritdoc />
+    public override Task<TreeViewStatus> CreateView(TreeAdminCreateViewRequest request, ServerCallContext context)
+        => InvokeAsync(
+            request,
+            context,
+            static (control, req, ct) =>
+            {
+                if (req.Payload.Length > LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(req.Payload),
+                        req.Payload.Length,
+                        $"A runtime projection payload cannot exceed {LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes} bytes.");
+                }
+
+                return control.CreateViewAsync(
+                    req.ViewName,
+                    req.SourceTreeId,
+                    req.ProviderKey,
+                    req.Payload,
+                    ct);
+            });
 
     /// <inheritdoc />
     public override Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context)
