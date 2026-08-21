@@ -300,10 +300,13 @@ public class MaterialisedViewPublicApiContractTests
         await source.SetAsync("o2", MaterialisedViewPublicApiContractFixture.OrderBytes("Zoe", 4));
 
         var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
+        var definition = new LatticeViewDefinition(
+            viewName,
+            MaterialisedViewPublicApiContractFixture.AmountByCustomer());
         var created = factory.Create(
             source,
             viewName,
-            new LatticeViewDefinition(viewName, MaterialisedViewPublicApiContractFixture.AmountByCustomer()));
+            MaterialisedViewRuntimeProjectionProvider.DescriptorFor(definition));
         await created.WaitForSourceHeadAsync(Barrier);
 
         var reopened = await factory.GetAsync(viewName);

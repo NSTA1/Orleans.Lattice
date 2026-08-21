@@ -49,7 +49,11 @@ public class MaterialisedViewIdentitySwapHealTests
     {
         var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(sourceTreeId);
-        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+        var definition = new LatticeViewDefinition(viewName, projection);
+        return factory.Create(
+            source,
+            viewName,
+            MaterialisedViewRuntimeProjectionProvider.DescriptorFor(definition));
     }
 
     // A projection that fails its next N Project calls, then delegates to a real

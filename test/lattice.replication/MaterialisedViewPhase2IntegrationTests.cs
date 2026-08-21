@@ -32,7 +32,11 @@ public class MaterialisedViewPhase2IntegrationTests
     {
         var factory = _fixture.SiloServices.GetRequiredService<ILatticeViewFactory>();
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(sourceTreeId);
-        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+        var definition = new LatticeViewDefinition(viewName, projection);
+        return factory.Create(
+            source,
+            viewName,
+            MaterialisedViewRuntimeProjectionProvider.DescriptorFor(definition));
     }
 
     private static PredicateLatticeViewProjection PrefixRekey() =>
