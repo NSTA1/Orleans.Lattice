@@ -25,13 +25,14 @@ public sealed class AzureBlobDistributedCacheAzuriteTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
 
-    // A conservative blob-service API version the shared Azurite build is
-    // guaranteed to understand. Pinning below the SDK's newest default (which an
-    // older emulator can reject) is the point, so choose a long-stable version
-    // rather than the newest - and keep it identical to the sibling backup.azureblob
-    // versioned-emulator fixture so both blob suites make the same assumption.
+    // Pinned to the newest blob-service API version the CI Azurite build (3.36.0)
+    // accepts (2025-11-05). The SDK's default API version outruns the emulator, so
+    // an unpinned client is rejected; pinning to the emulator's ceiling keeps this
+    // suite deterministic without being stuck on a stale version. Kept identical to
+    // the sibling backup.azureblob versioned-emulator fixture so both blob suites
+    // make the same assumption.
     private const BlobClientOptions.ServiceVersion EmulatorApiVersion =
-        BlobClientOptions.ServiceVersion.V2021_12_02;
+        BlobClientOptions.ServiceVersion.V2025_11_05;
 
     private BlobServiceClient _adminClient = null!;
     private string _containerName = null!;

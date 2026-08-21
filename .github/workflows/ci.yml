@@ -26,7 +26,7 @@ jobs:
     # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
     services:
       azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
         ports:
           - 10000:10000
           - 10001:10001

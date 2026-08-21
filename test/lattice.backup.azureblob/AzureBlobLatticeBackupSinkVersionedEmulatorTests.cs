@@ -26,10 +26,12 @@ public sealed class AzureBlobLatticeBackupSinkVersionedEmulatorTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
 
-    // Pinned to a version the shared Azurite build understands; the SDK default
-    // can advertise a newer API version than the emulator supports.
+    // Pinned to the newest blob-service API version the CI Azurite build (3.36.0)
+    // accepts (2025-11-05); the SDK default advertises a newer API version than the
+    // emulator supports. Kept identical to the sibling caching.azureblob versioned
+    // fixture so both blob suites make the same assumption.
     private const BlobClientOptions.ServiceVersion PinnedVersion =
-        BlobClientOptions.ServiceVersion.V2021_12_02;
+        BlobClientOptions.ServiceVersion.V2025_11_05;
 
     private ServiceProvider _services = null!;
     private Serializer<BackupManifest> _serializer = null!;
