@@ -98,6 +98,20 @@ jobs:
       contents: write
       id-token: write
 
+    # Azurite supplies the local Azure Storage endpoints for the
+    # AzureTableEmulator-category tests (storage.azuretable, caching.azureblob,
+    # backup.azureblob) so a release of those packages actually runs their emulator
+    # tests instead of skipping them. Harmless for packages that define no such
+    # tests. Pinned to the version validated locally; default command binds
+    # blob/queue/table on 0.0.0.0 and the ports map to the runner host.
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
     steps:
       - uses: actions/checkout@v5
 
@@ -208,17 +222,33 @@ jobs:
             dotnet build "${{ steps.parse.outputs.CSPROJ }}" --no-restore --configuration Release
           fi
 
+      # Ensure Azurite is accepting connections before the AzureTableEmulator
+      # tests run (they self-skip on a connection failure). Build precedes this,
+      # so it is normally already satisfied; cheap guard against a cold start.
+      - name: Wait for Azurite
+        if: steps.parse.outputs.TEST_PROJECT != ''
+        run: |
+          for port in 10000 10001 10002; do
+            for i in $(seq 1 30); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+                echo "Azurite port ${port} ready"; break
+              fi
+              if [ "$i" -eq 30 ]; then echo "::error::Azurite port ${port} not ready after 30s"; exit 1; fi
+              sleep 1
+            done
+          done
+
       - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
-      # The Azurite-gated AzureTableEmulator category is excluded because
-      # the GitHub-hosted runner has no Azurite instance. This mirrors the
-      # ci.yml deterministic step. The exclusion is harmless for packages
-      # that don't define the category.
-      - name: Test (deterministic, no Azurite)
+      # The AzureTableEmulator category runs here against the job's Azurite
+      # service container (see `services:` above). The chaos step excludes it so
+      # the Azure chaos suite stays out of the release gate; the deterministic
+      # emulator integration tests run. Harmless for packages without the category.
+      - name: Test (deterministic)
         if: steps.parse.outputs.TEST_PROJECT != ''
-        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
+        run: dotnet test "${{ steps.parse.outputs.TEST_PROJECT }}" --no-build --configuration Release --filter "TestCategory!=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
       # No global -p:PackageVersion here (see 'Verify csproj version matches
       # tag' and 'Build'): --no-build reuses the already-correct assembly, and

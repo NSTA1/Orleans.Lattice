@@ -17,6 +17,21 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
+    # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
+    # AzureTableEmulator-category integration tests (in storage.azuretable,
+    # caching.azureblob, and backup.azureblob) drive via `UseDevelopmentStorage=true`.
+    # Without it those tests self-skip (Assert.Inconclusive) and never validate their
+    # coverage in CI. The image's default command binds blob/queue/table on 0.0.0.0;
+    # publishing 10000-10002 to the runner host makes the SDK dev endpoints
+    # (127.0.0.1:10000-10002) resolve. Pinned to the version validated locally.
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
     steps:
       - uses: actions/checkout@v5
         with:
@@ -617,6 +632,24 @@ jobs:
       # Convention: tests at `test/{name}/*.Tests.csproj`. A discovered package
       # without a matching test project is silently skipped (e.g. a future
       # `src/foo/` that has no `test/foo/`).
+      # Ensure Azurite is accepting connections before the AzureTableEmulator
+      # tests run (they self-skip on a connection failure, so a not-yet-ready
+      # emulator would silently drop that coverage rather than fail). The service
+      # starts at job start and restore/build precede this, so it is normally
+      # already satisfied; this is a cheap guard against a cold-start race.
+      - name: Wait for Azurite
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        run: |
+          for port in 10000 10001 10002; do
+            for i in $(seq 1 30); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+                echo "Azurite port ${port} ready"; break
+              fi
+              if [ "$i" -eq 30 ]; then echo "::error::Azurite port ${port} not ready after 30s"; exit 1; fi
+              sleep 1
+            done
+          done
+
       - name: Test changed packages (chaos first - isolate flaky-prone surface)
         if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         # See the deterministic step below for why the digest-settle
@@ -635,7 +668,7 @@ jobs:
             fi
             echo "::group::Test ${name} (chaos)"
             dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory=Chaos" \
+              --filter "TestCategory=Chaos&TestCategory!=AzureTableEmulator" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-chaos.trx"
             echo "::endgroup::"
@@ -667,7 +700,7 @@ jobs:
             fi
             echo "::group::Test ${name} (deterministic)"
             dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=AzureTableEmulator" \
+              --filter "TestCategory!=Chaos" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-results.trx"
             echo "::endgroup::"
