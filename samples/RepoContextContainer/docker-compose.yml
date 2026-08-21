@@ -22,6 +22,11 @@ services:
       - hf-cache:/app/.cache/huggingface
     expose:
       - "9000"
+    # Survive a daemon/host restart like the repocontext service does. Without
+    # this the embedder's default `no` policy leaves it stopped after a Docker
+    # daemon restart while repocontext (unless-stopped) comes back on its own,
+    # degrading search to keyword mode until the embedder is started by hand.
+    restart: unless-stopped
     # Cap container log growth: the default json-file driver is otherwise
     # unbounded. Rotate at 20 MiB x 5 files (100 MiB ceiling per container).
     logging:
