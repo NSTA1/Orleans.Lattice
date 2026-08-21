@@ -28,7 +28,8 @@ internal sealed record ViewRegistration(
     string SourceTreeId,
     ILatticeViewProjection? Projection,
     ILatticeAggregationProjection? AggregationProjection = null,
-    bool Accumulative = false)
+    bool Accumulative = false,
+    string? ProjectionProviderKey = null)
 {
     /// <summary>Whether this view is an aggregation (grouped reduce) view.</summary>
     public bool IsAggregation => AggregationProjection is not null;

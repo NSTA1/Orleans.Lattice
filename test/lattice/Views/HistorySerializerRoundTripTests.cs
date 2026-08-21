@@ -79,7 +79,7 @@ public sealed class HistorySerializerRoundTripTests
     }
 
     [Test]
-    public void RuntimeViewRegistration_accumulative_round_trips()
+    public void RuntimeViewRegistration_runtime_fields_round_trip()
     {
         var record = new RuntimeViewRegistration
         {
@@ -88,12 +88,16 @@ public sealed class HistorySerializerRoundTripTests
             ProjectionTypeName = "Some.Type, Some.Assembly",
             ProjectionVersion = "history-v1",
             Accumulative = true,
+            ProjectionProviderKey = "app.history.v1",
+            ProjectionProviderPayload = [1, 2, 3],
         };
 
         var decoded = RoundTrip(record);
 
         Assert.That(decoded.Accumulative, Is.True);
         Assert.That(decoded.IsAggregation, Is.False);
+        Assert.That(decoded.ProjectionProviderKey, Is.EqualTo("app.history.v1"));
+        Assert.That(decoded.ProjectionProviderPayload, Is.EqualTo(new byte[] { 1, 2, 3 }));
     }
 
     [Test]
@@ -107,7 +111,13 @@ public sealed class HistorySerializerRoundTripTests
             ProjectionVersion = "x",
         };
 
-        Assert.That(RoundTrip(record).Accumulative, Is.False);
+        var decoded = RoundTrip(record);
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.Accumulative, Is.False);
+            Assert.That(decoded.ProjectionProviderKey, Is.Null);
+            Assert.That(decoded.ProjectionProviderPayload, Is.Null);
+        });
     }
 
     [Test]

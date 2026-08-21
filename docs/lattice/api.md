@@ -1887,10 +1887,38 @@ so the view can pin the source WAL); it does **not** require the replication
 package's `AddLatticeReplication` (that is only for the cross-cluster `ShipView`
 mode). See [Materialised views](materialised-views.md) for the full guide and
 [configuration](configuration.md#materialised-view-options) for the per-view
-options.
+options. Runtime-created stateful views use a host-registered
+`LatticeRuntimeViewProjectionDescriptor`; its opaque payload is capped at 64 KiB,
+and activation fails closed unless the provider reconstructs the exact persisted
+projection shape and version. Filter-only predicate views are captured
+automatically. See the durability section of the full guide for provider examples
+and legacy-registration migration.
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;
+
+// Delegate-backed runtime shapes use stable, host-registered provider keys.
+siloBuilder.AddLatticeViews(views =>
+{
+    views.AddRuntimeProjectionProvider(
+        "app.age-sum.v1",
+        (_, context) => new LatticeViewDefinition(
+            context.ViewName,
+            AggregationLatticeViewProjection.Create<User>(
+                AggregationKind.Sum,
+                groupKeySelector: u => u.Name,
+                selectorVersion: "sum-age-v1",
+                valueSelector: u => u.Age)));
+    views.AddRuntimeProjectionProvider(
+        "app.name-trail.v1",
+        (_, context) => new LatticeViewDefinition(
+            context.ViewName,
+            LatticeFoldProjection.Create<User, string>(
+                groupKeySelector: u => u.Age.ToString(),
+                initial: () => string.Empty,
+                apply: (trail, key, u, hlc) => trail.Length == 0 ? u.Name : trail + "," + u.Name,
+                foldVersion: "name-trail-v1")));
+});
 
 // ILatticeViewFactory is registered by AddLatticeViews; here it is resolved from
 // the service provider for illustration. Prefer constructor injection in practice.
@@ -1898,7 +1926,7 @@ var viewFactory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>
 var people = grainFactory.GetGrain<ILattice>("people");
 
 // Filter / re-project view.
-ILatticeView adults = viewFactory.Create(
+ILatticeView adults = await viewFactory.CreateAsync(
     people,
     "adults",
     new LatticeViewDefinition("adults", new PredicateLatticeViewProjection(
@@ -1913,27 +1941,19 @@ await adults.WaitForSourceHeadAsync(TimeSpan.FromSeconds(5), cancellationToken);
 ViewDigest digest = await adults.ComputeDigestAsync(cancellationToken);
 
 // Aggregation view: one reduced value per group.
-ILatticeView ageByName = viewFactory.Create(
+ILatticeView ageByName = await viewFactory.CreateAsync(
     people,
     "age-sum-by-name",
-    new LatticeViewDefinition("age-sum-by-name", AggregationLatticeViewProjection.Create<User>(
-        AggregationKind.Sum,
-        groupKeySelector: u => u.Name,
-        selectorVersion: "sum-age-v1",
-        valueSelector: u => u.Age)));
+    new LatticeRuntimeViewProjectionDescriptor("app.age-sum.v1", []));
 
 // Typed aggregate read: null means the group has no live members.
 double total = await ageByName.GetAggregateDoubleAsync("Alice", cancellationToken) ?? 0;
 
 // Folded (custom-reducer) view: a user-defined, HLC-ordered fold per group.
-ILatticeView nameTrail = viewFactory.Create(
+ILatticeView nameTrail = await viewFactory.CreateAsync(
     people,
     "name-trail-by-age",
-    new LatticeViewDefinition("name-trail-by-age", LatticeFoldProjection.Create<User, string>(
-        groupKeySelector: u => u.Age.ToString(),
-        initial: () => string.Empty,
-        apply: (trail, key, u, hlc) => trail.Length == 0 ? u.Name : trail + "," + u.Name,
-        foldVersion: "name-trail-v1")));
+    new LatticeRuntimeViewProjectionDescriptor("app.name-trail.v1", []));
 
 // The accumulator is stored under the bare group key; read it with GetAsync<T>.
 string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
@@ -1945,7 +1965,7 @@ string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
 |------|------|
 | `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView` / `AddFoldedView`). |
 | `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
-| `ILatticeViewFactory` | Injected entry point: `Create(source, viewName, definition)` returns an `ILatticeView` handle and persists a durable runtime registration; `GetAsync(viewName, ct?)` opens a read handle for an already-registered view by name (returns `null` when none is registered), without re-supplying the source or projection; `DeleteAsync(viewName, ct?)` tears a runtime view down completely (maintainer, reminder, WAL pin, backing tree, checkpoint, and registration) and is idempotent. Registered as a singleton by `AddLatticeViews`. |
+| `ILatticeViewFactory` | Injected entry point: `CreateAsync(source, viewName, definition, ct?)` persists a durable runtime registration before returning an `ILatticeView` handle; the synchronous `Create(...)` compatibility path persists and activates in the background. `GetAsync(viewName, ct?)` opens an existing view by name without re-supplying its source or projection; `DeleteAsync(viewName, ct?)` tears a runtime view down completely and is idempotent. Registered as a singleton by `AddLatticeViews`. |
 | `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
 | `TypedLatticeViewExtensions` | Typed read helpers over `ILatticeView`: `GetAsync<T>` / `EntriesAsync<T>` (deserialize via `ILatticeSerializer<T>`, default `JsonLatticeSerializer<T>`) and `GetAggregateDoubleAsync` / `GetAggregateInt64Async` (decode aggregate values via `LatticeAggregationValue`). |
 | `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
@@ -1999,10 +2019,12 @@ string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
 - **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
   surfaced atomically in the derived views; see
   [Materialised views](materialised-views.md#atomic-write-visibility).
-- **Runtime-view durability.** A view created at runtime is re-registered durably
-  and resumes after a silo restart, provided its projection type is resolvable
-  from dependency injection. `DeleteAsync` rejects a startup-declared view (the
-  declaration would re-create it); see
+- **Runtime-view durability.** `CreateAsync` returns after the runtime registration
+  is durable. Filter-only predicates are encoded automatically; other stateful or
+  delegate-backed projections require a host-registered provider descriptor, and
+  activation fails closed unless it reconstructs the exact persisted shape and
+  version. `DeleteAsync` rejects a startup-declared view (the declaration would
+  re-create it); see
   [Materialised views](materialised-views.md#deleting-a-view).
 
 

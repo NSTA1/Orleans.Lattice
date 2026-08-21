@@ -69,11 +69,13 @@ internal sealed class GrpcTreeAdminClusterFixture
     /// permissive authorizer to exercise the accept path.
     /// </param>
     /// <param name="requireAuthorization">Whether to enforce the authorizer.</param>
+    /// <param name="controlOverride">Optional facade substitute used by binding tests.</param>
     public async Task<GrpcTreeAdminHost> CreateGrpcHostAsync(
         ILatticeTreeAdminApiAuthorizer? authorizer = null,
-        bool requireAuthorization = true)
+        bool requireAuthorization = true,
+        ILatticeTreeAdmin? controlOverride = null)
     {
-        var control = Control;
+        var control = controlOverride ?? Control;
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {

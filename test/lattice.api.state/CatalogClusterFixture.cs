@@ -16,6 +16,8 @@ namespace Orleans.Lattice.Api.State.Tests;
 /// </summary>
 internal sealed class CatalogClusterFixture
 {
+    private const string AggregationProviderKey = "tests.state.count.v1";
+
     public TestCluster Cluster { get; private set; } = null!;
 
     public IServiceProvider SiloServices =>
@@ -111,11 +113,10 @@ internal sealed class CatalogClusterFixture
     {
         var factory = SiloServices.GetRequiredService<ILatticeViewFactory>();
         var source = Cluster.Client.GetGrain<ILattice>(sourceTreeId);
-        var projection = new AggregationLatticeViewProjection(
-            AggregationKind.Count,
-            groupKeySelector: _ => "all",
-            selectorVersion: "v1");
-        return factory.Create(source, viewName, new LatticeViewDefinition(viewName, projection));
+        return factory.Create(
+            source,
+            viewName,
+            new LatticeRuntimeViewProjectionDescriptor(AggregationProviderKey, []));
     }
 
     /// <summary>
@@ -148,7 +149,14 @@ internal sealed class CatalogClusterFixture
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeViews();
+            siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
+                AggregationProviderKey,
+                (_, context) => new LatticeViewDefinition(
+                    context.ViewName,
+                    new AggregationLatticeViewProjection(
+                        AggregationKind.Count,
+                        groupKeySelector: _ => "all",
+                        selectorVersion: "v1"))));
             siloBuilder.AddLatticeStateApi();
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, OrSetPrefixMergeModeResolver>();
         }

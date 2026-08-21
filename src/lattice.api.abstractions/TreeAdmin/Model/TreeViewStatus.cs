@@ -39,4 +39,16 @@ public sealed record TreeViewStatus
     /// id for the durable active generation. Changes across a rebuild's shadow-swap.
     /// </summary>
     [Id(4)] public string ActiveTreeId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The host-registered runtime projection provider key, or <see langword="null"/>
+    /// when unavailable for a startup-only or legacy registration.
+    /// </summary>
+    [Id(5)] public string? ProviderKey { get; init; }
+
+    /// <summary>
+    /// The projection version derived by the server, or <see langword="null"/> when
+    /// unavailable.
+    /// </summary>
+    [Id(6)] public string? ProjectionVersion { get; init; }
 }

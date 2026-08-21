@@ -9,10 +9,12 @@ namespace Orleans.Lattice.Views;
 /// view catalog, the durable runtime-view registry, the startup-declared view
 /// names, and the injectable <see cref="ILatticeReplicationContext"/> seam (views
 /// require a WAL provider, registered by <c>AddLattice</c>). Each
-/// <see cref="Create"/> call registers the view in the catalog and persists its
-/// runtime registration durably so the maintainer survives a silo restart, then
-/// ensures the maintainer is active. <see cref="DeleteAsync"/> tears a view down
-/// completely.
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>
+/// persists a runtime registration before publishing it to the catalog and
+/// returning; the synchronous
+/// <see cref="ILatticeViewFactory.Create(ILattice,string,LatticeViewDefinition)"/>
+/// compatibility path persists and activates in the background.
+/// <see cref="DeleteAsync"/> tears a view down completely.
 /// </summary>
 internal sealed class LatticeViewFactory(
     IGrainFactory grainFactory,
@@ -20,10 +22,56 @@ internal sealed class LatticeViewFactory(
     IReadOnlyList<StartupViewRegistration> startupRegistrations,
     ILatticeReplicationContext replicationContext,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
+    IServiceProvider services,
+    RuntimeViewProjectionProviderCatalog runtimeProviders,
+    PredicateRuntimeViewProjectionCodec predicateCodec,
     ILogger<LatticeViewFactory> logger) : ILatticeViewFactory
 {
     /// <inheritdoc />
     public ILatticeView Create(ILattice source, string viewName, LatticeViewDefinition definition)
+    {
+        var (registration, durable) = Prepare(source, viewName, definition);
+        return RegisterAndActivate(viewName, registration, durable);
+    }
+
+    /// <inheritdoc />
+    public async Task<ILatticeView> CreateAsync(
+        ILattice source,
+        string viewName,
+        LatticeViewDefinition definition,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var (registration, durable) = Prepare(source, viewName, definition);
+        return await RegisterDurablyAndActivateAsync(viewName, registration, durable);
+    }
+
+    /// <inheritdoc />
+    public ILatticeView Create(
+        ILattice source,
+        string viewName,
+        LatticeRuntimeViewProjectionDescriptor runtimeProjection)
+    {
+        var (registration, durable) = Prepare(source, viewName, runtimeProjection);
+        return RegisterAndActivate(viewName, registration, durable);
+    }
+
+    /// <inheritdoc />
+    public async Task<ILatticeView> CreateAsync(
+        ILattice source,
+        string viewName,
+        LatticeRuntimeViewProjectionDescriptor runtimeProjection,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var (registration, durable) = Prepare(source, viewName, runtimeProjection);
+        return await RegisterDurablyAndActivateAsync(viewName, registration, durable);
+    }
+
+    private (ViewRegistration Registration, RuntimeViewRegistration? Durable) Prepare(
+        ILattice source,
+        string viewName,
+        LatticeViewDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrEmpty(viewName);
@@ -38,22 +86,73 @@ internal sealed class LatticeViewFactory(
 
         var sourceTreeId = source.GetPrimaryKeyString();
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
-        var registration = definition.AggregationProjection is { } aggregation
+        var suppliedRegistration = definition.AggregationProjection is { } aggregation
             ? new ViewRegistration(viewName, sourceTreeId, Projection: null, aggregation)
             : new ViewRegistration(viewName, sourceTreeId, definition.Projection, Accumulative: definition.Accumulative);
-        catalog.Register(registration);
+        if (IsStartupDeclared(viewName))
+        {
+            return (suppliedRegistration, null);
+        }
 
-        var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+        var descriptor = ResolveRuntimeDescriptor(definition);
+        var durable = BuildDurableRegistration(suppliedRegistration, descriptor);
+        var registration = RuntimeViewRehydrator.Resolve(durable, services, runtimeProviders, logger)
+            ?? throw new InvalidOperationException(
+                $"Runtime view '{viewName}' cannot be reconstructed faithfully after a restart. Register a runtime projection provider and attach a matching {nameof(LatticeRuntimeViewProjectionDescriptor)}.");
+        return (registration, durable);
+    }
 
-        // Lazy activation (Phase 1): persist the durable runtime registration (so
-        // the view survives a restart) and kick the maintainer online in the
-        // background. Faults are observed and logged rather than surfaced through
-        // the sync Create call. The hosted ViewActivationService performs the same
-        // EnsureActiveAsync with retry/backoff for startup-registered and
-        // re-hydrated runtime views.
-        _ = PersistAndActivateAsync(maintainer, registration);
+    private (ViewRegistration Registration, RuntimeViewRegistration? Durable) Prepare(
+        ILattice source,
+        string viewName,
+        LatticeRuntimeViewProjectionDescriptor runtimeProjection)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ArgumentNullException.ThrowIfNull(runtimeProjection);
 
-        return BuildHandle(viewName, registration.IsAggregation);
+        var provider = runtimeProviders.TryGet(runtimeProjection.ProviderKey)
+            ?? throw new InvalidOperationException(
+                $"Runtime view projection provider '{runtimeProjection.ProviderKey}' is not configured on this silo.");
+        var sourceTreeId = source.GetPrimaryKeyString();
+        ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
+        var definition = provider.Factory(
+            services,
+            new LatticeRuntimeViewProjectionContext(
+                viewName,
+                sourceTreeId,
+                runtimeProjection.PayloadSpan))
+            ?? throw new InvalidOperationException(
+                $"Runtime view projection provider '{runtimeProjection.ProviderKey}' returned null.");
+        if (!string.Equals(definition.ViewName, viewName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Runtime view projection provider '{runtimeProjection.ProviderKey}' returned definition name '{definition.ViewName}' for view '{viewName}'.");
+        }
+
+        var registration = definition.AggregationProjection is { } aggregation
+            ? new ViewRegistration(
+                viewName,
+                sourceTreeId,
+                Projection: null,
+                aggregation,
+                ProjectionProviderKey: runtimeProjection.ProviderKey)
+            : new ViewRegistration(
+                viewName,
+                sourceTreeId,
+                definition.Projection,
+                Accumulative: definition.Accumulative,
+                ProjectionProviderKey: runtimeProjection.ProviderKey);
+        if (string.IsNullOrEmpty(registration.ProjectionVersion))
+        {
+            throw new InvalidOperationException(
+                $"Runtime view projection provider '{runtimeProjection.ProviderKey}' returned an empty projection version.");
+        }
+
+        var durable = IsStartupDeclared(viewName)
+            ? null
+            : BuildDurableRegistration(registration, runtimeProjection);
+        return (registration, durable);
     }
 
     /// <inheritdoc />
@@ -102,6 +201,43 @@ internal sealed class LatticeViewFactory(
         // (cached for cacheTtl) rather than binding a fixed tree id, so queries
         // follow a shadow-swap rebuild automatically.
         return new LatticeView(viewName, grainFactory, maintainer, cacheTtl, isAggregation);
+    }
+
+    private ILatticeView RegisterAndActivate(
+        string viewName,
+        ViewRegistration registration,
+        RuntimeViewRegistration? durable)
+    {
+        catalog.Register(registration);
+
+        var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+
+        // Lazy activation (Phase 1): persist the durable runtime registration (so
+        // the view survives a restart) and kick the maintainer online in the
+        // background. Faults are observed and logged rather than surfaced through
+        // the sync Create call. The hosted ViewActivationService performs the same
+        // EnsureActiveAsync with retry/backoff for startup-registered and
+        // re-hydrated runtime views.
+        _ = PersistAndActivateAsync(maintainer, registration, durable);
+
+        return BuildHandle(viewName, registration.IsAggregation);
+    }
+
+    private async Task<ILatticeView> RegisterDurablyAndActivateAsync(
+        string viewName,
+        ViewRegistration registration,
+        RuntimeViewRegistration? durable)
+    {
+        var handle = BuildHandle(viewName, registration.IsAggregation);
+        if (durable is not null)
+        {
+            await RegistryGrain.RegisterAsync(durable);
+        }
+
+        catalog.Register(registration);
+        var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+        _ = ActivateAsync(maintainer, viewName);
+        return handle;
     }
 
     /// <inheritdoc />
@@ -185,7 +321,50 @@ internal sealed class LatticeViewFactory(
         return false;
     }
 
-    private async Task PersistAndActivateAsync(IViewMaintainerGrain maintainer, ViewRegistration registration)
+    private LatticeRuntimeViewProjectionDescriptor? ResolveRuntimeDescriptor(
+        LatticeViewDefinition definition)
+    {
+        if (definition.RuntimeProjection is not null)
+        {
+            return definition.RuntimeProjection;
+        }
+
+        if (definition.Projection is PredicateLatticeViewProjection predicate
+            && !predicate.HasValueSelector
+            && !predicate.HasKeySelector)
+        {
+            return new LatticeRuntimeViewProjectionDescriptor(
+                PredicateRuntimeViewProjectionCodec.ProviderKey,
+                predicateCodec.Encode(predicate.Filter));
+        }
+
+        return null;
+    }
+
+    private static RuntimeViewRegistration BuildDurableRegistration(
+        ViewRegistration registration,
+        LatticeRuntimeViewProjectionDescriptor? descriptor)
+    {
+        var projection = (object?)registration.AggregationProjection ?? registration.Projection;
+        var typeName = projection!.GetType().FullName!;
+
+        return new RuntimeViewRegistration
+        {
+            ViewName = registration.ViewName,
+            SourceTreeId = registration.SourceTreeId,
+            ProjectionTypeName = typeName,
+            ProjectionVersion = registration.ProjectionVersion,
+            IsAggregation = registration.IsAggregation,
+            Accumulative = registration.Accumulative,
+            ProjectionProviderKey = descriptor?.ProviderKey,
+            ProjectionProviderPayload = descriptor?.Payload,
+        };
+    }
+
+    private async Task PersistAndActivateAsync(
+        IViewMaintainerGrain maintainer,
+        ViewRegistration registration,
+        RuntimeViewRegistration? durable)
     {
         var viewName = registration.ViewName;
         try
@@ -193,33 +372,9 @@ internal sealed class LatticeViewFactory(
             // Startup-declared views are re-registered authoritatively by the
             // activation service on every start, so they need no durable runtime
             // record (and on a name conflict the startup declaration wins).
-            if (!IsStartupDeclared(viewName))
+            if (durable is not null)
             {
-                var projection = (object?)registration.AggregationProjection ?? registration.Projection;
-
-                // Persist the projection's version-free full name (the namespace-
-                // qualified type name) rather than its assembly-qualified name. The
-                // AQN pins the assembly version at creation time, so a package bump
-                // would leave the persisted identity unmatchable on re-hydration and
-                // silently strand the view (it stays dormant until re-created). The
-                // full name is the stable identity; RuntimeViewProjectionAllowList
-                // resolves it against the set of projection types already loaded on
-                // the silo, so the load-time anti-tamper constraint is preserved.
-                // Registrations written by older builds hold an AQN; the allow-list
-                // recovers the full name embedded in it, so they re-hydrate too.
-                var typeName = projection!.GetType().FullName;
-                if (typeName is not null)
-                {
-                    await RegistryGrain.RegisterAsync(new RuntimeViewRegistration
-                    {
-                        ViewName = viewName,
-                        SourceTreeId = registration.SourceTreeId,
-                        ProjectionTypeName = typeName,
-                        ProjectionVersion = registration.ProjectionVersion,
-                        IsAggregation = registration.IsAggregation,
-                        Accumulative = registration.Accumulative,
-                    });
-                }
+                await RegistryGrain.RegisterAsync(durable);
             }
         }
         catch (Exception ex)
@@ -227,6 +382,11 @@ internal sealed class LatticeViewFactory(
             logger.LogWarning(ex, "Failed to persist the durable runtime registration for view '{ViewName}'; it will not survive a restart until re-created.", viewName);
         }
 
+        await ActivateAsync(maintainer, viewName);
+    }
+
+    private async Task ActivateAsync(IViewMaintainerGrain maintainer, string viewName)
+    {
         try
         {
             await maintainer.EnsureActiveAsync(CancellationToken.None).ConfigureAwait(false);

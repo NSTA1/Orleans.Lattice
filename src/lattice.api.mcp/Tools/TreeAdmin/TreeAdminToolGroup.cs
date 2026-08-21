@@ -212,14 +212,16 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 "List the cluster's runtime materialised views",
                 "Lists every runtime-registered materialised view on the cluster - the views created at runtime "
                 + "through the view factory and durably recorded in the runtime-view registry - reporting each view's "
-                + "name, the source tree it tails, and whether it is an aggregation. Views declared at startup through "
+                + "name, source tree, aggregation shape, runtime provider key, and projection version. Provider payloads "
+                + "are never returned. Views declared at startup through "
                 + "AddLatticeViews are not included (they are code-declared, not runtime registrations, and cannot be "
                 + "dropped at runtime). A pure read with no side effects. Requires the cluster-wide telemetry "
                 + "capability. Read-only."),
             Read(services, TreeAdminLifecycleToolHandlers.GetViewStatusAsync, "lattice_treeadmin_view_status",
                 "Read a materialised view's status",
                 "Reads a materialised view's status: the source tree it tails, its apply lag (source entries not yet "
-                + "reflected in the view), and its active generation tree id. A materialised view is authorized by "
+                + "reflected in the view), active generation tree id, runtime provider key, and projection version. "
+                + "Provider payloads are never returned. A materialised view is authorized by "
                 + "the readability of its source tree, which the facade resolves authoritatively; the caller cannot "
                 + "supply the source. A pure read with no side effects. Requires whole-tree read authority over the "
                 + "view's source tree. Read-only."),
@@ -302,6 +304,14 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "leaf fan-out, internal fan-out), returning whether a new tree was registered and its effective "
                 + "sizing. Idempotent: creating an existing tree preserves its configuration and reports "
                 + "created=false. Rejected for a reserved system tree id. Admin-gated and destructive."));
+            tools.Add(Write(services, TreeAdminLifecycleToolHandlers.CreateViewAsync, "lattice_treeadmin_view_create",
+                "Create a provider-backed materialised view",
+                "Creates or updates a durable runtime materialised view from a host-registered projection provider key "
+                + "and a base64-encoded opaque payload of at most 65536 decoded bytes. Projection kind, accumulative "
+                + "shape, and version are resolved locally by the target cluster and cannot be supplied by the caller. "
+                + "The payload is validated before the facade call and is never returned or logged. Requires whole-tree "
+                + "admin authority over the caller-supplied source tree; the facade authorizes before invoking provider "
+                + "code. Admin-gated and destructive."));
             tools.Add(Write(services, TreeAdminLifecycleToolHandlers.SetTreeAliasAsync, "lattice_treeadmin_tree_set_alias",
                 "Point a logical tree at a physical tree",
                 "Points a logical tree at a physical tree so subsequent reads and writes routed through it target "

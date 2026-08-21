@@ -2,18 +2,19 @@ namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Durable record of a materialised view created at runtime through
-/// <see cref="ILatticeViewFactory.Create"/>. Persisted by the
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>.
+/// Persisted by the
 /// <see cref="IViewRegistryGrain"/> so a runtime view can be re-registered into
 /// the in-memory <see cref="IViewCatalog"/> and have its maintainer re-activated
 /// after a silo restart, giving runtime views the same restart-durability that
 /// startup-declared views get from <c>AddLatticeViews</c>.
 /// <para>
-/// A projection instance cannot be serialized, so only its <em>identity</em> is
-/// recorded: the concrete CLR type (<see cref="ProjectionTypeName"/>) and the
-/// stable <see cref="ProjectionVersion"/>. On re-hydration the projection is
-/// resolved from the silo service provider by that type; a runtime view therefore
-/// survives a restart only when its projection type is resolvable from DI (either
-/// registered there or constructable with DI-satisfiable constructor arguments).
+/// A projection instance cannot be serialized. New records persist a configured
+/// provider key and bounded opaque payload so the host can faithfully reconstruct
+/// the complete definition. Legacy records retain the concrete CLR type
+/// (<see cref="ProjectionTypeName"/>) for allow-listed type/DI reconstruction.
+/// Both paths require the reconstructed projection to match the persisted
+/// <see cref="ProjectionVersion"/> exactly.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -56,4 +57,15 @@ internal sealed record RuntimeViewRegistration
     /// </summary>
     [Id(5)]
     public bool Accumulative { get; init; }
+
+    /// <summary>
+    /// The host-configured provider key used for faithful reconstruction, or
+    /// <see langword="null"/> for a legacy type-based registration.
+    /// </summary>
+    [Id(6)]
+    public string? ProjectionProviderKey { get; init; }
+
+    /// <summary>The bounded opaque state supplied to the configured provider.</summary>
+    [Id(7)]
+    public byte[]? ProjectionProviderPayload { get; init; }
 }

@@ -29,6 +29,56 @@ public interface ILatticeViewFactory
     ILatticeView Create(ILattice source, string viewName, LatticeViewDefinition definition);
 
     /// <summary>
+    /// Creates a materialised view and waits until any runtime registration has
+    /// been persisted before returning.
+    /// </summary>
+    /// <param name="source">The source tree the view is derived from.</param>
+    /// <param name="viewName">The logical view name.</param>
+    /// <param name="definition">The view definition carrying the projection.</param>
+    /// <param name="cancellationToken">Cancellation token observed before durable creation begins.</param>
+    Task<ILatticeView> CreateAsync(
+        ILattice source,
+        string viewName,
+        LatticeViewDefinition definition,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Create(source, viewName, definition));
+    }
+
+    /// <summary>
+    /// Creates a runtime materialised view by resolving a host-registered projection
+    /// provider from <paramref name="runtimeProjection"/>.
+    /// </summary>
+    /// <param name="source">The source tree the view is derived from.</param>
+    /// <param name="viewName">The logical view name.</param>
+    /// <param name="runtimeProjection">The provider key and bounded opaque state.</param>
+    ILatticeView Create(
+        ILattice source,
+        string viewName,
+        LatticeRuntimeViewProjectionDescriptor runtimeProjection) =>
+        throw new NotSupportedException(
+            "This view factory does not support provider-backed runtime view creation.");
+
+    /// <summary>
+    /// Creates a provider-backed runtime materialised view and waits until its
+    /// registration has been persisted before returning.
+    /// </summary>
+    /// <param name="source">The source tree the view is derived from.</param>
+    /// <param name="viewName">The logical view name.</param>
+    /// <param name="runtimeProjection">The provider key and bounded opaque state.</param>
+    /// <param name="cancellationToken">Cancellation token observed before durable creation begins.</param>
+    Task<ILatticeView> CreateAsync(
+        ILattice source,
+        string viewName,
+        LatticeRuntimeViewProjectionDescriptor runtimeProjection,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Create(source, viewName, runtimeProjection));
+    }
+
+    /// <summary>
     /// Opens a read handle for a materialised view that <b>already exists</b>,
     /// resolved by name from the view catalog, the startup declarations, or the
     /// durable runtime-view registry - without re-supplying the source tree or the

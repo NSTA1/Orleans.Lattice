@@ -21,6 +21,8 @@ public sealed class ViewClusterFixture
     public const string SetUnionView = "agg-setunion";
     public const string FilterView = "filter-view";
     public const string FoldView = "fold-view";
+    internal const string RuntimeCountProvider = "tests.runtime-count.v1";
+    internal const string RuntimeScenarioProvider = "tests.runtime-scenario.v1";
 
     public const string CountSource = "src-count";
     public const string SumSource = "src-sum";
@@ -53,6 +55,9 @@ public sealed class ViewClusterFixture
     public ILatticeViewFactory ViewFactory =>
         Cluster.Silos.OfType<InProcessSiloHandle>().First()
             .SiloHost.Services.GetRequiredService<ILatticeViewFactory>();
+
+    internal IServiceProvider SiloServices =>
+        Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
 
     /// <summary>Encodes a "group|numeric|member" aggregation source value.</summary>
     public static byte[] AggValue(string group, double numeric = 0, string member = "") =>
@@ -99,8 +104,39 @@ public sealed class ViewClusterFixture
                         () => BitConverter.GetBytes(0L),
                         (acc, _, _, _) => BitConverter.GetBytes(BitConverter.ToInt64(acc) + 1L),
                         "v1"));
+                views.AddRuntimeProjectionProvider(
+                    RuntimeCountProvider,
+                    (_, context) => new LatticeViewDefinition(
+                        context.ViewName,
+                        new AggregationLatticeViewProjection(
+                            AggregationKind.Count,
+                            GroupOf,
+                            "v1")));
+                views.AddRuntimeProjectionProvider(
+                    RuntimeScenarioProvider,
+                    (_, context) => context.PayloadSpan[0] switch
+                    {
+                        0 => new LatticeViewDefinition(
+                            context.ViewName,
+                            new PredicateLatticeViewProjection()),
+                        1 => null!,
+                        2 => new LatticeViewDefinition(
+                            $"{context.ViewName}-wrong",
+                            new PredicateLatticeViewProjection()),
+                        3 => new LatticeViewDefinition(
+                            context.ViewName,
+                            new EmptyVersionProjection()),
+                        _ => throw new ArgumentException("Unknown runtime projection test scenario."),
+                    });
             });
         }
+    }
+
+    private sealed class EmptyVersionProjection : ILatticeViewProjection
+    {
+        public string ProjectionVersion => string.Empty;
+
+        public IEnumerable<ViewWrite> Project(LatticeMutation mutation) => [];
     }
 }
 

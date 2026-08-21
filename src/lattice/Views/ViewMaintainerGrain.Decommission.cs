@@ -72,7 +72,8 @@ internal sealed partial class ViewMaintainerGrain
     /// <summary>
     /// Reads the source tree id for this view from the durable runtime registry,
     /// used when the in-memory catalog has no entry (a maintainer activated fresh
-    /// on a silo that never saw the runtime <see cref="ILatticeViewFactory.Create"/>).
+    /// on a silo that never saw the runtime
+    /// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>).
     /// Returns <see langword="null"/> when no durable record exists or the registry
     /// cannot be read, in which case the WAL cursor pin cannot be released here.
     /// </summary>

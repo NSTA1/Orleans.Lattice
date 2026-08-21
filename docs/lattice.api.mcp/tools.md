@@ -262,8 +262,9 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `lattice_treeadmin_view_list` | read | List runtime-registered materialised views. |
-| `lattice_treeadmin_view_status` | read | Read one materialised view's source, lag, and active generation. |
+| `lattice_treeadmin_view_create` | manage | Create or update a provider-backed runtime materialised view from a provider key and a base64 payload (64 KiB decoded maximum). |
+| `lattice_treeadmin_view_list` | read | List runtime-registered materialised views with provider key and projection version; payloads are never returned. |
+| `lattice_treeadmin_view_status` | read | Read one materialised view's source, lag, active generation, provider key, and projection version; payloads are never returned. |
 | `lattice_treeadmin_view_rebuild` | manage | Rebuild a materialised view. |
 | `lattice_treeadmin_view_reconcile` | manage | Reconcile a materialised view. |
 | `lattice_treeadmin_view_drop` | manage | Drop a runtime materialised view. |

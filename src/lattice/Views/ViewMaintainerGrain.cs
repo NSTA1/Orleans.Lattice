@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -185,7 +186,8 @@ internal sealed partial class ViewMaintainerGrain(
     /// when the in-memory catalog has no entry for it. This is the restart-survival
     /// path: a maintainer woken by its keepalive reminder after a silo restart (or
     /// reactivated on a silo whose catalog never saw a runtime
-    /// <see cref="ILatticeViewFactory.Create"/>) recovers its source tree id and
+    /// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>)
+    /// recovers its source tree id and
     /// projection from durable state and registers them into the local catalog, so
     /// it resumes draining instead of going dormant. Returns <see langword="null"/>
     /// when no durable registration exists or its projection cannot be resolved.
@@ -210,7 +212,11 @@ internal sealed partial class ViewMaintainerGrain(
             return null;
         }
 
-        var registration = RuntimeViewRehydrator.Resolve(record, context.ActivationServices, logger);
+        var registration = RuntimeViewRehydrator.Resolve(
+            record,
+            context.ActivationServices,
+            context.ActivationServices.GetRequiredService<RuntimeViewProjectionProviderCatalog>(),
+            logger);
         if (registration is not null)
         {
             catalog.Register(registration);

@@ -6,15 +6,17 @@ namespace Orleans.Lattice.Views;
 /// <summary>
 /// <see cref="IHostedService"/> that registers every startup-declared view and
 /// re-hydrates every durably-registered runtime view (created previously through
-/// <see cref="ILatticeViewFactory.Create"/>) into the <see cref="IViewCatalog"/>,
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>)
+/// into the <see cref="IViewCatalog"/>,
 /// then activates each one's <see cref="IViewMaintainerGrain"/> on silo startup.
 /// Orleans' single-activation guarantee makes the activation calls
 /// cluster-singleton even though every silo runs this service.
 /// <para>
 /// Re-hydrating runtime views gives them the same restart-durability that startup
 /// views get: their maintainer resumes from the durable checkpoint without the
-/// application having to re-call <see cref="ILatticeViewFactory.Create"/>. A
-/// runtime view's projection is resolved from the silo service provider by its
+/// application having to re-call
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>.
+/// A runtime view's projection is resolved from the silo service provider by its
 /// persisted concrete type; a startup declaration of the same name wins on
 /// conflict (the runtime record is skipped).
 /// </para>
@@ -29,6 +31,7 @@ internal sealed class ViewActivationService(
     IServiceProvider services,
     IReadOnlyList<StartupViewRegistration> registrations,
     IViewCatalog catalog,
+    RuntimeViewProjectionProviderCatalog runtimeProviders,
     IGrainFactory grainFactory,
     ILogger<ViewActivationService> logger) : BackgroundService
 {
@@ -152,7 +155,7 @@ internal sealed class ViewActivationService(
                 continue;
             }
 
-            var registration = RuntimeViewRehydrator.Resolve(record, services, logger);
+            var registration = RuntimeViewRehydrator.Resolve(record, services, runtimeProviders, logger);
             if (registration is null)
             {
                 continue;

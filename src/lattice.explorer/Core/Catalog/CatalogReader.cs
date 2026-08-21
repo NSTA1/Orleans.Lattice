@@ -77,6 +77,8 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
                 SourceTreeId = entry.SourceTreeId,
                 IsAggregation = entry.IsAggregation,
                 IsHistory = entry.IsHistory,
+                ProjectionProviderKey = entry.ProjectionProviderKey,
+                ProjectionVersion = entry.ProjectionVersion,
             });
         }
 

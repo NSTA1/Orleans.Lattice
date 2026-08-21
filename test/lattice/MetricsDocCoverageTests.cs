@@ -22,11 +22,13 @@ public sealed class MetricsDocCoverageTests : MetricsDocCoverageTestsBase
 
     // Dotted orleans.lattice.* literals that are not meter instruments: the core
     // meter name is "orleans.lattice" (no trailing segment, so it never matches the
-    // scan regex) but "orleans.lattice.events" is the change-feed stream namespace.
+    // scan regex), "orleans.lattice.events" is the change-feed stream namespace,
+    // and "orleans.lattice.predicate.v1" is a runtime projection provider key.
     protected override IReadOnlySet<string> NonInstrumentLiterals { get; } =
         new HashSet<string>(StringComparer.Ordinal)
         {
             "orleans.lattice.events",
+            "orleans.lattice.predicate.v1",
         };
 
     // Pre-existing instrument-to-panel-map backlog: these core instruments are

@@ -12,46 +12,46 @@ namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 public enum LatticeTreeAdminApiOperation
 {
     /// <summary>The read-only <c>ProbeCapabilities</c> capability-probe RPC.</summary>
-    ProbeCapabilities,
+    ProbeCapabilities = 0,
 
     /// <summary>The read-only <c>GetShardHotness</c> hotness RPC.</summary>
-    GetShardHotness,
+    GetShardHotness = 1,
 
     /// <summary>The read-only <c>GetDiagnostics</c> diagnostics RPC.</summary>
-    GetDiagnostics,
+    GetDiagnostics = 2,
 
     /// <summary>The read-only <c>InspectShardMap</c> topology RPC.</summary>
-    InspectShardMap,
+    InspectShardMap = 3,
 
     /// <summary>The read-only <c>GetProjectionDigest</c> digest RPC.</summary>
-    GetProjectionDigest,
+    GetProjectionDigest = 4,
 
     /// <summary>The read-only <c>GetTreeStats</c> statistics RPC.</summary>
-    GetTreeStats,
+    GetTreeStats = 5,
 
     /// <summary>The read-only <c>GetStorageUsage</c> cluster-storage RPC.</summary>
-    GetStorageUsage,
+    GetStorageUsage = 6,
 
     /// <summary>The mutating <c>CreateTree</c> explicit-creation lifecycle RPC.</summary>
-    CreateTree,
+    CreateTree = 7,
 
     /// <summary>The read-only <c>CheckTreeExists</c> existence RPC.</summary>
-    CheckTreeExists,
+    CheckTreeExists = 8,
 
     /// <summary>The mutating <c>SetTreeAlias</c> alias-assignment lifecycle RPC.</summary>
-    SetTreeAlias,
+    SetTreeAlias = 9,
 
     /// <summary>The read-only <c>ResolveTreeAlias</c> alias-resolution RPC.</summary>
-    ResolveTreeAlias,
+    ResolveTreeAlias = 10,
 
     /// <summary>The read-only <c>GetTreeConfig</c> configuration RPC.</summary>
-    GetTreeConfig,
+    GetTreeConfig = 11,
 
     /// <summary>The mutating <c>SetTreeConfig</c> configuration-update lifecycle RPC.</summary>
-    SetTreeConfig,
+    SetTreeConfig = 12,
 
     /// <summary>The read-only <c>GetShardMap</c> registry-persisted shard-map RPC.</summary>
-    GetShardMap,
+    GetShardMap = 13,
 
     /// <summary>
     /// A tree-administration control-API method the interceptor does not recognise
@@ -59,7 +59,10 @@ public enum LatticeTreeAdminApiOperation
     /// Presented to the authorizer so a deny-by-default policy can refuse an
     /// unmapped call rather than have it silently masquerade as a benign read.
     /// </summary>
-    Unknown,
+    Unknown = 14,
+
+    /// <summary>The mutating <c>CreateView</c> runtime materialised-view RPC.</summary>
+    CreateView = 15,
 }
 
 /// <summary>

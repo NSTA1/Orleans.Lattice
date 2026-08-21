@@ -15,12 +15,20 @@ public class CatalogReaderTests
         Config = new TreeConfigSummary { ShardCount = shards },
     };
 
-    private static ViewStateSummary View(string name, string source, bool aggregation, bool history = false) => new()
+    private static ViewStateSummary View(
+        string name,
+        string source,
+        bool aggregation,
+        bool history = false,
+        string? providerKey = null,
+        string? projectionVersion = null) => new()
     {
         ViewName = name,
         SourceTreeId = source,
         IsAggregation = aggregation,
         IsHistory = history,
+        ProjectionProviderKey = providerKey,
+        ProjectionVersion = projectionVersion,
     };
 
     [Test]
@@ -78,7 +86,16 @@ public class CatalogReaderTests
         {
             OnListViews = _ => Task.FromResult(new ViewCatalogPage
             {
-                Entries = new[] { View("v1", "alpha", aggregation: true), View("v2", "beta", aggregation: false) },
+                Entries = new[]
+                {
+                    View(
+                        "v1",
+                        "alpha",
+                        aggregation: true,
+                        providerKey: "app.orders.v1",
+                        projectionVersion: "v3"),
+                    View("v2", "beta", aggregation: false),
+                },
                 NextPageToken = null,
             }),
         };
@@ -98,6 +115,10 @@ public class CatalogReaderTests
         Assert.That(page.Items[1].IsAggregation, Is.False);
         Assert.That(page.Items[0].IsHistory, Is.False, "a plain projection / aggregation view is not a history view");
         Assert.That(page.Items[1].IsHistory, Is.False);
+        Assert.That(page.Items[0].ProjectionProviderKey, Is.EqualTo("app.orders.v1"));
+        Assert.That(page.Items[0].ProjectionVersion, Is.EqualTo("v3"));
+        Assert.That(page.Items[1].ProjectionProviderKey, Is.Null);
+        Assert.That(page.Items[1].ProjectionVersion, Is.Null);
         Assert.That(page.Items[0].ShardCount, Is.Null);
         Assert.That(page.Items[0].Lifecycle, Is.Null);
         Assert.That(page.HasMore, Is.False);

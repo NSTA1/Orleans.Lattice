@@ -140,6 +140,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only runtime materialised-view listing RPC method name.</summary>
     public const string ListViewsMethodName = "ListViews";
 
+    /// <summary>The unary runtime materialised-view creation RPC method name.</summary>
+    public const string CreateViewMethodName = "CreateView";
+
     /// <summary>The unary read-only materialised-view status RPC method name.</summary>
     public const string GetViewStatusMethodName = "GetViewStatus";
 
@@ -218,6 +221,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
         Serializer<TreeWalMovePlan> walMovePlanSerializer,
         Serializer<TreeWalMoveReceipt> walMoveReceiptSerializer,
         Serializer<TreeAdminViewRequest> viewRequestSerializer,
+        Serializer<TreeAdminCreateViewRequest> createViewRequestSerializer,
         Serializer<TreeAdminViewListRequest> viewListRequestSerializer,
         Serializer<TreeViewCatalog> viewCatalogSerializer,
         Serializer<TreeViewStatus> viewStatusSerializer,
@@ -277,6 +281,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(walMovePlanSerializer);
         ArgumentNullException.ThrowIfNull(walMoveReceiptSerializer);
         ArgumentNullException.ThrowIfNull(viewRequestSerializer);
+        ArgumentNullException.ThrowIfNull(createViewRequestSerializer);
         ArgumentNullException.ThrowIfNull(viewListRequestSerializer);
         ArgumentNullException.ThrowIfNull(viewCatalogSerializer);
         ArgumentNullException.ThrowIfNull(viewStatusSerializer);
@@ -556,6 +561,13 @@ internal sealed class LatticeTreeAdminGrpcMethods
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewListRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewCatalogSerializer));
 
+        CreateView = new Method<TreeAdminCreateViewRequest, TreeViewStatus>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: CreateViewMethodName,
+            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(createViewRequestSerializer),
+            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewStatusSerializer));
+
         GetViewStatus = new Method<TreeAdminViewRequest, TreeViewStatus>(
             type: MethodType.Unary,
             serviceName: ServiceName,
@@ -741,6 +753,9 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>ListViews</c> read-only runtime materialised-view listing RPC.</summary>
     public Method<TreeAdminViewListRequest, TreeViewCatalog> ListViews { get; }
 
+    /// <summary>The unary <c>CreateView</c> runtime materialised-view creation RPC.</summary>
+    public Method<TreeAdminCreateViewRequest, TreeViewStatus> CreateView { get; }
+
     /// <summary>The unary <c>GetViewStatus</c> read-only materialised-view status RPC.</summary>
     public Method<TreeAdminViewRequest, TreeViewStatus> GetViewStatus { get; }
 
@@ -827,6 +842,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TreeWalMovePlan>>(),
             serializerProvider.GetRequiredService<Serializer<TreeWalMoveReceipt>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminViewRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TreeAdminCreateViewRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeAdminViewListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TreeViewCatalog>>(),
             serializerProvider.GetRequiredService<Serializer<TreeViewStatus>>(),

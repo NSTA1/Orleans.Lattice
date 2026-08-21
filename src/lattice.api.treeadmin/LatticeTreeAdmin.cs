@@ -1047,10 +1047,54 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 SourceTreeId = r.SourceTreeId,
                 IsAggregation = r.IsAggregation,
                 Accumulative = r.Accumulative,
+                ProviderKey = r.ProjectionProviderKey,
+                ProjectionVersion = r.ProjectionVersion,
             });
         }
 
         return new TreeViewCatalog { Views = views.ToImmutable() };
+    }
+
+    /// <inheritdoc />
+    public async Task<TreeViewStatus> CreateViewAsync(
+        string viewName,
+        string sourceTreeId,
+        string providerKey,
+        byte[] payload,
+        CancellationToken cancellationToken = default)
+    {
+        RequireViews();
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        ArgumentException.ThrowIfNullOrEmpty(providerKey);
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length > LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(payload),
+                payload.Length,
+                $"A runtime projection payload cannot exceed {LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes} bytes.");
+        }
+
+        if (sourceTreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Source tree '{sourceTreeId}' is itself a materialised view; a view cannot derive from another view.",
+                nameof(sourceTreeId));
+        }
+
+        var descriptor = new LatticeRuntimeViewProjectionDescriptor(providerKey, payload);
+
+        // This ordering is security-critical: the caller-supplied source is the
+        // authorization boundary, and no provider code may run before it is granted.
+        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        var source = _grainFactory.GetGrain<ILattice>(sourceTreeId);
+        await _viewFactory!.CreateAsync(source, viewName, descriptor, cancellationToken)
+            .ConfigureAwait(false);
+
+        var resolved = await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+        return await CaptureViewStatusAsync(viewName, resolved, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1059,11 +1103,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireViews();
         ArgumentException.ThrowIfNullOrEmpty(viewName);
-        var (sourceTreeId, isAggregation) =
+        var resolved =
             await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeReadAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        return await CaptureViewStatusAsync(viewName, sourceTreeId, isAggregation, cancellationToken)
+        return await CaptureViewStatusAsync(viewName, resolved, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1073,15 +1117,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireViews();
         ArgumentException.ThrowIfNullOrEmpty(viewName);
-        var (sourceTreeId, isAggregation) =
+        var resolved =
             await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
         await _grainFactory.GetGrain<IViewMaintainerGrain>(viewName)
             .RebuildAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return await CaptureViewStatusAsync(viewName, sourceTreeId, isAggregation, cancellationToken)
+        return await CaptureViewStatusAsync(viewName, resolved, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1091,9 +1135,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireViews();
         ArgumentException.ThrowIfNullOrEmpty(viewName);
-        var (sourceTreeId, _) =
+        var resolved =
             await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
         var repaired = await _grainFactory.GetGrain<IViewMaintainerGrain>(viewName)
             .ReconcileAsync(cancellationToken)
@@ -1102,7 +1146,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         return new TreeViewReconcileResult
         {
             ViewName = viewName,
-            SourceTreeId = sourceTreeId,
+            SourceTreeId = resolved.SourceTreeId,
             DriftRepaired = repaired,
         };
     }
@@ -1113,9 +1157,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireViews();
         ArgumentException.ThrowIfNullOrEmpty(viewName);
-        var (sourceTreeId, _) =
+        var resolved =
             await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
         await _viewFactory!.DeleteAsync(viewName, cancellationToken).ConfigureAwait(false);
     }
@@ -1346,12 +1390,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// registry is queried. A view that resolves through neither is reported absent with a
     /// <see cref="KeyNotFoundException"/>.
     /// </summary>
-    private async Task<(string SourceTreeId, bool IsAggregation)> ResolveViewAsync(
+    private async Task<(string SourceTreeId, bool IsAggregation, string? ProviderKey, string? ProjectionVersion)> ResolveViewAsync(
         string viewName, CancellationToken cancellationToken)
     {
         if (_viewCatalog?.TryGet(viewName) is { } registration)
         {
-            return (registration.SourceTreeId, registration.IsAggregation);
+            return (
+                registration.SourceTreeId,
+                registration.IsAggregation,
+                registration.ProjectionProviderKey,
+                registration.ProjectionVersion);
         }
 
         var registrations = await _grainFactory
@@ -1363,7 +1411,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         {
             if (string.Equals(r.ViewName, viewName, StringComparison.Ordinal))
             {
-                return (r.SourceTreeId, r.IsAggregation);
+                return (
+                    r.SourceTreeId,
+                    r.IsAggregation,
+                    r.ProjectionProviderKey,
+                    r.ProjectionVersion);
             }
         }
 
@@ -1376,7 +1428,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// its maintainer, after the caller has already resolved and authorized the source.
     /// </summary>
     private async Task<TreeViewStatus> CaptureViewStatusAsync(
-        string viewName, string sourceTreeId, bool isAggregation, CancellationToken cancellationToken)
+        string viewName,
+        (string SourceTreeId, bool IsAggregation, string? ProviderKey, string? ProjectionVersion) registration,
+        CancellationToken cancellationToken)
     {
         var maintainer = _grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
         var lag = await maintainer.GetLagAsync(cancellationToken).ConfigureAwait(false);
@@ -1385,10 +1439,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         return new TreeViewStatus
         {
             ViewName = viewName,
-            SourceTreeId = sourceTreeId,
-            IsAggregation = isAggregation,
+            SourceTreeId = registration.SourceTreeId,
+            IsAggregation = registration.IsAggregation,
             ApplyLag = lag,
             ActiveTreeId = activeTreeId ?? string.Empty,
+            ProviderKey = registration.ProviderKey,
+            ProjectionVersion = registration.ProjectionVersion,
         };
     }
 
@@ -1553,7 +1609,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         Window = settings.Window,
     };
 
-    /// current effective B+ node capacity (via the registry, default-seeded) - onto the
+    /// <summary>
+    /// Projects the current effective B+ node capacity (via the registry, default-seeded) onto the
     /// transport-agnostic <see cref="TreeResizeStatus"/>. The requested-capacity fields
     /// echo the trigger's target and are <see langword="null"/> for a standalone status
     /// read or an undo.

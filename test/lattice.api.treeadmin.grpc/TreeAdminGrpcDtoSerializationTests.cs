@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Orleans;
 using Orleans.Serialization;
 
@@ -632,6 +633,46 @@ public sealed class TreeAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TreeAdminCreateViewRequest_round_trips_opaque_payload()
+    {
+        var copy = RoundTrip(new TreeAdminCreateViewRequest
+        {
+            ViewName = "orders-by-region",
+            SourceTreeId = "orders",
+            ProviderKey = "provider-a",
+            Payload = [1, 2, 3],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.ViewName, Is.EqualTo("orders-by-region"));
+            Assert.That(copy.SourceTreeId, Is.EqualTo("orders"));
+            Assert.That(copy.ProviderKey, Is.EqualTo("provider-a"));
+            Assert.That(copy.Payload, Is.EqualTo(new byte[] { 1, 2, 3 }));
+        });
+    }
+
+    [Test]
+    public void CreateViewAsync_rejects_oversized_payload_before_transport()
+    {
+        var invoker = Substitute.For<global::Grpc.Core.CallInvoker>();
+        var client = LatticeTreeAdminApiGrpcClient.Create(invoker, _services);
+
+        Assert.That(
+            () => client.CreateViewAsync(
+                "orders-by-region",
+                "orders",
+                "provider-a",
+                new byte[LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes + 1]),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+        invoker.DidNotReceiveWithAnyArgs().AsyncUnaryCall<object, object>(
+            default!,
+            default,
+            default,
+            default!);
+    }
+
+    [Test]
     public void TreeAdminViewListRequest_round_trips()
     {
         var copy = RoundTrip(new TreeAdminViewListRequest());
@@ -645,7 +686,15 @@ public sealed class TreeAdminGrpcDtoSerializationTests
         var copy = RoundTrip(new TreeViewCatalog
         {
             Views = System.Collections.Immutable.ImmutableArray.Create(
-                new TreeViewInfo { ViewName = "v1", SourceTreeId = "s1", IsAggregation = false, Accumulative = true },
+                new TreeViewInfo
+                {
+                    ViewName = "v1",
+                    SourceTreeId = "s1",
+                    IsAggregation = false,
+                    Accumulative = true,
+                    ProviderKey = "provider-a",
+                    ProjectionVersion = "v3",
+                },
                 new TreeViewInfo { ViewName = "v2", SourceTreeId = "s2", IsAggregation = true, Accumulative = false }),
         });
 
@@ -654,6 +703,8 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             Assert.That(copy.Views, Has.Length.EqualTo(2));
             Assert.That(copy.Views[0].ViewName, Is.EqualTo("v1"));
             Assert.That(copy.Views[0].Accumulative, Is.True);
+            Assert.That(copy.Views[0].ProviderKey, Is.EqualTo("provider-a"));
+            Assert.That(copy.Views[0].ProjectionVersion, Is.EqualTo("v3"));
             Assert.That(copy.Views[1].IsAggregation, Is.True);
         });
     }
@@ -668,6 +719,8 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             IsAggregation = true,
             ApplyLag = 42,
             ActiveTreeId = "view-orders-by-region",
+            ProviderKey = "provider-a",
+            ProjectionVersion = "v3",
         });
 
         Assert.Multiple(() =>
@@ -677,6 +730,9 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             Assert.That(copy.IsAggregation, Is.True);
             Assert.That(copy.ApplyLag, Is.EqualTo(42));
             Assert.That(copy.ActiveTreeId, Is.EqualTo("view-orders-by-region"));
+            Assert.That(copy.ProviderKey, Is.EqualTo("provider-a"));
+            Assert.That(copy.ProjectionVersion, Is.EqualTo("v3"));
+            Assert.That(copy.GetType().GetProperty("Payload"), Is.Null);
         });
     }
 

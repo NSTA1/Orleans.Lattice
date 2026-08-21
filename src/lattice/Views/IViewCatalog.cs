@@ -3,8 +3,9 @@ namespace Orleans.Lattice.Views;
 /// <summary>
 /// Process-wide registry mapping a view name to its <see cref="ViewRegistration"/>.
 /// Populated at startup from <c>AddLatticeViews</c> registrations and at runtime
-/// by <see cref="ILatticeViewFactory.Create"/>. The view maintainer grain reads
-/// it to recover the source tree id and the projection instance for the view it
+/// by
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>.
+/// The view maintainer grain reads it to recover the source tree id and the projection instance for the view it
 /// maintains, because a grain cannot receive a non-serializable projection
 /// through its key or persisted state.
 /// </summary>

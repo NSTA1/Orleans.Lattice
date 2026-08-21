@@ -850,6 +850,47 @@ public sealed class LatticeTreeAdminApiGrpcClient
         => UnaryAsync(_methods.ListViews, new TreeAdminViewListRequest(), cancellationToken);
 
     /// <summary>
+    /// Creates a provider-backed runtime materialised view. The opaque payload is
+    /// bounded locally before any transport call.
+    /// </summary>
+    /// <param name="viewName">The logical view name.</param>
+    /// <param name="sourceTreeId">The directly writable source tree id.</param>
+    /// <param name="providerKey">The host-registered projection provider key.</param>
+    /// <param name="payload">Opaque provider state, limited to 64 KiB.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The server-derived status of the created view.</returns>
+    public Task<TreeViewStatus> CreateViewAsync(
+        string viewName,
+        string sourceTreeId,
+        string providerKey,
+        byte[] payload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
+        ArgumentException.ThrowIfNullOrEmpty(providerKey);
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length > LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(payload),
+                payload.Length,
+                $"A runtime projection payload cannot exceed {LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes} bytes.");
+        }
+
+        return UnaryAsync(
+            _methods.CreateView,
+            new TreeAdminCreateViewRequest
+            {
+                ViewName = viewName,
+                SourceTreeId = sourceTreeId,
+                ProviderKey = providerKey,
+                Payload = payload,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Reads the status of the materialised view named <paramref name="viewName"/>.
     /// Requires read authority over the view's source tree.
     /// </summary>

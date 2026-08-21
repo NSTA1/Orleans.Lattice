@@ -2,8 +2,9 @@ namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Cluster-wide durable registry of materialised views created at runtime through
-/// <see cref="ILatticeViewFactory.Create"/>. A single activation (keyed by the
-/// well-known <see cref="SingletonKey"/>) persists every runtime view's
+/// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>.
+/// A single activation (keyed by the well-known <see cref="SingletonKey"/>)
+/// persists every runtime view's
 /// <see cref="RuntimeViewRegistration"/> so the hosted view-activation service can
 /// re-register them into the in-memory <see cref="IViewCatalog"/> and re-activate
 /// their maintainers on silo start, making runtime views survive a restart
