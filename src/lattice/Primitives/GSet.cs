@@ -38,7 +38,16 @@ public sealed class GSet : ICrdt<GSet>
     /// element is a member of the set if and only if its base64 key is present.
     /// </summary>
     [Id(0)]
-    public HashSet<string> Elements { get; set; } = [];
+    public HashSet<string> Elements { get; set; }
+
+    /// <summary>Creates an empty grow-only set.</summary>
+    public GSet() => Elements = [];
+
+    // Direct-assign constructor for the clone/merge fast paths: takes ownership
+    // of an already-built backing store so the factory allocates no discarded
+    // empty-collection shell from a field initializer that an object
+    // initializer would immediately overwrite. Mirrors OrSet / GCounter.
+    private GSet(HashSet<string> elements) => Elements = elements;
 
     /// <summary>Returns <c>true</c> when the set contains no elements.</summary>
     public bool IsEmpty => Elements.Count == 0;
@@ -140,7 +149,7 @@ public sealed class GSet : ICrdt<GSet>
         var union = new HashSet<string>(left.Elements.Count + right.Elements.Count, StringComparer.Ordinal);
         union.UnionWith(left.Elements);
         union.UnionWith(right.Elements);
-        return new GSet { Elements = union };
+        return new GSet(union);
     }
 
     /// <summary>
@@ -155,10 +164,15 @@ public sealed class GSet : ICrdt<GSet>
     }
 
     /// <summary>Creates a deep copy of this set.</summary>
-    public GSet Clone() => new()
-    {
-        Elements = new HashSet<string>(Elements, StringComparer.Ordinal),
-    };
+    public GSet Clone() =>
+        // Rehash into a fresh ordinal-comparer set presized to the element count
+        // (the IEnumerable copy constructor sizes to the source ICollection's
+        // Count), matching the ordinal normalisation the merge factory applies.
+        // The direct-assign constructor takes the copy as-is, so the clone
+        // allocates exactly one set with no discarded empty-collection shell -
+        // the object initializer form allocated (and immediately overwrote) the
+        // parameterless constructor's empty backing set on every clone.
+        new(new HashSet<string>(Elements, StringComparer.Ordinal));
 
     /// <summary>
     /// Folds a <see cref="GSetDelta"/> into this set: every element in

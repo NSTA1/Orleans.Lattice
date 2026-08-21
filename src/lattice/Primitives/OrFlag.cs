@@ -35,14 +35,31 @@ public sealed class OrFlag : ICrdt<OrFlag>
     /// of these dots is not present in <see cref="Tombstones"/>.
     /// </summary>
     [Id(0)]
-    public List<OrSetDot> Enables { get; set; } = [];
+    public List<OrSetDot> Enables { get; set; }
 
     /// <summary>
     /// Observed-remove (disable) dots. A dot in this list cancels the
     /// matching dot in <see cref="Enables"/> on merge.
     /// </summary>
     [Id(1)]
-    public List<OrSetDot> Tombstones { get; set; } = [];
+    public List<OrSetDot> Tombstones { get; set; }
+
+    /// <summary>Creates an empty enable-wins flag.</summary>
+    public OrFlag()
+    {
+        Enables = [];
+        Tombstones = [];
+    }
+
+    // Direct-assign constructor for the clone fast path: takes ownership of
+    // already-built backing stores so the clone allocates no discarded
+    // empty-collection shells from field initializers that an object
+    // initializer would immediately overwrite. Mirrors OrSet.
+    private OrFlag(List<OrSetDot> enables, List<OrSetDot> tombstones)
+    {
+        Enables = enables;
+        Tombstones = tombstones;
+    }
 
     /// <summary>Returns <c>true</c> when at least one enable dot is not tombstoned.</summary>
     public bool IsEnabled => LiveEnableCount() > 0;
@@ -126,11 +143,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
     }
 
     /// <summary>Creates a deep copy of this flag.</summary>
-    public OrFlag Clone() => new()
-    {
-        Enables = [.. Enables],
-        Tombstones = [.. Tombstones],
-    };
+    public OrFlag Clone() => new([.. Enables], [.. Tombstones]);
 
     /// <summary>
     /// Folds an <see cref="OrFlagDelta"/> into this flag: every dot in
