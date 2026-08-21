@@ -222,11 +222,17 @@ jobs:
             dotnet build "${{ steps.parse.outputs.CSPROJ }}" --no-restore --configuration Release
           fi
 
-      # Ensure Azurite is accepting connections before the AzureStorageEmulator
-      # tests run (they self-skip on a connection failure). Build precedes this,
-      # so it is normally already satisfied; cheap guard against a cold start.
+      # The durable active-active suite is deliberately outside package test
+      # discovery: it spans core, replication, and Azure WAL concerns and is a
+      # release-wide gate rather than a package-owned suite.
+      - name: Build durable active-active release gate
+        run: dotnet build test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj --no-restore --configuration Release
+
+      # Ensure Azurite is accepting connections before the
+      # AzureStorageEmulator tests run (they self-skip on a connection failure).
+      # Build precedes this, so it is normally already satisfied; cheap guard
+      # against a cold-start race.
       - name: Wait for Azurite
-        if: steps.parse.outputs.TEST_PROJECT != ''
         run: |
           for port in 10000 10001 10002; do
             for i in $(seq 1 30); do
@@ -237,6 +243,9 @@ jobs:
               sleep 1
             done
           done
+
+      - name: Test durable active-active release gate
+        run: dotnet test test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj --no-build --configuration Release --filter "TestCategory=AzureStorageEmulator&TestCategory!=Chaos" --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
 
       - name: Test (chaos first - isolate flaky-prone surface)
         if: steps.parse.outputs.TEST_PROJECT != ''
