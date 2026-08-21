@@ -1,0 +1,102 @@
+name: Coverage
+
+# Coverage is measured on main only. The README coverage badge reads the
+# default branch's coverage from Codecov, and Codecov only learns main's
+# coverage from an upload made on a main commit - so a post-merge push run is
+# what keeps the badge live. This deliberately does NOT run on pull_request:
+# the full non-chaos suite (every test/*.Tests.csproj, including the Azurite
+# integration tests) is expensive, and paying it on every PR would slow the
+# PR feedback loop for no badge benefit. The change-scoped build-and-test job
+# in ci.yml remains the PR gate.
+on:
+  push:
+    branches: [main]
+
+# Least-privilege: this workflow only reads source and uploads a coverage report.
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
+    # AzureTableEmulator-category integration tests drive via
+    # `UseDevelopmentStorage=true`, so their code paths are counted in coverage
+    # rather than self-skipping. Mirrors the build-and-test job in ci.yml.
+    services:
+      azurite:
+        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        ports:
+          - 10000:10000
+          - 10001:10001
+          - 10002:10002
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Orleans.Lattice.slnx
+
+      - name: Build
+        run: dotnet build Orleans.Lattice.slnx --no-restore --configuration Release
+
+      - name: Wait for Azurite
+        run: |
+          for port in 10000 10001 10002; do
+            for i in $(seq 1 30); do
+              if (echo > "/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+                echo "Azurite port ${port} ready"; break
+              fi
+              if [ "$i" -eq 30 ]; then echo "::error::Azurite port ${port} not ready after 30s"; exit 1; fi
+              sleep 1
+            done
+          done
+
+      - name: Test with coverage
+        # The digest-settle integration oracles need a wider convergence budget
+        # on a loaded runner; see the equivalent step in ci.yml for the rationale.
+        env:
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+          # Exclude the benchmark/throughput test projects: microbench runs
+          # BenchmarkDotNet harnesses (not library coverage) and
+          # azure-throughput-silo is not part of Orleans.Lattice.slnx, so it is
+          # not built by the step above.
+          mapfile -t testProjs < <(find test -type f -name '*.Tests.csproj' \
+            -not -path '*/microbench/*' \
+            -not -path '*/azure-throughput-silo/*' | sort)
+          for proj in "${testProjs[@]}"; do
+            name=$(basename "$proj" .csproj)
+            echo "::group::Coverage: $name"
+            # Chaos tests are CI-only fault-injection and excluded here to keep
+            # the coverage run deterministic; AzureTableEmulator tests run
+            # against the Azurite service above.
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos" \
+              --collect:"XPlat Code Coverage" \
+              --results-directory "coverage/${name}" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}.trx"
+            echo "::endgroup::"
+          done
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          # Add a CODECOV_TOKEN repository secret (from the Codecov project
+          # settings). fail_ci_if_error is left false so a transient upload
+          # hiccup never fails the post-merge run.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: coverage
+          fail_ci_if_error: false
