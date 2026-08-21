@@ -49,7 +49,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// key.
     /// </summary>
     [Id(0)]
-    public Dictionary<TKey, List<OrMapEntry<TValue>>> Adds { get; set; } = new();
+    public Dictionary<TKey, List<OrMapEntry<TValue>>> Adds { get; set; }
 
     /// <summary>
     /// Per-key observed-removed dots. A dot in this map cancels the
@@ -57,7 +57,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// on merge.
     /// </summary>
     [Id(1)]
-    public Dictionary<TKey, List<OrSetDot>> Tombstones { get; set; } = new();
+    public Dictionary<TKey, List<OrSetDot>> Tombstones { get; set; }
 
     /// <summary>
     /// Dot context: per-replica highest counter ever minted or observed
@@ -78,7 +78,29 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// </para>
     /// </summary>
     [Id(2)]
-    public Dictionary<string, long> Context { get; set; } = [];
+    public Dictionary<string, long> Context { get; set; }
+
+    /// <summary>Creates an empty observed-remove map.</summary>
+    public OrMap()
+    {
+        Adds = new();
+        Tombstones = new();
+        Context = [];
+    }
+
+    // Direct-assign constructor for the clone fast path: takes ownership of
+    // already-built backing stores so the clone allocates no discarded
+    // empty-collection shells from field initializers that an object
+    // initializer would immediately overwrite. Mirrors OrSet.
+    private OrMap(
+        Dictionary<TKey, List<OrMapEntry<TValue>>> adds,
+        Dictionary<TKey, List<OrSetDot>> tombstones,
+        Dictionary<string, long> context)
+    {
+        Adds = adds;
+        Tombstones = tombstones;
+        Context = context;
+    }
 
     /// <summary>Returns <c>true</c> when no key has any live (un-tombstoned) dot.</summary>
     public bool IsEmpty
@@ -543,30 +565,29 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// <summary>Creates a deep copy of this map (every per-key list is duplicated; value snapshots are referenced as-is).</summary>
     public OrMap<TKey, TValue> Clone()
     {
-        var copy = new OrMap<TKey, TValue>
-        {
-            // Presize both backing dictionaries to the source key counts so the
-            // entry-by-entry fill below never triggers an intermediate rehash
-            // grow. Mirrors the VersionVector.Clone presize; the per-key list
-            // copies are unchanged.
-            Adds = new Dictionary<TKey, List<OrMapEntry<TValue>>>(Adds.Count),
-            Tombstones = new Dictionary<TKey, List<OrSetDot>>(Tombstones.Count),
-            // Copy the dot-context through its own comparer so the Dictionary
-            // copy constructor bulk-copies the backing store instead of
-            // rehashing every replica key. A fresh StringComparer.Ordinal is
-            // ordinally identical but reference-distinct from the source
-            // comparer, defeating that fast path. Mirrors Rga.Clone.
-            Context = new Dictionary<string, long>(Context, Context.Comparer),
-        };
+        // Presize both backing dictionaries to the source key counts so the
+        // entry-by-entry fill below never triggers an intermediate rehash
+        // grow. Mirrors the VersionVector.Clone presize; the per-key list
+        // copies are unchanged.
+        var adds = new Dictionary<TKey, List<OrMapEntry<TValue>>>(Adds.Count);
         foreach (var (key, entries) in Adds)
         {
-            copy.Adds[key] = new List<OrMapEntry<TValue>>(entries);
+            adds[key] = new List<OrMapEntry<TValue>>(entries);
         }
+        var tombstones = new Dictionary<TKey, List<OrSetDot>>(Tombstones.Count);
         foreach (var (key, dots) in Tombstones)
         {
-            copy.Tombstones[key] = new List<OrSetDot>(dots);
+            tombstones[key] = new List<OrSetDot>(dots);
         }
-        return copy;
+        // Copy the dot-context through its own comparer so the Dictionary
+        // copy constructor bulk-copies the backing store instead of
+        // rehashing every replica key. A fresh StringComparer.Ordinal is
+        // ordinally identical but reference-distinct from the source
+        // comparer, defeating that fast path. Mirrors Rga.Clone.
+        var context = new Dictionary<string, long>(Context, Context.Comparer);
+        // The direct-assign constructor takes the filled stores as-is, so the
+        // clone allocates no discarded empty-collection shells.
+        return new OrMap<TKey, TValue>(adds, tombstones, context);
     }
 
     private long NextCounter(string replicaId)

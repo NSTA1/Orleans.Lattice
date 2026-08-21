@@ -37,14 +37,14 @@ public sealed class RwFlag : ICrdt<RwFlag>
     /// (the disable side gates presence).
     /// </summary>
     [Id(0)]
-    public List<OrSetDot> Enables { get; set; } = [];
+    public List<OrSetDot> Enables { get; set; }
 
     /// <summary>
     /// Disable (remove) dots. A disable dot suppresses the flag until an
     /// enable observes it and cancels it via <see cref="Tombstones"/>.
     /// </summary>
     [Id(1)]
-    public List<OrSetDot> Disables { get; set; } = [];
+    public List<OrSetDot> Disables { get; set; }
 
     /// <summary>
     /// Observed-enable tombstones: disable dots that an
@@ -53,7 +53,26 @@ public sealed class RwFlag : ICrdt<RwFlag>
     /// merge.
     /// </summary>
     [Id(2)]
-    public List<OrSetDot> Tombstones { get; set; } = [];
+    public List<OrSetDot> Tombstones { get; set; }
+
+    /// <summary>Creates an empty remove-wins flag.</summary>
+    public RwFlag()
+    {
+        Enables = [];
+        Disables = [];
+        Tombstones = [];
+    }
+
+    // Direct-assign constructor for the clone fast path: takes ownership of
+    // already-built backing stores so the clone allocates no discarded
+    // empty-collection shells from field initializers that an object
+    // initializer would immediately overwrite. Mirrors OrSet.
+    private RwFlag(List<OrSetDot> enables, List<OrSetDot> disables, List<OrSetDot> tombstones)
+    {
+        Enables = enables;
+        Disables = disables;
+        Tombstones = tombstones;
+    }
 
     /// <summary>
     /// Returns <c>true</c> when at least one enable dot is present and no
@@ -154,12 +173,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
     }
 
     /// <summary>Creates a deep copy of this flag.</summary>
-    public RwFlag Clone() => new()
-    {
-        Enables = [.. Enables],
-        Disables = [.. Disables],
-        Tombstones = [.. Tombstones],
-    };
+    public RwFlag Clone() => new([.. Enables], [.. Disables], [.. Tombstones]);
 
     /// <summary>
     /// Folds a <see cref="RwFlagDelta"/> into this flag: every dot in

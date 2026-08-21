@@ -40,7 +40,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// dominates them.
     /// </summary>
     [Id(0)]
-    public List<MvRegisterEntry> Entries { get; set; } = [];
+    public List<MvRegisterEntry> Entries { get; set; }
 
     /// <summary>
     /// Dot context: per-replica highest-observed counter. Acts as the
@@ -49,7 +49,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// superseded and must not be re-introduced on merge.
     /// </summary>
     [Id(1)]
-    public Dictionary<string, long> Context { get; set; } = [];
+    public Dictionary<string, long> Context { get; set; }
 
     /// <summary>
     /// Cached materialised snapshot of the single-valued read produced by
@@ -64,6 +64,24 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// </summary>
     [NonSerialized]
     private IReadOnlyList<byte[]>? _singleValueSnapshot;
+
+    /// <summary>Creates an empty multi-value register.</summary>
+    public MvRegister()
+    {
+        Entries = [];
+        Context = [];
+    }
+
+    // Direct-assign constructor for the clone fast path: takes ownership of
+    // already-built backing stores so the clone allocates no discarded
+    // empty-collection shells from field initializers that an object
+    // initializer would immediately overwrite. The derived single-value
+    // snapshot is left null to rebuild lazily on the next read. Mirrors OrSet.
+    private MvRegister(List<MvRegisterEntry> entries, Dictionary<string, long> context)
+    {
+        Entries = entries;
+        Context = context;
+    }
 
     /// <summary>Returns <c>true</c> when no live values remain.</summary>
     public bool IsEmpty => Entries.Count == 0;
@@ -304,16 +322,14 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // bumps). The entry value bytes are treated as immutable by every
         // production call site, so the shallow per-entry copy is a deep copy;
         // ReplicaId/Counter are interned strings / value types.
-        new()
-        {
-            Entries = new List<MvRegisterEntry>(Entries),
+        new(
+            new List<MvRegisterEntry>(Entries),
             // Copy the dot-context through its own comparer so the Dictionary
             // copy constructor bulk-copies the backing store instead of
             // rehashing every replica key. A fresh StringComparer.Ordinal is
             // ordinally identical but reference-distinct from the source
             // comparer, defeating that fast path. Mirrors Rga.Clone.
-            Context = new Dictionary<string, long>(Context, Context.Comparer),
-        };
+            new Dictionary<string, long>(Context, Context.Comparer));
 
     private long NextCounter(string replicaId) =>
         Context.TryGetValue(replicaId, out var current) ? current + 1 : 1;
