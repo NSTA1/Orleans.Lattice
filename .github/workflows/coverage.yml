@@ -4,10 +4,10 @@ name: Coverage
 # default branch's coverage from Codecov, and Codecov only learns main's
 # coverage from an upload made on a main commit - so a post-merge push run is
 # what keeps the badge live. This deliberately does NOT run on pull_request:
-# the full non-chaos suite (every test/*.Tests.csproj, including the Azurite
-# integration tests) is expensive, and paying it on every PR would slow the
-# PR feedback loop for no badge benefit. The change-scoped build-and-test job
-# in ci.yml remains the PR gate.
+# the full non-chaos suite (every test/*.Tests.csproj, including the durable
+# active-active and other Azurite integration tests) is expensive, and paying
+# it on every PR would slow the PR feedback loop for no badge benefit. The
+# change-scoped build-and-test job in ci.yml remains the PR gate.
 on:
   push:
     branches: [main]
@@ -72,7 +72,8 @@ jobs:
           # Exclude the benchmark/throughput test projects: microbench runs
           # BenchmarkDotNet harnesses (not library coverage) and
           # azure-throughput-silo is not part of Orleans.Lattice.slnx, so it is
-          # not built by the step above.
+          # not built by the step above. The standalone lattice.integration
+          # project is intentionally included here.
           mapfile -t testProjs < <(find test -type f -name '*.Tests.csproj' \
             -not -path '*/microbench/*' \
             -not -path '*/azure-throughput-silo/*' | sort)
