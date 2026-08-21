@@ -24,12 +24,12 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// flag and was restarted with it on); and recovery is idempotent.
 /// </para>
 /// <para>
-/// Gated under the <c>AzureTableEmulator</c> category exactly like
+/// Gated under the <c>AzureStorageEmulator</c> category exactly like
 /// the rest of the integration suite; the dev loop skips them.
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public class AzureTableWalStorageProviderEliminateCandidateRowIntegrationTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";

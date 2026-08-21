@@ -14,13 +14,13 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// and <see cref="AzureTableWalStorageProvider.GetLowestOffsetAsync"/>),
 /// driven against a live Azure Table Storage endpoint (canonically
 /// Azurite on the default development connection string). Gated under
-/// the <c>AzureTableEmulator</c> NUnit category. Each test uses a
+/// the <c>AzureStorageEmulator</c> NUnit category. Each test uses a
 /// fresh, GUID-named table torn down afterward, and a per-test unique
 /// tree id, so the fixture is safe to run concurrently with other
 /// emulator suites sharing the same Azurite instance.
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public class AzureTableWalStorageProviderOffsetSizeIntegrationTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
@@ -50,7 +50,7 @@ public class AzureTableWalStorageProviderOffsetSizeIntegrationTests
         {
             Assert.Inconclusive(
                 $"Azurite is not reachable on the default development endpoint ({AzuriteConnectionString}). "
-                + $"Start it or skip the AzureTableEmulator category. "
+                + $"Start it or skip the AzureStorageEmulator category. "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }

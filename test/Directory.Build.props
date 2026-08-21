@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    Test code is not the subject of the coverage report: coverlet's "XPlat Code
+    Coverage" collector instruments every assembly loaded by the test host,
+    including the test projects and the shared Orleans.Lattice.Testing helper
+    library. Counting fixtures, fakes, and test scaffolding distorts the product
+    coverage number the README badge advertises.
+
+    Emitting [assembly: ExcludeFromCodeCoverage] via the SDK's AssemblyAttribute
+    item (GenerateAssemblyInfo is on by default) marks every assembly under test/
+    so coverlet skips it, without a per-project edit or a hand-maintained
+    AssemblyInfo file. This inherits into all *.Tests projects and the shared
+    testing library beneath this directory.
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
+  </ItemGroup>
+
+</Project>

@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// <c>(currentTail, orphansAscending)</c>; behavioural coverage of
 /// the surrounding I/O (table scans, transactional writes) lives in
 /// the Azurite-backed integration tests under the
-/// <c>AzureTableEmulator</c> category.
+/// <c>AzureStorageEmulator</c> category.
 /// </summary>
 public partial class AzureTableWalStorageProviderTests
 {

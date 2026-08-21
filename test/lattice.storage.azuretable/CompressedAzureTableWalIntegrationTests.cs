@@ -17,12 +17,12 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// <see cref="AzureTableWalStorageOptions.CompressionMinPayloadBytes"/> =
 /// <c>0</c>, so every row exercises the compressed encode/decode path.
 /// <para>
-/// Gated under the <c>AzureTableEmulator</c> NUnit category so the
+/// Gated under the <c>AzureStorageEmulator</c> NUnit category so the
 /// default dev loop skips it when no emulator is running.
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public class CompressedAzureTableWalIntegrationTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
@@ -52,7 +52,7 @@ public class CompressedAzureTableWalIntegrationTests
         {
             Assert.Inconclusive(
                 $"Azurite is not reachable on the default development endpoint ({AzuriteConnectionString}). "
-                + $"Start it via 'azurite --silent --location <dir>' or skip the AzureTableEmulator category. "
+                + $"Start it via 'azurite --silent --location <dir>' or skip the AzureStorageEmulator category. "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }

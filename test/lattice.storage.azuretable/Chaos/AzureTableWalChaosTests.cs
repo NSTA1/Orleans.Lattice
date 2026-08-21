@@ -43,7 +43,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests.Chaos;
 /// missing-entry failure on the post-window read.
 /// </para>
 /// <para>
-/// Gated under the <c>AzureTableEmulator</c> category and falls through
+/// Gated under the <c>AzureStorageEmulator</c> category and falls through
 /// to <see cref="Assert.Inconclusive(string)"/> when Azurite is not
 /// reachable, matching every other test under
 /// <c>test/lattice.storage.azuretable</c>.
@@ -52,7 +52,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests.Chaos;
 [TestFixture]
 [NonParallelizable]
 [Category("Chaos")]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public class AzureTableWalChaosTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
@@ -84,7 +84,7 @@ public class AzureTableWalChaosTests
         {
             Assert.Inconclusive(
                 $"Azurite is not reachable on the default development endpoint ({AzuriteConnectionString}). "
-                + $"Start it via 'azurite --silent --location <dir>' or skip the AzureTableEmulator category. "
+                + $"Start it via 'azurite --silent --location <dir>' or skip the AzureStorageEmulator category. "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }

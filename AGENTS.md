@@ -63,7 +63,7 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   the **testing** skill (`.github/skills/testing/SKILL.md`) points there too.
   Follow that file rather than any command pasted elsewhere, so nothing drifts.
   Chaos tests (`[Category("Chaos")]`) are CI-only; the Azure Table emulator suite
-  (`[Category("AzureTableEmulator")]`) only runs when Azurite is started locally.
+  (`[Category("AzureStorageEmulator")]`) only runs when Azurite is started locally.
 
 ## Conventions that matter
 

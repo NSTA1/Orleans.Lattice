@@ -19,12 +19,12 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// the orphan forward into the manifest or rolls it back by
 /// deleting its entry rows.
 /// <para>
-/// Gated under the <c>AzureTableEmulator</c> category exactly like
+/// Gated under the <c>AzureStorageEmulator</c> category exactly like
 /// the rest of the integration suite; the dev loop skips them.
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public class AzureTableWalStorageProviderReconcileIntegrationTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";

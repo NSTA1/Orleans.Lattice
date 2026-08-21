@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Testing.Hygiene;
 /// ASP.NET Core <c>TestServer</c>, a <c>Microsoft.Extensions.Hosting.IHost</c>,
 /// a <c>Grpc.Net.Client.GrpcChannel</c>, or any user-defined
 /// <c>*ClusterFixture</c> helper - must carry one of the slow-category tags
-/// (<c>Integration</c>, <c>Chaos</c>, or <c>AzureTableEmulator</c>) at the
+/// (<c>Integration</c>, <c>Chaos</c>, or <c>AzureStorageEmulator</c>) at the
 /// fixture level so it is excluded from the Tier 2 fast dev loop.
 /// <para>
 /// Without the tag, a single such fixture re-introduces silo startup latency
@@ -35,7 +35,7 @@ public abstract class IntegrationCategoryHygieneTestsBase
     {
         "Integration",
         "Chaos",
-        "AzureTableEmulator",
+        "AzureStorageEmulator",
     };
 
     // Full type names whose presence as an instance field or property on a
@@ -91,7 +91,7 @@ public abstract class IntegrationCategoryHygieneTestsBase
             "Cluster-based test fixtures must declare a slow-category tag at the fixture level "
             + "so they are excluded from the Tier 2 dev-loop filter. Add "
             + "[Category(\"Integration\")] (or [Category(\"Chaos\")] for stress suites, or "
-            + "[Category(\"AzureTableEmulator\")] for emulator-dependent suites) above the "
+            + "[Category(\"AzureStorageEmulator\")] for emulator-dependent suites) above the "
             + "[TestFixture] declaration. See .github/instructions/testing.instructions.md "
             + "section 'Categorization conventions'."
             + Environment.NewLine

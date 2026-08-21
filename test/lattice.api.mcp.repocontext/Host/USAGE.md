@@ -34,7 +34,7 @@ All host tests are grouped under the `Host/` folder here.
 ```powershell
 # Unit tier
 dotnet test test/lattice.api.mcp.repocontext -c Release `
-  --filter "TestCategory!=Integration&TestCategory!=Chaos&TestCategory!=AzureTableEmulator&TestCategory!=Container"
+  --filter "TestCategory!=Integration&TestCategory!=Chaos&TestCategory!=AzureStorageEmulator&TestCategory!=Container"
 
 # Integration tier
 dotnet test test/lattice.api.mcp.repocontext -c Release --filter "TestCategory=Integration"

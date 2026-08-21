@@ -209,7 +209,7 @@ If after reading you can no longer construct a plausible failing test, **discard
 Write the failing test before touching the production code. The test must:
 
 1. **Live in the project that mirrors the source under test.** A bug in `src/lattice/` -> test under `test/lattice/`. A bug in `src/lattice.replication/` -> test under `test/lattice.replication/`. Cross-project bugs (rare) get tests in both.
-2. **Follow `.github/instructions/testing.instructions.md` exactly** - NUnit constraint model, `Method_condition_expectedResult` naming, mirroring source file paths, `[Category("Integration")]` (or `[Category("Chaos")]`, `[Category("AzureTableEmulator")]`) on every cluster-based fixture per the strict-delta filter.
+2. **Follow `.github/instructions/testing.instructions.md` exactly** - NUnit constraint model, `Method_condition_expectedResult` naming, mirroring source file paths, `[Category("Integration")]` (or `[Category("Chaos")]`, `[Category("AzureStorageEmulator")]`) on every cluster-based fixture per the strict-delta filter.
 3. **Be named after the bug, not the function under test.** Prefer `OrSetAccessor_remove_after_add_does_not_resurrect_element_after_concurrent_merge` over `OrSetAccessor_Merge_Test_4`. The test name is the bug's epitaph - make it readable.
 4. **Demonstrate the predicted failure first.** Run the test on `main` (or with your fix temporarily reverted). It **must fail with the message you predicted in Phase 1**. Paste the failing transcript into the chat reply:
 
@@ -254,7 +254,7 @@ A bug class is a hypothesis about a pattern - once you've confirmed the pattern 
 
    ```powershell
    dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
-     --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureTableEmulator" `
+     --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator" `
      --nologo --blame-hang-timeout 2m --blame-hang-dump-type none
    ```
 

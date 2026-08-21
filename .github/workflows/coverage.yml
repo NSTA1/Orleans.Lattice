@@ -25,12 +25,12 @@ jobs:
     runs-on: ubuntu-latest
 
     # Azurite supplies the local Azure Storage blob/queue/table endpoints that the
-    # AzureTableEmulator-category integration tests drive via
+    # AzureStorageEmulator-category integration tests drive via
     # `UseDevelopmentStorage=true`, so their code paths are counted in coverage
     # rather than self-skipping. Mirrors the build-and-test job in ci.yml.
     services:
       azurite:
-        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        image: mcr.microsoft.com/azure-storage/azurite:3.36.0
         ports:
           - 10000:10000
           - 10001:10001
@@ -80,7 +80,7 @@ jobs:
             name=$(basename "$proj" .csproj)
             echo "::group::Coverage: $name"
             # Chaos tests are CI-only fault-injection and excluded here to keep
-            # the coverage run deterministic; AzureTableEmulator tests run
+            # the coverage run deterministic; AzureStorageEmulator tests run
             # against the Azurite service above.
             dotnet test "$proj" --no-build --configuration Release \
               --filter "TestCategory!=Chaos" \

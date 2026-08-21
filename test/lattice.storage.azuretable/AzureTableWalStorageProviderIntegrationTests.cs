@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// driven against an Azure Table Storage endpoint - canonically
 /// <see href="https://learn.microsoft.com/azure/storage/common/storage-use-azurite">Azurite</see>
 /// listening on the default development connection string. Gated under
-/// the <c>AzureTableEmulator</c> NUnit category so the default dev
+/// the <c>AzureStorageEmulator</c> NUnit category so the default dev
 /// loop (which excludes that category) skips them when no emulator is
 /// running; <see cref="OneTimeSetUp"/> probes reachability and falls
 /// through to <see cref="Assert.Inconclusive(string)"/> if the probe
@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("AzureTableEmulator")]
+[Category("AzureStorageEmulator")]
 public class AzureTableWalStorageProviderIntegrationTests
 {
     private const string AzuriteConnectionString = "UseDevelopmentStorage=true";
@@ -59,7 +59,7 @@ public class AzureTableWalStorageProviderIntegrationTests
         {
             Assert.Inconclusive(
                 $"Azurite is not reachable on the default development endpoint ({AzuriteConnectionString}). "
-                + $"Start it via 'azurite --silent --location <dir>' or skip the AzureTableEmulator category. "
+                + $"Start it via 'azurite --silent --location <dir>' or skip the AzureStorageEmulator category. "
                 + $"Underlying error: {ex.GetType().Name}: {ex.Message}");
         }
     }

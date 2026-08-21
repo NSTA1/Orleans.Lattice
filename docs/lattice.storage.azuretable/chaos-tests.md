@@ -2,7 +2,7 @@
 
 The Azure Table WAL package has a focused chaos suite that exercises the real `AzureTableWalStorageProvider` against an Azurite-backed Azure Table endpoint. It complements the core [chaos tests](../lattice/chaos-tests.md) and the replication [chaos tests](../lattice.replication/chaos-tests.md) by proving the durable WAL backend preserves its storage invariants under concurrent append pressure.
 
-Every suite here is tagged `[Category("Chaos")]`; the Azure-backed suite is also tagged `[Category("AzureTableEmulator")]`.
+Every suite here is tagged `[Category("Chaos")]`; the Azure-backed suite is also tagged `[Category("AzureStorageEmulator")]`.
 
 ```powershell
 dotnet test --filter "TestCategory!=Chaos"
