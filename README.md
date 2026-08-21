@@ -3,6 +3,7 @@
 ![CI](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/ci.yml/badge.svg)
 ![Publish](https://github.com/NSTA1/Orleans.Lattice/actions/workflows/publish.yml/badge.svg)
 [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice)](https://www.nuget.org/packages/Orleans.Lattice)
+[![Coverage](https://img.shields.io/codecov/c/github/NSTA1/Orleans.Lattice)](https://codecov.io/gh/NSTA1/Orleans.Lattice)
 
 ## What is it?
 
