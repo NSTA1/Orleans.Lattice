@@ -20,6 +20,11 @@ code paths rather than test doubles of that logic, but they run in-process:
 in-process test clusters wired with a simulated, fault-injectable inter-site
 delivery layer stand in for networked silos.
 
+For durable restart and recovery coverage, see the
+[durable active-active integration suite](../../test/lattice.integration/README.md).
+It uses independent sites with Azurite-backed grain state, reminders, and WAL,
+and shares one fixture across crash, partition, replay, and recovery scenarios.
+
 ## Cross-cluster suite (`test/lattice.replication/Chaos/`)
 
 A multi-site cluster fixture stands up three (or, for the smoke fixture, two)
