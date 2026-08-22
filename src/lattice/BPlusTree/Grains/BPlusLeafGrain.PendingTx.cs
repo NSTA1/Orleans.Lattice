@@ -1273,7 +1273,7 @@ internal sealed partial class BPlusLeafGrain
         // and either there is no backstop payload, or every payload key
         // is already covered (in the bucket - which is null on the
         // alreadyFlipped path - or in the per-key backstopped set).
-        if (alreadyFlipped && missingKeys is null && !hadPending)
+        if (MigrationTerminalCore.IsNoOpRedelivery(alreadyFlipped, hadPending, missingKeys is not null))
             return;
 
         // Pending-flip path: drain the bucket into Entries (commit) or
@@ -1310,11 +1310,18 @@ internal sealed partial class BPlusLeafGrain
         //     was evicted from the registry retention window.
         if (hadPending)
         {
-            if (alreadyFlipped)
+            // Bucket disposition on terminal delivery is the shared, dependency-
+            // free MigrationTerminalCore rule so the production apply path and the
+            // Coyote reshard model execute one identical decision (see #1591).
+            // DiscardOrphan (terminal already landed) is the write-side orphan
+            // guard; DiscardAborted is a normal abort; both discard the bucket.
+            var bucketAction = MigrationTerminalCore.DecideBucketAction(hadPending, alreadyFlipped, committed);
+            if (bucketAction is MigrationTerminalBucketAction.DiscardOrphan
+                or MigrationTerminalBucketAction.DiscardAborted)
             {
                 ApplyTxAbort(transactionId);
             }
-            else if (committed)
+            else if (bucketAction == MigrationTerminalBucketAction.DrainCommit)
             {
                 // Publish Version[ReplicaId] as the *pre-drain* Clock
                 // value, then let ApplyTxCommit's counter-only bump push
@@ -1703,15 +1710,14 @@ internal sealed partial class BPlusLeafGrain
         foreach (var txid in sagas)
         {
             var status = await ResolvePendingStatusAsync(txid);
-            if (status != TxStatus.Committed) continue;
-            // Committed: safe only if the backstop terminal has already
-            // been applied here. _recentlyTerminal is set unconditionally
-            // by every ApplyTxTerminalAsync exit path, so it is the
-            // single source of truth for "this saga's terminal has
-            // landed on this leaf".
-            if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
-                continue;
-            return false;
+            // Per-saga safety is the shared, dependency-free
+            // ShadowedMigrationReadGuard rule (see #1591): a committed saga is safe
+            // only once its terminal has landed here (_recentlyTerminal is the
+            // single source of truth for that), otherwise the migrated pre-saga
+            // value would tear atomic visibility against a backstopped sibling.
+            var terminalApplied = _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
+            if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied))
+                return false;
         }
         return true;
     }
