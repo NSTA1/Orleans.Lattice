@@ -325,58 +325,21 @@ internal sealed partial class BPlusLeafGrain(
     {
         var status = await ResolvePendingStatusAsync(txid);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        switch (status)
+        // Single-key visibility decision, delegated to the shared, dependency-free
+        // AtomicVisibilityGate so the production read path and the Coyote
+        // atomic-visibility model execute one identical rule (see #1585). The
+        // orphan guard (IsRecentlyTerminal) and the strict-isolation fall-through
+        // are encoded in the gate; the historical rationale lives on
+        // AtomicVisibilityGate / PendingReadOutcome.
+        switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
         {
-            case TxStatus.Committed:
-                // Orphan-pending guard. A pending bucket that survives
-                // AFTER this leaf has already processed the saga's
-                // terminal is an orphan from a late-arriving shadow-
-                // forward: under an online reshard, the saga's terminal
-                // broadcast can reach this destination leaf via the
-                // cross-migration LWW backstop (no bucket existed, so
-                // ApplyTxTerminalAsync wrote the saga's value directly
-                // into Entries and set _recentlyTerminal) BEFORE the
-                // source shard's shadow-forward of the prepare lands
-                // here. The shadow-forward then bucketed the prepare,
-                // and TryFindPendingForKey's HLC tie-break can pick
-                // that orphan over a sibling bucket from a later saga
-                // whose prepare HLC was stamped against the
-                // destination's own clock (typically lower than the
-                // orphan's source-stamped HLC). Returning the orphan's
-                // value would then shadow Entries[key], which may hold
-                // a later saga's already-drained value, producing the
-                // "split (pre=1, post=15)" / "unknown-round (other=1)"
-                // chaos shapes the reshard-topology suite caught.
-                //
-                // _recentlyTerminal is the per-leaf "this saga's
-                // terminal has already been applied here" flag set by
-                // every ApplyTxTerminalAsync exit path (drain commit,
-                // drain abort, fast-path-no-bucket commit, backstop-
-                // only commit). When it is set for the bucket's txid,
-                // the bucket cannot be the saga's primary delivery, so
-                // we surface the durably-projected value from Entries
-                // (which the saga's own backstop or drain wrote, or
-                // which a strictly-later saga has since overwritten).
-                if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
-                {
-                    if (Cache.TryGetRow(key, out var entriesLww)
-                        && !entriesLww.IsTombstone
-                        && !entriesLww.IsExpired(nowTicks))
-                        return entriesLww.Value;
-                    return null;
-                }
-                if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
-                    return null;
+            case PendingReadOutcome.SurfacePrepared:
                 return pendingValue.Value;
+            case PendingReadOutcome.Hidden:
+                return null;
             default:
-                // InFlight or Aborted - surface the pre-saga value
-                // from Entries. Strict atomic visibility: until the
-                // registry records a Committed decision, the saga's
-                // prepared writes are invisible and readers must see
-                // exactly the state that existed before the saga
-                // started. Hiding the key on InFlight would create a
-                // split observation across leaves whose prepares
-                // arrive at different wall-clock moments.
+                // FallThroughToPreSaga: InFlight, Aborted, or an already-terminal
+                // orphan bucket - surface the pre-saga value from Entries.
                 if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
                     return lww.Value;
                 return null;
@@ -409,28 +372,15 @@ internal sealed partial class BPlusLeafGrain(
     {
         var status = await ResolvePendingStatusAsync(txid);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        switch (status)
+        // Shared atomic-visibility gate (see GetWithPendingAsync / #1585).
+        switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
         {
-            case TxStatus.Committed:
-                // Orphan-pending guard. See GetWithPendingAsync for the
-                // full rationale: a Committed bucket whose txid is in
-                // _recentlyTerminal is a late-arriving shadow-forward
-                // orphan and must not shadow Entries[key]'s authoritative
-                // value.
-                if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
-                {
-                    if (Cache.TryGetRow(key, out var entriesLww)
-                        && !entriesLww.IsTombstone
-                        && !entriesLww.IsExpired(nowTicks))
-                        return new VersionedValue { Value = entriesLww.Value, Version = entriesLww.Timestamp, ExpiresAtTicks = entriesLww.ExpiresAtTicks, MergeMode = Cache.GetMergeMode(key) };
-                    return new VersionedValue();
-                }
-                if (pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks))
-                    return new VersionedValue();
+            case PendingReadOutcome.SurfacePrepared:
                 return new VersionedValue { Value = pendingValue.Value, Version = pendingValue.Timestamp, ExpiresAtTicks = pendingValue.ExpiresAtTicks, MergeMode = Cache.GetMergeMode(key) };
+            case PendingReadOutcome.Hidden:
+                return new VersionedValue();
             default:
-                // InFlight or Aborted - surface the pre-saga value.
-                // See GetWithPendingAsync for the rationale.
+                // FallThroughToPreSaga: InFlight, Aborted, or already-terminal orphan.
                 if (Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks))
                     return new VersionedValue { Value = lww.Value, Version = lww.Timestamp, ExpiresAtTicks = lww.ExpiresAtTicks, MergeMode = Cache.GetMergeMode(key) };
                 return new VersionedValue();
@@ -459,21 +409,15 @@ internal sealed partial class BPlusLeafGrain(
     {
         var status = await ResolvePendingStatusAsync(txid);
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
-        switch (status)
+        // Shared atomic-visibility gate (see GetWithPendingAsync / #1585).
+        switch (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(txid), pendingValue.IsTombstone || pendingValue.IsExpired(nowTicks)))
         {
-            case TxStatus.Committed:
-                // Orphan-pending guard. See GetWithPendingAsync for the
-                // full rationale.
-                if (_recentlyTerminal is not null && _recentlyTerminal.Contains(txid))
-                {
-                    return Cache.TryGetRow(key, out var entriesLww)
-                        && !entriesLww.IsTombstone
-                        && !entriesLww.IsExpired(nowTicks);
-                }
-                return !pendingValue.IsTombstone && !pendingValue.IsExpired(nowTicks);
+            case PendingReadOutcome.SurfacePrepared:
+                return true;
+            case PendingReadOutcome.Hidden:
+                return false;
             default:
-                // InFlight or Aborted - fall through to Entries.
-                // See GetWithPendingAsync for the rationale.
+                // FallThroughToPreSaga: InFlight, Aborted, or already-terminal orphan.
                 return Cache.TryGetRow(key, out var lww) && !lww.IsTombstone && !lww.IsExpired(nowTicks);
         }
     }
@@ -566,6 +510,10 @@ internal sealed partial class BPlusLeafGrain(
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var predicate = LatticePredicateContext.Current;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
+        // Resolve every key of this fan-out against a single registry view, so a
+        // registry InFlight->Committed transition cannot fall mid-scan and split
+        // the observation across keys (see #1584 / TxRegistrySnapshot).
+        var registrySnapshot = new TxDecisionView(outcomes);
         var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var key in keys)
         {
@@ -582,9 +530,8 @@ internal sealed partial class BPlusLeafGrain(
 
             if (pendingKeys.TryGetValue(key, out var pending))
             {
-                var status = outcomes.TryGetValue(pending.txid, out var s) ? s : TxStatus.InFlight;
-                if (status == TxStatus.Committed
-                    && !(_recentlyTerminal is not null && _recentlyTerminal.Contains(pending.txid)))
+                var status = registrySnapshot.Resolve(pending.txid);
+                if (AtomicVisibilityGate.ResolveKey(status, IsRecentlyTerminal(pending.txid), pending.value.IsTombstone || pending.value.IsExpired(nowTicks)) != PendingReadOutcome.FallThroughToPreSaga)
                 {
                     if (!pending.value.IsTombstone && !pending.value.IsExpired(nowTicks))
                     {

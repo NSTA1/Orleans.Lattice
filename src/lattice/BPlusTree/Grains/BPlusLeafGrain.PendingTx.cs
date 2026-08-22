@@ -129,6 +129,14 @@ internal sealed partial class BPlusLeafGrain
     private HashSet<Guid>? _recentlyTerminal;
 
     /// <summary>
+    /// Whether this leaf has already applied the terminal for <paramref name="txid"/>,
+    /// so a surviving pending bucket for it is a late-arriving shadow-forward orphan.
+    /// This is the orphan-guard input to <see cref="AtomicVisibilityGate.ResolveKey"/>.
+    /// </summary>
+    private bool IsRecentlyTerminal(Guid txid) =>
+        _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
+
+    /// <summary>
     /// Tracks per-saga which keys have already had the cross-migration
     /// LWW backstop applied. Keyed by transaction id; value is the set
     /// of keys whose backstop write has landed on this leaf.

@@ -110,7 +110,7 @@ Run only the project that owns the code you touched, excluding the slow categori
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
-  --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator"
+  --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote"
 ```
 
 The five test projects (`Orleans.Lattice.Tests`, `Orleans.Lattice.Replication.Tests`, `Orleans.Lattice.Replication.Grpc.Tests`, `Orleans.Lattice.Storage.AzureTable.Tests`, `Orleans.Lattice.Dashboards.Tests`) are independent - if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
@@ -158,12 +158,63 @@ The tier filters above only get sharper over time if tests are correctly categor
 - Tag long-running stress / concurrency-fuzzing tests with `[Category("Chaos")]`.
 - Tag tests that require an external service (Azurite, a real Azure resource, a gRPC server bound to a port, etc.) with the service name, e.g. `[Category("AzureStorageEmulator")]`.
 - Tag fixtures whose sole job is to verify documentation or sample code (e.g. `DocsSnippetCompilationTests`) with `[Category("Docs")]`.
+- Tag Coyote systematic-concurrency models (fixtures that drive a shared correctness core through `CoyoteModelHarness`) with `[Category("Coyote")]`. See "Coyote concurrency tier" below.
 - Pure in-process unit tests (grains constructed directly with `FakePersistentState<T>`, primitive type tests, options tests) do not need a category.
 - Prefer fixture-level `[Category(...)]` over per-method tagging so the tag stays consistent across partial test files.
 
 This convention is enforced by `IntegrationCategoryHygieneTests.Every_cluster_based_fixture_carries_a_slow_category`. The scan logic lives in the shared `IntegrationCategoryHygieneTestsBase` (in `Orleans.Lattice.Testing`); a thin concrete subclass under each test project's `Hygiene/` folder runs it against that project's own assembly, so the gate is active in every test project. The hygiene test fails CI if a `[TestFixture]` declares an instance field or property typed `Orleans.TestingHost.TestCluster`, `Microsoft.AspNetCore.TestHost.TestServer`, `Microsoft.Extensions.Hosting.IHost`, `Grpc.Net.Client.GrpcChannel`, or any `*ClusterFixture`-suffix helper without also carrying `[Category("Integration")]`, `[Category("Chaos")]`, or `[Category("AzureStorageEmulator")]`. This makes the strict-delta Tier 3 filter safe - a contributor cannot silently add a cluster fixture that bypasses both Tier 2's exclusion and Tier 3's positive selection.
 
 If you touch an uncategorized integration-style fixture as part of unrelated work, back-fill the appropriate `[Category(...)]` tag in the same commit - that is how the dev loop gets faster over time.
+
+## Coyote concurrency tier
+
+Some correctness-critical decisions are extracted into a small, dependency-free
+**pure core** that the production grain executes on its hot path *and* a
+[Coyote](https://microsoft.github.io/coyote/) model drives under systematic
+schedule exploration - so the property the model proves is a property of the
+code that actually runs, not of a parallel mimic that can drift. The first such
+core is `AtomicVisibilityGate` (the multi-key atomic-commit read gate,
+issue #1585); its model is `AtomicCommitVisibilityModel`.
+
+These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
+they are fast and deterministic, but they are held out of the default dev loop
+(Tier 2) and the per-package deterministic CI step, and run as their own opt-in
+tier. Run them explicitly with:
+
+```powershell
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Coyote"
+```
+
+The reusable harness lives in the product-agnostic shared testing library
+(`Orleans.Lattice.Testing`, namespace `Orleans.Lattice.Testing.Coyote`):
+
+- `ICoyoteModel` - a model implements `Run(ICoyoteRuntime runtime)`, expressing
+  the concurrent scenario as explicit cooperative interleaving driven by the
+  runtime's controlled nondeterminism (e.g. `runtime.RandomBoolean()`), and
+  asserts its safety property with `Specification.Assert(...)`. The harness does
+  **not** apply `coyote rewrite`, so real `Task`/`await` interleavings are not
+  controlled - drive every scheduling choice through the runtime, and build all
+  model state inside `Run` (hold no mutable static state between iterations).
+- `CoyoteModelHarness` - `Explore` runs the engine and returns a
+  `CoyoteExplorationResult` (iterations, bugs found, bug reports, replayable
+  trace); `AssertNoInterleavingViolation` fails the test with the reproducible
+  trace when any schedule violates the property; `AssertInterleavingViolationFound`
+  asserts a schedule *does* violate it.
+
+### How to add a new Coyote model
+
+1. Extract the decision you want to prove into a shared, dependency-free core in
+   the product assembly (a pure function over explicit inputs, like
+   `AtomicVisibilityGate.ResolveKey`), and route the production code through it
+   so the proven artifact is the one that runs.
+2. Add a model under `test/<package>/.../Coyote/` implementing `ICoyoteModel`,
+   invoking that shared core and asserting the safety property. Express the race
+   as cooperative interleaving driven by `runtime.RandomBoolean()`.
+3. Add a `[TestFixture] [Category("Coyote")]` test that calls
+   `CoyoteModelHarness.AssertNoInterleavingViolation(new YourModel(...))` for the
+   fixed design. **Also** add a companion test that removes the guard and asserts
+   `AssertInterleavingViolationFound(...)` - this proves the model genuinely
+   exercises the race, so the passing test is meaningful rather than vacuous.
 
 ## Hygiene gates
 
