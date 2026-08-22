@@ -204,6 +204,70 @@ covers only probabilistically as a CI-only chaos backstop: the relative delivery
 orders of {shadow-forward prepare, terminal broadcast, backstop, reader fan-out}
 against an already-terminal saga.
 
+A fourth model is the atomic-commit **liveness** model, `AtomicCommitLivenessModel`
+(issue #1592). Where the three models above prove *safety* (nothing bad happens)
+over a reliable transport, this one proves *liveness / progress* (the protocol does
+not get stuck) under **fault injection**: the saga's terminal broadcast is
+delivered through a `FaultDeliveryQueue<T>` that drops, duplicates, and reorders
+messages, and participants restart, all bounded by a `FaultBudget`. It drives the
+same production cores (`SagaCoordinatorCore.Decide` for the verdict,
+`TxRegistryDecisionCore` for the durable decision, `MigrationTerminalCore` for each
+leaf's terminal disposition, `AtomicVisibilityGate` for the reader fan-out), and
+asserts three progress properties: a saga with all acks eventually commits on every
+participant; an aborted saga leaves no participant holding a prepared value; and a
+committed saga is eventually visible to a reader on every owning leaf.
+
+**How liveness is encoded (and why not a Coyote liveness monitor).** Because the
+harness does not apply `coyote rewrite`, real `Task`/`await` is not controlled, so
+there is no fair infinite schedule for a temperature-based Coyote liveness monitor
+to flag. Liveness is instead encoded as **bounded progress**: the finite
+`FaultBudget` is the fairness assumption ("faults do not happen forever") made
+concrete, so once it is exhausted the transport is reliable and a correct protocol
+must converge. The run drives the fault-injected broadcast to completion, applies
+the fix's durable-registry backstop, then models the registry decision being
+garbage-collected once its tombstone retention elapses, and finally asserts the good
+terminal state was reached. The garbage-collection step is load-bearing: a committed
+saga is visible the instant its durable decision is recorded, so the progress
+obligation is that every leaf *drains* its prepared bucket before the decision is
+forgotten; a leaf that never drains then resolves the txid to `InFlight` and the read
+gate falls its value through to the pre-saga value, so the commit becomes invisible.
+The guard tests remove the backstop and prove Coyote re-finds the stalled schedule (a
+dropped or restart-lost terminal that is never recovered), so the passing liveness
+tests are non-vacuous.
+
+**Fault-model conventions.** Model a fault as a bounded, scheduler-explored choice,
+never an unbounded one: draw drops, duplicates, and restarts from a `FaultBudget` so
+exploration terminates and the fairness ceiling is explicit. Keep the fault helpers
+(`FaultBudget`, `FaultDeliveryQueue<T>`) in the shared `Orleans.Lattice.Testing.Coyote`
+library, dependency-free (they take the nondeterministic decision as a `Func<bool>`,
+e.g. `runtime.RandomBoolean`, rather than referencing a Coyote runtime type), so every
+model shares them and they are unit-testable without an engine. Durable state (the
+registry decision, drained projected state) must survive a modelled restart; only
+volatile in-flight state (an undelivered broadcast) is lost. Every terminal-apply the
+model drives must be idempotent so a duplicate delivery is safe - itself a property of
+the real `MigrationTerminalCore` the model exercises.
+
+**Reconciliation with the chaos suite.** The liveness model subsumes,
+*deterministically*, the progress dimension of the atomic-commit / reshard chaos
+coverage: that a committed saga's terminal reaches every owning leaf and that an
+aborted saga releases every prepared bucket, under message loss, duplication,
+reordering, and participant restart. What remains **chaos-only** (and must stay in
+`ReshardTopologyTests` and the atomic-commit chaos suite) is everything the pure-core
+model abstracts away: real Orleans transport and RPC retries, real reminder timers and
+reactivation, real persistence and storage-provider failures, real HLC / wall-clock
+timing, and the end-to-end wiring of the actual grains. The Coyote model proves the
+*protocol logic* makes progress; the chaos suite proves the *deployed system* does, on
+real infrastructure.
+
+**Finalized CI exploration budget.** The per-PR opt-in Coyote step runs every model in
+the `Coyote` category at the harness defaults - `DefaultIterations` (1000) schedules by
+`DefaultMaxSteps` (200) scheduling steps each - which the liveness models adopt
+unchanged; this completes in a few seconds per model and needs no per-model override,
+so the existing CI step (`--filter "TestCategory=Coyote"`) requires no parameter
+change. A deeper nightly sweep (a higher iteration count on a scheduled workflow) is
+optional and *not* wired up: it would add exploration depth for little marginal signal
+on these small bounded models, and no required check may depend on it.
+
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
 (Tier 2) and the per-package deterministic CI step, and run as their own opt-in
@@ -228,6 +292,14 @@ The reusable harness lives in the product-agnostic shared testing library
   trace); `AssertNoInterleavingViolation` fails the test with the reproducible
   trace when any schedule violates the property; `AssertInterleavingViolationFound`
   asserts a schedule *does* violate it.
+- `FaultBudget` / `FaultDeliveryQueue<T>` - the dependency-free fault-injection
+  helpers for **liveness** models. `FaultBudget` is a bounded ledger of drops,
+  duplicates, and restarts (the fairness ceiling that makes bounded-progress
+  liveness terminate); `FaultDeliveryQueue<T>` is a bounded fault-injecting
+  transport (reorder, drop, duplicate, and restart-induced in-flight loss). Both
+  take the nondeterministic decision as a `Func<bool>` (pass `runtime.RandomBoolean`)
+  so they never reference a Coyote type and are unit-testable with scripted
+  delegates.
 
 ### How to add a new Coyote model
 
@@ -243,6 +315,12 @@ The reusable harness lives in the product-agnostic shared testing library
    fixed design. **Also** add a companion test that removes the guard and asserts
    `AssertInterleavingViolationFound(...)` - this proves the model genuinely
    exercises the race, so the passing test is meaningful rather than vacuous.
+4. For a **liveness / progress** model, inject faults from a `FaultBudget` (via
+   `FaultDeliveryQueue<T>`) so exploration terminates, encode the property as
+   bounded progress (drive to the budget-exhausted point, apply the backstop, then
+   assert the good terminal state), and add the mandatory companion guard test that
+   removes the backstop and asserts `AssertInterleavingViolationFound(...)` finds
+   the stall. See `AtomicCommitLivenessModel` for the reference pattern.
 
 ## TLA+ specification (not a required check)
 
