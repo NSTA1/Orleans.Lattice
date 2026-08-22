@@ -278,16 +278,33 @@ internal sealed class LatticeCrossTreeTxGrain(
             throw;
         }
 
-        var allPrepared = true;
         var anyFailed = false;
+
+        // Route the shipped commit-vs-abort decision through the proven
+        // SagaCoordinatorCore: each participating tree's prepare vote is a real
+        // participant outcome, so the core (not an inline loop) decides commit
+        // vs abort. stackalloc keeps the fold allocation-free for the common
+        // small fan-out; the array fallback guards a pathologically wide
+        // participant set.
+        const int stackThreshold = 64;
+        Span<SagaParticipantOutcome> outcomes = votes.Length <= stackThreshold
+            ? stackalloc SagaParticipantOutcome[stackThreshold].Slice(0, votes.Length)
+            : new SagaParticipantOutcome[votes.Length];
         for (var i = 0; i < votes.Length; i++)
         {
             participants[i].Vote = votes[i];
-            if (votes[i] != CrossTreePrepareVote.Prepared) allPrepared = false;
             if (votes[i] == CrossTreePrepareVote.Failed) anyFailed = true;
+
+            // Prepared is the only affirmative vote; PreconditionFailed and
+            // Failed (and any future non-Prepared vote) are a nack, which the
+            // core treats as decisive - a single nack aborts the whole batch.
+            var outcome = votes[i] == CrossTreePrepareVote.Prepared
+                ? SagaParticipantOutcome.PreparedAck
+                : SagaParticipantOutcome.PreparedNack;
+            SagaCoordinatorCore.OnParticipantResult(outcomes, i, outcome);
         }
 
-        if (allPrepared)
+        if (SagaCoordinatorCore.Decide(outcomes) == SagaDecision.Commit)
         {
             state.State.Phase = CrossTreeTxPhase.Committed;
             state.State.Outcome = CrossTreeAtomicWriteOutcome.Committed;

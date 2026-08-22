@@ -174,7 +174,9 @@ Some correctness-critical decisions are extracted into a small, dependency-free
 schedule exploration - so the property the model proves is a property of the
 code that actually runs, not of a parallel mimic that can drift. The first such
 core is `AtomicVisibilityGate` (the multi-key atomic-commit read gate,
-issue #1585); its model is `AtomicCommitVisibilityModel`.
+issue #1585); its model is `AtomicCommitVisibilityModel`. The second is
+`SagaCoordinatorCore` (the atomic-write saga coordinator's commit-vs-abort
+transition, issue #1589); its model is `SagaCoordinatorModel`.
 
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
