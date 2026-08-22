@@ -33,6 +33,6 @@ internal sealed class PredicateRuntimeViewProjectionCodec(Serializer<LatticePred
             throw new ArgumentException("The predicate projection payload is invalid.", nameof(payload));
         }
 
-        return serializer.Deserialize(payload[1..].ToArray());
+        return serializer.Deserialize(payload[1..]);
     }
 }
