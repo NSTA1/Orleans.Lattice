@@ -7,8 +7,9 @@ namespace Orleans.Lattice.Views;
 /// <summary>
 /// Default <see cref="ILatticeViewFactory"/>. Captures the grain factory, the
 /// view catalog, the durable runtime-view registry, the startup-declared view
-/// names, and the injectable <see cref="ILatticeReplicationContext"/> seam (views
-/// require a WAL provider, registered by <c>AddLattice</c>). Each
+/// names, and the injectable <see cref="ILatticeReplicationContext"/> seam used to
+/// validate replication topology before publishing a view (views require a WAL
+/// provider, registered by <c>AddLattice</c>). Each
 /// <see cref="ILatticeViewFactory.CreateAsync(ILattice,string,LatticeViewDefinition,CancellationToken)"/>
 /// persists a runtime registration before publishing it to the catalog and
 /// returning; the synchronous
@@ -77,15 +78,9 @@ internal sealed class LatticeViewFactory(
         ArgumentException.ThrowIfNullOrEmpty(viewName);
         ArgumentNullException.ThrowIfNull(definition);
 
-        // replicationContext is captured to mirror the tag-index factory's
-        // pre-wiring; Phase 1 views derive their WAL seams from it implicitly
-        // (the maintainer resolves ICommitLogReader, which is only non-null when
-        // a WAL provider - the in-memory baseline from AddLattice, a durable
-        // provider, or replication - is present).
-        _ = replicationContext;
-
         var sourceTreeId = source.GetPrimaryKeyString();
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
+        ValidateReplicationTopology(viewName, sourceTreeId);
         var suppliedRegistration = definition.AggregationProjection is { } aggregation
             ? new ViewRegistration(viewName, sourceTreeId, Projection: null, aggregation)
             : new ViewRegistration(viewName, sourceTreeId, definition.Projection, Accumulative: definition.Accumulative);
@@ -116,6 +111,7 @@ internal sealed class LatticeViewFactory(
                 $"Runtime view projection provider '{runtimeProjection.ProviderKey}' is not configured on this silo.");
         var sourceTreeId = source.GetPrimaryKeyString();
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
+        ValidateReplicationTopology(viewName, sourceTreeId);
         var definition = provider.Factory(
             services,
             new LatticeRuntimeViewProjectionContext(
@@ -154,6 +150,13 @@ internal sealed class LatticeViewFactory(
             : BuildDurableRegistration(registration, runtimeProjection);
         return (registration, durable);
     }
+
+    private void ValidateReplicationTopology(string viewName, string sourceTreeId) =>
+        ViewReplicationTopology.Resolve(
+            viewName,
+            sourceTreeId,
+            viewOptions.Get(viewName),
+            replicationContext);
 
     /// <inheritdoc />
     public async Task<ILatticeView?> GetAsync(string viewName, CancellationToken cancellationToken = default)

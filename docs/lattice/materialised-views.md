@@ -646,26 +646,121 @@ heals any divergence - choosing liveness over an indefinite stall.
 ## Replication modes
 
 A view declares, through `LatticeViewOptions.ReplicationMode`, how its tree is
-made available across replicating clusters. This only matters in a multi-cluster
-replication deployment; a single cluster always uses the default.
+made available across replicating clusters. Three topologies are supported:
 
-| Mode | Who runs the maintainer | View tree replicated? |
-|------|-------------------------|-----------------------|
-| `DeriveLocally` (default) | Every cluster | No - each cluster derives the view from its local copy of the replicated source. |
-| `ShipView` (opt-in) | Only the producer cluster(s) that host the source locally | Yes - the view tree is replicated to thin consumer clusters that want the view but not the full base tree. |
+| Topology | Source tree replicated? | View tree replicated? | Producer selection |
+|----------|-------------------------|-----------------------|--------------------|
+| `DeriveLocally` (default) | Yes | No | Every cluster maintains its own view. |
+| `ShipView`, source-less consumers | No | Yes | Inferred from local source-WAL ownership. |
+| `ShipView`, replicated source | Yes | Yes | Exactly one stable replication cluster id is explicit. |
 
-`DeriveLocally` is the single-cluster and full-replication default: every cluster
-has the source locally and runs the maintainer. It assumes a deterministic
-projection at a uniform version across clusters.
+A startup guard validates startup declarations, and runtime creation runs the
+same checks before publishing a view. It rejects a replicated `DeriveLocally`
+view tree, an unreplicated `ShipView` tree, an explicit producer on a
+non-replicated source, and source-plus-view replication without an explicit
+producer. Cluster ids are case-sensitive and must be globally unique.
 
-`ShipView` is for source-less / thin consumer clusters: the maintainer runs only
-on the producer, the view tree is replicated, and consumer clusters receive the
-view through the ordinary replication path. `ShipView` requires
-`AddLatticeReplication` and an entry for the view tree in the replication
-`ReplicatedTrees` map. When replication is configured, a startup guard fails the
-silo fast on an inconsistent pairing (a `DeriveLocally` view whose tree is
-replicated - two writers; or a `ShipView` view whose tree is not replicated -
-consumers never receive it).
+Replication topology is fixed for the lifetime of a view name. Do not change an
+existing view between `DeriveLocally` and `ShipView`, or change its designated
+producer in place: the existing view-tree WAL may contain writes authored under
+the old topology. Create a new view name, let it converge, and then retire the
+old view.
+
+Source-relative `GetLagAsync` and read barriers are producer-only for
+`ShipView`. Consumers receive view rows through replication, so their local
+source WAL and maintainer checkpoint do not describe view progress; these APIs
+throw `InvalidOperationException` on a consumer.
+
+### Derive independently on every cluster
+
+Use `DeriveLocally` when every cluster replicates the source and deploys the
+same deterministic projection version. Replicate `people`, but never
+`view-adults`; each cluster owns and maintains its local view tree.
+
+```csharp verify
+var deriveTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+{
+    ["people"] = LatticeMergeMode.LwwRegister,
+};
+
+siloBuilder.AddLatticeReplication(options =>
+{
+    options.ClusterId = "site-a"; // Use this cluster's stable id.
+    options.ReplicationPeers = new[] { "site-b" };
+    options.ReplicatedTrees = deriveTrees;
+});
+siloBuilder.AddLatticeViews(views => views.AddView(
+    "adults",
+    "people",
+    new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(user => user.Age >= 18))));
+siloBuilder.ConfigureLatticeView("adults", options =>
+    options.ReplicationMode = LatticeViewReplicationMode.DeriveLocally);
+```
+
+### Ship a view to source-less consumers
+
+Use inferred `ShipView` when only the producer holds `people`. Replicate
+`view-adults`, but not `people`. A cluster with a locally readable source WAL
+maintains the view; a source-less consumer suppresses its maintainer and receives
+the view through replication. Deploy the same tree map to every participant,
+using each cluster's own `ClusterId` and outbound peers.
+
+```csharp verify
+var thinConsumerTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+{
+    ["view-adults"] = LatticeMergeMode.LwwRegister,
+};
+
+siloBuilder.AddLatticeReplication(options =>
+{
+    options.ClusterId = "site-a"; // Use "site-b" on the consumer.
+    options.ReplicationPeers = new[] { "site-b" };
+    options.ReplicatedTrees = thinConsumerTrees;
+});
+siloBuilder.AddLatticeViews(views => views.AddView(
+    "adults",
+    "people",
+    new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(user => user.Age >= 18))));
+siloBuilder.ConfigureLatticeView("adults", options =>
+    options.ReplicationMode = LatticeViewReplicationMode.ShipView);
+```
+
+### Ship a view while also replicating its source
+
+When consumers need both `people` and `view-adults`, source-WAL readability can
+no longer identify one writer. Replicate both trees and set
+`ShipViewProducerClusterId` to the same producer id on every cluster. Only the
+cluster whose local replication `ClusterId` matches that value maintains the
+view; all others suppress their maintainers even though they can read the source.
+A runtime-created view in this topology must have its named options configured
+at host startup before it is created.
+
+```csharp verify
+var activeSourceTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+{
+    ["people"] = LatticeMergeMode.LwwRegister,
+    ["view-adults"] = LatticeMergeMode.LwwRegister,
+};
+
+siloBuilder.AddLatticeReplication(options =>
+{
+    options.ClusterId = "site-a"; // Use "site-b" on the consumer.
+    options.ReplicationPeers = new[] { "site-b" };
+    options.ReplicatedTrees = activeSourceTrees;
+});
+siloBuilder.AddLatticeViews(views => views.AddView(
+    "adults",
+    "people",
+    new PredicateLatticeViewProjection(
+        LatticePredicateTranslator.Translate<User>(user => user.Age >= 18))));
+siloBuilder.ConfigureLatticeView("adults", options =>
+{
+    options.ReplicationMode = LatticeViewReplicationMode.ShipView;
+    options.ShipViewProducerClusterId = "site-a";
+});
+```
 
 ### Lag budget and dead-view eviction
 
@@ -766,6 +861,7 @@ apply lag, and do not infer rollback from a create-time timeout.
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. See [Replication modes](#replication-modes). |
+| `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. |
 | `MaxLagBudget` | 0 | Upper bound, in committed-but-unapplied source entries, on how far the view may fall behind before it is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. A non-positive value falls back to the default. Has no effect when `MaxLagBudget` is 0. |
 | `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. Only engages while the source is actually saturated. |

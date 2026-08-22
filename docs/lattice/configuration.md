@@ -983,6 +983,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl`. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `ShipView` requires the replication package. |
+| `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. |
 | `MaxLagBudget` | 0 | Maximum committed-but-unapplied source entries before the view is force-evicted (WAL unpinned and rebuilt). 0 disables eviction. Must not be negative. |
 | `LagEvictionCooldown` | 30 s | Minimum interval between two lag-budget evictions of the same view. Has no effect when `MaxLagBudget` is 0. |
 | `ObeySourceBackpressure` | `true` | Whether the maintainer throttles its own drain when the source tree's WAL is under saturation back-pressure (smaller batch + deferred ticks). Set to `false` to always drain at full rate. |

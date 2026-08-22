@@ -24,12 +24,13 @@ public enum LatticeViewReplicationMode
     DeriveLocally = 0,
 
     /// <summary>
-    /// The maintainer runs only on the designated producer cluster(s) - those that
-    /// host the source locally - and the view tree is replicated to thin consumer
-    /// clusters that want the (small) view but not the full base tree. A consumer
-    /// suppresses its maintainer and receives the view through the ordinary
-    /// replication bootstrap / catch-up / apply path. A single producer is a single
-    /// writer for the replicated view tree. Opt-in.
+    /// The maintainer runs only on one producer cluster and the view tree is
+    /// replicated to consumers. When consumers do not replicate the source, local
+    /// source-WAL ownership identifies the producer. When both source and view trees
+    /// replicate, <see cref="LatticeViewOptions.ShipViewProducerClusterId"/> must
+    /// explicitly identify the single producer. Every other cluster suppresses its
+    /// maintainer and receives the view through the ordinary replication bootstrap /
+    /// catch-up / apply path. Opt-in.
     /// </summary>
     ShipView = 1,
 }

@@ -30,6 +30,9 @@ public interface ILatticeView
     /// Returns the view's apply lag as the number of source WAL entries committed
     /// but not yet applied to the view, summed across every source shard. Zero
     /// means the view has caught up to the source head as of this call.
+    /// Throws <see cref="InvalidOperationException"/> on a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer because its
+    /// progress is driven by view-tree replication rather than the local source WAL.
     /// </summary>
     Task<long> GetLagAsync(CancellationToken cancellationToken = default);
 
@@ -56,7 +59,9 @@ public interface ILatticeView
     /// This is the manual analogue of replication anti-entropy for a view derived
     /// locally from its source. It has no effect for a view shipped to a
     /// source-less consumer cluster (whose drift is instead repaired by the normal
-    /// replication anti-entropy against the producer).
+    /// replication anti-entropy against the producer). The same suppression applies
+    /// to an explicitly designated ShipView consumer that also holds a replicated
+    /// source copy.
     /// </para>
     /// </summary>
     Task<bool> ReconcileAsync(CancellationToken cancellationToken = default);
@@ -79,6 +84,8 @@ public interface ILatticeView
     /// observe its own write in the view without depending on the background
     /// timer. This is an opt-in barrier; the default contract remains best-effort
     /// lag (see <see cref="GetLagAsync"/>).
+    /// Throws <see cref="InvalidOperationException"/> on a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// <para>
     /// The applied position is tracked as the maximum applied source HLC across
     /// the view's shard cursors. For a single source shard this is exact; across
@@ -99,6 +106,8 @@ public interface ILatticeView
     /// "write, then wait until my write is visible" pattern. Throws
     /// <see cref="TimeoutException"/> if the view does not catch up within
     /// <paramref name="timeout"/>.
+    /// Throws <see cref="InvalidOperationException"/> on a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// </summary>
     /// <param name="timeout">Maximum time to wait before throwing <see cref="TimeoutException"/>.</param>
     /// <param name="cancellationToken">Cancellation token observed while waiting.</param>
