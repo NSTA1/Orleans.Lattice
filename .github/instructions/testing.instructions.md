@@ -174,7 +174,14 @@ Some correctness-critical decisions are extracted into a small, dependency-free
 schedule exploration - so the property the model proves is a property of the
 code that actually runs, not of a parallel mimic that can drift. The first such
 core is `AtomicVisibilityGate` (the multi-key atomic-commit read gate,
-issue #1585); its model is `AtomicCommitVisibilityModel`.
+issue #1585); its model is `AtomicCommitVisibilityModel`. That model was
+generalized to an N-key read resolved against a versioned registry view
+(issue #1590): it drives the real recording-side `TxRegistryDecisionCore`
+(the decision map + monotonic revision counter) and the real reader-side
+`ReaderStabilityGate` (the double-checked revision-stability probe) that the
+production `TxRegistryGrain` and `LatticeGrain` reader retry now route through,
+asserting an all-or-nothing observation across N keys and that the stability
+probe never certifies a read that observed a mid-commit split.
 
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
