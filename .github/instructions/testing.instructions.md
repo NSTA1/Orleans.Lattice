@@ -399,6 +399,61 @@ in-memory, or trivial-adapter concern the models do not encode). No enumerated
 commit/abort, ordering, or orphan-guard branch remains as un-audited inline
 logic.
 
+### Property catalogue (level-C Phase 6, issue #1595)
+
+Lever (b) of the level-C epic (#1588) completes the atomic-commit *safety and
+liveness property catalogue*: a model only checks what you assert, so "verified"
+is bounded by the completeness of the property set. The full correctness contract
+of the atomic-commit protocol is enumerated below, and every property is encoded
+as a Coyote assertion (or a bounded-progress liveness check) against a
+production core, with a companion non-vacuous guard test (break the invariant ->
+Coyote finds it). The catalogue is kept aligned name-for-name with the abstract
+invariants of the Phase 7 TLA+ spec (`spec/AtomicCommit.tla`); the mapping column
+is the cross-lever alignment contract.
+
+The net-new home for this phase is `AtomicCommitInvariantModel` /
+`AtomicCommitInvariantCoyoteTests`: a single-saga full-lifecycle model (the
+tree-wide registry decision, the per-leaf terminal broadcast, duplicate terminal
+re-deliveries classified by `TerminalDecisionGuard`, and interleaved reader
+probes) that continuously asserts the per-key point and ordering invariants the
+sibling models did not yet encode. Each of its assertions has a companion guard
+(`AtomicCommitInvariantGuard`) that removes exactly the one fix it depends on.
+
+| TLA+ invariant | Plain-language property | Core / phase | Encoding (model + assertion) | Guard test (proves non-vacuous) | Net-new vs cited |
+|----------------|-------------------------|--------------|------------------------------|---------------------------------|------------------|
+| `AllOrNothing` | An N-key read observes every key of a saga with its post value, or every key with its pre value; never a mix. | `AtomicVisibilityGate` / `TxDecisionView` / `ReaderStabilityGate` (Phase 1) | `AtomicCommitVisibilityModel` asserts `AssertAllOrNothing` over the fan-out. | `Shared_snapshot_without_revision_probe_certifies_a_torn_read`, `Live_per_key_read_reintroduces_the_split_view_race`. | Cited (already covered). |
+| `VisibilityMatchesDecision` | A key is observed post-saga exactly when the recorded decision is committed (the sharpened all-or-nothing, per key against the current decision). | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `post == (core.Resolve(txid) == Committed)` on every reader probe. | `Surfacing_in_flight_as_prepared_violates_strict_isolation`. | Net-new. |
+| `StrictIsolation` | A reader never observes a post-saga value unless the recorded decision is committed; in-flight/unknown defaults to hidden. | `AtomicVisibilityGate` (Phase 1) | `AtomicCommitInvariantModel` asserts `!post || core.Resolve(txid) == Committed`, resolved against the real recorded decision (not the guard's faked surfacing). | `Surfacing_in_flight_as_prepared_violates_strict_isolation`. | Net-new. |
+| `CommitIntegrity` | The coordinator commits iff every participant acked; a single nack/unreachable is decisive; never both commit and abort. | `SagaCoordinatorCore` (Phase 2) | `SagaCoordinatorModel` asserts the fold verdict against the vote multiset. | `SagaCoordinatorModel` guard test (commit-with-a-nack) in `SagaCoordinatorCoyoteTests`. | Cited (already covered). |
+| `LinearizedTerminals` | A leaf's applied commit/abort terminal matches the recorded decision, so no terminal precedes the decision. | `TxRegistryDecisionCore` + broadcast (Phase 1/3) | `AtomicCommitInvariantModel` asserts a commit terminal implies `Resolve == Committed` and an abort terminal implies `Resolve == Aborted`. | `Broadcasting_before_the_decision_violates_terminal_linearization`. | Net-new. |
+| `NoMixedTerminals` | One saga never applies a commit terminal on one leaf and an abort terminal on another. | `TerminalDecisionGuard` + broadcast (Phase 3) | `AtomicCommitInvariantModel` asserts `!(anyCommit && anyAbort)` across leaves; the serialized-registry write-once rule is additionally pinned by `TerminalDecisionGuardTests`. | `Independent_per_leaf_terminals_violate_no_mixed_terminals`. | Net-new (interleaving) + cited (serialized). |
+| `DecisionDurability` | Once the registry records a terminal decision it never flips to the other terminal, across every duplicate delivery. | `TxRegistryDecisionCore` + `TerminalDecisionGuard` (Phase 1/3) | `AtomicCommitInvariantModel` tracks the first recorded terminal and asserts it never changes under duplicate re-delivery; complementary to the serialized permutation suite `TerminalDecisionGuardTests`. | `Flipping_a_recorded_decision_violates_decision_durability`. | Net-new (interleaving) + cited (serialized). |
+| `MonotonicVisibility` | Once a committed value is observed visible it stays visible (no regression except by a later committed write/tombstone, none of which this model injects). | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` records `EverVisible[k]` and asserts a once-visible key never reverts; the cross-round/reshard form is covered by `ReshardMigrationModel`. | `Flipping_a_recorded_decision_violates_decision_durability` (a flip to abort re-hides a committed key). | Net-new (single-saga temporal) + cited (reshard). |
+| `RevisionMonotonic` | The registry revision counter never decreases; a stale-revision snapshot is exactly what the reader-side probe rejects. | `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `core.Revision >= previousRevision` after every mutation. | `Lowering_the_revision_counter_violates_revision_monotonicity`. | Net-new (explicit assertion; `AtomicCommitVisibilityModel` relies on it via the probe but does not assert it directly). |
+| `Termination` | Every saga reaches a terminal decision under a bounded fault budget (no permanent stall). | `SagaCoordinatorCore` + registry (Phase 4) | `AtomicCommitLivenessModel` drives to the budget-exhausted point and asserts the good terminal state. | `AtomicCommitLivenessModel` guard test (backstop removed) in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
+| `EveryCommittedKeyReadable` | Every stable committed key eventually becomes readable (bounded-progress liveness). | `AtomicVisibilityGate` + drain (Phase 4) | `AtomicCommitLivenessModel` asserts eventual readability at the bounded terminal. | `AtomicCommitLivenessModel` guard test in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
+
+**Net-new assertions this phase** (properties not previously asserted by any
+model): `VisibilityMatchesDecision`, `StrictIsolation`, `LinearizedTerminals`,
+`NoMixedTerminals` (as an interleaving property beyond the serialized suite),
+`DecisionDurability` (as an interleaving property beyond the serialized suite),
+`MonotonicVisibility` (as a single-saga temporal property), and `RevisionMonotonic`
+(as an explicit assertion). All seven live in `AtomicCommitInvariantModel` with a
+one-to-one guard in `AtomicCommitInvariantCoyoteTests`.
+
+**Cited (already-covered) properties**: `AllOrNothing` and the cross-round form of
+`MonotonicVisibility` (`AtomicCommitVisibilityModel` / `ReshardMigrationModel`),
+`CommitIntegrity` (`SagaCoordinatorModel`), `Termination` and
+`EveryCommittedKeyReadable` (`AtomicCommitLivenessModel`), and the serialized
+write-once forms of `NoMixedTerminals` / `DecisionDurability`
+(`TerminalDecisionGuardTests`). These are catalogued but not re-encoded, to avoid
+duplicating a non-vacuous assertion an existing model already makes.
+
+**Gap analysis.** All eleven TLA+ invariants have a live model home above; none is
+recorded as out-of-scope. The wall-clock, real-RPC, grain-serialized-in-memory,
+and trivial-adapter concerns the models deliberately do not encode remain listed
+under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
+
 ## TLA+ specification (not a required check)
 
 The atomic-commit protocol also has a design-level TLA+ specification under the
