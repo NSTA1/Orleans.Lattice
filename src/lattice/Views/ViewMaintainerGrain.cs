@@ -251,14 +251,21 @@ internal sealed partial class ViewMaintainerGrain(
             ViewName,
             topologyOptions,
             state.State.ActiveGeneration);
+        // Only materialise the view-tree id when replication is enabled: it is the
+        // sole input the topology resolver reads past its non-replicated early
+        // return, so computing it on every drain tick of the default
+        // (non-replicated) deployment would allocate a string for nothing on the
+        // steady-state hot path.
         var maintenanceRole = ViewReplicationTopology.Resolve(
             ViewName,
             registration.SourceTreeId,
             topologyOptions,
             replicationContext,
-            topologyOptions.ReplicationMode == LatticeViewReplicationMode.ShipView
-                ? GenerationTreeId(0)
-                : ViewTreeId);
+            replicationContext.IsReplicationEnabled
+                ? topologyOptions.ReplicationMode == LatticeViewReplicationMode.ShipView
+                    ? GenerationTreeId(0)
+                    : ViewTreeId
+                : null);
         if (maintenanceRole == ViewReplicationTopology.MaintenanceRole.Suppress
             || (maintenanceRole == ViewReplicationTopology.MaintenanceRole.InferFromSource
                 && !await IsSourceLocallyReadableAsync(registration, cancellationToken)))
