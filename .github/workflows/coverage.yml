@@ -93,7 +93,7 @@ jobs:
           done
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           # Add a CODECOV_TOKEN repository secret (from the Codecov project
           # settings). fail_ci_if_error is left false so a transient upload
