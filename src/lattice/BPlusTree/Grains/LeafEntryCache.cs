@@ -179,7 +179,13 @@ internal sealed class LeafEntryCache
         {
             return;
         }
-        foreach (var key in _deferredMaterializers.Keys.ToArray())
+        // Iterate the deferred map directly: the loop mutates only _rows (a
+        // separate dictionary) and each materialiser purely serialises its
+        // live typed shadow, so the enumerated map is never structurally
+        // modified here - the Clear runs only after the walk completes. This
+        // avoids the per-drain string[] key snapshot the previous ToArray()
+        // allocated on every hand-out of the backing rows.
+        foreach (var key in _deferredMaterializers.Keys)
         {
             if (_rows.TryGetValue(key, out var row))
             {

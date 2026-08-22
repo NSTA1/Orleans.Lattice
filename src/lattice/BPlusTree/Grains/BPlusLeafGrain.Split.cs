@@ -120,9 +120,14 @@ internal sealed partial class BPlusLeafGrain
 
     private async Task<SplitResult> SplitAsync()
     {
-        var keys = Cache.Keys.ToList();
-        int mid = keys.Count / 2;
-        var splitKey = keys[mid];
+        // Only the median key is needed to pivot the split, so avoid
+        // materialising every key into a throwaway List<string>. The cache's
+        // Keys view is the backing SortedDictionary's ordered key collection:
+        // its Count is O(1) and enumerating to the midpoint touches half the
+        // keys without copying the whole set into a new array.
+        var keys = Cache.Keys;
+        int mid = keys.Count() / 2;
+        var splitKey = keys.ElementAt(mid);
 
         // Snapshot the WAL head per partition before the split's
         // intent is persisted. Under multi-partition replay every

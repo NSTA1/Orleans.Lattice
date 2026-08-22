@@ -231,49 +231,83 @@ public sealed class Rga : ICrdt<Rga>
     public IReadOnlyList<(OrSetDot Dot, byte[] Value)> ToList()
     {
         if (_materializedCache is { } cached) return cached;
-        if (Nodes.Count == 0) return _materializedCache = Array.Empty<(OrSetDot, byte[])>();
+        var nodes = Nodes;
+        var n = nodes.Count;
+        if (n == 0) return _materializedCache = Array.Empty<(OrSetDot, byte[])>();
 
-        // Build the parent -> children index once per call. The map
-        // value is a list of (counter, replicaId, nodeIndex) triples
-        // sorted descending by (counter, replicaId) so the in-order
-        // traversal is a straight foreach on the sorted children.
-        var childrenByParent = new Dictionary<OrSetDot, List<RgaNode>>();
-        foreach (var n in Nodes)
+        // Build the parent -> children index as a flat compressed layout
+        // instead of a Dictionary<OrSetDot, List<RgaNode>>. The previous
+        // shape allocated one List per distinct parent, which for the
+        // dominant collaborative-text pattern (a linear chain where every
+        // parent has exactly one child) meant one throwaway list object per
+        // node on every uncached rebuild. Here a single dot->index map plus
+        // a handful of pooled-shape int[] arrays (counting-sort buckets, the
+        // scatter cursor, and the DFS stack) carry the whole traversal, so
+        // the rebuild's allocation profile no longer scales with the number
+        // of parents. The resolved order is identical: siblings under a
+        // shared parent are still sorted descending by (Counter, ReplicaId),
+        // and the pre-order DFS still emits live nodes in the same sequence.
+        // Slot index n is the virtual Root; a node maps to slot n when its
+        // parent is Root, to its parent's storage index when the parent is a
+        // known node, or to -1 (excluded, never reachable from Root) for an
+        // orphan whose parent is absent - exactly the nodes the old DFS never
+        // visited.
+        var indexByDot = new Dictionary<OrSetDot, int>(n);
+        for (var i = 0; i < n; i++) indexByDot[nodes[i].Dot] = i;
+
+        var parentSlot = new int[n];
+        var starts = new int[n + 2];
+        for (var i = 0; i < n; i++)
         {
-            if (!childrenByParent.TryGetValue(n.ParentDot, out var bucket))
-            {
-                bucket = new List<RgaNode>();
-                childrenByParent[n.ParentDot] = bucket;
-            }
-            bucket.Add(n);
-        }
-        foreach (var bucket in childrenByParent.Values)
-        {
-            bucket.Sort(static (a, b) =>
-            {
-                var c = b.Counter.CompareTo(a.Counter);
-                if (c != 0) return c;
-                return string.CompareOrdinal(b.ReplicaId, a.ReplicaId);
-            });
+            var parent = nodes[i].ParentDot;
+            int slot;
+            if (parent == default) slot = n;
+            else if (indexByDot.TryGetValue(parent, out var pj)) slot = pj;
+            else slot = -1;
+            parentSlot[i] = slot;
+            // Tally into starts[slot + 1] so the prefix sum below turns the
+            // per-slot counts directly into exclusive start offsets.
+            if (slot >= 0) starts[slot + 1]++;
         }
 
-        var result = new List<(OrSetDot, byte[])>(Nodes.Count);
-        // Iterative DFS to avoid stack overflows on deep histories.
-        var stack = new Stack<RgaNode>();
-        if (childrenByParent.TryGetValue(Root, out var top))
+        for (var s = 0; s <= n; s++) starts[s + 1] += starts[s];
+        var totalChildren = starts[n + 1];
+
+        // Scatter each node index into its parent's contiguous run. A cursor
+        // seeded from the start offsets keeps the fill append-only per slot.
+        var childrenFlat = new int[totalChildren];
+        var cursor = new int[n + 1];
+        Array.Copy(starts, cursor, n + 1);
+        for (var i = 0; i < n; i++)
         {
-            // Push in reverse so the highest-priority sibling is
-            // popped first.
-            for (var i = top.Count - 1; i >= 0; i--) stack.Push(top[i]);
+            var slot = parentSlot[i];
+            if (slot >= 0) childrenFlat[cursor[slot]++] = i;
         }
-        while (stack.Count > 0)
+
+        // Sort each parent's run into descending (Counter, ReplicaId) sibling
+        // order. The struct comparer is passed by value through the generic
+        // Span.Sort overload, so the whole rebuild allocates no ordering
+        // delegate.
+        var comparer = new SiblingComparer(nodes);
+        for (var s = 0; s <= n; s++)
         {
-            var node = stack.Pop();
+            var start = starts[s];
+            var len = starts[s + 1] - start;
+            if (len > 1) childrenFlat.AsSpan(start, len).Sort(comparer);
+        }
+
+        var result = new List<(OrSetDot, byte[])>(n);
+        // Iterative DFS over an int index stack (bounded by the child count,
+        // which never exceeds n) to avoid stack overflows on deep histories.
+        var stack = new int[n];
+        var top = 0;
+        for (var k = starts[n + 1] - 1; k >= starts[n]; k--) stack[top++] = childrenFlat[k];
+        while (top > 0)
+        {
+            var i = stack[--top];
+            var node = nodes[i];
             if (!node.IsTombstone) result.Add((node.Dot, node.Value));
-            if (childrenByParent.TryGetValue(node.Dot, out var kids))
-            {
-                for (var i = kids.Count - 1; i >= 0; i--) stack.Push(kids[i]);
-            }
+            for (var k = starts[i + 1] - 1; k >= starts[i]; k--) stack[top++] = childrenFlat[k];
         }
         return _materializedCache = result;
     }
@@ -568,5 +602,25 @@ public sealed class Rga : ICrdt<Rga>
             if (c != 0) return c;
         }
         return a.Length.CompareTo(b.Length);
+    }
+
+    /// <summary>
+    /// Orders node storage indices into descending
+    /// <c>(Counter, ReplicaId)</c> RGA sibling order - the highest counter
+    /// wins, ReplicaId breaks counter ties - by resolving each index against
+    /// the shared <see cref="Nodes"/> list. A <c>readonly struct</c> so the
+    /// generic <see cref="MemoryExtensions.Sort{T, TComparer}(Span{T}, TComparer)"/>
+    /// overload sorts each sibling run without allocating an ordering
+    /// delegate on the <see cref="ToList"/> rebuild path.
+    /// </summary>
+    private readonly struct SiblingComparer(List<RgaNode> nodes) : IComparer<int>
+    {
+        public int Compare(int a, int b)
+        {
+            var na = nodes[a];
+            var nb = nodes[b];
+            var c = nb.Counter.CompareTo(na.Counter);
+            return c != 0 ? c : string.CompareOrdinal(nb.ReplicaId, na.ReplicaId);
+        }
     }
 }

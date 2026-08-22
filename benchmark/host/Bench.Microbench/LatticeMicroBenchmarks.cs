@@ -897,6 +897,7 @@ public class LatticeMicroBenchmarks
         BuildOrSetOpsFixture();
         BuildOrMapBulkSetFixture();
         BuildRgaFixture();
+        BuildLeafCacheMicroFixture();
         BuildFlagFixture();
         BuildNewCrdtFixture();
         BuildLeafQueueFixture();
@@ -3297,6 +3298,14 @@ public class LatticeMicroBenchmarks
     private int _rgaKeyCount;
     private Rga _rgaToListFixture = null!;
 
+    // The shared node list of the ToList fixture, re-wrapped in a fresh Rga on
+    // every Rga_ToListUncached invocation so the materialisation cache starts
+    // null and the full parent/children index rebuild is measured each time -
+    // the collaborative-text projection path Rga_ToList's cached arm never
+    // exercises. Shared (not copied) so the benchmark allocates only what the
+    // rebuild itself allocates, not a per-invocation node list.
+    private List<RgaNode> _rgaRebuildNodes = null!;
+
     // Merge-path operands: a pre-built sequence of N live nodes and a
     // single-operation delta whose dot already exists in the sequence (an
     // idempotent re-insert). Applying it repeatedly neither grows nor
@@ -3902,6 +3911,11 @@ public class LatticeMicroBenchmarks
         {
             parent = _rgaToListFixture.InsertAfter(parent, "replica", _rgaValue);
         }
+        // Force one materialisation so the shared node list is the exact shape
+        // the uncached rebuild benchmark re-projects; the nodes are shared by
+        // reference with each fresh Rga wrapper, never copied.
+        _ = _rgaToListFixture.ToList();
+        _rgaRebuildNodes = _rgaToListFixture.Nodes;
 
         // A second N-node sequence plus an idempotent single-insert delta
         // (the last node re-shipped under its own parent). The dot already
@@ -4060,6 +4074,27 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// Rebuild-path instrument: <see cref="Rga.ToList"/> over a fresh wrapper
+    /// whose materialisation cache is cold, so the full parent/children index
+    /// and per-sibling ordering are rebuilt on every invocation. This is the
+    /// projection cost a replica actually pays after any mutation invalidates
+    /// the cache (an edit, a merge, or a freshly loaded/cloned sequence). The
+    /// rebuild now lays the parent/children relation out in flat counting-sort
+    /// arrays keyed by a single dot->index map, replacing the previous
+    /// Dictionary&lt;OrSetDot, List&lt;RgaNode&gt;&gt; that allocated one child
+    /// list per parent (N single-element lists for the linear text shape this
+    /// fixture builds) plus a boxed comparison delegate - the allocation
+    /// reduction this benchmark exists to quantify. The node list is shared by
+    /// reference with the fixture, so the measurement isolates the rebuild's
+    /// own allocations.
+    /// </summary>
+    [Benchmark(Description = "Rga ToList (uncached rebuild)")]
+    public IReadOnlyList<(OrSetDot Dot, byte[] Value)> Rga_ToListUncached()
+    {
+        return new Rga { Nodes = _rgaRebuildNodes }.ToList();
+    }
+
+    /// <summary>
     /// Merge-path instrument: a single-operation <see cref="Rga.MergeDelta"/>
     /// against a pre-built N-node sequence - the steady-state replication
     /// shape where each delivered delta carries one or two operations. The
@@ -4088,6 +4123,100 @@ public class LatticeMicroBenchmarks
     /// </summary>
     [Benchmark(Description = "Rga count (append-only)")]
     public int Rga_Count() => _rgaCountTarget.Count;
+
+    // ===== Leaf-entry-cache micro-suite operands =====
+    // Sized by BENCH_MICROBENCH_LEAFCACHE_ROWS (default 256). _leafSplitCache is
+    // a pre-built cache of N canonical rows, read (never mutated) by the two
+    // split-midpoint arms; _leafCacheMicroKeys/_leafCacheMicroValue seed the
+    // fresh per-invocation cache the drain benchmark fills with deferred rows.
+    private int _leafCacheMicroCount;
+    private byte[] _leafCacheMicroValue = null!;
+    private string[] _leafCacheMicroKeys = null!;
+    private LeafEntryCache _leafSplitCache = null!;
+
+    /// <summary>
+    /// Builds the leaf-entry-cache micro operands: an ordered key set, a shared
+    /// value buffer, and a canonical-row cache for the split-midpoint arms.
+    /// </summary>
+    private void BuildLeafCacheMicroFixture()
+    {
+        var rows = ReadIntEnv("BENCH_MICROBENCH_LEAFCACHE_ROWS", 256);
+        if (rows < 2) rows = 2;
+        _leafCacheMicroCount = rows;
+        _leafCacheMicroValue = new byte[64];
+        _leafCacheMicroKeys = new string[rows];
+        for (var i = 0; i < rows; i++)
+        {
+            _leafCacheMicroKeys[i] = $"k{i:D6}";
+        }
+
+        var canonical = new SortedDictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
+        _leafSplitCache = new LeafEntryCache(canonical);
+        var ts = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        for (var i = 0; i < rows; i++)
+        {
+            _leafSplitCache.StoreRow(
+                _leafCacheMicroKeys[i],
+                new LwwValue<byte[]> { Value = _leafCacheMicroValue, Timestamp = ts, IsTombstone = false });
+        }
+    }
+
+    /// <summary>
+    /// Drain-path instrument: fills a fresh <see cref="LeafEntryCache"/> with N
+    /// deferred rows (each a null-value metadata row plus a materialiser that
+    /// returns a shared buffer) and then hands out the backing rows, which
+    /// drains every deferred materialiser in one pass. The drain now iterates
+    /// the deferred map's keys directly instead of snapshotting them into a
+    /// throwaway <c>string[]</c> on every hand-out - the per-drain array
+    /// allocation this benchmark exists to quantify. The fresh cache and the
+    /// N materialiser closures are setup common to both the before and after
+    /// arms, so the measured allocation delta isolates the removed snapshot.
+    /// </summary>
+    [Benchmark(Description = "Leaf cache drain deferred")]
+    public int LeafCache_DrainDeferred()
+    {
+        var cache = new LeafEntryCache(new SortedDictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal));
+        var ts = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 };
+        var value = _leafCacheMicroValue;
+        var keys = _leafCacheMicroKeys;
+        for (var i = 0; i < keys.Length; i++)
+        {
+            cache.StoreDeferredRow(
+                keys[i],
+                new LwwValue<byte[]> { Value = null, Timestamp = ts, IsTombstone = false },
+                () => value,
+                value.Length);
+        }
+        // Draining materialises every deferred row into the backing store.
+        return cache.UnderlyingRows.Count;
+    }
+
+    /// <summary>
+    /// Split-pivot instrument, <b>before</b> arm: selects the median key the way
+    /// the leaf split used to - materialising the whole ordered key view into a
+    /// <c>List&lt;string&gt;</c> only to index its midpoint. Paired with
+    /// <see cref="LeafCache_SplitMidpoint_New"/> so a single run shows the
+    /// allocation the throwaway list costs at N keys.
+    /// </summary>
+    [Benchmark(Description = "Leaf split midpoint (before: ToList)")]
+    public string LeafCache_SplitMidpoint_Old()
+    {
+        var keys = _leafSplitCache.Keys.ToList();
+        return keys[keys.Count / 2];
+    }
+
+    /// <summary>
+    /// Split-pivot instrument, <b>after</b> arm: selects the median key by
+    /// reading the ordered key view's O(1) count and enumerating to the
+    /// midpoint, so no throwaway <c>List&lt;string&gt;</c> is allocated. This
+    /// is the shape the leaf split now uses.
+    /// </summary>
+    [Benchmark(Description = "Leaf split midpoint (after: ElementAt)")]
+    public string LeafCache_SplitMidpoint_New()
+    {
+        var keys = _leafSplitCache.Keys;
+        return keys.ElementAt(keys.Count() / 2);
+    }
 
     /// <summary>
     /// Builds the operands for the four flag-CRDT benchmarks. The read
