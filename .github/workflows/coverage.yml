@@ -82,9 +82,12 @@ jobs:
             echo "::group::Coverage: $name"
             # Chaos tests are CI-only fault-injection and excluded here to keep
             # the coverage run deterministic; AzureStorageEmulator tests run
-            # against the Azurite service above.
+            # against the Azurite service above. Coyote systematic-concurrency
+            # models run in their own opt-in CI tier and cover the same shared
+            # cores the deterministic unit tests already exercise, so they are
+            # excluded here too.
             dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos" \
+              --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
               --collect:"XPlat Code Coverage" \
               --results-directory "coverage/${name}" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \

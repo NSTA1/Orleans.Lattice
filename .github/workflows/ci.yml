@@ -650,30 +650,6 @@ jobs:
             done
           done
 
-      - name: Test changed packages (chaos first - isolate flaky-prone surface)
-        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
-        # See the deterministic step below for why the digest-settle
-        # convergence budget is widened on a loaded CI runner via
-        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
-        # the same settle helper under even heavier fault-injection load.
-        env:
-          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
-        run: |
-          set -euo pipefail
-          for name in ${{ steps.discover.outputs.to_test }}; do
-            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
-            if [ -z "$proj" ]; then
-              echo "::notice::No test project under test/${name}/ - skipping."
-              continue
-            fi
-            echo "::group::Test ${name} (chaos)"
-            dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}-chaos.trx"
-            echo "::endgroup::"
-          done
-
       - name: Test changed packages (deterministic)
         if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         # The leaf-side projection-digest publish is coalesced behind a
@@ -696,13 +672,65 @@ jobs:
           for name in ${{ steps.discover.outputs.to_test }}; do
             proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
             if [ -z "$proj" ]; then
+              echo "::notice::No test project under test/${name}/ - skipping."
               continue
             fi
             echo "::group::Test ${name} (deterministic)"
             dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos" \
+              --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-results.trx"
+            echo "::endgroup::"
+          done
+
+      - name: Test changed packages (Coyote systematic concurrency)
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        # Runs after the deterministic unit tests and before the chaos suite:
+        # normal -> coyote -> chaos. Opt-in tier. Coyote models drive the
+        # shared, dependency-free correctness cores (e.g. AtomicVisibilityGate)
+        # through systematic schedule exploration. They use no Orleans cluster,
+        # so they are fast and deterministic, but they are held out of the
+        # deterministic step (via TestCategory!=Coyote above) and run here on
+        # their own so a model regression is attributed to this tier rather than
+        # buried in the per-package suite.
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              continue
+            fi
+            echo "::group::Test ${name} (Coyote)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory=Coyote" \
+              --logger "trx;LogFileName=${name}-coyote.trx"
+            echo "::endgroup::"
+          done
+
+      - name: Test changed packages (chaos last - isolate flaky-prone surface)
+        if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
+        # See the deterministic step above for why the digest-settle
+        # convergence budget is widened on a loaded CI runner via
+        # LATTICE_DIGEST_SETTLE_TIMEOUT_MS. The chaos digest suite leans on
+        # the same settle helper under even heavier fault-injection load.
+        # Runs last (normal -> coyote -> chaos) so the fast deterministic and
+        # Coyote tiers report first and the flaky-prone fault-injection surface
+        # is isolated at the end.
+        env:
+          LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
+        run: |
+          set -euo pipefail
+          for name in ${{ steps.discover.outputs.to_test }}; do
+            proj=$(ls "test/${name}"/*.Tests.csproj 2>/dev/null | head -n 1 || true)
+            if [ -z "$proj" ]; then
+              echo "::notice::No test project under test/${name}/ - skipping."
+              continue
+            fi
+            echo "::group::Test ${name} (chaos)"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "TestCategory=Chaos&TestCategory!=AzureStorageEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}-chaos.trx"
             echo "::endgroup::"
           done
 
