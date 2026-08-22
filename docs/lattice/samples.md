@@ -35,6 +35,7 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 | [TagIndexes](../../samples/TagIndexes/README.md) | Tagging keys and querying them back with `WithAllTags` (intersection) and `WithAnyTags` (union). |
 | [TreeRegistry](../../samples/TreeRegistry/README.md) | Enumerating all user trees and their per-tree configuration overrides. |
 | [Ttl](../../samples/Ttl/README.md) | Per-entry time-to-live: a key visible before its TTL and gone after it expires. |
+| [VerifiedAtomicCommit](../../samples/VerifiedAtomicCommit/README.md) | A concurrent snapshot reader (`GetManyAsync`) races a flipping atomic saga and never observes a torn view - the all-or-nothing property the atomic-commit cores, Coyote models, and TLA+ spec machine-check. |
 
 ## HelloWorld
 

@@ -83,6 +83,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Tombstone cleanup** | Background reaping of expired tombstones with crash-safe progress tracking. | [Tombstone Compaction](docs/lattice/tombstone-compaction.md) | n/a |
 | **Tree registry** | Built-in enumeration of all user trees and their per-tree config overrides - no external metadata store required. | [Tree Registry](docs/lattice/tree-registry.md) | [sample](samples/TreeRegistry/README.md) |
 | **TTL on `SetAsync`** | Per-entry time-to-live with absolute server-side expiry, preserved verbatim across splits, snapshots, resize, and replication. | [TTL](docs/lattice/ttl.md) | [sample](samples/Ttl/README.md) |
+| **Verified atomic-commit protocol** | The atomic-commit protocol behind atomic writes and online reshard is driven by pure, deterministic cores that both production and a verification layer execute, so its all-or-nothing safety and liveness properties are machine-checked by a Coyote concurrency tier and a TLA+ specification, not just integration tests. | [Verified Atomic-Commit](docs/lattice/verified-atomic-commit.md) | [sample](samples/VerifiedAtomicCommit/README.md) |
 
 ## Quick Start
 
@@ -130,6 +131,7 @@ For internals (the "how"):
 - [Architecture](docs/lattice/architecture.md) - grain layers, sharding, root promotion, grain mapping, capacity.
 - [Tree Structure](docs/lattice/tree-structure.md) - internal/leaf node layout, two-phase leaf splits, idempotent split propagation.
 - [Tree Storage](docs/lattice/tree-storage.md) - per-provider storage limits, node size estimation, sizing recommendations.
+- [Verified Atomic-Commit](docs/lattice/verified-atomic-commit.md) - the proven-core pattern, Coyote concurrency tier, property catalogue, and TLA+ spec behind the atomic-commit protocol.
 - [WAL](docs/lattice/wal.md) - write-ahead log as the sole foreground-commit durability boundary.
 - [WAL Causal+](docs/lattice/wal-causal-plus.md) - causal+ entry-schema extension, dependency satisfaction, snapshot semantics.
 - [WAL Storage Providers](docs/lattice/wal-storage-providers.md) - `IWalStorageProvider` durability seam, in-memory default, optional Azure Table backend.
