@@ -216,6 +216,25 @@ The reusable harness lives in the product-agnostic shared testing library
    `AssertInterleavingViolationFound(...)` - this proves the model genuinely
    exercises the race, so the passing test is meaningful rather than vacuous.
 
+## TLA+ specification (not a required check)
+
+The atomic-commit protocol also has a design-level TLA+ specification under the
+top-level [`spec/`](../../spec/) directory (`AtomicCommit.tla` + `.cfg`, checked
+by TLC), complementary to the Coyote tier: the Coyote models verify the
+*implementation* of an extracted core under systematic schedule exploration,
+while the TLA+ spec checks the protocol *design* exhaustively over small bounded
+instances. See `spec/README.md` for how to run it and `spec/Refinement.md` for
+the mapping from spec actions to the code cores.
+
+TLC is deliberately **not** a required per-PR check. It needs a Java runtime and
+the TLA+ tools, which the .NET build image does not carry, and the spec tracks
+the protocol design rather than any single code change, so gating every PR on it
+would add a heavyweight toolchain for little marginal signal. It is run locally
+when the protocol design changes; a non-required scheduled workflow could run it
+nightly if the model portfolio grows, but no required check may depend on the
+TLA+ toolchain. `spec/` is outside `Orleans.Lattice.slnx` and is not built by
+`dotnet`.
+
 ## Hygiene gates
 
 The repository enforces a set of *hygiene gates* - structural regression tests that fail the build at PR time rather than letting a leak reach `main`. They run as ordinary tests inside the non-chaos suite, so any violation breaks the required `build-and-test` check.
