@@ -128,6 +128,52 @@ public class LatticeCrossTreeTxGrainTests
     }
 
     [Test]
+    public async Task CommitAsync_precondition_failed_abort_records_null_failure_message()
+    {
+        // Vote->outcome->decision mapping (via SagaCoordinatorCore): a single
+        // PreconditionFailed vote maps to a nack, which the core decides as
+        // Abort - but with anyFailed=false, so the persisted FailureMessage stays
+        // null (a guard-precondition abort, not a genuine staging failure).
+        var (grain, state, _, participants) = CreateGrain(["orders", "inventory"]);
+        participants["inventory"].PrepareForCoordinatorAsync(
+                Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
+            .Returns(CrossTreePrepareVote.PreconditionFailed);
+
+        await grain.CommitAsync(Batches(("orders", "order:1", "A"), ("inventory", "sku:1", "B")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.PreconditionFailed));
+            Assert.That(state.State.FailureMessage, Is.Null);
+        });
+    }
+
+    [Test]
+    public void CommitAsync_genuine_failure_records_non_null_failure_message()
+    {
+        // Vote->outcome->decision mapping (via SagaCoordinatorCore): a Failed vote
+        // maps to a nack that the core decides as Abort, and the anyFailed nuance
+        // stamps a non-null FailureMessage (distinguishing a genuine staging
+        // failure from a precondition abort) before CommitAsync surfaces the throw.
+        var (grain, state, _, participants) = CreateGrain(["orders", "inventory"]);
+        participants["inventory"].PrepareForCoordinatorAsync(
+                Arg.Any<string>(), Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                Arg.Any<LatticePredicateNode?>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>())
+            .Returns(CrossTreePrepareVote.Failed);
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => grain.CommitAsync(Batches(
+            ("orders", "order:1", "A"),
+            ("inventory", "sku:1", "B"))));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Outcome, Is.EqualTo(CrossTreeAtomicWriteOutcome.PreconditionFailed));
+            Assert.That(state.State.FailureMessage, Is.Not.Null);
+        });
+    }
+
+    [Test]
     public async Task CommitAsync_empty_batches_is_vacuous_commit()
     {
         var (grain, state, _, _) = CreateGrain();

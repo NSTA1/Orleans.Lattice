@@ -174,7 +174,99 @@ Some correctness-critical decisions are extracted into a small, dependency-free
 schedule exploration - so the property the model proves is a property of the
 code that actually runs, not of a parallel mimic that can drift. The first such
 core is `AtomicVisibilityGate` (the multi-key atomic-commit read gate,
-issue #1585); its model is `AtomicCommitVisibilityModel`.
+issue #1585); its model is `AtomicCommitVisibilityModel`. That model was
+generalized to an N-key read resolved against a versioned registry view
+(issue #1590): it drives the real recording-side `TxRegistryDecisionCore`
+(the decision map + monotonic revision counter) and the real reader-side
+`ReaderStabilityGate` (the double-checked revision-stability probe) that the
+production `TxRegistryGrain` and `LatticeGrain` reader retry now route through,
+asserting an all-or-nothing observation across N keys and that the stability
+probe never certifies a read that observed a mid-commit split. A second core is
+`SagaCoordinatorCore` (the atomic-write saga coordinator's commit-vs-abort
+transition, issue #1589); its model is `SagaCoordinatorModel`, and the
+production `LatticeCrossTreeTxGrain` folds each participant's prepare vote
+through it to decide commit-vs-abort. A third group covers the online-reshard
+migration protocol's interaction with the saga (issue #1591, reproducing the
+#1584 split-view class): its model is `ReshardMigrationModel`, driving the real
+write-side `MigrationTerminalCore` (the terminal-delivery bucket disposition,
+including the `DiscardOrphan` guard) that `BPlusLeafGrain.ApplyTxTerminalAsync`
+routes through, the real read-side `ShadowedMigrationReadGuard` /
+`AtomicVisibilityGate` orphan guard that `BPlusLeafGrain.IsShadowedReadSafeAsync`
+routes through, and the real `SplitBoundary.Owns` split-key seal that
+`ShouldApplyDuringReplay` routes through. It interleaves a migration-in-progress
+destination leaf, two concurrent saga rounds, a late shadow-forwarded orphan
+prepare, a duplicate terminal broadcast, the cross-migration LWW backstop, and a
+multi-key reader fan-out, asserting (a) a reader observes zero-or-all keys (no
+split view) and (b) no orphan bucket ever shadows a later saga's value. This
+makes deterministic exactly the interleavings that
+`ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard`
+covers only probabilistically as a CI-only chaos backstop: the relative delivery
+orders of {shadow-forward prepare, terminal broadcast, backstop, reader fan-out}
+against an already-terminal saga.
+
+A fourth model is the atomic-commit **liveness** model, `AtomicCommitLivenessModel`
+(issue #1592). Where the three models above prove *safety* (nothing bad happens)
+over a reliable transport, this one proves *liveness / progress* (the protocol does
+not get stuck) under **fault injection**: the saga's terminal broadcast is
+delivered through a `FaultDeliveryQueue<T>` that drops, duplicates, and reorders
+messages, and participants restart, all bounded by a `FaultBudget`. It drives the
+same production cores (`SagaCoordinatorCore.Decide` for the verdict,
+`TxRegistryDecisionCore` for the durable decision, `MigrationTerminalCore` for each
+leaf's terminal disposition, `AtomicVisibilityGate` for the reader fan-out), and
+asserts three progress properties: a saga with all acks eventually commits on every
+participant; an aborted saga leaves no participant holding a prepared value; and a
+committed saga is eventually visible to a reader on every owning leaf.
+
+**How liveness is encoded (and why not a Coyote liveness monitor).** Because the
+harness does not apply `coyote rewrite`, real `Task`/`await` is not controlled, so
+there is no fair infinite schedule for a temperature-based Coyote liveness monitor
+to flag. Liveness is instead encoded as **bounded progress**: the finite
+`FaultBudget` is the fairness assumption ("faults do not happen forever") made
+concrete, so once it is exhausted the transport is reliable and a correct protocol
+must converge. The run drives the fault-injected broadcast to completion, applies
+the fix's durable-registry backstop, then models the registry decision being
+garbage-collected once its tombstone retention elapses, and finally asserts the good
+terminal state was reached. The garbage-collection step is load-bearing: a committed
+saga is visible the instant its durable decision is recorded, so the progress
+obligation is that every leaf *drains* its prepared bucket before the decision is
+forgotten; a leaf that never drains then resolves the txid to `InFlight` and the read
+gate falls its value through to the pre-saga value, so the commit becomes invisible.
+The guard tests remove the backstop and prove Coyote re-finds the stalled schedule (a
+dropped or restart-lost terminal that is never recovered), so the passing liveness
+tests are non-vacuous.
+
+**Fault-model conventions.** Model a fault as a bounded, scheduler-explored choice,
+never an unbounded one: draw drops, duplicates, and restarts from a `FaultBudget` so
+exploration terminates and the fairness ceiling is explicit. Keep the fault helpers
+(`FaultBudget`, `FaultDeliveryQueue<T>`) in the shared `Orleans.Lattice.Testing.Coyote`
+library, dependency-free (they take the nondeterministic decision as a `Func<bool>`,
+e.g. `runtime.RandomBoolean`, rather than referencing a Coyote runtime type), so every
+model shares them and they are unit-testable without an engine. Durable state (the
+registry decision, drained projected state) must survive a modelled restart; only
+volatile in-flight state (an undelivered broadcast) is lost. Every terminal-apply the
+model drives must be idempotent so a duplicate delivery is safe - itself a property of
+the real `MigrationTerminalCore` the model exercises.
+
+**Reconciliation with the chaos suite.** The liveness model subsumes,
+*deterministically*, the progress dimension of the atomic-commit / reshard chaos
+coverage: that a committed saga's terminal reaches every owning leaf and that an
+aborted saga releases every prepared bucket, under message loss, duplication,
+reordering, and participant restart. What remains **chaos-only** (and must stay in
+`ReshardTopologyTests` and the atomic-commit chaos suite) is everything the pure-core
+model abstracts away: real Orleans transport and RPC retries, real reminder timers and
+reactivation, real persistence and storage-provider failures, real HLC / wall-clock
+timing, and the end-to-end wiring of the actual grains. The Coyote model proves the
+*protocol logic* makes progress; the chaos suite proves the *deployed system* does, on
+real infrastructure.
+
+**Finalized CI exploration budget.** The per-PR opt-in Coyote step runs every model in
+the `Coyote` category at the harness defaults - `DefaultIterations` (1000) schedules by
+`DefaultMaxSteps` (200) scheduling steps each - which the liveness models adopt
+unchanged; this completes in a few seconds per model and needs no per-model override,
+so the existing CI step (`--filter "TestCategory=Coyote"`) requires no parameter
+change. A deeper nightly sweep (a higher iteration count on a scheduled workflow) is
+optional and *not* wired up: it would add exploration depth for little marginal signal
+on these small bounded models, and no required check may depend on it.
 
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
@@ -200,6 +292,14 @@ The reusable harness lives in the product-agnostic shared testing library
   trace); `AssertNoInterleavingViolation` fails the test with the reproducible
   trace when any schedule violates the property; `AssertInterleavingViolationFound`
   asserts a schedule *does* violate it.
+- `FaultBudget` / `FaultDeliveryQueue<T>` - the dependency-free fault-injection
+  helpers for **liveness** models. `FaultBudget` is a bounded ledger of drops,
+  duplicates, and restarts (the fairness ceiling that makes bounded-progress
+  liveness terminate); `FaultDeliveryQueue<T>` is a bounded fault-injecting
+  transport (reorder, drop, duplicate, and restart-induced in-flight loss). Both
+  take the nondeterministic decision as a `Func<bool>` (pass `runtime.RandomBoolean`)
+  so they never reference a Coyote type and are unit-testable with scripted
+  delegates.
 
 ### How to add a new Coyote model
 
@@ -215,6 +315,163 @@ The reusable harness lives in the product-agnostic shared testing library
    fixed design. **Also** add a companion test that removes the guard and asserts
    `AssertInterleavingViolationFound(...)` - this proves the model genuinely
    exercises the race, so the passing test is meaningful rather than vacuous.
+4. For a **liveness / progress** model, inject faults from a `FaultBudget` (via
+   `FaultDeliveryQueue<T>`) so exploration terminates, encode the property as
+   bounded progress (drive to the budget-exhausted point, apply the backstop, then
+   assert the good terminal state), and add the mandatory companion guard test that
+   removes the backstop and asserts `AssertInterleavingViolationFound(...)` finds
+   the stall. See `AtomicCommitLivenessModel` for the reference pattern.
+
+### Verified-core coverage (level-C Phase 5, issue #1594)
+
+Lever (a) of the level-C epic (#1588) widens the extracted cores so less
+atomic-commit logic lives outside a model-driven artifact. The enumerated
+commit/abort, visibility, ordering, and orphan-guard decisions in the
+read/write/reshard paths are classified as follows.
+
+**Model-driven cores (a decision the production grain and a Coyote model or a
+core unit-test suite both execute):**
+
+- Saga commit-vs-abort fold - `SagaCoordinatorCore` (drives `AtomicWriteGrain`
+  and `LatticeCrossTreeTxGrain`); model `SagaCoordinatorModel`.
+- Per-key read visibility - `AtomicVisibilityGate` / `TxDecisionView` (drives
+  `BPlusLeafGrain` reads); model `AtomicCommitVisibilityModel`.
+- Reader-side stability - `ReaderStabilityGate` (drives `LatticeGrain` multi-key
+  read retry); model `AtomicCommitVisibilityModel`.
+- Registry decision map + revision - `TxRegistryDecisionCore` (drives
+  `TxRegistryGrain`); model `AtomicCommitVisibilityModel`.
+- Reshard terminal bucket disposition - `MigrationTerminalCore`, shadowed read
+  guard `ShadowedMigrationReadGuard`, split seal `SplitBoundary` (drive
+  `BPlusLeafGrain`); model `ReshardMigrationModel`.
+- Write-once terminal-recording guard - `TerminalDecisionGuard` (collapses the
+  three inline commit/abort monotonicity branches in `TxRegistryGrain`'s
+  `MarkCommittedAsync`, `MarkAbortedAsync`, and `RecordTerminalArrivalAsync`);
+  covered by `TerminalDecisionGuardTests`, which exhaust every terminal-delivery
+  ordering over the {commit, abort} alphabet. This decision is **not** driven by
+  a Coyote model by design: the registry is a single grain activation whose turns
+  are serialized, so terminal deliveries for one saga are applied in sequence
+  rather than truly concurrently. The load-bearing property is the ordering
+  invariant (write-once, never both terminals), which a permutation-complete unit
+  suite pins exactly; a Coyote schedule would only re-explore the same finite
+  sequence space.
+- Terminal-arrival completeness gate - `TerminalArrivalTally` (the monotonic
+  `MergeExpected` + `IsFinalArrival` quorum arithmetic in
+  `RecordTerminalArrivalAsync`); covered by `TerminalArrivalTallyTests`. The
+  count arithmetic is extracted; the dedup of *which* source shards have arrived
+  stays in the grain (see documented exclusions below).
+
+**Documented exclusions (a decision deliberately left in the grain, with why it
+is safe):**
+
+- **Tombstone-expiry masking** (`TxRegistryGrain.IsTombstoneExpiredAt`,
+  `now - ts > retention`). A pure wall-clock comparison with no cross-key
+  invariant. It is excluded for the same reason `AtomicVisibilityGate.ResolveKey`
+  takes `preparedHiddenByTombstoneOrExpiry` as a pre-computed boolean input: the
+  models abstract wall-clock away and feed the resolved flag, so the time
+  arithmetic itself is not interleaving-sensitive.
+- **Delegated cross-tree decision resolution**
+  (`TxRegistryGrain.ResolveDelegatedAsync` / `ResolveReceiverDelegatedAsync`).
+  These make a real RPC to a coordinator grain and cache a terminal verdict,
+  conservatively surfacing `InFlight` on dial failure. The safety-bearing pieces
+  (the recorded-verdict apply and the never-flip guard) already route through
+  `TxRegistryDecisionCore` and `TerminalDecisionGuard`; what remains is real
+  network the model does not encode.
+- **Transitive split-forward fan-out** (`TerminalFanOutResolver`). A BFS over
+  live shard-root grains via the grain factory (`Task`/`await`, Orleans types),
+  not a pure decision. Its correctness is the visited-set cycle guard, exercised
+  by the reshard integration/chaos suites, not a schedule-sensitive branch.
+- **Arrivals-set dedup** (the `HashSet<int>` of observed source shards in
+  `RecordTerminalArrivalAsync`). The idempotent "have I already seen this source
+  shard's terminal" membership is grain-local in-memory state applied under the
+  grain's serialized turns; the count-based completeness decision it feeds is the
+  extracted `TerminalArrivalTally`.
+- **Prepare-vote to participant-outcome mapping** (the inline
+  `Prepared -> PreparedAck, else -> PreparedNack` shims in `AtomicWriteGrain` and
+  `LatticeCrossTreeTxGrain`). The fold that the mapping feeds is
+  `SagaCoordinatorCore`; the mapping itself is a trivial per-vote-type adapter
+  with no cross-participant invariant.
+
+**Coverage summary.** Of the enumerated atomic-commit decisions, all are now
+either executed by a verified core (7 cores: the 5 pre-existing plus
+`TerminalDecisionGuard` and `TerminalArrivalTally`) or carry a documented
+exclusion above (5 exclusions, each a wall-clock, real-RPC, grain-serialized
+in-memory, or trivial-adapter concern the models do not encode). No enumerated
+commit/abort, ordering, or orphan-guard branch remains as un-audited inline
+logic.
+
+### Property catalogue (level-C Phase 6, issue #1595)
+
+Lever (b) of the level-C epic (#1588) completes the atomic-commit *safety and
+liveness property catalogue*: a model only checks what you assert, so "verified"
+is bounded by the completeness of the property set. The full correctness contract
+of the atomic-commit protocol is enumerated below, and every property is encoded
+as a Coyote assertion (or a bounded-progress liveness check) against a
+production core, with a companion non-vacuous guard test (break the invariant ->
+Coyote finds it). The catalogue is kept aligned name-for-name with the abstract
+invariants of the Phase 7 TLA+ spec (`spec/AtomicCommit.tla`); the mapping column
+is the cross-lever alignment contract.
+
+The net-new home for this phase is `AtomicCommitInvariantModel` /
+`AtomicCommitInvariantCoyoteTests`: a single-saga full-lifecycle model (the
+tree-wide registry decision, the per-leaf terminal broadcast, duplicate terminal
+re-deliveries classified by `TerminalDecisionGuard`, and interleaved reader
+probes) that continuously asserts the per-key point and ordering invariants the
+sibling models did not yet encode. Each of its assertions has a companion guard
+(`AtomicCommitInvariantGuard`) that removes exactly the one fix it depends on.
+
+| TLA+ invariant | Plain-language property | Core / phase | Encoding (model + assertion) | Guard test (proves non-vacuous) | Net-new vs cited |
+|----------------|-------------------------|--------------|------------------------------|---------------------------------|------------------|
+| `AllOrNothing` | An N-key read observes every key of a saga with its post value, or every key with its pre value; never a mix. | `AtomicVisibilityGate` / `TxDecisionView` / `ReaderStabilityGate` (Phase 1) | `AtomicCommitVisibilityModel` asserts `AssertAllOrNothing` over the fan-out. | `Shared_snapshot_without_revision_probe_certifies_a_torn_read`, `Live_per_key_read_reintroduces_the_split_view_race`. | Cited (already covered). |
+| `VisibilityMatchesDecision` | A key is observed post-saga exactly when the recorded decision is committed (the sharpened all-or-nothing, per key against the current decision). | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `post == (core.Resolve(txid) == Committed)` on every reader probe. | `Surfacing_in_flight_as_prepared_violates_strict_isolation`. | Net-new. |
+| `StrictIsolation` | A reader never observes a post-saga value unless the recorded decision is committed; in-flight/unknown defaults to hidden. | `AtomicVisibilityGate` (Phase 1) | `AtomicCommitInvariantModel` asserts `!post || core.Resolve(txid) == Committed`, resolved against the real recorded decision (not the guard's faked surfacing). | `Surfacing_in_flight_as_prepared_violates_strict_isolation`. | Net-new. |
+| `CommitIntegrity` | The coordinator commits iff every participant acked; a single nack/unreachable is decisive; never both commit and abort. | `SagaCoordinatorCore` (Phase 2) | `SagaCoordinatorModel` asserts the fold verdict against the vote multiset. | `SagaCoordinatorModel` guard test (commit-with-a-nack) in `SagaCoordinatorCoyoteTests`. | Cited (already covered). |
+| `LinearizedTerminals` | A leaf's applied commit/abort terminal matches the recorded decision, so no terminal precedes the decision. | `TxRegistryDecisionCore` + broadcast (Phase 1/3) | `AtomicCommitInvariantModel` asserts a commit terminal implies `Resolve == Committed` and an abort terminal implies `Resolve == Aborted`. | `Broadcasting_before_the_decision_violates_terminal_linearization`. | Net-new. |
+| `NoMixedTerminals` | One saga never applies a commit terminal on one leaf and an abort terminal on another. | `TerminalDecisionGuard` + broadcast (Phase 3) | `AtomicCommitInvariantModel` asserts `!(anyCommit && anyAbort)` across leaves; the serialized-registry write-once rule is additionally pinned by `TerminalDecisionGuardTests`. | `Independent_per_leaf_terminals_violate_no_mixed_terminals`. | Net-new (interleaving) + cited (serialized). |
+| `DecisionDurability` | Once the registry records a terminal decision it never flips to the other terminal, across every duplicate delivery. | `TxRegistryDecisionCore` + `TerminalDecisionGuard` (Phase 1/3) | `AtomicCommitInvariantModel` tracks the first recorded terminal and asserts it never changes under duplicate re-delivery; complementary to the serialized permutation suite `TerminalDecisionGuardTests`. | `Flipping_a_recorded_decision_violates_decision_durability`. | Net-new (interleaving) + cited (serialized). |
+| `MonotonicVisibility` | Once a committed value is observed visible it stays visible (no regression except by a later committed write/tombstone, none of which this model injects). | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` records `EverVisible[k]` and asserts a once-visible key never reverts; the cross-round/reshard form is covered by `ReshardMigrationModel`. | `Flipping_a_recorded_decision_violates_decision_durability` (a flip to abort re-hides a committed key). | Net-new (single-saga temporal) + cited (reshard). |
+| `RevisionMonotonic` | The registry revision counter never decreases; a stale-revision snapshot is exactly what the reader-side probe rejects. | `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `core.Revision >= previousRevision` after every mutation. | `Lowering_the_revision_counter_violates_revision_monotonicity`. | Net-new (explicit assertion; `AtomicCommitVisibilityModel` relies on it via the probe but does not assert it directly). |
+| `Termination` | Every saga reaches a terminal decision under a bounded fault budget (no permanent stall). | `SagaCoordinatorCore` + registry (Phase 4) | `AtomicCommitLivenessModel` drives to the budget-exhausted point and asserts the good terminal state. | `AtomicCommitLivenessModel` guard test (backstop removed) in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
+| `EveryCommittedKeyReadable` | Every stable committed key eventually becomes readable (bounded-progress liveness). | `AtomicVisibilityGate` + drain (Phase 4) | `AtomicCommitLivenessModel` asserts eventual readability at the bounded terminal. | `AtomicCommitLivenessModel` guard test in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
+
+**Net-new assertions this phase** (properties not previously asserted by any
+model): `VisibilityMatchesDecision`, `StrictIsolation`, `LinearizedTerminals`,
+`NoMixedTerminals` (as an interleaving property beyond the serialized suite),
+`DecisionDurability` (as an interleaving property beyond the serialized suite),
+`MonotonicVisibility` (as a single-saga temporal property), and `RevisionMonotonic`
+(as an explicit assertion). All seven live in `AtomicCommitInvariantModel` with a
+one-to-one guard in `AtomicCommitInvariantCoyoteTests`.
+
+**Cited (already-covered) properties**: `AllOrNothing` and the cross-round form of
+`MonotonicVisibility` (`AtomicCommitVisibilityModel` / `ReshardMigrationModel`),
+`CommitIntegrity` (`SagaCoordinatorModel`), `Termination` and
+`EveryCommittedKeyReadable` (`AtomicCommitLivenessModel`), and the serialized
+write-once forms of `NoMixedTerminals` / `DecisionDurability`
+(`TerminalDecisionGuardTests`). These are catalogued but not re-encoded, to avoid
+duplicating a non-vacuous assertion an existing model already makes.
+
+**Gap analysis.** All eleven TLA+ invariants have a live model home above; none is
+recorded as out-of-scope. The wall-clock, real-RPC, grain-serialized-in-memory,
+and trivial-adapter concerns the models deliberately do not encode remain listed
+under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
+
+## TLA+ specification (not a required check)
+
+The atomic-commit protocol also has a design-level TLA+ specification under the
+top-level [`spec/`](../../spec/) directory (`AtomicCommit.tla` + `.cfg`, checked
+by TLC), complementary to the Coyote tier: the Coyote models verify the
+*implementation* of an extracted core under systematic schedule exploration,
+while the TLA+ spec checks the protocol *design* exhaustively over small bounded
+instances. See `spec/README.md` for how to run it and `spec/Refinement.md` for
+the mapping from spec actions to the code cores.
+
+TLC is deliberately **not** a required per-PR check. It needs a Java runtime and
+the TLA+ tools, which the .NET build image does not carry, and the spec tracks
+the protocol design rather than any single code change, so gating every PR on it
+would add a heavyweight toolchain for little marginal signal. It is run locally
+when the protocol design changes; a non-required scheduled workflow could run it
+nightly if the model portfolio grows, but no required check may depend on the
+TLA+ toolchain. `spec/` is outside `Orleans.Lattice.slnx` and is not built by
+`dotnet`.
 
 ## Hygiene gates
 

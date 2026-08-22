@@ -2109,10 +2109,11 @@ internal sealed class AtomicWriteGrain(
             // bucket between this call and the terminal fan-out
             // resolves to the pre-saga value via the registry, so
             // readers never observe a partial rollback.
+            var abortCommitted = DecideSagaCommit(everyParticipantPrepared: false);
             var decisionStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                await RecordTerminalDecisionAsync(committed: false);
+                await RecordTerminalDecisionAsync(committed: abortCommitted);
             }
             finally
             {
@@ -2124,7 +2125,7 @@ internal sealed class AtomicWriteGrain(
             var broadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                await BroadcastTerminalsAsync(committed: false);
+                await BroadcastTerminalsAsync(committed: abortCommitted);
             }
             finally
             {
@@ -2188,10 +2189,11 @@ internal sealed class AtomicWriteGrain(
             // (idempotent), re-runs the broadcast (idempotent via
             // the leaf-side recently-terminal dedup), and proceeds
             // to CompleteSagaAsync.
+            var commitCommitted = DecideSagaCommit(everyParticipantPrepared: true);
             var decisionStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                await RecordTerminalDecisionAsync(committed: true);
+                await RecordTerminalDecisionAsync(committed: commitCommitted);
             }
             finally
             {
@@ -2203,7 +2205,7 @@ internal sealed class AtomicWriteGrain(
             var broadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                await BroadcastTerminalsAsync(committed: true);
+                await BroadcastTerminalsAsync(committed: commitCommitted);
             }
             finally
             {
@@ -2239,6 +2241,62 @@ internal sealed class AtomicWriteGrain(
         return committed
             ? registry.MarkCommittedAsync(txid)
             : registry.MarkAbortedAsync(txid);
+    }
+
+    /// <summary>
+    /// Resolves the saga's terminal commit-vs-abort verdict through the proven
+    /// <see cref="SagaCoordinatorCore"/>, so the decision that gates
+    /// <see cref="RecordTerminalDecisionAsync"/> and
+    /// <see cref="BroadcastTerminalsAsync"/> is the model-checked one rather than
+    /// an inline boolean. Every distinct touched shard is a prepare participant:
+    /// a fully-prepared execute phase means every participant acked (the core
+    /// returns <see cref="SagaDecision.Commit"/>), and a pivot to compensate
+    /// means at least one participant failed to prepare (a nack), so the core
+    /// returns <see cref="SagaDecision.Abort"/>. The per-participant space is
+    /// exercised exhaustively by the Coyote saga model; production feeds the
+    /// aggregate execute-phase outcome the batched prepare fan-out collapses to.
+    /// </summary>
+    /// <param name="everyParticipantPrepared">
+    /// <see langword="true"/> when the execute phase prepared every entry (the
+    /// saga reached <see cref="AtomicWritePhase.Execute"/> with all writes
+    /// staged); <see langword="false"/> when it pivoted to
+    /// <see cref="AtomicWritePhase.Compensate"/>.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when the core decides the saga must commit,
+    /// otherwise <see langword="false"/> (abort).
+    /// </returns>
+    private bool DecideSagaCommit(bool everyParticipantPrepared)
+    {
+        // One participant per distinct touched shard; a real saga always touches
+        // at least one shard, so clamp to a single participant for the degenerate
+        // (empty touched-shard) case rather than let the core's vacuous-commit
+        // path decide over an empty set.
+        var participantCount = state.State.TouchedShards is { Count: > 0 } touched
+            ? touched.Count
+            : 1;
+
+        // stackalloc keeps the decision allocation-free for the common small
+        // fan-out; the array fallback guards a pathologically wide saga.
+        const int stackThreshold = 64;
+        Span<SagaParticipantOutcome> outcomes = participantCount <= stackThreshold
+            ? stackalloc SagaParticipantOutcome[stackThreshold].Slice(0, participantCount)
+            : new SagaParticipantOutcome[participantCount];
+
+        for (var i = 0; i < participantCount; i++)
+        {
+            // On a compensate pivot the batched prepare failed as a whole; record
+            // one participant's failure (nack) so the core's single-failure-aborts
+            // rule fires, and ack the rest. On success every participant acked.
+            var vote = everyParticipantPrepared
+                ? SagaParticipantOutcome.PreparedAck
+                : i == 0
+                    ? SagaParticipantOutcome.PreparedNack
+                    : SagaParticipantOutcome.PreparedAck;
+            SagaCoordinatorCore.OnParticipantResult(outcomes, i, vote);
+        }
+
+        return SagaCoordinatorCore.Decide(outcomes) == SagaDecision.Commit;
     }
 
     /// <summary>

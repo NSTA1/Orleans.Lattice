@@ -3456,7 +3456,7 @@ internal sealed partial class LatticeGrain(
             // observed).
             return true;
         }
-        if (revision2 == snap1Revision)
+        if (ReaderStabilityGate.IsRevisionStable(snap1Revision, revision2))
         {
             return true;
         }
@@ -3486,58 +3486,12 @@ internal sealed partial class LatticeGrain(
     /// <summary>
     /// Returns <c>true</c> when a fan-out result computed under
     /// <paramref name="snap1"/> is still consistent given a fresh
-    /// <paramref name="snap2"/> taken after the fan-out - that is, no
-    /// saga transitioned <see cref="TxStatus.InFlight"/>-&gt;
-    /// <see cref="TxStatus.Committed"/> during the fan-out window. The
-    /// check is asymmetric: every <see cref="TxStatus.Committed"/>
-    /// entry in snap2 must already be Committed in snap1.
-    /// <para>
-    /// The asymmetry is the whole point. Per-leaf drain into the
-    /// runtime entry cache on
-    /// <see cref="MutationKind.TxCommit"/> is irreversible - once a
-    /// leaf has flipped a saga's prepared keys into the cache it has
-    /// no record they came from a saga, so a stale
-    /// <see cref="TxStatus.InFlight"/> snapshot can no longer gate
-    /// visibility on that leaf. A reader whose snap1 was taken before
-    /// <c>MarkCommittedAsync</c> but whose fan-out reaches some leaves
-    /// after their drain therefore observes drained leaves serving
-    /// post-saga entries while sibling undrained leaves consult
-    /// snap1.InFlight and fall through to pre-saga entries - split
-    /// observation. snap2.Committed reveals the transition; the
-    /// caller retries with the fresh snapshot in scope so the next
-    /// fan-out observes the saga as Committed everywhere (drained
-    /// leaves return cached-post AND undrained leaves surface
-    /// pending.value=post via <see cref="TxStatus.Committed"/>).
-    /// </para>
-    /// <para>
-    /// <see cref="TxStatus.Aborted"/> transitions and registry forgets
-    /// (snap1 has the txid, snap2 does not) are atomic-safe by
-    /// construction and do not invalidate snap1: an Aborted saga
-    /// drains by removing pending entries everywhere (no Entries
-    /// change), and a forget implies every leaf has already drained
-    /// the terminal mark, so snap1.Committed already gates undrained
-    /// pending consistently. A <c>null</c> snap2 (registry RPC
-    /// failure) is treated as stable so the scan completes rather
-    /// than retrying indefinitely.
-    /// </para>
+    /// <paramref name="snap2"/> taken after the fan-out. The rule now
+    /// lives in <see cref="ReaderStabilityGate.IsSnapshotStable"/>; this
+    /// method is retained only as the internal call shape.
     /// </summary>
     private static bool IsSnapshotStable(
         Dictionary<Guid, TxStatus>? snap1,
-        Dictionary<Guid, TxStatus>? snap2)
-    {
-        if (snap2 is null) return true;
-        foreach (var (txid, status) in snap2)
-        {
-            if (status == TxStatus.Committed)
-            {
-                if (snap1 is null
-                    || !snap1.TryGetValue(txid, out var s1)
-                    || s1 != TxStatus.Committed)
-                {
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
+        Dictionary<Guid, TxStatus>? snap2) =>
+        ReaderStabilityGate.IsSnapshotStable(snap1, snap2);
 }

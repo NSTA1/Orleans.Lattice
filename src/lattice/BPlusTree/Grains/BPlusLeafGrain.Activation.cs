@@ -1003,10 +1003,7 @@ internal sealed partial class BPlusLeafGrain
     {
         MutationKind.Set or MutationKind.Delete or MutationKind.Tombstone =>
             IsShardOwnedDuringReplay(mutation, leafShardIndex, currentShardMap)
-            && (lowKeyInclusive is null
-                || string.CompareOrdinal(mutation.Key, lowKeyInclusive) >= 0)
-            && (highKeyExclusive is null
-                || string.CompareOrdinal(mutation.Key, highKeyExclusive) < 0),
+            && SplitBoundary.Owns(mutation.Key, lowKeyInclusive, highKeyExclusive),
         MutationKind.DeleteRange => true,
         MutationKind.TxCommit => true,
         MutationKind.TxAbort => true,

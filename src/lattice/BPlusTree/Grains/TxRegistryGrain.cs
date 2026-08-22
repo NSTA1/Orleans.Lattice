@@ -68,6 +68,18 @@ internal sealed class TxRegistryGrain(
     /// </summary>
     private TimeSpan Retention => optionsMonitor.Get(TreeId).TxDecisionRetention;
 
+    /// <summary>
+    /// Constructs a fresh <see cref="TxRegistryDecisionCore"/> wrapping the
+    /// live persisted decision map and revision counter. Built per call
+    /// rather than cached in a field because Orleans replaces the
+    /// <see cref="IPersistentState{TState}.State"/> object (and hence its
+    /// <see cref="TxRegistryState.Decisions"/> dictionary) on load, so a
+    /// field-captured reference could dangle. The core wraps the dictionary
+    /// by reference, so a mutation lands in the same map the grain persists.
+    /// </summary>
+    private TxRegistryDecisionCore DecisionCore() =>
+        new(state.State.Decisions, state.State.DecisionsRevision);
+
     /// <inheritdoc />
     public async Task MarkCommittedAsync(Guid txid)
     {
@@ -86,14 +98,17 @@ internal sealed class TxRegistryGrain(
         state.State.ExternalAuthorities.Remove(txid);
         state.State.ReceiverDecisionAuthorities.Remove(txid);
 
-        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        // Write-once terminal guard through the shared, dependency-free
+        // TerminalDecisionGuard so the "never both commit and abort" invariant is
+        // one model-checked rule rather than a hand-copied inline branch.
+        var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: true))
         {
-            if (existing == TxStatus.Committed) return;
-            if (existing == TxStatus.Aborted)
-            {
+            case TerminalRecordAction.Idempotent:
+                return;
+            case TerminalRecordAction.Conflict:
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
-            }
         }
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
@@ -101,19 +116,17 @@ internal sealed class TxRegistryGrain(
         // Committed while disk does not, and the next retry from the
         // same activation hits the `existing == TxStatus.Committed`
         // short-circuit and silently returns without re-persisting.
-        var hadEntry = state.State.Decisions.TryGetValue(txid, out var prevStatus);
-        state.State.Decisions[txid] = TxStatus.Committed;
-        var prevRevision = state.State.DecisionsRevision;
-        state.State.DecisionsRevision = prevRevision + 1;
+        var core = DecisionCore();
+        var mutation = core.Apply(txid, TxStatus.Committed);
+        state.State.DecisionsRevision = core.Revision;
         try
         {
             await state.WriteStateAsync();
         }
         catch
         {
-            if (hadEntry) state.State.Decisions[txid] = prevStatus;
-            else state.State.Decisions.Remove(txid);
-            state.State.DecisionsRevision = prevRevision;
+            core.Rollback(mutation);
+            state.State.DecisionsRevision = core.Revision;
             throw;
         }
     }
@@ -130,31 +143,29 @@ internal sealed class TxRegistryGrain(
         state.State.ExternalAuthorities.Remove(txid);
         state.State.ReceiverDecisionAuthorities.Remove(txid);
 
-        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: false))
         {
-            if (existing == TxStatus.Aborted) return;
-            if (existing == TxStatus.Committed)
-            {
+            case TerminalRecordAction.Idempotent:
+                return;
+            case TerminalRecordAction.Conflict:
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
-            }
         }
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
         // can be unwound (see MarkCommittedAsync for the same rationale).
-        var hadEntry = state.State.Decisions.TryGetValue(txid, out var prevStatus);
-        state.State.Decisions[txid] = TxStatus.Aborted;
-        var prevRevision = state.State.DecisionsRevision;
-        state.State.DecisionsRevision = prevRevision + 1;
+        var core = DecisionCore();
+        var mutation = core.Apply(txid, TxStatus.Aborted);
+        state.State.DecisionsRevision = core.Revision;
         try
         {
             await state.WriteStateAsync();
         }
         catch
         {
-            if (hadEntry) state.State.Decisions[txid] = prevStatus;
-            else state.State.Decisions.Remove(txid);
-            state.State.DecisionsRevision = prevRevision;
+            core.Rollback(mutation);
+            state.State.DecisionsRevision = core.Revision;
             throw;
         }
     }
@@ -273,19 +284,19 @@ internal sealed class TxRegistryGrain(
 
         if (!state.State.Decisions.ContainsKey(txid))
         {
-            state.State.Decisions[txid] = verdict;
+            var core = DecisionCore();
+            var mutation = core.Apply(txid, verdict);
             state.State.ReceiverDecisionAuthorities.Remove(txid);
-            var prevRevision = state.State.DecisionsRevision;
-            state.State.DecisionsRevision = prevRevision + 1;
+            state.State.DecisionsRevision = core.Revision;
             try
             {
                 await state.WriteStateAsync();
             }
             catch
             {
-                state.State.Decisions.Remove(txid);
+                core.Rollback(mutation);
                 state.State.ReceiverDecisionAuthorities[txid] = receiverCoordinatorKey;
-                state.State.DecisionsRevision = prevRevision;
+                state.State.DecisionsRevision = core.Revision;
             }
         }
         return verdict;
@@ -344,19 +355,19 @@ internal sealed class TxRegistryGrain(
         // and future reads need no further coordinator round-trips.
         if (!state.State.Decisions.ContainsKey(txid))
         {
-            state.State.Decisions[txid] = verdict;
+            var core = DecisionCore();
+            var mutation = core.Apply(txid, verdict);
             state.State.ExternalAuthorities.Remove(txid);
-            var prevRevision = state.State.DecisionsRevision;
-            state.State.DecisionsRevision = prevRevision + 1;
+            state.State.DecisionsRevision = core.Revision;
             try
             {
                 await state.WriteStateAsync();
             }
             catch
             {
-                state.State.Decisions.Remove(txid);
+                core.Rollback(mutation);
                 state.State.ExternalAuthorities[txid] = coordinatorKey;
-                state.State.DecisionsRevision = prevRevision;
+                state.State.DecisionsRevision = core.Revision;
                 // Surface the resolved verdict for this read even though the
                 // cache write failed; the next read re-dials and re-attempts.
             }
@@ -640,10 +651,19 @@ internal sealed class TxRegistryGrain(
             // block's rollback.
             var revisionBumped = droppedDecision
                 || (pruned.Tombstones is { Count: > 0 });
+            // The core is the sole revision authority: the intricate map
+            // mutations above are left inline (the core does not model the
+            // participant / delegation / pin maps), and only the single
+            // per-batch revision advance is routed through it so the counter
+            // stays owned by one place. Constructed unconditionally so the
+            // catch block can reach it; this is the cold Forget cleanup path,
+            // not the reader hot path, so the per-call allocation is fine.
+            var core = DecisionCore();
             var prevRevision = state.State.DecisionsRevision;
             if (revisionBumped)
             {
-                state.State.DecisionsRevision = prevRevision + 1;
+                core.AdvanceRevision();
+                state.State.DecisionsRevision = core.Revision;
             }
             try
             {
@@ -698,7 +718,8 @@ internal sealed class TxRegistryGrain(
                 }
                 if (revisionBumped)
                 {
-                    state.State.DecisionsRevision = prevRevision;
+                    core.RollbackRevision(prevRevision);
+                    state.State.DecisionsRevision = core.Revision;
                 }
                 throw;
             }
@@ -852,18 +873,19 @@ internal sealed class TxRegistryGrain(
         // mixed terminal set); throwing here lets a malformed inbound
         // stream surface as a hard error rather than silently
         // corrupting the gate.
-        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        // Mixed-outcome guard: every per-source-shard terminal of a
+        // saga must agree on commit/abort. A mixed sequence is a
+        // protocol violation (the saga coordinator never broadcasts a
+        // mixed terminal set); throwing here lets a malformed inbound
+        // stream surface as a hard error rather than silently
+        // corrupting the gate. Routed through the shared write-once
+        // TerminalDecisionGuard so it is the same rule the Mark* paths use.
+        var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        if (TerminalDecisionGuard.Classify(hasExisting, existing, committed) == TerminalRecordAction.Conflict)
         {
-            if (committed && existing == TxStatus.Aborted)
-            {
-                throw new InvalidOperationException(
-                    $"Saga {txid:N} received a commit terminal after an abort was already recorded.");
-            }
-            if (!committed && existing == TxStatus.Committed)
-            {
-                throw new InvalidOperationException(
-                    $"Saga {txid:N} received an abort terminal after a commit was already recorded.");
-            }
+            throw new InvalidOperationException(committed
+                ? $"Saga {txid:N} received a commit terminal after an abort was already recorded."
+                : $"Saga {txid:N} received an abort terminal after a commit was already recorded.");
         }
 
         // Snapshot prior state so a failing WriteStateAsync can unwind
@@ -885,9 +907,7 @@ internal sealed class TxRegistryGrain(
         var arrivalAdded = arrivals.Add(sourceShardIndex);
 
         var expectedHadEntry = state.State.ExpectedTerminals.TryGetValue(txid, out var prevExpected);
-        var newExpected = expectedHadEntry
-            ? Math.Max(prevExpected, expectedShardCount)
-            : expectedShardCount;
+        var newExpected = TerminalArrivalTally.MergeExpected(expectedHadEntry, prevExpected, expectedShardCount);
         var expectedChanged = !expectedHadEntry || newExpected != prevExpected;
         if (expectedChanged)
         {
@@ -916,7 +936,7 @@ internal sealed class TxRegistryGrain(
             }
         }
 
-        var isFinal = arrivals.Count >= newExpected;
+        var isFinal = TerminalArrivalTally.IsFinalArrival(arrivals.Count, newExpected);
         // Materialise the observed source-shard set only on the final
         // arrival - in-progress arrivals do not need to know the
         // interim list and shipping a fresh copy on every arrival
