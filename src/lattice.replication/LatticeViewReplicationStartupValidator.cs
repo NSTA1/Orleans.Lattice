@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// For each startup-declared view it resolves the per-view
 /// <see cref="LatticeViewOptions.ReplicationMode"/>, computes the stable view tree
-/// id <c>view-{viewName}</c>, and reads the replicated-trees map. It rejects two
+/// id <c>view-{viewName}</c>, and reads the replicated-trees map. It rejects
 /// misconfigurations:
 /// </para>
 /// <list type="bullet">
@@ -31,12 +31,19 @@ namespace Orleans.Lattice.Replication;
 /// from the replicated-trees map: the maintainer runs only on the producer and the
 /// tree is never shipped, so consumer clusters would never receive the view.
 /// </description></item>
+/// <item><description>
+/// <see cref="LatticeViewReplicationMode.ShipView"/> with both source and view
+/// trees replicated but no explicit
+/// <see cref="LatticeViewOptions.ShipViewProducerClusterId"/>: every cluster could
+/// otherwise maintain the replicated view tree.
+/// </description></item>
 /// </list>
 /// </summary>
 internal sealed class LatticeViewReplicationStartupValidator(
     IServiceProvider services,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
-    IOptionsMonitor<LatticeReplicationOptions> replicationOptions) : IHostedService
+    IOptionsMonitor<LatticeReplicationOptions> replicationOptions,
+    ILatticeReplicationContext replicationContext) : IHostedService
 {
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -56,7 +63,7 @@ internal sealed class LatticeViewReplicationStartupValidator(
 
             if (mode == LatticeViewReplicationMode.DeriveLocally)
             {
-                var conflicting = FindDeriveLocallyConflict(trees, viewTreeId);
+                var conflicting = FindDeriveLocallyConflict(trees, replicationContext, viewTreeId);
                 if (conflicting is not null)
                 {
                     throw new InvalidOperationException(
@@ -70,18 +77,12 @@ internal sealed class LatticeViewReplicationStartupValidator(
                         + "runs only on the producer cluster(s).");
                 }
             }
-            else if (trees is null || !trees.ContainsKey(viewTreeId))
-            {
-                throw new InvalidOperationException(
-                    $"View '{registration.ViewName}' uses {nameof(LatticeViewReplicationMode)}."
-                    + $"{nameof(LatticeViewReplicationMode.ShipView)} but its view tree '{viewTreeId}' is not declared in "
-                    + $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ReplicatedTrees)}. "
-                    + $"{nameof(LatticeViewReplicationMode.ShipView)} suppresses the maintainer on consumer clusters and ships "
-                    + "the view tree to them, so the tree must be replicated or consumer clusters would never receive the view. "
-                    + "Either add the view tree to the replicated-trees map, or switch the view to "
-                    + $"{nameof(LatticeViewReplicationMode)}.{nameof(LatticeViewReplicationMode.DeriveLocally)} so every cluster "
-                    + "derives the view from its local source.");
-            }
+
+            _ = ViewReplicationTopology.Resolve(
+                registration.ViewName,
+                registration.SourceTreeId,
+                viewOptions.Get(registration.ViewName),
+                replicationContext);
         }
 
         return Task.CompletedTask;
@@ -98,6 +99,7 @@ internal sealed class LatticeViewReplicationStartupValidator(
     /// </summary>
     private static string? FindDeriveLocallyConflict(
         IReadOnlyDictionary<string, LatticeMergeMode>? trees,
+        ILatticeReplicationContext replicationContext,
         string viewTreeId)
     {
         if (trees is null)
@@ -105,7 +107,8 @@ internal sealed class LatticeViewReplicationStartupValidator(
             return null;
         }
 
-        if (trees.ContainsKey(viewTreeId))
+        if (trees.ContainsKey(viewTreeId)
+            && replicationContext.ResolveMergeMode(viewTreeId) is not null)
         {
             return viewTreeId;
         }
@@ -113,7 +116,8 @@ internal sealed class LatticeViewReplicationStartupValidator(
         var generationPrefix = $"{viewTreeId}#g";
         foreach (var key in trees.Keys)
         {
-            if (key.StartsWith(generationPrefix, StringComparison.Ordinal))
+            if (key.StartsWith(generationPrefix, StringComparison.Ordinal)
+                && replicationContext.ResolveMergeMode(key) is not null)
             {
                 return key;
             }

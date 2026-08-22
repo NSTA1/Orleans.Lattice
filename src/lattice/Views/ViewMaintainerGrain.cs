@@ -43,6 +43,7 @@ internal sealed partial class ViewMaintainerGrain(
     LatticeOptionsResolver optionsResolver,
     IOptionsMonitor<LatticeViewOptions> viewOptions,
     IOptionsMonitor<LatticeOptions> latticeOptions,
+    ILatticeReplicationContext replicationContext,
     IWalSaturationSignal? saturationSignal,
     HistoryRowCodec historyRowCodec,
     [PersistentState("view-checkpoint", LatticeOptions.StorageProviderName)]
@@ -64,9 +65,10 @@ internal sealed partial class ViewMaintainerGrain(
     private IGrainTimer? _timer;
     private string? _consumerId;
 
-    // Set in EnsureActiveAsync when this view is ShipView and the source WAL is not
-    // locally readable here (a thin consumer cluster). A suppressed maintainer does
-    // not drain, pin the WAL, or rebuild: the view tree is received via replication.
+    // Set in EnsureActiveAsync when this cluster is a ShipView consumer, either by
+    // explicit producer identity or by absent local source-WAL ownership. A
+    // suppressed maintainer does not drain, pin the WAL, or rebuild: the view tree
+    // is received via replication.
     private bool _shipViewSuppressed;
 
     // UTC ticks of the last lag-budget force-eviction this activation (0 = none).
@@ -119,31 +121,38 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
-        // ShipView producer designation (ASSUMPTION - Decision A): a cluster is the
-        // producer for a ShipView view iff the view's source tree WAL is locally
-        // readable here. A thin consumer that registered the view but has no local
-        // source WAL suppresses its maintainer entirely - no reminder, no timer, no
-        // drain, no cursor pin - and receives the view tree through replication.
-        // DeriveLocally (the default, and every existing deployment) always has the
-        // source locally and is never suppressed.
-        if (Options.ReplicationMode == LatticeViewReplicationMode.ShipView
-            && !await IsSourceLocallyReadableAsync(registration, cancellationToken))
-        {
-            _shipViewSuppressed = true;
-            _activated = true;
-            logger.LogInformation(
-                "View '{ViewName}' is ShipView with no locally-readable source WAL; suppressing the maintainer on this consumer cluster (the view tree is received via replication).",
-                ViewName);
-            return;
-        }
-
-        _shipViewSuppressed = false;
-
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,
             reminderName: KeepaliveReminderName,
             dueTime: TimeSpan.FromMinutes(1),
             period: TimeSpan.FromMinutes(1));
+
+        var options = Options;
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            options,
+            state.State.ActiveGeneration);
+        var maintenanceRole = ViewReplicationTopology.Resolve(
+            ViewName,
+            registration.SourceTreeId,
+            options,
+            replicationContext,
+            ViewTreeId);
+        var suppress = maintenanceRole == ViewReplicationTopology.MaintenanceRole.Suppress
+            || (maintenanceRole == ViewReplicationTopology.MaintenanceRole.InferFromSource
+                && !await IsSourceLocallyReadableAsync(registration, cancellationToken));
+        if (suppress)
+        {
+            await SuppressShipViewConsumerAsync(registration, cancellationToken);
+            _activated = true;
+            logger.LogInformation(
+                "View '{ViewName}' is ShipView on consumer cluster '{ClusterId}'; suppressing its maintainer because the view tree is received via replication.",
+                ViewName,
+                replicationContext.LocalReplicaId);
+            return;
+        }
+
+        _shipViewSuppressed = false;
 
         // A projection-version change means the view's logic is no longer the one
         // that built the persisted state; rebuild from current source state. An
@@ -235,12 +244,30 @@ internal sealed partial class ViewMaintainerGrain(
             return 0;
         }
 
-        // ShipView consumer (Decision A): the maintainer is suppressed, so a drain
-        // is a no-op. The view tree is maintained by replication, not this grain.
-        if (_shipViewSuppressed)
+        // Re-evaluate before every write pass so a live replication-config change
+        // cannot turn an already-active inferred producer into a second writer.
+        var topologyOptions = Options;
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            topologyOptions,
+            state.State.ActiveGeneration);
+        var maintenanceRole = ViewReplicationTopology.Resolve(
+            ViewName,
+            registration.SourceTreeId,
+            topologyOptions,
+            replicationContext,
+            topologyOptions.ReplicationMode == LatticeViewReplicationMode.ShipView
+                ? GenerationTreeId(0)
+                : ViewTreeId);
+        if (maintenanceRole == ViewReplicationTopology.MaintenanceRole.Suppress
+            || (maintenanceRole == ViewReplicationTopology.MaintenanceRole.InferFromSource
+                && !await IsSourceLocallyReadableAsync(registration, cancellationToken)))
         {
+            await SuppressShipViewConsumerAsync(registration, cancellationToken);
             return 0;
         }
+
+        _shipViewSuppressed = false;
 
         // Heal a source physical-identity swap (restore / resize / reshard) before
         // any drain work: if the alias now resolves to a different physical tree, the
@@ -423,12 +450,17 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task<long> GetLagAsync(CancellationToken cancellationToken = default)
     {
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            Options,
+            state.State.ActiveGeneration);
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
             return 0;
         }
 
+        await ThrowIfShipViewConsumerAsync(registration, cancellationToken);
         var walTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
         return await ComputeLagAsync(walTreeId, partitions, cancellationToken);
@@ -438,6 +470,16 @@ internal sealed partial class ViewMaintainerGrain(
     public async Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
         using var viewWriteScope = ViewWriteContext.BeginScope();
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            Options,
+            state.State.ActiveGeneration);
+        var registration = catalog.TryGet(ViewName);
+        if (registration is not null)
+        {
+            await ThrowIfShipViewConsumerAsync(registration, cancellationToken);
+        }
+
         if (target <= HybridLogicalClock.Zero)
         {
             // Nothing committed at or before zero to wait for.
@@ -477,12 +519,17 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     public async Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default)
     {
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            Options,
+            state.State.ActiveGeneration);
         var registration = catalog.TryGet(ViewName);
         if (registration is null)
         {
             return HybridLogicalClock.Zero;
         }
 
+        await ThrowIfShipViewConsumerAsync(registration, cancellationToken);
         var sourceTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         var partitions = await optionsResolver.GetWalPartitionsAsync(sourceTreeId);
         var head = HybridLogicalClock.Zero;
@@ -531,12 +578,34 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
+        var options = Options;
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            options,
+            state.State.ActiveGeneration);
+        var targetViewTreeId = options.ReplicationMode == LatticeViewReplicationMode.ShipView
+            ? GenerationTreeId(0)
+            : GenerationTreeId(state.State.ActiveGeneration + 1);
+        var maintenanceRole = ViewReplicationTopology.Resolve(
+            ViewName,
+            registration.SourceTreeId,
+            options,
+            replicationContext,
+            targetViewTreeId);
+        if (maintenanceRole == ViewReplicationTopology.MaintenanceRole.Suppress
+            || (maintenanceRole == ViewReplicationTopology.MaintenanceRole.InferFromSource
+                && !await IsSourceLocallyReadableAsync(registration, cancellationToken)))
+        {
+            await SuppressShipViewConsumerAsync(registration, cancellationToken);
+            return;
+        }
+
         // ShipView (ASSUMPTION - Decision B): pin the stable generation-0
         // view-{name} tree id and rebuild in place so the replicated tree id is
         // stable and matches the operator's replicated-trees entry. Transient
         // divergence on a producer rebuild is acceptable per the best-effort
         // contract and heals on consumers via replication anti-entropy.
-        if (Options.ReplicationMode == LatticeViewReplicationMode.ShipView)
+        if (options.ReplicationMode == LatticeViewReplicationMode.ShipView)
         {
             await InPlaceRebuildAsync(registration, cancellationToken);
             return;
@@ -570,6 +639,47 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         return false;
+    }
+
+    private async Task SuppressShipViewConsumerAsync(
+        ViewRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        if (!_shipViewSuppressed)
+        {
+            var currentPhysicalTreeId = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
+            var boundPhysicalTreeId = state.State.BoundPhysicalTreeId;
+            foreach (var treeId in ViewReplicationTopology.SourceCursorTreesToUnregister(
+                boundPhysicalTreeId,
+                currentPhysicalTreeId))
+            {
+                await cursorRegistry.UnregisterAsync(treeId, ConsumerId, cancellationToken);
+            }
+        }
+
+        _shipViewSuppressed = true;
+    }
+
+    private async Task ThrowIfShipViewConsumerAsync(
+        ViewRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        var maintenanceRole = ViewReplicationTopology.Resolve(
+            ViewName,
+            registration.SourceTreeId,
+            Options,
+            replicationContext,
+            GenerationTreeId(0));
+        var isConsumer = maintenanceRole == ViewReplicationTopology.MaintenanceRole.Suppress
+            || (maintenanceRole == ViewReplicationTopology.MaintenanceRole.InferFromSource
+                && !await IsSourceLocallyReadableAsync(registration, cancellationToken));
+        if (isConsumer)
+        {
+            throw new InvalidOperationException(
+                $"Source-relative lag and read barriers are unavailable for {nameof(LatticeViewReplicationMode)}."
+                + $"{nameof(LatticeViewReplicationMode.ShipView)} consumer view '{ViewName}' because its contents arrive "
+                + "through view-tree replication rather than the local source maintainer.");
+        }
     }
 
     /// <summary>

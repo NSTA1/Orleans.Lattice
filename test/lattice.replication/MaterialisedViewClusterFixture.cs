@@ -61,7 +61,25 @@ internal sealed class MaterialisedViewClusterFixture
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
+            siloBuilder.AddLatticeReplication(opts =>
+            {
+                opts.ClusterId = ClusterId;
+                opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+                {
+                    [$"view-{ShipViewProducerViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewConsumerViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewLateSourceViewName}"] = LatticeMergeMode.LwwRegister,
+                    [ShipViewExplicitProducerSourceTreeId] = LatticeMergeMode.LwwRegister,
+                    [ShipViewExplicitConsumerSourceTreeId] = LatticeMergeMode.LwwRegister,
+                    [ShipViewAmbiguousSourceTreeId] = LatticeMergeMode.LwwRegister,
+                    [ShipViewRuntimeAmbiguousSourceTreeId] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewExplicitProducerViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewExplicitConsumerViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewAmbiguousViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewRuntimeAmbiguousViewName}"] = LatticeMergeMode.LwwRegister,
+                    [$"view-{ShipViewHistoryViewName}"] = LatticeMergeMode.LwwRegister,
+                };
+            });
             siloBuilder.AddLatticeViews(MaterialisedViewRuntimeProjectionProvider.Configure);
 
             // Pin a long coalesce window for every view so the maintainer's
@@ -138,6 +156,29 @@ internal sealed class MaterialisedViewClusterFixture
             siloBuilder.Services.Configure<LatticeViewOptions>(
                 ShipViewLateSourceViewName,
                 o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewExplicitProducerViewName,
+                o =>
+                {
+                    o.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                    o.ShipViewProducerClusterId = ClusterId;
+                });
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewExplicitConsumerViewName,
+                o =>
+                {
+                    o.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                    o.ShipViewProducerClusterId = "remote-site";
+                });
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewAmbiguousViewName,
+                o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewRuntimeAmbiguousViewName,
+                o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
+            siloBuilder.Services.Configure<LatticeViewOptions>(
+                ShipViewHistoryViewName,
+                o => o.ReplicationMode = LatticeViewReplicationMode.ShipView);
         }
     }
 
@@ -167,6 +208,8 @@ internal sealed class MaterialisedViewClusterFixture
     /// </summary>
     public const string LagBudgetDisabledViewName = "mv-lag-noevict-view";
 
+    public const string ShipViewHistoryViewName = "mv-shipview-history";
+
     /// <summary>
     /// View name pre-configured with <c>MaxLagBudget = 3</c>, <c>BatchSize = 1</c>
     /// and a long <c>LagEvictionCooldown</c> so a second over-budget backlog within
@@ -186,4 +229,28 @@ internal sealed class MaterialisedViewClusterFixture
     /// un-suppress on a later keepalive once the source becomes locally readable.
     /// </summary>
     public const string ShipViewLateSourceViewName = "mv-shipview-late-source";
+
+    /// <summary>Replicated source tree for the explicit local-producer case.</summary>
+    public const string ShipViewExplicitProducerSourceTreeId = "mv-shipview-explicit-producer-source";
+
+    /// <summary>Replicated source tree for the explicit remote-producer case.</summary>
+    public const string ShipViewExplicitConsumerSourceTreeId = "mv-shipview-explicit-consumer-source";
+
+    /// <summary>Replicated source tree for the missing-producer rejection case.</summary>
+    public const string ShipViewAmbiguousSourceTreeId = "mv-shipview-ambiguous-source";
+
+    /// <summary>ShipView whose explicit producer is this fixture's local cluster.</summary>
+    public const string ShipViewExplicitProducerViewName = "mv-shipview-explicit-producer";
+
+    /// <summary>ShipView whose explicit producer is a different cluster.</summary>
+    public const string ShipViewExplicitConsumerViewName = "mv-shipview-explicit-consumer";
+
+    /// <summary>ShipView with a replicated source but no producer designation.</summary>
+    public const string ShipViewAmbiguousViewName = "mv-shipview-ambiguous";
+
+    /// <summary>Replicated source tree for runtime-create topology preflight.</summary>
+    public const string ShipViewRuntimeAmbiguousSourceTreeId = "mv-shipview-runtime-ambiguous-source";
+
+    /// <summary>Runtime-created ShipView with both trees replicated but no producer.</summary>
+    public const string ShipViewRuntimeAmbiguousViewName = "mv-shipview-runtime-ambiguous";
 }

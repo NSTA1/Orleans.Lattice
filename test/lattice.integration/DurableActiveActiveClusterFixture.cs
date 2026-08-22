@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Storage.AzureTable;
+using Orleans.Lattice.Views;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Integration.Tests;
@@ -118,6 +119,12 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
         WalGcTreeId = NewTreeId("wal-gc");
         CursorHwmTreeId = NewTreeId("cursor-hwm");
         NoWakeTreeId = NewTreeId("no-wake");
+        DeriveLocallySourceTreeId = NewTreeId("view-derive-source");
+        DeriveLocallyViewName = NewTreeId("view-derive");
+        InferredShipViewSourceTreeId = NewTreeId("view-ship-inferred-source");
+        InferredShipViewName = NewTreeId("view-ship-inferred");
+        ExplicitShipViewSourceTreeId = NewTreeId("view-ship-explicit-source");
+        ExplicitShipViewName = NewTreeId("view-ship-explicit");
 
         TreeIds = new[]
         {
@@ -130,6 +137,11 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
         {
             replicatedTrees[treeId] = LatticeMergeMode.LwwRegister;
         }
+
+        replicatedTrees[DeriveLocallySourceTreeId] = LatticeMergeMode.LwwRegister;
+        replicatedTrees[ExplicitShipViewSourceTreeId] = LatticeMergeMode.LwwRegister;
+        replicatedTrees[$"view-{InferredShipViewName}"] = LatticeMergeMode.LwwRegister;
+        replicatedTrees[$"view-{ExplicitShipViewName}"] = LatticeMergeMode.LwwRegister;
 
         _replicatedTrees = replicatedTrees;
     }
@@ -170,6 +182,24 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
     /// <summary>Tree for scenario 8 (replication resumes after restart without a manual shipper wake).</summary>
     public string NoWakeTreeId { get; }
 
+    /// <summary>Replicated source used by the derive-locally materialised-view topology.</summary>
+    public string DeriveLocallySourceTreeId { get; }
+
+    /// <summary>View derived independently on both sites from a replicated source.</summary>
+    public string DeriveLocallyViewName { get; }
+
+    /// <summary>Producer-only source used by the source-less-consumer ShipView topology.</summary>
+    public string InferredShipViewSourceTreeId { get; }
+
+    /// <summary>View shipped from the inferred source-owning producer to the source-less consumer.</summary>
+    public string InferredShipViewName { get; }
+
+    /// <summary>Replicated source used by the explicit-producer ShipView topology.</summary>
+    public string ExplicitShipViewSourceTreeId { get; }
+
+    /// <summary>View maintained only by the explicitly designated producer.</summary>
+    public string ExplicitShipViewName { get; }
+
     private string StateTableA { get; }
     private string ReminderTableA { get; }
     private string WalTableA { get; }
@@ -188,10 +218,19 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
     {
         await ProbeAzuriteAsync().ConfigureAwait(false);
 
-        _wiringA = new SiteWiring(SiteAClusterId, SiteBClusterId, ServiceId, StateTableA, ReminderTableA, WalTableA, _replicatedTrees);
+        var views = new ViewTopologyWiring(
+            DeriveLocallySourceTreeId,
+            DeriveLocallyViewName,
+            InferredShipViewSourceTreeId,
+            InferredShipViewName,
+            ExplicitShipViewSourceTreeId,
+            ExplicitShipViewName,
+            SiteAClusterId);
+
+        _wiringA = new SiteWiring(SiteAClusterId, SiteBClusterId, ServiceId, StateTableA, ReminderTableA, WalTableA, _replicatedTrees, views);
         _siteA = await BuildSiteAsync<SiteASiloConfigurator>(SiteAClusterId, ServiceId, _silosPerSite).ConfigureAwait(false);
 
-        _wiringB = new SiteWiring(SiteBClusterId, SiteAClusterId, ServiceId, StateTableB, ReminderTableB, WalTableB, _replicatedTrees);
+        _wiringB = new SiteWiring(SiteBClusterId, SiteAClusterId, ServiceId, StateTableB, ReminderTableB, WalTableB, _replicatedTrees, views);
         _siteB = await BuildSiteAsync<SiteBSiloConfigurator>(SiteBClusterId, ServiceId, _silosPerSite).ConfigureAwait(false);
     }
 
@@ -260,6 +299,30 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
     /// <see cref="ILatticeWalIntrospection"/>.
     /// </summary>
     public IServiceProvider ServicesFor(Site site) => FaultInjectingReplicationTransport.ServicesFor(ClusterIdFor(site));
+
+    /// <summary>Returns a startup-declared materialised-view handle on the requested site.</summary>
+    public async Task<ILatticeView> ViewOnAsync(Site site, string viewName)
+    {
+        var factory = ServicesFor(site).GetRequiredService<ILatticeViewFactory>();
+        return await factory.GetAsync(viewName).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"View '{viewName}' was not registered on site {site}.");
+    }
+
+    /// <summary>Forces the requested site's view maintainer through activation and one drain pass.</summary>
+    public async Task ActivateAndDrainViewAsync(Site site, string viewName)
+    {
+        var maintainer = ClientFor(site).GetGrain<IViewMaintainerGrain>(viewName);
+        await maintainer.EnsureActiveAsync().ConfigureAwait(false);
+        await maintainer.DrainAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Reports whether the requested view owns a WAL cursor pin on one site.</summary>
+    public async Task<bool> HasViewCursorPinAsync(Site site, string sourceTreeId, string viewName)
+    {
+        var registry = ServicesFor(site).GetRequiredService<IWalCursorRegistry>();
+        var snapshot = await registry.SnapshotAsync(sourceTreeId).ConfigureAwait(false);
+        return snapshot.Any(cursor => cursor.ConsumerId == $"view:{viewName}");
+    }
 
     /// <summary>Drops every send from <paramref name="from"/> to <paramref name="to"/> until healed.</summary>
     public void Partition(Site from, Site to) => FaultInjectingReplicationTransport.Partition(ClusterIdFor(from), ClusterIdFor(to));
@@ -469,6 +532,32 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
             opts.MaintenanceGcInterval = TimeSpan.FromHours(1);
         });
 
+        siloBuilder.AddLatticeViews(views =>
+        {
+            views.AddView(
+                wiring.Views.DeriveLocallyViewName,
+                wiring.Views.DeriveLocallySourceTreeId,
+                new PredicateLatticeViewProjection());
+            views.AddView(
+                wiring.Views.InferredShipViewName,
+                wiring.Views.InferredShipViewSourceTreeId,
+                new PredicateLatticeViewProjection());
+            views.AddView(
+                wiring.Views.ExplicitShipViewName,
+                wiring.Views.ExplicitShipViewSourceTreeId,
+                new PredicateLatticeViewProjection());
+        });
+        siloBuilder.ConfigureLatticeView(
+            wiring.Views.InferredShipViewName,
+            options => options.ReplicationMode = LatticeViewReplicationMode.ShipView);
+        siloBuilder.ConfigureLatticeView(
+            wiring.Views.ExplicitShipViewName,
+            options =>
+            {
+                options.ReplicationMode = LatticeViewReplicationMode.ShipView;
+                options.ShipViewProducerClusterId = wiring.Views.ProducerClusterId;
+            });
+
         // Replace the default no-op transport with the fault-injecting one.
         // AddSingleton overrides the TryAddSingleton default registration
         // performed by AddLatticeReplication above.
@@ -512,7 +601,17 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
         string StateTable,
         string ReminderTable,
         string WalTable,
-        IReadOnlyDictionary<string, LatticeMergeMode> ReplicatedTrees);
+        IReadOnlyDictionary<string, LatticeMergeMode> ReplicatedTrees,
+        ViewTopologyWiring Views);
+
+    private sealed record ViewTopologyWiring(
+        string DeriveLocallySourceTreeId,
+        string DeriveLocallyViewName,
+        string InferredShipViewSourceTreeId,
+        string InferredShipViewName,
+        string ExplicitShipViewSourceTreeId,
+        string ExplicitShipViewName,
+        string ProducerClusterId);
 
     private sealed record ClusterServiceLocatorRegistration(string ClusterId);
 

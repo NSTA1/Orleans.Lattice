@@ -46,6 +46,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Integration.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication" />
     <InternalsVisibleTo Include="Orleans.Lattice.Replication.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Auth" />

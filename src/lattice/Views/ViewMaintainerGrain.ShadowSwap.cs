@@ -64,13 +64,23 @@ internal sealed partial class ViewMaintainerGrain
     }
 
     /// <inheritdoc />
-    public Task<string> GetActiveTreeIdAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult(GenerationTreeId(state.State.ActiveGeneration));
+    public Task<string> GetActiveTreeIdAsync(CancellationToken cancellationToken = default)
+    {
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            Options,
+            state.State.ActiveGeneration);
+        return Task.FromResult(ViewTreeId);
+    }
 
     /// <inheritdoc />
     public async Task<ViewDigest> ComputeViewDigestAsync(CancellationToken cancellationToken = default)
     {
         using var viewReadScope = ViewReadContext.BeginScope();
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            Options,
+            state.State.ActiveGeneration);
         var registration = catalog.TryGet(ViewName);
         var isAggregation = registration?.IsAggregation ?? false;
         var activeTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
@@ -87,12 +97,27 @@ internal sealed partial class ViewMaintainerGrain
             return false;
         }
 
-        // ShipView consumer (Decision A): a suppressed consumer has no local source
-        // to re-derive from, so source-digest drift repair is producer-only. Drift
-        // on a consumer's replicated view tree is repaired by the existing
-        // replication anti-entropy against the producer, not by a local reconcile.
-        if (_shipViewSuppressed)
+        var options = Options;
+        ViewReplicationTopology.ThrowIfNonStableShipViewGeneration(
+            ViewName,
+            options,
+            state.State.ActiveGeneration);
+        var maintenanceRole = ViewReplicationTopology.Resolve(
+            ViewName,
+            registration.SourceTreeId,
+            options,
+            replicationContext,
+            options.ReplicationMode == LatticeViewReplicationMode.ShipView
+                ? GenerationTreeId(0)
+                : GenerationTreeId(state.State.ActiveGeneration + 1));
+
+        // ShipView source-digest repair is producer-only. Drift on a consumer's
+        // replicated view tree is repaired by replication anti-entropy.
+        if (maintenanceRole == ViewReplicationTopology.MaintenanceRole.Suppress
+            || (maintenanceRole == ViewReplicationTopology.MaintenanceRole.InferFromSource
+                && !await IsSourceLocallyReadableAsync(registration, cancellationToken)))
         {
+            await SuppressShipViewConsumerAsync(registration, cancellationToken);
             return false;
         }
 
@@ -117,7 +142,16 @@ internal sealed partial class ViewMaintainerGrain
             return false;
         }
 
-        // Drift: the freshly-built shadow is the repaired view; swap it in.
+        if (options.ReplicationMode == LatticeViewReplicationMode.ShipView)
+        {
+            // The shadow is only a comparison workspace. Repair the stable,
+            // replicated generation-0 tree in place so consumers keep following it.
+            await ClearTreeAsync(shadowTree, cancellationToken);
+            await InPlaceRebuildAsync(registration, cancellationToken);
+            return true;
+        }
+
+        // DeriveLocally drift: the freshly-built shadow is the repaired view.
         await SwapToShadowAsync(registration, built.Offsets, built.Highest, cancellationToken);
         return true;
     }
@@ -184,6 +218,14 @@ internal sealed partial class ViewMaintainerGrain
         var sourceTree = grainFactory.GetGrain<ILattice>(walTreeId);
         var highest = HybridLogicalClock.Zero;
         var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(viewTree) : null;
+        HistoryRetentionPolicy historyPolicy = default;
+        var historyNowTicks = 0L;
+        if (registration.Accumulative)
+        {
+            historyPolicy = await optionsResolver
+                .GetHistoryRetentionAsync(sourceTreeId, Options.HistoryHybridFullValueWindow);
+            historyNowTicks = DateTime.UtcNow.Ticks;
+        }
 
         // Drain the source key stream up front before the projection loop. The
         // per-key body does heavy async work (a source read plus one or more
@@ -221,6 +263,13 @@ internal sealed partial class ViewMaintainerGrain
                 foreach (var contribution in registration.AggregationProjection!.Project(synthetic))
                 {
                     await aggregationApplier.ApplyAsync(contribution, cancellationToken);
+                }
+            }
+            else if (registration.Accumulative)
+            {
+                foreach (var write in registration.Projection!.Project(synthetic))
+                {
+                    await ApplyAsync(viewTree, ShapeHistoryWrite(write, historyPolicy, historyNowTicks), cancellationToken);
                 }
             }
             else

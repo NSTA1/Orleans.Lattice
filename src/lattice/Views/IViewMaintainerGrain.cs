@@ -34,6 +34,8 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// Returns the view's apply lag: the number of committed-but-unapplied source
     /// WAL entries summed across every source partition. Zero means the view has
     /// caught up to the source head as of this call.
+    /// Throws <see cref="InvalidOperationException"/> for a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// </summary>
     Task<long> GetLagAsync(CancellationToken cancellationToken = default);
 
@@ -74,6 +76,8 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// Read-your-writes barrier: drives drains until the highest applied source
     /// HLC reaches <paramref name="target"/>, or throws
     /// <see cref="TimeoutException"/> once <paramref name="timeout"/> elapses.
+    /// Throws <see cref="InvalidOperationException"/> for a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// </summary>
     Task WaitForSourceHlcAsync(HybridLogicalClock target, TimeSpan timeout, CancellationToken cancellationToken = default);
 
@@ -81,6 +85,8 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// Returns the current source head HLC: the highest committed source HLC
     /// across every source WAL partition, or <see cref="HybridLogicalClock.Zero"/>
     /// when the source is empty. Used to capture a write-then-wait target.
+    /// Throws <see cref="InvalidOperationException"/> for a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// </summary>
     Task<HybridLogicalClock> CaptureSourceHeadHlcAsync(CancellationToken cancellationToken = default);
 
@@ -91,6 +97,8 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     /// elapses. Combines the capture and the wait into a single maintainer call
     /// so the read handle does not pay two sequential grain round-trips per
     /// barrier; the capture and wait run in-process on the one activation.
+    /// Throws <see cref="InvalidOperationException"/> for a
+    /// <see cref="LatticeViewReplicationMode.ShipView"/> consumer.
     /// </summary>
     Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
 
