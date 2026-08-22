@@ -185,7 +185,24 @@ probe never certifies a read that observed a mid-commit split. A second core is
 `SagaCoordinatorCore` (the atomic-write saga coordinator's commit-vs-abort
 transition, issue #1589); its model is `SagaCoordinatorModel`, and the
 production `LatticeCrossTreeTxGrain` folds each participant's prepare vote
-through it to decide commit-vs-abort.
+through it to decide commit-vs-abort. A third group covers the online-reshard
+migration protocol's interaction with the saga (issue #1591, reproducing the
+#1584 split-view class): its model is `ReshardMigrationModel`, driving the real
+write-side `MigrationTerminalCore` (the terminal-delivery bucket disposition,
+including the `DiscardOrphan` guard) that `BPlusLeafGrain.ApplyTxTerminalAsync`
+routes through, the real read-side `ShadowedMigrationReadGuard` /
+`AtomicVisibilityGate` orphan guard that `BPlusLeafGrain.IsShadowedReadSafeAsync`
+routes through, and the real `SplitBoundary.Owns` split-key seal that
+`ShouldApplyDuringReplay` routes through. It interleaves a migration-in-progress
+destination leaf, two concurrent saga rounds, a late shadow-forwarded orphan
+prepare, a duplicate terminal broadcast, the cross-migration LWW backstop, and a
+multi-key reader fan-out, asserting (a) a reader observes zero-or-all keys (no
+split view) and (b) no orphan bucket ever shadows a later saga's value. This
+makes deterministic exactly the interleavings that
+`ReshardTopologyTests.Continuous_reader_observes_zero_or_all_keys_through_mid_saga_reshard`
+covers only probabilistically as a CI-only chaos backstop: the relative delivery
+orders of {shadow-forward prepare, terminal broadcast, backstop, reader fan-out}
+against an already-terminal saga.
 
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
