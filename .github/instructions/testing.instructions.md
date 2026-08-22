@@ -244,6 +244,83 @@ The reusable harness lives in the product-agnostic shared testing library
    `AssertInterleavingViolationFound(...)` - this proves the model genuinely
    exercises the race, so the passing test is meaningful rather than vacuous.
 
+### Verified-core coverage (level-C Phase 5, issue #1594)
+
+Lever (a) of the level-C epic (#1588) widens the extracted cores so less
+atomic-commit logic lives outside a model-driven artifact. The enumerated
+commit/abort, visibility, ordering, and orphan-guard decisions in the
+read/write/reshard paths are classified as follows.
+
+**Model-driven cores (a decision the production grain and a Coyote model or a
+core unit-test suite both execute):**
+
+- Saga commit-vs-abort fold - `SagaCoordinatorCore` (drives `AtomicWriteGrain`
+  and `LatticeCrossTreeTxGrain`); model `SagaCoordinatorModel`.
+- Per-key read visibility - `AtomicVisibilityGate` / `TxDecisionView` (drives
+  `BPlusLeafGrain` reads); model `AtomicCommitVisibilityModel`.
+- Reader-side stability - `ReaderStabilityGate` (drives `LatticeGrain` multi-key
+  read retry); model `AtomicCommitVisibilityModel`.
+- Registry decision map + revision - `TxRegistryDecisionCore` (drives
+  `TxRegistryGrain`); model `AtomicCommitVisibilityModel`.
+- Reshard terminal bucket disposition - `MigrationTerminalCore`, shadowed read
+  guard `ShadowedMigrationReadGuard`, split seal `SplitBoundary` (drive
+  `BPlusLeafGrain`); model `ReshardMigrationModel`.
+- Write-once terminal-recording guard - `TerminalDecisionGuard` (collapses the
+  three inline commit/abort monotonicity branches in `TxRegistryGrain`'s
+  `MarkCommittedAsync`, `MarkAbortedAsync`, and `RecordTerminalArrivalAsync`);
+  covered by `TerminalDecisionGuardTests`, which exhaust every terminal-delivery
+  ordering over the {commit, abort} alphabet. This decision is **not** driven by
+  a Coyote model by design: the registry is a single grain activation whose turns
+  are serialized, so terminal deliveries for one saga are applied in sequence
+  rather than truly concurrently. The load-bearing property is the ordering
+  invariant (write-once, never both terminals), which a permutation-complete unit
+  suite pins exactly; a Coyote schedule would only re-explore the same finite
+  sequence space.
+- Terminal-arrival completeness gate - `TerminalArrivalTally` (the monotonic
+  `MergeExpected` + `IsFinalArrival` quorum arithmetic in
+  `RecordTerminalArrivalAsync`); covered by `TerminalArrivalTallyTests`. The
+  count arithmetic is extracted; the dedup of *which* source shards have arrived
+  stays in the grain (see documented exclusions below).
+
+**Documented exclusions (a decision deliberately left in the grain, with why it
+is safe):**
+
+- **Tombstone-expiry masking** (`TxRegistryGrain.IsTombstoneExpiredAt`,
+  `now - ts > retention`). A pure wall-clock comparison with no cross-key
+  invariant. It is excluded for the same reason `AtomicVisibilityGate.ResolveKey`
+  takes `preparedHiddenByTombstoneOrExpiry` as a pre-computed boolean input: the
+  models abstract wall-clock away and feed the resolved flag, so the time
+  arithmetic itself is not interleaving-sensitive.
+- **Delegated cross-tree decision resolution**
+  (`TxRegistryGrain.ResolveDelegatedAsync` / `ResolveReceiverDelegatedAsync`).
+  These make a real RPC to a coordinator grain and cache a terminal verdict,
+  conservatively surfacing `InFlight` on dial failure. The safety-bearing pieces
+  (the recorded-verdict apply and the never-flip guard) already route through
+  `TxRegistryDecisionCore` and `TerminalDecisionGuard`; what remains is real
+  network the model does not encode.
+- **Transitive split-forward fan-out** (`TerminalFanOutResolver`). A BFS over
+  live shard-root grains via the grain factory (`Task`/`await`, Orleans types),
+  not a pure decision. Its correctness is the visited-set cycle guard, exercised
+  by the reshard integration/chaos suites, not a schedule-sensitive branch.
+- **Arrivals-set dedup** (the `HashSet<int>` of observed source shards in
+  `RecordTerminalArrivalAsync`). The idempotent "have I already seen this source
+  shard's terminal" membership is grain-local in-memory state applied under the
+  grain's serialized turns; the count-based completeness decision it feeds is the
+  extracted `TerminalArrivalTally`.
+- **Prepare-vote to participant-outcome mapping** (the inline
+  `Prepared -> PreparedAck, else -> PreparedNack` shims in `AtomicWriteGrain` and
+  `LatticeCrossTreeTxGrain`). The fold that the mapping feeds is
+  `SagaCoordinatorCore`; the mapping itself is a trivial per-vote-type adapter
+  with no cross-participant invariant.
+
+**Coverage summary.** Of the enumerated atomic-commit decisions, all are now
+either executed by a verified core (7 cores: the 5 pre-existing plus
+`TerminalDecisionGuard` and `TerminalArrivalTally`) or carry a documented
+exclusion above (5 exclusions, each a wall-clock, real-RPC, grain-serialized
+in-memory, or trivial-adapter concern the models do not encode). No enumerated
+commit/abort, ordering, or orphan-guard branch remains as un-audited inline
+logic.
+
 ## TLA+ specification (not a required check)
 
 The atomic-commit protocol also has a design-level TLA+ specification under the

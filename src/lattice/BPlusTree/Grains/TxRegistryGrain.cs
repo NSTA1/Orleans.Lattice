@@ -98,14 +98,17 @@ internal sealed class TxRegistryGrain(
         state.State.ExternalAuthorities.Remove(txid);
         state.State.ReceiverDecisionAuthorities.Remove(txid);
 
-        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        // Write-once terminal guard through the shared, dependency-free
+        // TerminalDecisionGuard so the "never both commit and abort" invariant is
+        // one model-checked rule rather than a hand-copied inline branch.
+        var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: true))
         {
-            if (existing == TxStatus.Committed) return;
-            if (existing == TxStatus.Aborted)
-            {
+            case TerminalRecordAction.Idempotent:
+                return;
+            case TerminalRecordAction.Conflict:
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
-            }
         }
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
@@ -140,14 +143,14 @@ internal sealed class TxRegistryGrain(
         state.State.ExternalAuthorities.Remove(txid);
         state.State.ReceiverDecisionAuthorities.Remove(txid);
 
-        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        switch (TerminalDecisionGuard.Classify(hasExisting, existing, incomingCommitted: false))
         {
-            if (existing == TxStatus.Aborted) return;
-            if (existing == TxStatus.Committed)
-            {
+            case TerminalRecordAction.Idempotent:
+                return;
+            case TerminalRecordAction.Conflict:
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
-            }
         }
 
         // Snapshot prior in-memory state so a failing WriteStateAsync
@@ -870,18 +873,19 @@ internal sealed class TxRegistryGrain(
         // mixed terminal set); throwing here lets a malformed inbound
         // stream surface as a hard error rather than silently
         // corrupting the gate.
-        if (state.State.Decisions.TryGetValue(txid, out var existing))
+        // Mixed-outcome guard: every per-source-shard terminal of a
+        // saga must agree on commit/abort. A mixed sequence is a
+        // protocol violation (the saga coordinator never broadcasts a
+        // mixed terminal set); throwing here lets a malformed inbound
+        // stream surface as a hard error rather than silently
+        // corrupting the gate. Routed through the shared write-once
+        // TerminalDecisionGuard so it is the same rule the Mark* paths use.
+        var hasExisting = state.State.Decisions.TryGetValue(txid, out var existing);
+        if (TerminalDecisionGuard.Classify(hasExisting, existing, committed) == TerminalRecordAction.Conflict)
         {
-            if (committed && existing == TxStatus.Aborted)
-            {
-                throw new InvalidOperationException(
-                    $"Saga {txid:N} received a commit terminal after an abort was already recorded.");
-            }
-            if (!committed && existing == TxStatus.Committed)
-            {
-                throw new InvalidOperationException(
-                    $"Saga {txid:N} received an abort terminal after a commit was already recorded.");
-            }
+            throw new InvalidOperationException(committed
+                ? $"Saga {txid:N} received a commit terminal after an abort was already recorded."
+                : $"Saga {txid:N} received an abort terminal after a commit was already recorded.");
         }
 
         // Snapshot prior state so a failing WriteStateAsync can unwind
@@ -903,9 +907,7 @@ internal sealed class TxRegistryGrain(
         var arrivalAdded = arrivals.Add(sourceShardIndex);
 
         var expectedHadEntry = state.State.ExpectedTerminals.TryGetValue(txid, out var prevExpected);
-        var newExpected = expectedHadEntry
-            ? Math.Max(prevExpected, expectedShardCount)
-            : expectedShardCount;
+        var newExpected = TerminalArrivalTally.MergeExpected(expectedHadEntry, prevExpected, expectedShardCount);
         var expectedChanged = !expectedHadEntry || newExpected != prevExpected;
         if (expectedChanged)
         {
@@ -934,7 +936,7 @@ internal sealed class TxRegistryGrain(
             }
         }
 
-        var isFinal = arrivals.Count >= newExpected;
+        var isFinal = TerminalArrivalTally.IsFinalArrival(arrivals.Count, newExpected);
         // Materialise the observed source-shard set only on the final
         // arrival - in-progress arrivals do not need to know the
         // interim list and shipping a fresh copy on every arrival
