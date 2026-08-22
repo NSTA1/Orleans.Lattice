@@ -246,6 +246,26 @@ internal sealed partial class BPlusLeafGrain
 
         if (rightEntries.Count > 0)
         {
+            // Arm the sibling's read gate BEFORE the migrated entries land
+            // on it. While a cross-shard reshard saga is mid-flight a leaf
+            // can hold an IsMigrated=true value for a key whose atomic
+            // isolation is provided EITHER by a destination-side shadow
+            // marker (_shadowedSagas, installed by the shard shadow-forward)
+            // OR by a locally prepared saga bucket (_pendingTx, when the
+            // saga prepared directly on this leaf). Both are per-key state on
+            // the donor; a split moves only the committed Entries row to the
+            // sibling. Without carrying that isolation the sibling would
+            // surface the migrated pre-saga value ungated, and once the saga
+            // commits a concurrent reader could observe it while sibling keys
+            // already show the post-saga value - the torn read the reshard
+            // chaos fixture catches. Re-arm the sibling with a shadow marker
+            // for every such saga so the read gate rejects a
+            // Committed-without-backstop read until the saga's committed-values
+            // backstop terminal lands on the sibling (it routes there as the
+            // key's current owner and clears the marker). Must precede
+            // MergeEntriesAsync so the gate is armed before the migrated value
+            // becomes visible on the sibling.
+            await TransferShadowMarkersToSiblingAsync(newLeaf, rightEntries.Keys);
             await newLeaf.MergeEntriesAsync(rightEntries);
         }
 
@@ -311,5 +331,104 @@ internal sealed partial class BPlusLeafGrain
             NewSiblingId = siblingId,
             ChildIsLeaf = true,
         };
+    }
+
+    /// <summary>
+    /// Re-arms the sibling's reshard read gate for the keys moving to it in
+    /// a split, by installing a destination-side shadow marker
+    /// (<see cref="MarkSagaShadowAsync"/>) on the sibling for every saga
+    /// that is still isolating one of those keys on this donor - both the
+    /// keys already carrying an explicit <see cref="_shadowedSagas"/> marker
+    /// and the keys with a locally prepared, not-yet-terminal bucket in
+    /// <see cref="_pendingTx"/>. Armed on the sibling before the migrated
+    /// rows are merged there, this preserves the reshard atomic-visibility
+    /// gate across a leaf split: an
+    /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.IsMigrated"/>=<c>true</c>
+    /// value that moves to the sibling stays gated for a
+    /// Committed-without-backstop read until the saga's committed-values
+    /// backstop terminal lands on the sibling (which routes there as the
+    /// key's current owner and clears the marker via
+    /// <see cref="ApplyTxTerminalAsync"/>).
+    /// <para>
+    /// Modelling the moved-key isolation as a shadow marker on the sibling -
+    /// rather than copying the prepared <see cref="_pendingTx"/> bucket and
+    /// its per-partition WAL offsets - keeps the sibling's projection-
+    /// checkpoint offset space untouched (the offsets are meaningful only in
+    /// the donor's replay stream) while still gating the read: an InFlight or
+    /// Aborted saga passes through (serving the migrated pre-saga value is the
+    /// strict-isolation-correct answer), and a Committed saga gates until its
+    /// backstop lands, exactly as the shard shadow-forward path does.
+    /// </para>
+    /// <para>
+    /// The donor keeps its own <see cref="_pendingTx"/> bucket and
+    /// <see cref="_shadowedSagas"/> markers for the moved keys: they are inert
+    /// once the split shrinks its key range (the donor no longer owns or
+    /// serves those keys) and are cleared per-saga by
+    /// <see cref="ApplyTxTerminalAsync"/> on the saga's terminal, so their
+    /// lifetime stays bounded by saga progress. Removing them here instead
+    /// would open a window - between this transfer and the donor dropping the
+    /// moved rows from its own cache - in which the donor still serves the
+    /// migrated value but no longer gates it.
+    /// </para>
+    /// </summary>
+    private async Task TransferShadowMarkersToSiblingAsync(
+        IBPlusLeafGrain sibling,
+        IReadOnlyCollection<string> movedKeys)
+    {
+        var haveMarkers = _shadowedSagas is { Count: > 0 };
+        var havePending = _pendingTx is { Count: > 0 };
+        if (!haveMarkers && !havePending)
+            return;
+
+        Dictionary<Guid, List<string>>? bySaga = null;
+
+        // Existing destination-side markers for the moved keys.
+        if (haveMarkers)
+        {
+            foreach (var key in movedKeys)
+            {
+                if (_shadowedSagas!.TryGetValue(key, out var sagas))
+                    foreach (var txid in sagas)
+                        AddSagaKeyMarker(ref bySaga, txid, key);
+            }
+        }
+
+        // Locally prepared, not-yet-terminal sagas whose bucket still holds a
+        // moved key - the isolation that a same-shard prepare relies on, which
+        // has no explicit marker of its own.
+        if (havePending)
+        {
+            var moved = movedKeys as HashSet<string>
+                ?? new HashSet<string>(movedKeys, StringComparer.Ordinal);
+            foreach (var (txid, bucket) in _pendingTx!)
+            {
+                foreach (var key in bucket.Keys)
+                {
+                    if (moved.Contains(key))
+                        AddSagaKeyMarker(ref bySaga, txid, key);
+                }
+            }
+        }
+
+        if (bySaga is null)
+            return;
+
+        foreach (var (txid, keys) in bySaga)
+            await sibling.MarkSagaShadowAsync(txid, keys);
+    }
+
+    private static void AddSagaKeyMarker(
+        ref Dictionary<Guid, List<string>>? bySaga,
+        Guid txid,
+        string key)
+    {
+        bySaga ??= new Dictionary<Guid, List<string>>();
+        if (!bySaga.TryGetValue(txid, out var list))
+        {
+            list = new List<string>();
+            bySaga[txid] = list;
+        }
+        if (!list.Contains(key))
+            list.Add(key);
     }
 }
