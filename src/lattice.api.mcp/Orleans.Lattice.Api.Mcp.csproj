@@ -34,9 +34,9 @@
     <ProjectReference Include="..\lattice.api.replication.grpc\Orleans.Lattice.Api.Replication.Grpc.csproj" />
     <ProjectReference Include="..\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
     <ProjectReference Include="..\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
-    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
-    <PackageReference Include="Azure.Core" Version="1.44.1" />
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+    <PackageReference Include="Azure.Core" Version="1.62.0" />
   </ItemGroup>
 
 </Project>

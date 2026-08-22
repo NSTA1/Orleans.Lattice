@@ -76,10 +76,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.2.0" />
-    <PackageReference Include="System.IO.Hashing" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Streaming" Version="10.2.2" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 
