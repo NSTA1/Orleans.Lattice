@@ -18,8 +18,8 @@
     <ProjectReference Include="..\..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\..\..\src\lattice.storage.azuretable\Orleans.Lattice.Storage.AzureTable.csproj" />
     <ProjectReference Include="..\..\..\samples\VehicleFleetSimulator\src\VehicleFleetSimulator.Abstractions\VehicleFleetSimulator.Abstractions.csproj" />
-    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
     <!--
       Bumped from 1.13.1 to satisfy the Microsoft.Diagnostics.Runtime 4.0
       transitive floor (>= 1.21.0); the diagnostics package is referenced

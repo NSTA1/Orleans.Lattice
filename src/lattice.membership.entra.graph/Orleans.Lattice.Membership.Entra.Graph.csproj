@@ -24,12 +24,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\lattice.membership.entra\Orleans.Lattice.Membership.Entra.csproj" />
-    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Graph" Version="5.105.0" />
-    <PackageReference Include="Microsoft.Identity.Client" Version="4.66.1" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Graph" Version="6.5.0" />
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.88.0" />
     <!-- Override the transitive Kiota.Abstractions pulled by Microsoft.Graph to a
          version without the RedirectHandler header-leak advisory (GHSA-7j59-v9qr-6fq9). -->
-    <PackageReference Include="Microsoft.Kiota.Abstractions" Version="1.22.2" />
+    <PackageReference Include="Microsoft.Kiota.Abstractions" Version="2.0.0" />
   </ItemGroup>
 
 </Project>

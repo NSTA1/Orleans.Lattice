@@ -26,11 +26,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.9" />
-    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.2" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
     <!--
       The AspNetCore-based Prometheus exporter mounts on Kestrel. The HttpListener

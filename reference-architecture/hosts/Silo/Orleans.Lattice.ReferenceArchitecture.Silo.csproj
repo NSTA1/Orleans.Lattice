@@ -21,12 +21,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.0" />
-    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.2" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
-    <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.12.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
     <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
   </ItemGroup>

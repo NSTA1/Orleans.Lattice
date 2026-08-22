@@ -27,7 +27,7 @@
     <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
     <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
     <ProjectReference Include="..\lattice.auth\Orleans.Lattice.Auth.csproj" />
-    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
   </ItemGroup>
 
 </Project>

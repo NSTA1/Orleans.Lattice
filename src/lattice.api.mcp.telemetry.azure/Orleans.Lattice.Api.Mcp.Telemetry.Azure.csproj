@@ -24,7 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\lattice.api.mcp.telemetry\Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
-    <PackageReference Include="Azure.Core" Version="1.44.1" />
+    <PackageReference Include="Azure.Core" Version="1.62.0" />
   </ItemGroup>
 
 </Project>

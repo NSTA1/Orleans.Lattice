@@ -15,7 +15,7 @@
   <ItemGroup>
     <!-- The Orleans client builder. The server/clustering/lattice packages
          arrive transitively through the Host project reference below. -->
-    <PackageReference Include="Microsoft.Orleans.Client" Version="10.2.0" />
+    <PackageReference Include="Microsoft.Orleans.Client" Version="10.2.2" />
   </ItemGroup>
 
   <ItemGroup>
