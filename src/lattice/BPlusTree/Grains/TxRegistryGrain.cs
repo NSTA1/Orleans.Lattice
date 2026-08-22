@@ -72,7 +72,7 @@ internal sealed class TxRegistryGrain(
     /// Constructs a fresh <see cref="TxRegistryDecisionCore"/> wrapping the
     /// live persisted decision map and revision counter. Built per call
     /// rather than cached in a field because Orleans replaces the
-    /// <see cref="IPersistentState{TState}.State"/> object (and hence its
+    /// <c>IPersistentState&lt;TState&gt;.State</c> object (and hence its
     /// <see cref="TxRegistryState.Decisions"/> dictionary) on load, so a
     /// field-captured reference could dangle. The core wraps the dictionary
     /// by reference, so a mutation lands in the same map the grain persists.

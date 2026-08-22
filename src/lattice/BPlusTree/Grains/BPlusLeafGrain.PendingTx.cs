@@ -920,7 +920,7 @@ internal sealed partial class BPlusLeafGrain
     /// regardless of how many keys the scan visits - the batched
     /// registry call collapses N per-key dial-backs into one round
     /// trip. Callers iterate the runtime entry cache as usual and,
-    /// for each key found in <paramref name="pendingKeys"/>, branch on
+    /// for each key found in <c>pendingKeys</c>, branch on
     /// the resolved outcome: <see cref="TxStatus.Committed"/> surfaces
     /// the prepared value, <see cref="TxStatus.InFlight"/> hides the
     /// key, and <see cref="TxStatus.Aborted"/> falls through to the
