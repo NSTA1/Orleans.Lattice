@@ -464,6 +464,13 @@ public class LatticeMicroBenchmarks
     private ILattice _deepLattice = null!;
     private string[] _deepKeys = null!;
     private List<KeyValuePair<string, byte[]>> _deepBulkBatch = null!;
+    // A read batch spanning every seeded deep-tree key. With DeepKeyCount=32
+    // keys at DeepMaxLeafKeys=4 per leaf the tree holds ~8 leaves, so a
+    // GetManyAsync over this batch scatters across every leaf and drives
+    // ShardRootGrain.TraverseForBatchReadAsync down its multi-leaf path (the
+    // per-leaf grouping dictionary + the result-merge dictionary), which the
+    // single-leaf microbench-default tree never reaches.
+    private List<string> _deepGetManyBatch = null!;
     private readonly Dictionary<GrainId, IBPlusInternalGrain> _internalGrains = [];
     private int _deepWriteCursor;
 
@@ -2064,6 +2071,25 @@ public class LatticeMicroBenchmarks
     }
 
     /// <summary>
+    /// One <see cref="ILattice.GetManyAsync"/> over every seeded key of the
+    /// depth-2 tree, so the batch scatters across all ~8 leaves and drives
+    /// <see cref="ShardRootGrain"/>'s <c>TraverseForBatchReadAsync</c> down its
+    /// multi-leaf path: keys are grouped into a per-leaf bucketing dictionary
+    /// and the per-leaf results are merged into a result dictionary. The
+    /// single-shard <see cref="PointGetMany"/> benchmarks never reach this path
+    /// because the microbench-default tree is a single leaf; this benchmark is
+    /// the one that exercises (and evidences) the result-merge dictionary
+    /// presize on that multi-leaf path. The deep tree is also single-shard, so
+    /// it additionally exercises the <c>GetManyAsyncCore</c> single-shard fast
+    /// path. Surfaced as <c>microbench_point_get_many_deep_tree_alloc_b</c>.
+    /// </summary>
+    [Benchmark(Description = "Point get many deep tree")]
+    public Task<Dictionary<string, byte[]>> PointGetMany_DeepTree()
+    {
+        return _deepLattice.GetManyAsync(_deepGetManyBatch);
+    }
+
+    /// <summary>
     /// Single <see cref="ILattice.GetAsync(string, CancellationToken)"/>
     /// against the depth-3+ deeper tree. Each invocation drives
     /// <see cref="ShardRootGrain"/>'s read traversal through
@@ -2376,6 +2402,16 @@ public class LatticeMicroBenchmarks
         {
             var k = "dbulk-" + i.ToString("D4", CultureInfo.InvariantCulture);
             _deepBulkBatch.Add(new(k, _value));
+        }
+
+        // Read batch over every seeded deep-tree key so the batch spans all
+        // ~8 leaves, forcing TraverseForBatchReadAsync onto its multi-leaf
+        // grouping + merge path. Built once in setup; the measured op only
+        // reads it.
+        _deepGetManyBatch = new List<string>(DeepKeyCount);
+        for (var i = 0; i < DeepKeyCount; i++)
+        {
+            _deepGetManyBatch.Add(_deepKeys[i]);
         }
     }
 

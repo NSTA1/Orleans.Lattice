@@ -521,8 +521,15 @@ internal sealed partial class ShardRootGrain
             bucket.Add(key);
         }
 
-        // Batch read from each leaf cache.
-        var result = new Dictionary<string, byte[]>();
+        // Batch read from each leaf cache. Presize the merge target to
+        // keys.Count: the loop writes one entry per returned key and the
+        // returned count is bounded above by the number of requested keys
+        // (fewer when some keys are absent), so keys.Count is a tight upper
+        // bound that eliminates the dictionary's geometric grow/rehash chain
+        // on a multi-leaf batch read. Reached only when the batch spans more
+        // than one leaf (the single-leaf case returns from the fast path
+        // above without allocating this dictionary).
+        var result = new Dictionary<string, byte[]>(keys.Count);
         foreach (var (leafId, bucket) in leafBuckets)
         {
             var cache = ResolveLeafCacheGrain(leafId);
