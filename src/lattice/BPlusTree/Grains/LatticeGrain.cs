@@ -1173,21 +1173,53 @@ internal sealed partial class LatticeGrain(
             // hot path. This is the locus called out as carry-forward
             // item #3 in POSTMORTEM-2026-06-09-retry-on-stale-routing-tstate.
             var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-            Dictionary<int, List<string>> shardBuckets;
+            Dictionary<int, List<string>>? shardBuckets = null;
+            int fastShardIdx = 0;
+            List<string>? fastBucket = null;
             try
             {
                 var physicalShardCount = shardMap.GetPhysicalShardIndices().Count;
-                shardBuckets = new Dictionary<int, List<string>>(
-                    capacity: Math.Min(keys.Count, physicalShardCount));
-                foreach (var key in keys)
+                if (physicalShardCount == 1 && keys.Count > 0)
                 {
-                    var idx = shardMap.Resolve(key);
-                    if (!shardBuckets.TryGetValue(idx, out var bucket))
+                    // Single physical shard: every key provably resolves to the
+                    // one shard, so skip the shard-bucketing dictionary and its
+                    // per-shard bucket list entirely and route the caller's key
+                    // list straight through as the single bucket. GetManyAsync
+                    // never mutates the list, so reusing it is safe. Resolve one
+                    // representative key for the physical shard index (all keys
+                    // resolve identically under a one-shard map). This is the
+                    // dominant case for a single-shard tree and removes the
+                    // Dictionary<int, List<string>> plus the per-shard List copy
+                    // from the batch-read hot path.
+                    fastShardIdx = shardMap.Resolve(keys[0]);
+                    fastBucket = keys;
+                }
+                else
+                {
+                    shardBuckets = new Dictionary<int, List<string>>(
+                        capacity: Math.Min(keys.Count, physicalShardCount));
+                    foreach (var key in keys)
                     {
-                        bucket = new List<string>(capacity: keys.Count);
-                        shardBuckets[idx] = bucket;
+                        var idx = shardMap.Resolve(key);
+                        if (!shardBuckets.TryGetValue(idx, out var bucket))
+                        {
+                            bucket = new List<string>(capacity: keys.Count);
+                            shardBuckets[idx] = bucket;
+                        }
+                        bucket.Add(key);
                     }
-                    bucket.Add(key);
+                    if (shardBuckets.Count == 1)
+                    {
+                        // Multi-shard map but every requested key happened to
+                        // land on one shard: take the same single-shard fan-out
+                        // fast path below (skip the concurrent merge + copy),
+                        // reusing the already-built bucket.
+                        foreach (var (idx, bucket) in shardBuckets)
+                        {
+                            fastShardIdx = idx;
+                            fastBucket = bucket;
+                        }
+                    }
                 }
             }
             finally
@@ -1198,7 +1230,7 @@ internal sealed partial class LatticeGrain(
             }
 
 #if LATTICE_DIAG
-            DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} bucketCount={shardBuckets.Count} buckets=[{string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]"))}]");
+            DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} bucketCount={(shardBuckets?.Count ?? (fastBucket != null ? 1 : 0))} buckets=[{(shardBuckets != null ? string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]")) : $"s{fastShardIdx}:[{string.Join(',', fastBucket ?? [])}]")}]");
 #endif
 
             // Fan-out stage: registry-snapshot probe + per-shard parallel
@@ -1207,41 +1239,73 @@ internal sealed partial class LatticeGrain(
             // so attributing it to a separate "snapshot" stage would
             // fragment the fan-out's wall-clock without buying
             // diagnostic value at the per-call granularity.
-            ConcurrentDictionary<string, byte[]> concurrent;
+            // Fan-out result: exactly one of these is populated per attempt.
+            // The multi-shard path fans out into `concurrent` (parallel
+            // TryAdd fan-in) and copies it to a plain Dictionary only once the
+            // stability checks pass; the single-shard fast path skips the
+            // concurrent merge target entirely and captures the one shard's
+            // own result dictionary in `singleShardFetched`, handing it back
+            // verbatim (no copy) when stable.
+            ConcurrentDictionary<string, byte[]>? concurrent = null;
+            Dictionary<string, byte[]>? singleShardFetched = null;
             RegistrySnapshotPair snap1Pair;
             var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 snap1Pair = await FetchRegistrySnapshotAsync();
                 var snap1 = snap1Pair.Snap;
-                // Presize the per-call merge target: the per-shard
-                // FetchFromShardAsync workers TryAdd one entry per
-                // returned key, so the steady-state final size is
-                // bounded by keys.Count (less when some keys are
-                // absent on the leaf). concurrencyLevel is the
-                // distinct-shard count - one writer per shard task -
-                // which matches the actual parallel-TryAdd fan-in
-                // without over-segmenting the bucket array. Both
-                // arguments must be >= 1 (ConcurrentDictionary's
-                // constructor rejects 0); the keys.Count == 0 entry
-                // point (legal per the public ILattice.GetManyAsync
-                // surface, exercised by GetManyAsync_returns_empty_for_no_keys)
-                // makes both shardBuckets.Count and keys.Count zero,
-                // so a Math.Max(1, ...) floor on each preserves the
-                // presize semantics on the common path while keeping
-                // the empty-batch path well-defined.
-                concurrent = new ConcurrentDictionary<string, byte[]>(
-                    concurrencyLevel: Math.Max(1, shardBuckets.Count),
-                    capacity: Math.Max(1, keys.Count));
-                using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+                if (fastBucket != null)
                 {
-                    var tasks = new List<Task>(shardBuckets.Count);
-                    foreach (var (shardIdx, bucket) in shardBuckets)
+                    // Single-shard fast path: every requested key routes to one
+                    // physical shard (the dominant case, and the only case for a
+                    // single-shard tree), so skip the per-call ConcurrentDictionary
+                    // merge target, the parallel fan-out, and the final
+                    // ConcurrentDictionary -> Dictionary copy. Issue one
+                    // IShardRootGrain.GetManyAsync under the snapshot scope and take
+                    // its own result dictionary directly. This mirrors the shard
+                    // grain's single-leaf fast path in TraverseForBatchReadAsync one
+                    // layer down. The per-shard ShardActivationRetry wrap, the
+                    // snapshot scope, and the topology + snap2 stability checks and
+                    // retry below are all identical to the multi-shard path, so
+                    // atomic visibility is unchanged.
+                    var shard = GetShardGrainByIndex(physicalTreeId, fastShardIdx);
+                    using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                     {
-                        var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-                        tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
+                        singleShardFetched = await ShardActivationRetry.RunAsync(
+                            () => shard.GetManyAsync(fastBucket));
                     }
-                    await Task.WhenAll(tasks);
+                }
+                else
+                {
+                    // Presize the per-call merge target: the per-shard
+                    // FetchFromShardAsync workers TryAdd one entry per
+                    // returned key, so the steady-state final size is
+                    // bounded by keys.Count (less when some keys are
+                    // absent on the leaf). concurrencyLevel is the
+                    // distinct-shard count - one writer per shard task -
+                    // which matches the actual parallel-TryAdd fan-in
+                    // without over-segmenting the bucket array. Both
+                    // arguments must be >= 1 (ConcurrentDictionary's
+                    // constructor rejects 0); the keys.Count == 0 entry
+                    // point (legal per the public ILattice.GetManyAsync
+                    // surface, exercised by GetManyAsync_returns_empty_for_no_keys)
+                    // makes both shardBuckets.Count and keys.Count zero,
+                    // so a Math.Max(1, ...) floor on each preserves the
+                    // presize semantics on the common path while keeping
+                    // the empty-batch path well-defined.
+                    concurrent = new ConcurrentDictionary<string, byte[]>(
+                        concurrencyLevel: Math.Max(1, shardBuckets!.Count),
+                        capacity: Math.Max(1, keys.Count));
+                    using (LatticeRegistrySnapshotContext.BeginScope(snap1))
+                    {
+                        var tasks = new List<Task>(shardBuckets.Count);
+                        foreach (var (shardIdx, bucket) in shardBuckets)
+                        {
+                            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                            tasks.Add(FetchFromShardAsync(shard, shardIdx, bucket, concurrent, attempt));
+                        }
+                        await Task.WhenAll(tasks);
+                    }
                 }
             }
             finally
@@ -1279,15 +1343,19 @@ internal sealed partial class LatticeGrain(
                 if (await IsSnap2StableAsync(snap1Pair.Snap, snap1Pair.Revision))
                 {
 #if LATTICE_DIAG
-                    DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={concurrent.Count} rounds=[{string.Join(',', concurrent.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
+                    var diagView = (IReadOnlyDictionary<string, byte[]>?)singleShardFetched ?? concurrent!;
+                    DiagSink.Write($"[DIAG reader-batch-exit] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} returnedCount={diagView.Count} rounds=[{string.Join(',', diagView.Select(kv => $"{kv.Key}=r{DiagSink.DecodeRound(kv.Value)}"))}]");
 #endif
-                    result = new Dictionary<string, byte[]>(concurrent);
+                    // Single-shard fast path hands back the shard's own
+                    // dictionary verbatim; multi-shard materialises the
+                    // concurrent merge target into a plain Dictionary.
+                    result = singleShardFetched ?? new Dictionary<string, byte[]>(concurrent!);
                     returning = true;
                 }
                 // else: a saga's InFlight->Committed transition raced our
                 // fan-out; retry with the fresh snapshot in scope.
 #if LATTICE_DIAG
-                if (!returning) DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={concurrent.Count}");
+                if (!returning) DiagSink.Write($"[DIAG reader-snapshot-retry] tree={physicalTreeId} attempt={attempt} returnedSoFar={(singleShardFetched?.Count ?? concurrent!.Count)}");
 #endif
             }
             finally
@@ -1845,22 +1913,43 @@ internal sealed partial class LatticeGrain(
         // allocations.
 
         var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-        Dictionary<int, List<KeyValuePair<string, byte[]>>> shardBuckets;
+        Dictionary<int, List<KeyValuePair<string, byte[]>>>? shardBuckets = null;
+        List<KeyValuePair<string, byte[]>>? singleShardEntries = null;
+        int singleShardIdx = 0;
         try
         {
             var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
-            var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
-            var bucketCapacity = Math.Min(expectedPerShard, 256);
-            shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
-            foreach (var entry in entries)
+            if (physicalShardCount == 1 && entries.Count > 0)
             {
-                var idx = shardMap.Resolve(entry.Key);
-                if (!shardBuckets.TryGetValue(idx, out var bucket))
+                // Single physical shard: every entry provably resolves to the
+                // one shard, so skip the shard-bucketing dictionary and its
+                // per-shard bucket list (which copies every entry) entirely and
+                // route the caller's entry list straight through as the single
+                // bucket. SetManyAsync only iterates `entries` read-only after
+                // the fan-out (the post-commit event publication), so reusing it
+                // is safe. Resolve one representative key for the physical shard
+                // index (all keys resolve identically under a one-shard map).
+                // This is the dominant case for a single-shard tree and removes
+                // the Dictionary<int, List<KeyValuePair>> plus the whole-batch
+                // per-shard List copy from the bulk-write hot path.
+                singleShardIdx = shardMap.Resolve(entries[0].Key);
+                singleShardEntries = entries;
+            }
+            else
+            {
+                var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
+                var bucketCapacity = Math.Min(expectedPerShard, 256);
+                shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
+                foreach (var entry in entries)
                 {
-                    bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
-                    shardBuckets[idx] = bucket;
+                    var idx = shardMap.Resolve(entry.Key);
+                    if (!shardBuckets.TryGetValue(idx, out var bucket))
+                    {
+                        bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
+                        shardBuckets[idx] = bucket;
+                    }
+                    bucket.Add(entry);
                 }
-                bucket.Add(entry);
             }
         }
         finally
@@ -1874,14 +1963,24 @@ internal sealed partial class LatticeGrain(
         var fanoutStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var tasks = new List<Task>(shardBuckets.Count);
-            foreach (var (shardIdx, bucket) in shardBuckets)
+            if (singleShardEntries != null)
             {
-                var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
-                tasks.Add(WriteToShardAsync(shard, bucket));
+                // Single-shard fast path: one write, no per-call List<Task> and
+                // no Task.WhenAll wrapper. Mirrors the bucketing skip above.
+                var shard = GetShardGrainByIndex(physicalTreeId, singleShardIdx);
+                await WriteToShardAsync(shard, singleShardEntries);
             }
+            else
+            {
+                var tasks = new List<Task>(shardBuckets!.Count);
+                foreach (var (shardIdx, bucket) in shardBuckets)
+                {
+                    var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+                    tasks.Add(WriteToShardAsync(shard, bucket));
+                }
 
-            await Task.WhenAll(tasks);
+                await Task.WhenAll(tasks);
+            }
         }
         finally
         {
