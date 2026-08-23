@@ -329,8 +329,9 @@ function Update-QuiesceState {
 	  FAILED    - any per-second failed>0 sample OR FINAL failed>0.
 	  DEGRADED  - watchdog / wal-slot / wal-append counters, OR
 	              cohort-attributable exception lines (net of benign
-	              shutdown-race and warmup-retry lines, which the runner
-	              subtracts before calling this function).
+	              shutdown-race, warmup-retry, and placement-convergence
+	              lines, which the runner subtracts before calling this
+	              function).
 	  HEALTHY   - none of the above; FINAL emitted, no failures, clean drain.
 
 	Drain-tail nuance: a trailing run of rate=0 per-second samples is the
@@ -366,7 +367,8 @@ function Resolve-CohortVerdict {
 		[int] $WalAppend,
 		[int] $ExceptionCount,
 		[int] $BenignShutdownExceptions,
-		[int] $BenignWarmupExceptions = 0
+		[int] $BenignWarmupExceptions = 0,
+		[int] $BenignPlacementConvergence = 0
 	)
 
 	$order = @{ 'HEALTHY' = 0; 'DEGRADED' = 1; 'FAILED' = 2; 'WEDGE' = 3 }
@@ -403,6 +405,7 @@ function Resolve-CohortVerdict {
 		$excludedNotes = @()
 		if ($BenignShutdownExceptions -gt 0) { $excludedNotes += "$BenignShutdownExceptions benign shutdown-race line(s)" }
 		if ($BenignWarmupExceptions -gt 0)   { $excludedNotes += "$BenignWarmupExceptions benign warmup-retry line(s)" }
+		if ($BenignPlacementConvergence -gt 0) { $excludedNotes += "$BenignPlacementConvergence benign placement-convergence line(s)" }
 		if ($excludedNotes.Count -gt 0) {
 			$reason += " ($($excludedNotes -join ', ') excluded)"
 		}
@@ -411,6 +414,7 @@ function Resolve-CohortVerdict {
 		$excludedNotes = @()
 		if ($BenignShutdownExceptions -gt 0) { $excludedNotes += "$BenignShutdownExceptions benign shutdown-race line(s)" }
 		if ($BenignWarmupExceptions -gt 0)   { $excludedNotes += "$BenignWarmupExceptions benign warmup-retry line(s)" }
+		if ($BenignPlacementConvergence -gt 0) { $excludedNotes += "$BenignPlacementConvergence benign placement-convergence line(s)" }
 		if ($excludedNotes.Count -gt 0) {
 			$reasons += "$($excludedNotes -join ', ') excluded"
 		}

@@ -633,6 +633,42 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
 	}
 }
 
+# Subtract benign placement-convergence exceptions from the verdict-relevant
+# tally. Since the Orleans 10.2.0 -> 10.2.2 bump (#1598), a fresh silo's
+# cluster-manifest / grain-directory view converges lazily per grain type:
+# the FIRST hot-path message addressed to a grain type the local silo has
+# not yet resolved is rejected by the placement service with an
+# `OrleansException: No active nodes are compatible with grain <type> and
+# interface <iface> version 0. Known nodes with grain type: none`, logged at
+# `fail:` by the `Orleans.Messaging` category. Orleans re-addresses the
+# waiting message once the manifest converges (a few hundred ms later), so
+# the caller's operation still succeeds - the cohort reaches a clean FINAL
+# with failed=0 and the burst lands in the pre-measurement warm window
+# (t < 15 s, trimmed by the steady-state filter), leaving steady-state
+# throughput unaffected. On the single-silo bench the affected types are the
+# write-path grains the warm-up probe does not pre-activate (walmaterialiserpin,
+# leafsnapshotstorage) plus late shardroot activations; their first touch
+# under load hits the convergence window as a single early burst.
+#
+# The match is anchored on BOTH the "No active nodes are compatible with
+# grain" seam AND the "Known nodes with grain type: none" cold-manifest
+# phenotype, so it is conservative: a genuine placement fault where nodes
+# ARE known but are version-incompatible (or an unsatisfiable placement
+# filter) reports "Known nodes with grain type: <silo>" and still counts.
+# Attribution is current-cohort-scoped (the target grain key carries the
+# cohort tree id) so a prior cohort's convergence burst is never
+# over-subtracted. A convergence retry that ever failed for real would
+# surface failed>0 and still grade FAILED (higher precedence).
+$benignPlacementConvergence = 0
+if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
+	$benignPlacementConvergence = Measure-CohortAttributableMatches `
+		-LogPath $siloLog -CurrentTreeId $treeId `
+		-Pattern 'No active nodes are compatible with grain .*Known nodes with grain type: none'
+	if ($benignPlacementConvergence -gt 0) {
+		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignPlacementConvergence)
+	}
+}
+
 # Whether this cohort exercises a read-only workload. Read-only modes
 # (get-point, get-many) do not enqueue WAL writes, so the silo has no
 # durable backlog to drain after the producer stops; a brief trailing
@@ -700,7 +736,8 @@ $verdict = Resolve-CohortVerdict `
 	-WalAppend $walAppend `
 	-ExceptionCount $exceptionCount `
 	-BenignShutdownExceptions $benignShutdownExceptions `
-	-BenignWarmupExceptions $benignWarmupExceptions
+	-BenignWarmupExceptions $benignWarmupExceptions `
+	-BenignPlacementConvergence $benignPlacementConvergence
 $verdictState   = [string]$verdict.State
 $verdictReasons = @($verdict.Reasons)
 
