@@ -725,8 +725,10 @@ internal sealed class WalShardGrain(
             // Re-check the move fence under the gate: a quiesce may have raised
             // it during the cutover-loop await above. Refusing here guarantees
             // no offset is assigned (and so no append commits to the source
-            // provider) once the fence is up.
-            if (_moveFenced)
+            // provider) once the fence is up. The check and the offset
+            // assignment are one atomic step under the gate - see
+            // WalMoveFenceCore.IsAppendAdmitted.
+            if (!WalMoveFenceCore.IsAppendAdmitted(_moveFenced))
             {
                 fenced = true;
             }
@@ -938,7 +940,7 @@ internal sealed class WalShardGrain(
             {
                 // Re-check the move fence under the gate (a quiesce may have
                 // raised it during a cutover await earlier in this batch loop).
-                if (_moveFenced)
+                if (!WalMoveFenceCore.IsAppendAdmitted(_moveFenced))
                 {
                     fenced = true;
                 }
@@ -1045,7 +1047,10 @@ internal sealed class WalShardGrain(
     {
         lock (_stateGate)
         {
-            return _inFlight.Count == 0 ? _nextOffset : _inFlight.First!.Value.StartOffset;
+            return WalShippingWatermark.DurableContiguousTail(
+                _inFlight.Count != 0,
+                _inFlight.First?.Value.StartOffset ?? 0L,
+                _nextOffset);
         }
     }
 
@@ -1105,7 +1110,7 @@ internal sealed class WalShardGrain(
             // provider returns offsets ascending, so the first at-or-above
             // entry ends the page; the deferred tail is picked up on the
             // next poll once the hole fills.
-            if (walEntry.Offset >= durableTail)
+            if (!WalShippingWatermark.IsOffsetExposable(walEntry.Offset, durableTail))
             {
                 break;
             }
@@ -1223,7 +1228,7 @@ internal sealed class WalShardGrain(
             // returns offsets ascending, so the first at-or-above offset
             // ends the page; the deferred tail ships on the next pump tick
             // once the hole fills.
-            if (offsets[i] >= durableTail)
+            if (!WalShippingWatermark.IsOffsetExposable(offsets[i], durableTail))
             {
                 break;
             }
@@ -2183,7 +2188,7 @@ internal sealed class WalShardGrain(
         // partition after the tree's first move (which advances the global
         // version) would spuriously abort against shards still on the old
         // version - exactly the case a multi-partition batch hits.
-        if (_placementVersion > expectedPlacementVersion)
+        if (WalMoveFenceCore.ShouldAbortStaleQuiesce(_placementVersion, expectedPlacementVersion))
         {
             return new WalMoveQuiesceResult(
                 Quiesced: false,

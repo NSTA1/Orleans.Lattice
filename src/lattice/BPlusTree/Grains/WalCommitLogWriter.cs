@@ -189,7 +189,7 @@ internal sealed class WalCommitLogWriter(
         // dispatch through a writer instance that has already begun
         // draining. Reads the writer-local flag, not any tracker state,
         // so successor writers in the same process see a clean gate.
-        if (_isDraining)
+        if (WalAdmissionGateCore.IsDispatchRefused(_isDraining))
         {
             // Typed shutdown-back-pressure exception (part of the
             // typed shutdown-refusal surface exposed by the public
