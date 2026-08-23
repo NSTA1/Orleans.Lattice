@@ -12,9 +12,22 @@
     samples/ so coverlet's "XPlat Code Coverage" collector skips it if it is
     ever loaded by a test host, without a per-project edit. This inherits into
     all sample projects beneath this directory.
+
+    The attribute is only emitted for target frameworks whose
+    ExcludeFromCodeCoverageAttribute permits assembly-level use: assembly support
+    was added in .NET Core 3.0 (AttributeTargets.Assembly). On netstandard2.0 and
+    .NET Framework the attribute is class/method-only, so an [assembly: ...]
+    application is a CS0592 compile error - and samples/ includes netstandard2.0
+    contract libraries. The condition lives in a target (not a top-level
+    ItemGroup) because $(TargetFramework) is not yet resolved when this props
+    file is imported; a per-TFM inner build sets it before the target runs.
   -->
-  <ItemGroup>
-    <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
-  </ItemGroup>
+  <Target Name="_ExcludeSamplesFromCodeCoverage"
+          BeforeTargets="CoreGenerateAssemblyInfo"
+          Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp' Or ('$(TargetFrameworkIdentifier)' == '.NETStandard' And '$(TargetFrameworkVersion)' == 'v2.1')">
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
+    </ItemGroup>
+  </Target>
 
 </Project>
