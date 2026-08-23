@@ -69,6 +69,14 @@ jobs:
       # no compileable surface for the library test matrix to cover, so
       # gating on it would just burn CI minutes running every package's
       # deterministic suite via the conservative no-match-found fallback.
+      # The benchmark harness IS compiled and tested by its own dedicated lane
+      # below (gated on the `benchmark` detection step), so a benchmark change
+      # is not left unbuilt - it just does not fan out to the library matrix.
+      # test/azure-throughput-silo/** (the harness's own NUnit project) is
+      # excluded here for the same reason: it lives under test/ but covers only
+      # the benchmark Silo, maps to no src/<name>/ package, and so would
+      # otherwise fall through the per-package discovery to the conservative
+      # "test every package" fallback. The dedicated benchmark lane runs it.
       #
       # reference-architecture/** is excluded from `code`/`nonSample` (and
       # handled by its own `refArch` lane) because it is a standalone deployment
@@ -114,6 +122,7 @@ jobs:
               - '!**/*.txt'
               - '!docs/**'
               - '!benchmark/**'
+              - '!test/azure-throughput-silo/**'
               - '!apps/**'
               - '!reference-architecture/**'
               - '!.github/workflows/**'
@@ -122,6 +131,7 @@ jobs:
               - '!**/*.txt'
               - '!docs/**'
               - '!benchmark/**'
+              - '!test/azure-throughput-silo/**'
               - '!apps/**'
               - '!reference-architecture/**'
               - '!.github/workflows/**'
@@ -132,6 +142,29 @@ jobs:
             apps:
               - 'apps/**'
               - '!apps/**/*.md'
+
+      # Detect a change to the benchmark harness (its source under benchmark/**
+      # or its own NUnit project under test/azure-throughput-silo/**), ignoring
+      # markdown. The harness is excluded from the `code`/`nonSample` library
+      # matrix above; this flag instead drives the dedicated benchmark lane that
+      # compiles the harness and runs its covering tests, so a benchmark-only
+      # change is built and tested WITHOUT fanning out to every package.
+      - name: Detect benchmark harness changes
+        id: benchmark
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          if echo "$changed" \
+               | grep -E '^(benchmark/|test/azure-throughput-silo/)' \
+               | grep -vE '\.md$' > /dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Benchmark harness change detected; the benchmark lane will build and test it."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Content-aware release-version-bump carve-out. A coordinated release
       # rewrites the `<Version>` slot of every publishable csproj in one commit
@@ -174,6 +207,7 @@ jobs:
             | grep -vE '\.txt$' \
             | grep -vE '^docs/' \
             | grep -vE '^benchmark/' \
+            | grep -vE '^test/azure-throughput-silo/' \
             | grep -vE '^apps/' \
             | grep -vE '^reference-architecture/' \
             | grep -vE '^\.github/workflows/' || true)
@@ -313,14 +347,14 @@ jobs:
           echo "Packages to test: ${matched[*]}"
 
       - name: Setup .NET
-        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
+        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       # Cache ~/.nuget/packages between runs.
       - name: Cache NuGet packages
-        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
+        if: steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true' || (steps.filter.outputs.code == 'true' && steps.verbump.outputs.version_only != 'true')
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -582,6 +616,93 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Dedicated benchmark-harness lane. Runs independently of the core library
+      # matrix whenever the benchmark harness changed (benchmark). The harness
+      # projects (benchmark/azure-throughput Silo/Producer, benchmark/host
+      # BenchmarkDotNet apps) are NOT in Orleans.Lattice.slnx and map to no
+      # src/<name>/ package, so - like the samples, reference-architecture and
+      # apps lanes - a change to them is compile-checked and covered here instead
+      # of fanning out to every package. Every csproj under benchmark/ is built
+      # (the Silo references src/ by ProjectReference, so this transitively
+      # compiles the core library too), then every test project that covers a
+      # benchmark csproj is run: any test/**/ *.Tests.csproj that
+      # ProjectReferences a benchmark csproj (e.g. test/azure-throughput-silo
+      # covers the Silo). Deterministic only (chaos and Azure-emulator categories
+      # excluded), mirroring the samples/reference-architecture/apps lanes.
+      #
+      # A small deny-list (BENCH_EXCLUDE) skips orphaned experimental harnesses
+      # that are neither in Orleans.Lattice.slnx nor referenced by the
+      # performance-report scripts and have bit-rotted against the current
+      # library API (they were never compiled by any build gate). They are
+      # skipped with a visible ::warning:: rather than silently, so the lane
+      # stays deterministically green while the drift remains tracked. Migrating
+      # them back to the current WAL API is separate follow-up work; drop a path
+      # from BENCH_EXCLUDE once its project compiles again.
+      - name: Build and test benchmark harness (benchmark change)
+        if: steps.benchmark.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          # Build every csproj under benchmark/ (compile-check the harness),
+          # skipping the orphaned bit-rotted harnesses listed in BENCH_EXCLUDE.
+          BENCH_EXCLUDE=(
+            # Orphaned: not in the solution, unreferenced by the perf scripts,
+            # and no longer compiles against the current WalRecord WAL API.
+            'benchmark/host/Bench.WalAzureTable/Orleans.Lattice.Benchmark.WalAzureTable.csproj'
+          )
+          mapfile -t allBenchProjs < <(find benchmark -type f -name '*.csproj' \
+            -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          benchProjs=()
+          for proj in "${allBenchProjs[@]}"; do
+            skip=false
+            for ex in "${BENCH_EXCLUDE[@]}"; do
+              if [ "$proj" = "$ex" ]; then skip=true; break; fi
+            done
+            if [ "$skip" = true ]; then
+              echo "::warning::Skipping orphaned benchmark project (bit-rotted against current API): $proj"
+              continue
+            fi
+            benchProjs+=("$proj")
+          done
+          if [ ${#benchProjs[@]} -eq 0 ]; then
+            echo "::notice::No csproj under benchmark/ - nothing to compile."
+            exit 0
+          fi
+          for proj in "${benchProjs[@]}"; do
+            echo "::group::Build $proj"
+            dotnet build "$proj" --configuration Release
+            echo "::endgroup::"
+          done
+
+          # Collect covering test projects: any test/**/ *.Tests.csproj that
+          # ProjectReferences a benchmark csproj (matched by csproj file name).
+          testProjs=()
+          for proj in "${benchProjs[@]}"; do
+            projFile=$(basename "$proj")
+            while IFS= read -r t; do
+              [ -n "$t" ] && testProjs+=("$t")
+            done < <(grep -rlF "$projFile" test --include='*.Tests.csproj' 2>/dev/null | sort -u || true)
+          done
+          if [ ${#testProjs[@]} -eq 0 ]; then
+            echo "::notice::No test project covers the benchmark harness - build-only."
+            exit 0
+          fi
+          mapfile -t testProjs < <(printf '%s\n' "${testProjs[@]}" | sort -u)
+          echo "Covering test projects: ${testProjs[*]}"
+
+          for testProj in "${testProjs[@]}"; do
+            testName=$(basename "$testProj" .csproj)
+            echo "::group::Build $testName"
+            dotnet build "$testProj" --configuration Release
+            echo "::endgroup::"
+            echo "::group::Test $testName"
+            dotnet test "$testProj" --no-build --configuration Release \
+              --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=benchmark-${testName}.trx"
+            echo "::endgroup::"
+          done
+
       - name: Restore
         if: steps.filter.outputs.nonSample == 'true' && steps.verbump.outputs.version_only != 'true'
         run: dotnet restore
@@ -739,7 +860,7 @@ jobs:
       # samples-only path, the reference-architecture lane, and the apps lane are
       # also captured.
       - name: Upload test results
-        if: always() && (steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true')
+        if: always() && (steps.filter.outputs.code == 'true' || steps.filter.outputs.refArch == 'true' || steps.filter.outputs.apps == 'true' || steps.benchmark.outputs.changed == 'true')
         uses: actions/upload-artifact@v6
         with:
           name: test-results

@@ -1,0 +1,37 @@
+<Project>
+
+  <!--
+    Benchmark harness code is not the subject of the coverage report, exactly
+    like the test tree (see test/Directory.Build.props). The throughput rig
+    (azure-throughput Silo/Producer) and the BenchmarkDotNet hosts under
+    benchmark/host are deploy-and-run-by-hand measurement scaffolding, not
+    product surface the README coverage badge advertises. Counting them would
+    distort the product coverage number.
+
+    Emitting [assembly: ExcludeFromCodeCoverage] via the SDK's AssemblyAttribute
+    item (GenerateAssemblyInfo is on by default) marks every assembly under
+    benchmark/ so coverlet's "XPlat Code Coverage" collector skips it if it is
+    ever loaded by a test host, without a per-project edit. This inherits into
+    all benchmark projects beneath this directory.
+
+    The attribute is only emitted for target frameworks whose
+    ExcludeFromCodeCoverageAttribute permits assembly-level use: assembly support
+    was added in .NET Core 3.0 (AttributeTargets.Assembly). On netstandard2.0 and
+    .NET Framework the attribute is class/method-only, so an [assembly: ...]
+    application is a CS0592 compile error. Every benchmark project targets
+    net10.0 today, so the guard is defensive - it keeps this props file safe if a
+    netstandard2.0/.NET Framework helper is ever added under benchmark/, and
+    matches samples/Directory.Build.props (which does host such a project). The
+    condition lives in a target (not a top-level ItemGroup) because
+    $(TargetFramework) is not yet resolved when this props file is imported; a
+    per-TFM inner build sets it before the target runs.
+  -->
+  <Target Name="_ExcludeBenchmarkFromCodeCoverage"
+          BeforeTargets="CoreGenerateAssemblyInfo"
+          Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp' Or ('$(TargetFrameworkIdentifier)' == '.NETStandard' And '$(TargetFrameworkVersion)' == 'v2.1')">
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
+    </ItemGroup>
+  </Target>
+
+</Project>

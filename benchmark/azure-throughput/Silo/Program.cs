@@ -906,7 +906,8 @@ internal sealed class TcpIngestService(
                     break;
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex) when (IsOrleansMessageRejection(ex))
+                catch (Exception ex) when (IsOrleansMessageRejection(ex)
+                    || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex))
                 {
                     lastReshardException = ex;
                     // Exponential backoff capped at MaxReshardBackoffMs:
@@ -920,7 +921,8 @@ internal sealed class TcpIngestService(
                     // probe saw 7+ consecutive rejections across two
                     // restarts before the directory cleared).
                     var backoffMs = Math.Min(100 * (1 << (attempt - 1)), MaxReshardBackoffMs);
-                    Console.WriteLine($"[silo] reshard treeId={settings.TreeId} attempt={attempt} REJECTED ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
+                    var kind = IsOrleansMessageRejection(ex) ? "REJECTED" : "PLACEMENT-CONVERGING";
+                    Console.WriteLine($"[silo] reshard treeId={settings.TreeId} attempt={attempt} {kind} ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
                     try
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(backoffMs), stoppingToken).ConfigureAwait(false);
@@ -1038,11 +1040,15 @@ internal sealed class TcpIngestService(
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested
-                && (IsOrleansMessageRejection(ex) || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)))
+                && (IsOrleansMessageRejection(ex)
+                    || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
+                    || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)))
             {
                 lastWarmUpException = ex;
                 var backoffMs = Math.Min(100 * (1 << (warmUpAttempt - 1)), MaxWarmUpBackoffMs);
-                var kind = IsOrleansMessageRejection(ex) ? "REJECTED" : "TRANSIENT-CANCEL";
+                var kind = IsOrleansMessageRejection(ex) ? "REJECTED"
+                    : WarmUpRetryClassifier.IsTransientPlacementConvergence(ex) ? "PLACEMENT-CONVERGING"
+                    : "TRANSIENT-CANCEL";
                 Console.WriteLine($"[silo] warmup treeId={settings.TreeId} attempt={warmUpAttempt} {kind} ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
                 try
                 {
