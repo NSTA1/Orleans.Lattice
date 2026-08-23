@@ -75,4 +75,55 @@ public class WarmUpRetryClassifierTests
     {
         Assert.That(WarmUpRetryClassifier.IsTransientActivationCancellation(null), Is.False);
     }
+
+    [Test]
+    public void No_compatible_silos_placement_failure_is_transient_placement_convergence()
+    {
+        // The exact shape Orleans 10.2.2 surfaces out of
+        // PlacementService.GetCompatibleSilos when the warm-up call races the
+        // local silo becoming Active in membership (grain manifest not yet
+        // published), for the local-placed LatticeGrain.
+        var ex = new InvalidOperationException(
+            "No active nodes are compatible with grain lattice and interface ol.gl version 0. "
+            + "Known nodes with grain type: none. All known nodes compatible with interface version: none");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientPlacementConvergence(ex), Is.True);
+    }
+
+    [Test]
+    public void Placement_convergence_wrapped_in_an_inner_chain_is_detected()
+    {
+        // The BackgroundService surfaces the placement fault wrapped: the host
+        // rethrows it inside its own InvalidOperation. We must see through the
+        // wrapper to the inner "no compatible nodes" message.
+        var ex = new InvalidOperationException(
+            "[silo] warm-up faulted",
+            new InvalidOperationException(
+                "No active nodes are compatible with grain lattice and interface ol.gl version 0. "
+                + "Known nodes with grain type: none."));
+
+        Assert.That(WarmUpRetryClassifier.IsTransientPlacementConvergence(ex), Is.True);
+    }
+
+    [Test]
+    public void Unrelated_exception_is_not_transient_placement_convergence()
+    {
+        var ex = new InvalidOperationException("cold tree - warm-up genuinely failed");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientPlacementConvergence(ex), Is.False);
+    }
+
+    [Test]
+    public void A_cancellation_is_not_misclassified_as_placement_convergence()
+    {
+        var ex = new TaskCanceledException("A task was canceled.");
+
+        Assert.That(WarmUpRetryClassifier.IsTransientPlacementConvergence(ex), Is.False);
+    }
+
+    [Test]
+    public void Null_exception_is_not_transient_placement_convergence()
+    {
+        Assert.That(WarmUpRetryClassifier.IsTransientPlacementConvergence(null), Is.False);
+    }
 }
