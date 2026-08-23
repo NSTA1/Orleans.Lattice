@@ -42,6 +42,8 @@ cores are `internal` and exposed to the test assembly through
 | `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. |
 | `WalAdmissionGateCore.IsDispatchRefused` | Whether the commit-log writer refuses a new dispatch because it is draining for shutdown - the pre-admission gate paired with a drain that must release every parked caller. |
 | `WalOffsetAllocationCore.Assign` | The per-shard log-offset handed to an append and the single-step advance of the offset counter - the read-and-advance that must be atomic so two concurrent appends never share an offset and the sequence stays dense. |
+| `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
+| `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
 
 The core files live under `src/lattice/` and `src/lattice/BPlusTree/` next to the
 grains that call them.
@@ -67,6 +69,8 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 | `WalMoveQuiesceModel` | `WalMoveFenceCore` | The fence check and the offset assignment are atomic, so a shard move that quiesces the log can never fence an append that has already taken an offset. |
 | `WalCommitLogWriterDrainModel` | `WalAdmissionGateCore` | A shutdown drain releases every parked admission caller; observing the drain token in the wait set (rather than sampling it before parking) closes the lost-wakeup. |
 | `WalOffsetContiguityModel` | `WalOffsetAllocationCore` | Reading and advancing the offset counter is atomic, so two concurrent appends never receive the same offset and the assigned sequence stays dense and strictly ascending. |
+| `WalBlockedFloorLifecycleModel` | `WalBlockedFloorCore` | The GC's blocked floor is the minimum live buffer pin across consumers, so through every interleaving of pin-take, pin-raise, and pin-clear it never rises above a live pin and never trims an entry a buffering consumer still needs. |
+| `WalMoveRedriveModel` | `WalMoveResumeCore` | A placement move's tail copy resumes just past what the target already holds, so a coordinator that crashes and re-drives at any offset boundary copies every retained offset exactly once with no duplicate and no gap. |
 
 ### Every model ships a non-vacuous guard test
 
@@ -92,6 +96,13 @@ asserts Coyote *finds* the resulting violation
 - `WalOffsetContiguityModel` - the guard splits the atomic read-and-advance of the
   offset counter, and Coyote finds the schedule where two appends are handed the
   same offset.
+- `WalBlockedFloorLifecycleModel` - the guard joins the floor at the *maximum*
+  live buffer pin instead of the minimum, and Coyote finds the schedule where the
+  floor rises above a lagging consumer's pin and the GC trims an entry it is still
+  buffering.
+- `WalMoveRedriveModel` - the guard resumes every re-drive from the source floor
+  instead of past what the target already holds, and Coyote finds the crash point
+  after which the copy re-appends an offset the target already has (a duplicate).
 
 A model with a green fix test and a green guard test is proven load-bearing.
 
