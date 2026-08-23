@@ -815,56 +815,12 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor)
-    {
-        // HLC-shaped clause: cursor OR TTL must accept the entry
-        // (existing legacy HLC-only behaviour).
-        var hlcAccepted = false;
-        if (minCursor is { } mc && mc > HybridLogicalClock.Zero && entry.Timestamp <= mc)
-        {
-            hlcAccepted = true;
-        }
-        else if (ttlCeiling is { } ceiling && entry.Timestamp <= ceiling)
-        {
-            hlcAccepted = true;
-        }
-
-        if (!hlcAccepted)
-        {
-            return false;
-        }
-
-        // Causal-stable clause: when at least one consumer has reported
-        // a per-origin frontier, the entry's VectorClock must be
-        // dominated by it. A null entry.VectorClock means the entry
-        // pre-dates causal+ stamping (legacy peer or hand-constructed
-        // test entry) or carries the empty frontier by design (range
-        // delete) - both are dominated by every non-null frontier.
-        // When causalStable itself is null, no consumer has reported a
-        // vector and the GC degrades cleanly to the HLC-only predicate.
-        if (causalStable is not null)
-        {
-            var entryVc = entry.VectorClock;
-            if (entryVc is not null && !causalStable.DominatesOrEquals(entryVc))
-            {
-                return false;
-            }
-        }
-
-        // Blocked-floor clause: when at least one consumer
-        // reports a non-null buffer pin, every WAL entry whose HLC is
-        // at or after the floor is held back so the receiver can
-        // recover from buffer state. Strict-less semantics protect the
-        // buffered entry itself: an entry whose Timestamp equals the
-        // floor is the buffer's lowest staged entry and must remain on
-        // the WAL until the batch completes or evicts. Range-delete
-        // entries carry HybridLogicalClock.Zero and are therefore
-        // never blocked by a positive floor (Zero < any positive HLC).
-        if (blockedFloor is { } floor && entry.Timestamp >= floor)
-        {
-            return false;
-        }
-
-        return true;
-    }
+        => WalGcTrimCore.IsEntryEligible(
+            entry.Timestamp,
+            entry.VectorClock,
+            minCursor,
+            ttlCeiling,
+            causalStable,
+            blockedFloor);
 }
 
