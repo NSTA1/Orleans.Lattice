@@ -429,14 +429,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
         HybridLogicalClock? min = null;
         foreach (var snapshot in snapshots)
         {
-            if (snapshot.BlockedAtHlc is not { } pin)
-            {
-                continue;
-            }
-            if (min is null || pin < min.Value)
-            {
-                min = pin;
-            }
+            min = WalBlockedFloorCore.Meet(min, snapshot.BlockedAtHlc);
         }
         return min;
     }

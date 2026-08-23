@@ -398,21 +398,21 @@ internal sealed partial class LatticeAdminGrain
             if (srcHighest >= 0)
             {
                 var dstHighestBefore = await dstProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
-                if (dstHighestBefore > srcHighest)
+                if (!WalMoveResumeCore.IsTargetCleanPrefix(dstHighestBefore, srcHighest))
                 {
                     throw new InvalidOperationException(
                         $"WAL move of {physicalTreeId}/{partition} aborted: the target already holds offset "
                         + $"{dstHighestBefore}, beyond the source highest {srcHighest}. The target is not a clean "
                         + "prefix of the source; resolve the divergence before retrying.");
                 }
-                if (dstHighestBefore < srcLowest - 1 && srcLowest > 0)
+                if (WalMoveResumeCore.NeedsFloorReserve(dstHighestBefore, srcLowest))
                 {
                     // Reserve the destination trim floor so the first append's
                     // offset (srcLowest) is contiguous with the reserved point.
                     await dstProvider.TrimAsync(physicalTreeId, partition, srcLowest - 1, cancellationToken);
                 }
 
-                await CopyRangeAsync(Math.Max(srcLowest - 1, dstHighestBefore), srcHighest);
+                await CopyRangeAsync(WalMoveResumeCore.ResumeCursor(srcLowest, dstHighestBefore), srcHighest);
             }
 
             // 3. Convergence: re-quiesce with a fresh lease right before the
