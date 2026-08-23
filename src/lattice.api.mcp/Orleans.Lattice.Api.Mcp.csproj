@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Mcp</PackageId>
-    <Version>9.1.0</Version>
+    <Version>9.2.0</Version>
     <Description>Model Context Protocol (MCP) server binding for Orleans.Lattice. Exposes the cluster's transport-agnostic API facades (state, data, backup, auth, replication, treeadmin) as MCP tools over the official ModelContextProtocol SDK, with permission-aware tool discovery, an authenticated fail-closed credential bridge, and a default-deny authorization posture. Registered with AddLatticeMcp(...) and mapped with MapLatticeMcp(); per-facade tool modules are opt-in via AddStateTools/AddDataTools/AddBackupTools/AddAuthTools/AddReplicationTools/AddTreeAdminTools, and out-of-silo hosting is available via AddLatticeMcpRemote(...).</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

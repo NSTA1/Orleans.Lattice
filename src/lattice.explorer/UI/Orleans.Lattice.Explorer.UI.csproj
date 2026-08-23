@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Orleans.Lattice.Explorer.UI</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.UI</PackageId>
-    <Version>9.1.0</Version>
+    <Version>9.2.0</Version>
     <Description>Shared Razor component class library (RCL) for the Orleans.Lattice Explorer: the routable pages, layout, navigation, detail, backup, access, and authentication components rendered identically by every explorer head, plus the packaged static web assets (css, favicon, topology interop). Served by a referencing app at _content/Orleans.Lattice.Explorer.UI.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
