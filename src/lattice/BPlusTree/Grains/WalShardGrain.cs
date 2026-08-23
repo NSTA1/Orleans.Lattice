@@ -734,7 +734,7 @@ internal sealed class WalShardGrain(
             }
             else
             {
-                var offset = _nextOffset++;
+                var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
                 _pendingSegments.Add(segment);
                 _pendingOffsets.Add(offset);
                 _pendingBatchSizeBytes += size;
@@ -946,7 +946,7 @@ internal sealed class WalShardGrain(
                 }
                 else
                 {
-                    var offset = _nextOffset++;
+                    var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
                     offsets[i] = offset;
                     _pendingSegments.Add(segments[i]);
                     _pendingOffsets.Add(offset);

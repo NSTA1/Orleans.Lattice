@@ -41,6 +41,7 @@ cores are `internal` and exposed to the test assembly through
 | `InMemoryWalCursorRegistry` (driven directly) | The per-consumer cursor max-merge and the `min(cursor)` GC floor scan - a consumer cursor never regresses under a stale re-delivery, and the floor is the minimum across consumers. |
 | `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. |
 | `WalAdmissionGateCore.IsDispatchRefused` | Whether the commit-log writer refuses a new dispatch because it is draining for shutdown - the pre-admission gate paired with a drain that must release every parked caller. |
+| `WalOffsetAllocationCore.Assign` | The per-shard log-offset handed to an append and the single-step advance of the offset counter - the read-and-advance that must be atomic so two concurrent appends never share an offset and the sequence stays dense. |
 
 The core files live under `src/lattice/` and `src/lattice/BPlusTree/` next to the
 grains that call them.
@@ -65,6 +66,7 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 | `WalCursorMonotonicityModel` | `InMemoryWalCursorRegistry` (real) | A consumer's cursor never regresses below its highest report; a stale re-delivery is max-merged away, not applied last-writer-wins. |
 | `WalMoveQuiesceModel` | `WalMoveFenceCore` | The fence check and the offset assignment are atomic, so a shard move that quiesces the log can never fence an append that has already taken an offset. |
 | `WalCommitLogWriterDrainModel` | `WalAdmissionGateCore` | A shutdown drain releases every parked admission caller; observing the drain token in the wait set (rather than sampling it before parking) closes the lost-wakeup. |
+| `WalOffsetContiguityModel` | `WalOffsetAllocationCore` | Reading and advancing the offset counter is atomic, so two concurrent appends never receive the same offset and the assigned sequence stays dense and strictly ascending. |
 
 ### Every model ships a non-vacuous guard test
 
@@ -87,6 +89,9 @@ asserts Coyote *finds* the resulting violation
 - `WalCommitLogWriterDrainModel` - the guard samples the drain token before
   parking, and Coyote finds the lost-wakeup that leaves a caller parked after the
   drain.
+- `WalOffsetContiguityModel` - the guard splits the atomic read-and-advance of the
+  offset counter, and Coyote finds the schedule where two appends are handed the
+  same offset.
 
 A model with a green fix test and a green guard test is proven load-bearing.
 
