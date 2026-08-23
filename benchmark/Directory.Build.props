@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Benchmark harness code is not the subject of the coverage report, exactly
+    like the test tree (see test/Directory.Build.props). The throughput rig
+    (azure-throughput Silo/Producer) and the BenchmarkDotNet hosts under
+    benchmark/host are deploy-and-run-by-hand measurement scaffolding, not
+    product surface the README coverage badge advertises. Counting them would
+    distort the product coverage number.
+
+    Emitting [assembly: ExcludeFromCodeCoverage] via the SDK's AssemblyAttribute
+    item (GenerateAssemblyInfo is on by default) marks every assembly under
+    benchmark/ so coverlet's "XPlat Code Coverage" collector skips it if it is
+    ever loaded by a test host, without a per-project edit. This inherits into
+    all benchmark projects beneath this directory.
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    Sample code is not the subject of the coverage report, exactly like the
+    test tree (see test/Directory.Build.props). The samples under samples/ are
+    illustrative host apps and their supporting projects, not the product
+    surface the README coverage badge advertises. Counting sample fixtures and
+    demo scaffolding would distort the product coverage number.
+
+    Emitting [assembly: ExcludeFromCodeCoverage] via the SDK's AssemblyAttribute
+    item (GenerateAssemblyInfo is on by default) marks every assembly under
+    samples/ so coverlet's "XPlat Code Coverage" collector skips it if it is
+    ever loaded by a test host, without a per-project edit. This inherits into
+    all sample projects beneath this directory.
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage" />
+  </ItemGroup>
+
+</Project>
