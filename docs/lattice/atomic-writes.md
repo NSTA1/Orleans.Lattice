@@ -9,6 +9,14 @@ grain that wraps the existing per-key `SetAsync` path.
 The non-atomic `SetManyAsync` remains available for throughput-oriented use
 cases where partial application on failure is acceptable.
 
+If you need to commit a tree write all-or-nothing *together with* a non-tree
+effect - a payment, an email, a call to another grain - reach for the
+[Atomic Action](atomic-action.md) coordinator instead. It generalizes this
+key-only atomic write to an ordered plan of arbitrary caller-defined
+forward/compensate steps, and ships a built-in tree-write step that delegates
+back to this machinery, so a `SetManyAtomicAsync`-equivalent mutation can be one
+step of a larger saga without giving up the atomicity guarantees described here.
+
 ## Atomicity Guarantees
 
 This section describes the **atomicity** contract of the saga. For the
@@ -950,3 +958,5 @@ the chaos suite - see
   relies on for compensation correctness.
 - [Chaos Tests](chaos-tests.md) - atomic-write workload exercised under
   concurrent splits and fault injection.
+- [Atomic Action](atomic-action.md) - the generic saga / TCC coordinator that
+  layers arbitrary forward/compensate steps over this atomic-write machinery.
