@@ -71,6 +71,18 @@ internal static class PromQlMetricExtractor
         var i = 0;
         var length = query.Length;
 
+        // Track whether a top-level '{...}' label selector is constrained. A
+        // selector is safe only when it is either anchored to a metric name in
+        // name position (for example up{job="api"}) or carries an exact
+        // __name__="..." matcher; a bare, unanchored label selector such as the
+        // right-hand side of `up or {job="api"}` selects series across every
+        // metric name and must fail the deny-all gate closed even though the
+        // expression also names an admitted metric.
+        var metricNamePrecedes = false;
+        var hasUnconstrainedSelector = false;
+        var selectorAnchored = false;
+        var selectorSawExactName = false;
+
         while (i < length)
         {
             var c = query[i];
@@ -78,12 +90,20 @@ internal static class PromQlMetricExtractor
             if (c == '"' || c == '\'' || c == '`')
             {
                 i = SkipString(query, i);
+                metricNamePrecedes = false;
                 continue;
             }
 
             if (c == '{')
             {
+                if (braceDepth == 0)
+                {
+                    selectorAnchored = metricNamePrecedes;
+                    selectorSawExactName = false;
+                }
+
                 braceDepth++;
+                metricNamePrecedes = false;
                 i++;
                 continue;
             }
@@ -93,8 +113,16 @@ internal static class PromQlMetricExtractor
                 if (braceDepth > 0)
                 {
                     braceDepth--;
+                    if (braceDepth == 0 && !selectorAnchored && !selectorSawExactName)
+                    {
+                        // A top-level label selector that is neither anchored to a
+                        // metric name nor pinned by an exact __name__ matcher is
+                        // unconstrained; the deny-all gate must reject it.
+                        hasUnconstrainedSelector = true;
+                    }
                 }
 
+                metricNamePrecedes = false;
                 i++;
                 continue;
             }
@@ -114,7 +142,14 @@ internal static class PromQlMetricExtractor
                     // Compare the span so a plain label name allocates no substring.
                     if (query.AsSpan(start, i - start).SequenceEqual("__name__"))
                     {
+                        var before = names?.Count ?? 0;
                         i = ReadNameMatcher(query, i, ref names, ref seen, ref hasUnresolvableNameMatcher);
+                        if ((names?.Count ?? 0) > before)
+                        {
+                            // An exact __name__="..." matcher pins the selector to a
+                            // named metric, so it is constrained.
+                            selectorSawExactName = true;
+                        }
                     }
 
                     continue;
@@ -134,20 +169,24 @@ internal static class PromQlMetricExtractor
                         i = SkipBalancedParens(query, listStart);
                     }
 
+                    metricNamePrecedes = false;
                     continue;
                 }
 
                 if (NextNonWhitespace(query, i) == '(')
                 {
+                    metricNamePrecedes = false;
                     continue;
                 }
 
                 if (ReservedWords.Contains(identifier))
                 {
+                    metricNamePrecedes = false;
                     continue;
                 }
 
                 AddName(identifier, ref names, ref seen);
+                metricNamePrecedes = true;
                 continue;
             }
 
@@ -160,16 +199,35 @@ internal static class PromQlMetricExtractor
                     i++;
                 }
 
+                metricNamePrecedes = false;
                 continue;
             }
 
+            if (char.IsWhiteSpace(c))
+            {
+                // Whitespace does not break the adjacency between a metric name and
+                // a following label selector, so leave metricNamePrecedes intact.
+                i++;
+                continue;
+            }
+
+            metricNamePrecedes = false;
             i++;
+        }
+
+        // An unterminated top-level '{' (a malformed selector) is treated as
+        // unconstrained unless it was anchored or pinned by an exact __name__,
+        // so the deny-all gate fails closed on it.
+        if (braceDepth > 0 && !selectorAnchored && !selectorSawExactName)
+        {
+            hasUnconstrainedSelector = true;
         }
 
         return new PromQlMetricReferences
         {
             Names = names is null ? [] : names,
             HasUnresolvableNameMatcher = hasUnresolvableNameMatcher,
+            HasUnconstrainedSelector = hasUnconstrainedSelector,
         };
     }
 

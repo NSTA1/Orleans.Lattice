@@ -27,4 +27,16 @@ internal readonly record struct PromQlMetricReferences
     /// <c>!=</c> / <c>!~</c> matcher), which the deny-all gate rejects outright.
     /// </summary>
     public required bool HasUnresolvableNameMatcher { get; init; }
+
+    /// <summary>
+    /// Whether the expression carries an <b>unconstrained</b> <c>{...}</c> label
+    /// selector: a label-set matcher that is not anchored to a metric name in name
+    /// position and carries no exact <c>__name__="..."</c> matcher (for example the
+    /// right-hand selector in <c>up or {job="api"}</c>). Such a selector matches
+    /// every series bearing the label across all metric names, so the deny-all gate
+    /// rejects it outright - even when the expression also names an admitted metric,
+    /// which would otherwise leave <see cref="Names"/> non-empty and slip past the
+    /// gate. Defaults to <c>false</c>.
+    /// </summary>
+    public bool HasUnconstrainedSelector { get; init; }
 }

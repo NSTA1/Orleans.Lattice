@@ -61,6 +61,29 @@ public class ExplorerEntraServiceCollectionExtensionsTests
         Assert.That(provider.GetService<IEntraInteractiveTokenAcquirer>(), Is.SameAs(custom));
     }
 
+    [Test]
+    public void AddExplorerEntraAuth_registersPerCircuitScopedServices()
+    {
+        // Credential-isolation regression: the MSAL-backed acquirer owns an
+        // in-memory token cache and the auth method drives a per-operator
+        // sign-in, so both must be scoped to the Blazor circuit, never a
+        // process-global singleton that would leak one operator's credential to
+        // every circuit.
+        var services = new ServiceCollection();
+
+        services.AddExplorerEntraAuth();
+
+        var acquirer = services.Single(d => d.ServiceType == typeof(IEntraInteractiveTokenAcquirer));
+        var method = services.Single(d =>
+            d.ServiceType == typeof(IExplorerAuthMethod)
+            && d.ImplementationType == typeof(EntraExplorerAuthMethod));
+        Assert.Multiple(() =>
+        {
+            Assert.That(acquirer.Lifetime, Is.EqualTo(ServiceLifetime.Scoped));
+            Assert.That(method.Lifetime, Is.EqualTo(ServiceLifetime.Scoped));
+        });
+    }
+
     private sealed class StubAcquirer : IEntraInteractiveTokenAcquirer
     {
         public Task<EntraTokenResult> AcquireInteractiveAsync(EntraTokenRequest request, CancellationToken cancellationToken = default)

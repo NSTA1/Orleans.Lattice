@@ -119,6 +119,55 @@ public sealed class PromQlMetricExtractorTests
     }
 
     [Test]
+    public void A_bare_label_selector_is_flagged_as_unconstrained()
+    {
+        var references = PromQlMetricExtractor.ExtractReferences("{job=\"api\"}");
+        Assert.That(references.HasUnconstrainedSelector, Is.True);
+    }
+
+    [Test]
+    public void An_admitted_metric_ORed_with_a_bare_selector_is_flagged_as_unconstrained()
+    {
+        // Regression: the extracted name set is non-empty (["up"]) yet the
+        // right-hand bare selector is unanchored, so the unconstrained flag must
+        // be set so the deny-all gate can fail closed.
+        var references = PromQlMetricExtractor.ExtractReferences("up or {job=\"api\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "up" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+            Assert.That(references.HasUnconstrainedSelector, Is.True);
+        });
+    }
+
+    [Test]
+    public void A_metric_anchored_label_selector_is_not_flagged_as_unconstrained()
+    {
+        var references = PromQlMetricExtractor.ExtractReferences("http_requests_total{job=\"api\",code=\"200\"}");
+        Assert.That(references.HasUnconstrainedSelector, Is.False);
+    }
+
+    [Test]
+    public void An_exact_name_matcher_selector_is_not_flagged_as_unconstrained()
+    {
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__=\"up\",job=\"api\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "up" }));
+            Assert.That(references.HasUnconstrainedSelector, Is.False);
+        });
+    }
+
+    [Test]
+    public void An_operator_separated_bare_selector_is_flagged_even_after_a_metric()
+    {
+        // The '+' breaks the adjacency between the metric name and the selector,
+        // so the selector is unanchored and must be flagged.
+        var references = PromQlMetricExtractor.ExtractReferences("up + {job=\"api\"}");
+        Assert.That(references.HasUnconstrainedSelector, Is.True);
+    }
+
+    [Test]
     public void An_unterminated_name_matcher_value_is_unresolvable()
     {
         var references = PromQlMetricExtractor.ExtractReferences("{__name__=\"up}");

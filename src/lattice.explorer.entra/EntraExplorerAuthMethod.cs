@@ -51,11 +51,16 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
         // keeps the token fresh for the life of the session.
         var initial = await _acquirer.AcquireInteractiveAsync(request, cancellationToken).ConfigureAwait(false);
 
+        // Bind silent renewal to the account that just signed in, so a shared
+        // MSAL token cache holding more than one account never renews this
+        // connection with a different operator's token.
+        var renewalRequest = request with { Username = initial.Username };
+
         var source = new ExplorerAccessTokenSource(
             new ExplorerAccessToken { Token = initial.AccessToken, ExpiresOn = initial.ExpiresOn },
             async ct =>
             {
-                var renewed = await _acquirer.AcquireSilentAsync(request, ct).ConfigureAwait(false);
+                var renewed = await _acquirer.AcquireSilentAsync(renewalRequest, ct).ConfigureAwait(false);
                 return renewed is { } value
                     ? new ExplorerAccessToken { Token = value.AccessToken, ExpiresOn = value.ExpiresOn }
                     : null;

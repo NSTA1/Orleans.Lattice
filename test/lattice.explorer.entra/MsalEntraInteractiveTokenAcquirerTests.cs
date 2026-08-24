@@ -163,6 +163,53 @@ public class MsalEntraInteractiveTokenAcquirerTests
     }
 
     [Test]
+    public async Task AcquireSilentAsync_multipleAccounts_selectsAccountMatchingRequestedUsername()
+    {
+        // Credential-confusion regression: with more than one account resident
+        // in the (potentially shared) MSAL cache, silent renewal must select the
+        // account bound to the sign-in, not an arbitrary FirstOrDefault(). Here
+        // the target account is deliberately NOT first, so the pre-fix
+        // FirstOrDefault() would have renewed with the wrong operator's identity.
+        var acquirer = CreateAcquirer();
+        var request = Request() with { Username = "target@contoso.com" };
+        var app = Substitute.For<IPublicClientApplication>();
+        var other = Substitute.For<IAccount>();
+        other.Username.Returns("other@contoso.com");
+        var target = Substitute.For<IAccount>();
+        target.Username.Returns("target@contoso.com");
+        app.GetAccountsAsync().Returns(Task.FromResult<IEnumerable<IAccount>>(new[] { other, target }));
+        app.AcquireTokenSilent(Arg.Any<IEnumerable<string>>(), Arg.Any<IAccount>())
+            .Returns(_ => throw new MsalUiRequiredException("ui_required", "interaction required"));
+        SeedApp(acquirer, request, app);
+
+        var result = await acquirer.AcquireSilentAsync(request);
+
+        Assert.That(result, Is.Null); // ui-required maps to null (re-challenge)
+        app.Received(1).AcquireTokenSilent(Arg.Any<IEnumerable<string>>(), target);
+        app.DidNotReceive().AcquireTokenSilent(Arg.Any<IEnumerable<string>>(), other);
+    }
+
+    [Test]
+    public async Task AcquireSilentAsync_requestedUsernameAbsentFromCache_returnsNull_withoutSilentCall()
+    {
+        // If the account bound to the sign-in is not in the cache, renewal must
+        // fail closed (return null -> re-challenge) rather than silently pick a
+        // different account.
+        var acquirer = CreateAcquirer();
+        var request = Request() with { Username = "missing@contoso.com" };
+        var app = Substitute.For<IPublicClientApplication>();
+        var other = Substitute.For<IAccount>();
+        other.Username.Returns("other@contoso.com");
+        app.GetAccountsAsync().Returns(Task.FromResult<IEnumerable<IAccount>>(new[] { other }));
+        SeedApp(acquirer, request, app);
+
+        var result = await acquirer.AcquireSilentAsync(request);
+
+        Assert.That(result, Is.Null);
+        app.DidNotReceive().AcquireTokenSilent(Arg.Any<IEnumerable<string>>(), Arg.Any<IAccount>());
+    }
+
+    [Test]
     public void AcquireInteractiveAsync_interactiveFlow_whenAppThrows_propagates()
     {
         var acquirer = CreateAcquirer();

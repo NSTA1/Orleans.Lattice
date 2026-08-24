@@ -32,8 +32,17 @@ public static class ExplorerEntraServiceCollectionExtensions
         }
 
         services.AddOptions<ExplorerEntraOptions>();
-        services.TryAddSingleton<IEntraInteractiveTokenAcquirer, MsalEntraInteractiveTokenAcquirer>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IExplorerAuthMethod, EntraExplorerAuthMethod>());
+
+        // Per-circuit credential isolation (security invariant): the acquirer
+        // owns an in-memory MSAL token cache and the auth method drives a
+        // per-operator sign-in, so both must be scoped to the Blazor circuit,
+        // never a process-global singleton - a shared cache would leak one
+        // operator's credential to every circuit. The consuming
+        // IExplorerAuthSession is itself scoped, so there is no captive
+        // dependency. Registered with TryAdd* so a host may still override the
+        // acquirer with its own registration.
+        services.TryAddScoped<IEntraInteractiveTokenAcquirer, MsalEntraInteractiveTokenAcquirer>();
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IExplorerAuthMethod, EntraExplorerAuthMethod>());
 
         return services;
     }

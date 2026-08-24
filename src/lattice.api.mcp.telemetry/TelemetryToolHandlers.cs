@@ -252,6 +252,18 @@ internal static class TelemetryToolHandlers
             return false;
         }
 
+        if (references.HasUnconstrainedSelector)
+        {
+            // Fail closed: a label-only selector that is not anchored to a metric
+            // name (for example the right-hand side of `up or {job="api"}`) matches
+            // series across every metric name, so it defeats the allow-list even
+            // when the expression also names an admitted metric.
+            denialMessage =
+                "The query selects series by label without constraining the metric name, "
+                + "which the telemetry metric-access allow-list cannot admit.";
+            return false;
+        }
+
         if (references.Names.Count == 0)
         {
             // Fail closed: a deny-all query whose metric names cannot be extracted
