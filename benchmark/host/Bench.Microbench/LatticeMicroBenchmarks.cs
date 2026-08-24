@@ -64,7 +64,8 @@ public class LatticeMicroBenchmarks
     private readonly Dictionary<Guid, IBPlusLeafGrain> _leaves = [];
     private readonly Dictionary<string, IShardRootGrain> _shards = [];
     private readonly Dictionary<string, ILeafCacheGrain> _leafCaches = [];
-    private IGrainFactory _grainFactory = null!;
+    private FakeGrainFactory _grainFactory = null!;
+    private FakeLatticeRegistry _registry = null!;
     private IOptionsMonitor<LatticeOptions> _optionsMonitor = null!;
     private LatticeOptionsResolver _optionsResolver = null!;
     private MutationObserverDispatcher _observers = null!;
@@ -660,13 +661,13 @@ public class LatticeMicroBenchmarks
         // do not wire. Sized 4x for safety.
         _maxLeafKeys = Math.Max(keyCount, bulkBatch) * 4;
 
-        _optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        _optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
-        // LatticeCrossTreeTxGrain.ResolveTtl() reads optionsMonitor.CurrentValue
-        // directly (not via .Get(name)); without this stub it returns null and
-        // the cross-tree finalize TTL slide NREs, so the cross-tree benches never
-        // produced numbers.
-        _optionsMonitor.CurrentValue.Returns(new LatticeOptions());
+        // Single fixed options value; the resolver reads Get(name) once per
+        // write on the saga hot path, and LatticeCrossTreeTxGrain.ResolveTtl()
+        // reads CurrentValue directly. FakeOptionsMonitor serves both from one
+        // cached instance, allocating nothing per call (unlike the prior
+        // substitute, whose per-call proxy overhead landed in the measured
+        // allocation figure).
+        _optionsMonitor = new FakeOptionsMonitor<LatticeOptions>(new LatticeOptions());
 
         _observers = new MutationObserverDispatcher([], NullLogger<MutationObserverDispatcher>.Instance);
 
@@ -675,19 +676,15 @@ public class LatticeMicroBenchmarks
         // hot path can reach. Unconfigured routes return null, which would
         // NRE at the call site; every grain interface touched on the hot
         // path is explicitly stubbed below.
-        _grainFactory = Substitute.For<IGrainFactory>();
+        _grainFactory = new FakeGrainFactory();
 
         // Real grain routes (constructed lazily, cached by key). These are
         // the data-bearing grains that actually drive the algorithm under
         // measurement.
-        _grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>())
-            .Returns(c => GetOrCreateLeaf(c.ArgAt<Guid>(0)));
-        _grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>())
-            .Returns(c => GetOrCreateLeaf(GuidFromGrainId(c.ArgAt<GrainId>(0))));
-        _grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>())
-            .Returns(c => GetOrCreateShard(c.ArgAt<string>(0)));
-        _grainFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>())
-            .Returns(c => GetOrCreateLeafCache(c.ArgAt<string>(0)));
+        _grainFactory.RouteByGuid<IBPlusLeafGrain>(GetOrCreateLeaf);
+        _grainFactory.RouteByGrainId<IBPlusLeafGrain>(id => GetOrCreateLeaf(GuidFromGrainId(id)));
+        _grainFactory.RouteByString<IShardRootGrain>(GetOrCreateShard);
+        _grainFactory.RouteByString<ILeafCacheGrain>(GetOrCreateLeafCache);
         // Cycle 13: route IBPlusInternalGrain for the deep-tree benchmarks.
         // Existing single-shard / fanout benchmarks pin MaxLeafKeys high
         // enough that this route is never exercised by them, so wiring it
@@ -697,10 +694,9 @@ public class LatticeMicroBenchmarks
         // internal-grain split path all call the Guid overload directly,
         // while the per-traversal hot path in ShardRootGrain.Traversal calls
         // the GrainId overload.
-        _grainFactory.GetGrain<IBPlusInternalGrain>(Arg.Any<Guid>())
-            .Returns(c => GetOrCreateInternalGrain(GrainId.Create("internal", c.ArgAt<Guid>(0).ToString("N"))));
-        _grainFactory.GetGrain<IBPlusInternalGrain>(Arg.Any<GrainId>())
-            .Returns(c => GetOrCreateInternalGrain(c.ArgAt<GrainId>(0)));
+        _grainFactory.RouteByGuid<IBPlusInternalGrain>(
+            id => GetOrCreateInternalGrain(GrainId.Create("internal", id.ToString("N"))));
+        _grainFactory.RouteByGrainId<IBPlusInternalGrain>(GetOrCreateInternalGrain);
 
         // Atomic-write saga routes: a real AtomicWriteGrain per saga key
         // ({treeId}/{operationId}) and a real TxRegistryGrain per tree.
@@ -719,10 +715,8 @@ public class LatticeMicroBenchmarks
         _atomicReminderRegistry
             .UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>())
             .Returns(Task.FromResult(true));
-        _grainFactory.GetGrain<IAtomicWriteGrain>(Arg.Any<string>())
-            .Returns(c => GetOrCreateAtomicSaga(c.ArgAt<string>(0)));
-        _grainFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>())
-            .Returns(c => GetOrCreateTxRegistry(c.ArgAt<string>(0)));
+        _grainFactory.RouteByString<IAtomicWriteGrain>(GetOrCreateAtomicSaga);
+        _grainFactory.RouteByString<ITxRegistryGrain>(GetOrCreateTxRegistry);
 
         // Cross-tree atomic-write coordinator route: a real
         // LatticeCrossTreeTxGrain per operationId. Shares the same mocked
@@ -732,27 +726,21 @@ public class LatticeMicroBenchmarks
         // per-tree IAtomicWriteGrain sub-sagas (keyed {treeId}/{operationId})
         // which are already served by the GetOrCreateAtomicSaga route above.
         _crossTreeReminderRegistry = _atomicReminderRegistry;
-        _grainFactory.GetGrain<ILatticeCrossTreeTxGrain>(Arg.Any<string>())
-            .Returns(c => GetOrCreateCrossTreeTx(c.ArgAt<string>(0)));
+        _grainFactory.RouteByString<ILatticeCrossTreeTxGrain>(GetOrCreateCrossTreeTx);
 
-        // Registry: an in-memory NSubstitute stub returning a fixed structural
-        // pin so LatticeOptionsResolver resolves the same shape for every
-        // tree id. Methods not used on the hot path are auto-mocked by
-        // NSubstitute (Task.CompletedTask / Task<default>).
-        var registry = Substitute.For<ILatticeRegistry>();
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = 1,
-            }));
-        registry.RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>()).Returns(Task.CompletedTask);
-        registry.UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>()).Returns(Task.CompletedTask);
-        registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.ArgAt<string>(0)));
-        registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
-        registry.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
-        _grainFactory.GetGrain<ILatticeRegistry>(Arg.Any<string>()).Returns(registry);
+        // Registry: an allocation-free in-memory fake returning a fixed
+        // structural pin so LatticeOptionsResolver resolves the same shape for
+        // every tree id. Multi-tree benchmarks layer per-tree overrides via
+        // _registry.SetEntry(...). Auxiliary members return the same defaults
+        // the previous auto-mock did.
+        _registry = new FakeLatticeRegistry();
+        _registry.SetDefaultEntry(new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = 1,
+        });
+        _grainFactory.RouteByString<ILatticeRegistry>(_ => _registry);
 
         // Fire-and-forget auxiliary grains touched once per activation by
         // LatticeGrain.SetAsync. NSubstitute auto-mocks every Task-returning
@@ -760,13 +748,22 @@ public class LatticeMicroBenchmarks
         // we want - the bench is not measuring tombstone compaction or hot
         // shard monitoring.
         var compaction = Substitute.For<ITombstoneCompactionGrain>();
-        _grainFactory.GetGrain<ITombstoneCompactionGrain>(Arg.Any<string>()).Returns(compaction);
+        _grainFactory.RouteByString<ITombstoneCompactionGrain>(_ => compaction);
 
         var monitor = Substitute.For<IHotShardMonitorGrain>();
-        _grainFactory.GetGrain<IHotShardMonitorGrain>(Arg.Any<string>()).Returns(monitor);
+        _grainFactory.RouteByString<IHotShardMonitorGrain>(_ => monitor);
 
         var stats = Substitute.For<ILatticeStats>();
-        _grainFactory.GetGrain<ILatticeStats>(Arg.Any<string>()).Returns(stats);
+        _grainFactory.RouteByString<ILatticeStats>(_ => stats);
+
+        // Per-shard WAL-read coordinator, touched only on the rare split path
+        // (BPlusLeafGrain.CaptureWalHeadsByPartitionAsync) - not the per-op hot
+        // path. An unconfigured substitute returns head/tail offset 0 and an
+        // empty slice, matching the head the seeding splits captured under the
+        // previous auto-mocked factory. Kept on NSubstitute because it is off
+        // the measured allocation path.
+        var leafReplayCoordinator = Substitute.For<ILeafReplayCoordinatorGrain>();
+        _grainFactory.RouteByString<ILeafReplayCoordinatorGrain>(_ => leafReplayCoordinator);
 
         // The resolver depends on the factory + monitor - same singleton
         // shared by every grain layer.
@@ -775,8 +772,7 @@ public class LatticeMicroBenchmarks
         // Build the LatticeGrain (the public ILattice). Service provider is
         // only dereferenced by LatticeEventPublisher when PublishEvents is
         // enabled (it is not in the default options), so a Substitute is safe.
-        var latticeContext = Substitute.For<IGrainContext>();
-        latticeContext.GrainId.Returns(GrainId.Create("lattice", TreeName));
+        var latticeContext = new FakeGrainContext(GrainId.Create("lattice", TreeName));
         var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             latticeContext,
@@ -785,7 +781,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             serviceProvider,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(lattice);
+        _grainFactory.RouteByString<ILattice>(_ => lattice);
         _lattice = lattice;
 
         // Stable lexicographic ordering with fixed-width zero-padded indices.
@@ -969,18 +965,17 @@ public class LatticeMicroBenchmarks
     private IBPlusLeafGrain GetOrCreateLeaf(Guid id)
     {
         if (_leaves.TryGetValue(id, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("leaf", id.ToString("N")));
         // Setup-only: the CRDT writer-path fixture flips this flag while
         // seeding so its leaf resolves a non-null ICommitLogWriter and takes
         // the durable writer path. Every other leaf (and every benchmark not
         // under that fixture) leaves it false, so ResolveCommitLogWriter()
-        // yields null exactly as before - the auto-substitute IServiceProvider
-        // returns null for an unstubbed GetService(ICommitLogWriter).
-        if (_wireWriterForNewLeaves)
-        {
-            ctx.ActivationServices.GetService(typeof(ICommitLogWriter)).Returns(_noOpCommitLogWriter);
-        }
+        // yields null exactly as before - the empty provider returns null for
+        // an unmapped GetService(ICommitLogWriter).
+        IServiceProvider activationServices = _wireWriterForNewLeaves
+            ? new FakeGrainContext.MapServiceProvider(
+                new Dictionary<Type, object?> { [typeof(ICommitLogWriter)] = _noOpCommitLogWriter })
+            : FakeGrainContext.EmptyServiceProvider.Instance;
+        var ctx = new FakeGrainContext(GrainId.Create("leaf", id.ToString("N")), activationServices);
         var state = new FakePersistentState<LeafNodeState>();
         var leaf = new BPlusLeafGrain(ctx, state, _grainFactory, _optionsResolver, _observers, new DefaultLatticeOriginClusterIdResolver());
         _leaves[id] = leaf;
@@ -994,8 +989,7 @@ public class LatticeMicroBenchmarks
     private IShardRootGrain GetOrCreateShard(string key)
     {
         if (_shards.TryGetValue(key, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("shard", key));
+        var ctx = new FakeGrainContext(GrainId.Create("shard", key));
         var state = new FakePersistentState<ShardRootState>();
         var shard = new ShardRootGrain(
             ctx, state, _grainFactory, _optionsResolver,
@@ -1014,11 +1008,10 @@ public class LatticeMicroBenchmarks
     private ILeafCacheGrain GetOrCreateLeafCache(string leafIdString)
     {
         if (_leafCaches.TryGetValue(leafIdString, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
         // The cache grain calls GrainId.Parse(context.GrainId.Key.ToString())
         // to recover the primary leaf id, so the key must be the leaf-id
         // round-trippable string.
-        ctx.GrainId.Returns(GrainId.Create("leafcache", leafIdString));
+        var ctx = new FakeGrainContext(GrainId.Create("leafcache", leafIdString));
         var cache = new LeafCacheGrain(ctx, _grainFactory, _optionsMonitor, new DefaultLatticeOriginClusterIdResolver());
         _leafCaches[leafIdString] = cache;
         return cache;
@@ -1033,8 +1026,7 @@ public class LatticeMicroBenchmarks
     private IBPlusInternalGrain GetOrCreateInternalGrain(GrainId id)
     {
         if (_internalGrains.TryGetValue(id, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(id);
+        var ctx = new FakeGrainContext(id);
         var state = new FakePersistentState<InternalNodeState>();
         var grain = new BPlusInternalGrain(ctx, state, _grainFactory, _optionsResolver);
         _internalGrains[id] = grain;
@@ -1054,8 +1046,7 @@ public class LatticeMicroBenchmarks
     private IAtomicWriteGrain GetOrCreateAtomicSaga(string key)
     {
         if (_atomicSagas.TryGetValue(key, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("atomic-write", key));
+        var ctx = new FakeGrainContext(GrainId.Create("atomic-write", key));
         var sagaState = new FakePersistentState<AtomicWriteState>();
         var saga = new AtomicWriteGrain(
             ctx,
@@ -1078,8 +1069,7 @@ public class LatticeMicroBenchmarks
     private ITxRegistryGrain GetOrCreateTxRegistry(string treeId)
     {
         if (_txRegistries.TryGetValue(treeId, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("tx-registry", treeId));
+        var ctx = new FakeGrainContext(GrainId.Create("tx-registry", treeId));
         var registryState = new FakePersistentState<TxRegistryState>();
         var registry = new TxRegistryGrain(ctx, _grainFactory, _optionsMonitor, registryState);
         _txRegistries[treeId] = registry;
@@ -1099,8 +1089,7 @@ public class LatticeMicroBenchmarks
     private ILatticeCrossTreeTxGrain GetOrCreateCrossTreeTx(string operationId)
     {
         if (_crossTreeCoordinators.TryGetValue(operationId, out var existing)) return existing;
-        var ctx = Substitute.For<IGrainContext>();
-        ctx.GrainId.Returns(GrainId.Create("cross-tree-tx", operationId));
+        var ctx = new FakeGrainContext(GrainId.Create("cross-tree-tx", operationId));
         var coordinatorState = new FakePersistentState<CrossTreeTxState>();
         var coordinator = new LatticeCrossTreeTxGrain(
             ctx,
@@ -1603,17 +1592,14 @@ public class LatticeMicroBenchmarks
         // Register the dedicated tree's structural pin (single shard,
         // root-is-leaf, MaxLeafKeys high enough that the 3 seeded keys never
         // trigger a split mid-seed), mirroring BuildCrossTreeParticipant.
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(WriterTreeName);
-        registry.GetEntryAsync(WriterTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = 1,
-            }));
+        _registry.SetEntry(WriterTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = 1,
+        });
 
-        var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("lattice", WriterTreeName));
+        var context = new FakeGrainContext(GrainId.Create("lattice", WriterTreeName));
         var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             context,
@@ -1622,7 +1608,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             serviceProvider,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(WriterTreeName).Returns(lattice);
+        _grainFactory.RouteKeyedString<ILattice>(WriterTreeName, lattice);
         _crdtGrowStateWriterLattice = lattice;
 
         // Flip the writer-wiring flag for the duration of the seed phase only,
@@ -1680,17 +1666,14 @@ public class LatticeMicroBenchmarks
     /// </summary>
     private void BuildCrdtReceiverBatchFixture()
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(ReceiverBatchTreeName);
-        registry.GetEntryAsync(ReceiverBatchTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = 1,
-            }));
+        _registry.SetEntry(ReceiverBatchTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = 1,
+        });
 
-        var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("lattice", ReceiverBatchTreeName));
+        var context = new FakeGrainContext(GrainId.Create("lattice", ReceiverBatchTreeName));
         var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             context,
@@ -1699,7 +1682,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             serviceProvider,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(ReceiverBatchTreeName).Returns(lattice);
+        _grainFactory.RouteKeyedString<ILattice>(ReceiverBatchTreeName, lattice);
         _crdtReceiverBatchLattice = lattice;
 
         // The single fixed, idempotent add-delta both lanes apply per key.
@@ -1907,17 +1890,14 @@ public class LatticeMicroBenchmarks
     /// </summary>
     private void BuildFanoutTree(int keyCount, int bulkBatch)
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(FanoutTreeName);
-        registry.GetEntryAsync(FanoutTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = FanoutShardCount,
-            }));
+        _registry.SetEntry(FanoutTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = FanoutShardCount,
+        });
 
-        var fanoutContext = Substitute.For<IGrainContext>();
-        fanoutContext.GrainId.Returns(GrainId.Create("lattice", FanoutTreeName));
+        var fanoutContext = new FakeGrainContext(GrainId.Create("lattice", FanoutTreeName));
         var fanoutSp = AuthBench.CreateServiceProvider();
         var fanoutLattice = new LatticeGrain(
             fanoutContext,
@@ -1926,7 +1906,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             fanoutSp,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(FanoutTreeName).Returns(fanoutLattice);
+        _grainFactory.RouteKeyedString<ILattice>(FanoutTreeName, fanoutLattice);
         _fanoutLattice = fanoutLattice;
 
         // Pre-seed the keyspace through the public surface so KeyScan has
@@ -2353,17 +2333,14 @@ public class LatticeMicroBenchmarks
     /// </summary>
     private void BuildDeepTree()
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(DeepTreeName);
-        registry.GetEntryAsync(DeepTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = DeepMaxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = 1,
-            }));
+        _registry.SetEntry(DeepTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = DeepMaxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = 1,
+        });
 
-        var deepContext = Substitute.For<IGrainContext>();
-        deepContext.GrainId.Returns(GrainId.Create("lattice", DeepTreeName));
+        var deepContext = new FakeGrainContext(GrainId.Create("lattice", DeepTreeName));
         var deepSp = AuthBench.CreateServiceProvider();
         var deepLattice = new LatticeGrain(
             deepContext,
@@ -2372,7 +2349,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             deepSp,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(DeepTreeName).Returns(deepLattice);
+        _grainFactory.RouteKeyedString<ILattice>(DeepTreeName, deepLattice);
         _deepLattice = deepLattice;
 
         // Distinct keyspace from the single-shard / fanout trees so the
@@ -2442,17 +2419,14 @@ public class LatticeMicroBenchmarks
         _deeperKeyCount = ReadIntEnv("BENCH_MICROBENCH_DEEPER_KEY_COUNT", DeeperKeyCountDefault);
         _deeperBulkBatch = ReadIntEnv("BENCH_MICROBENCH_DEEPER_BULK_BATCH", DeeperBulkBatchDefault);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(DeeperTreeName);
-        registry.GetEntryAsync(DeeperTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _deeperMaxLeafKeys,
-                MaxInternalChildren = _deeperMaxInternalChildren,
-                ShardCount = 1,
-            }));
+        _registry.SetEntry(DeeperTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _deeperMaxLeafKeys,
+            MaxInternalChildren = _deeperMaxInternalChildren,
+            ShardCount = 1,
+        });
 
-        var deeperContext = Substitute.For<IGrainContext>();
-        deeperContext.GrainId.Returns(GrainId.Create("lattice", DeeperTreeName));
+        var deeperContext = new FakeGrainContext(GrainId.Create("lattice", DeeperTreeName));
         var deeperSp = AuthBench.CreateServiceProvider();
         var deeperLattice = new LatticeGrain(
             deeperContext,
@@ -2461,7 +2435,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             deeperSp,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(DeeperTreeName).Returns(deeperLattice);
+        _grainFactory.RouteKeyedString<ILattice>(DeeperTreeName, deeperLattice);
         _deeperLattice = deeperLattice;
 
         // Distinct keyspace from the single-shard / fanout / deep trees so the
@@ -2508,17 +2482,14 @@ public class LatticeMicroBenchmarks
     {
         var atomicBatchSize = ReadIntEnv("BENCH_MICROBENCH_ATOMIC_BATCH", AtomicBatchDefault);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(AtomicTreeName);
-        registry.GetEntryAsync(AtomicTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = 1,
-            }));
+        _registry.SetEntry(AtomicTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = 1,
+        });
 
-        var atomicContext = Substitute.For<IGrainContext>();
-        atomicContext.GrainId.Returns(GrainId.Create("lattice", AtomicTreeName));
+        var atomicContext = new FakeGrainContext(GrainId.Create("lattice", AtomicTreeName));
         var atomicSp = AuthBench.CreateServiceProvider();
         var atomicLattice = new LatticeGrain(
             atomicContext,
@@ -2527,7 +2498,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             atomicSp,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(AtomicTreeName).Returns(atomicLattice);
+        _grainFactory.RouteKeyedString<ILattice>(AtomicTreeName, atomicLattice);
         _atomicLattice = atomicLattice;
 
         // Pre-build the saga batch with disjoint keys so the saga's per-key
@@ -2565,17 +2536,14 @@ public class LatticeMicroBenchmarks
     {
         var atomicBatchSize = ReadIntEnv("BENCH_MICROBENCH_ATOMIC_BATCH", AtomicBatchDefault);
 
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(AtomicFanoutTreeName);
-        registry.GetEntryAsync(AtomicFanoutTreeName).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = AtomicFanoutShardCount,
-            }));
+        _registry.SetEntry(AtomicFanoutTreeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = AtomicFanoutShardCount,
+        });
 
-        var atomicFanoutContext = Substitute.For<IGrainContext>();
-        atomicFanoutContext.GrainId.Returns(GrainId.Create("lattice", AtomicFanoutTreeName));
+        var atomicFanoutContext = new FakeGrainContext(GrainId.Create("lattice", AtomicFanoutTreeName));
         var atomicFanoutSp = AuthBench.CreateServiceProvider();
         var atomicFanoutLattice = new LatticeGrain(
             atomicFanoutContext,
@@ -2584,7 +2552,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             atomicFanoutSp,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(AtomicFanoutTreeName).Returns(atomicFanoutLattice);
+        _grainFactory.RouteKeyedString<ILattice>(AtomicFanoutTreeName, atomicFanoutLattice);
         _atomicFanoutLattice = atomicFanoutLattice;
 
         // Pre-build the fanout-specific batch with shard-spreading keys so
@@ -2779,17 +2747,14 @@ public class LatticeMicroBenchmarks
     /// </summary>
     private ILattice BuildCrossTreeParticipant(string treeId)
     {
-        var registry = _grainFactory.GetGrain<ILatticeRegistry>(treeId);
-        registry.GetEntryAsync(treeId).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
-            {
-                MaxLeafKeys = _maxLeafKeys,
-                MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
-                ShardCount = 1,
-            }));
+        _registry.SetEntry(treeId, new TreeRegistryEntry
+        {
+            MaxLeafKeys = _maxLeafKeys,
+            MaxInternalChildren = LatticeConstants.DefaultMaxInternalChildren,
+            ShardCount = 1,
+        });
 
-        var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("lattice", treeId));
+        var context = new FakeGrainContext(GrainId.Create("lattice", treeId));
         var serviceProvider = AuthBench.CreateServiceProvider();
         var lattice = new LatticeGrain(
             context,
@@ -2798,7 +2763,7 @@ public class LatticeMicroBenchmarks
             _optionsResolver,
             serviceProvider,
             NullLogger<LatticeGrain>.Instance);
-        _grainFactory.GetGrain<ILattice>(treeId).Returns(lattice);
+        _grainFactory.RouteKeyedString<ILattice>(treeId, lattice);
         return lattice;
     }
 
@@ -3093,10 +3058,8 @@ public class LatticeMicroBenchmarks
             new InMemoryWalStorageProvider(),
             TimeSpan.FromMilliseconds(latencyMs));
 
-        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        monitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
-        var grainContext = Substitute.For<IGrainContext>();
-        grainContext.GrainId.Returns(GrainId.Create("wal", "leafqueue-tree/0"));
+        var monitor = new FakeOptionsMonitor<LatticeOptions>(new LatticeOptions());
+        var grainContext = new FakeGrainContext(GrainId.Create("wal", "leafqueue-tree/0"));
         var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
         modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
