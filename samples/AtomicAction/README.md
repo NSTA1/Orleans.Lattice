@@ -12,7 +12,30 @@ effect**. The built-in `.TreeWrite` step delegates to the verified atomic-write
 machinery (so it inherits the tree's atomicity) and its compensation is
 library-synthesized from a captured pre-image; a custom `.Step` names a
 pre-registered handler (here, one that reserves credit in a stand-in external
-ledger). The sample runs:
+ledger). The saga plan is literally a Lattice tree write and a custom action
+built together, then run all-or-nothing:
+
+```csharp
+var plan = new AtomicActionPlanBuilder()
+    // Step 1: an atomic Lattice tree update - decrement on-hand stock.
+    //         Auto-compensated from a captured pre-image on rollback.
+    .TreeWrite("inventory", w => w.Upsert("sku-42/onhand", Encoding.UTF8.GetBytes("40")))
+    // Step 2: a custom action - reserve credit in an external ledger.
+    //         Its registered compensate effect releases the reservation.
+    .Step("reserve-credit", Encoding.UTF8.GetBytes("alice:100"))
+    .Build();
+
+var outcome = await grainFactory
+    .GetGrain<IAtomicActionGrain>("order-1001")
+    .ExecuteAsync(plan);
+```
+
+Prefer the built-in `.TreeWrite` step over doing the tree write inside a custom
+handler: a custom handler has no pre-image scratch, so it cannot cleanly restore
+a tree key on compensation, whereas `.TreeWrite` captures and restores the
+pre-image for you. Reach for a custom `.Step` for the *non-tree* effects.
+
+The sample runs:
 
 1. A **committing** plan - decrement stock in the `inventory` tree *and* reserve
    credit in the ledger, together.
@@ -35,9 +58,9 @@ dotnet run --project samples/AtomicAction
 
 1) Seeded inventory 'sku-42/onhand' = 41, ledger reservation = 0.
    Outcome: Committed
-   inventory 'sku-42/onhand' = 40
+   inventory 'sku-42/onhand' = 40 (was 41)
    ledger reservation for order-1001 = 100
-   -> the tree write and the external reservation committed together.
+   -> one saga committed a Lattice tree write and a custom external action together.
 
 2) Seeded inventory 'sku-99/onhand' = 5, ledger reservation = 0.
    Outcome: Compensated (faulted at step 2: carrier rejected the shipment)

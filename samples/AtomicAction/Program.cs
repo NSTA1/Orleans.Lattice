@@ -85,7 +85,9 @@ await inventory.SetAsync("sku-42/onhand", Encoding.UTF8.GetBytes("41"));
 Console.WriteLine("1) Seeded inventory 'sku-42/onhand' = 41, ledger reservation = 0.");
 
 var commitPlan = new AtomicActionPlanBuilder()
+    // Step 1: an atomic Lattice tree update (auto-compensated from a pre-image).
     .TreeWrite("inventory", w => w.Upsert("sku-42/onhand", Encoding.UTF8.GetBytes("40")))
+    // Step 2: a custom action against an external system.
     .Step("reserve-credit", Encoding.UTF8.GetBytes("alice:100"))
     .Build();
 
@@ -93,9 +95,9 @@ var committing = grainFactory.GetGrain<IAtomicActionGrain>("order-1001");
 var commitOutcome = await committing.ExecuteAsync(commitPlan);
 
 Console.WriteLine($"   Outcome: {commitOutcome.Status}");
-Console.WriteLine($"   inventory 'sku-42/onhand' = {await ReadAsync(inventory, "sku-42/onhand")}");
+Console.WriteLine($"   inventory 'sku-42/onhand' = {await ReadAsync(inventory, "sku-42/onhand")} (was 41)");
 Console.WriteLine($"   ledger reservation for order-1001 = {ledger.Reserved("order-1001")}");
-Console.WriteLine("   -> the tree write and the external reservation committed together.");
+Console.WriteLine("   -> one saga committed a Lattice tree write and a custom external action together.");
 Console.WriteLine();
 
 // --- 2. A rolling-back plan: a later step faults -> everything is undone -----
