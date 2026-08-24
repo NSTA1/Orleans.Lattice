@@ -645,6 +645,18 @@ app.UseFrontDoorOriginLock(
     "/orleans.lattice.replication.LatticeRemoteSnapshot",
     "/orleans.lattice.replication.LatticeSaga");
 
+// The origin lock EXEMPTS /metrics and /lattice/scale (internal scrapers cannot
+// stamp the Front Door header), and ASP.NET endpoint routing answers a mapped
+// endpoint on BOTH Kestrel listeners - so without this guard those two paths are
+// reachable, unauthenticated, on the externally exposed HTTP/2 ingress (grpcPort).
+// Confine them to the internal HTTP/1 listener (httpPort): they return 404 on any
+// other port. The discriminator is the accepted-socket local port, which Kestrel
+// sets from the listener the connection arrived on; unlike the Host / :authority
+// header it is not client-supplied, so it cannot be spoofed across the external
+// ingress. /health is intentionally NOT confined - Front Door's og-state origin
+// group probes it on the HTTP/2 ingress port.
+app.UseInternalPortEndpointGuard(httpPort, "/metrics", "/lattice/scale");
+
 app.MapLatticeStateApiGrpc();
 app.MapLatticeAuthApiGrpc();
 if (dataApiEnabled)
