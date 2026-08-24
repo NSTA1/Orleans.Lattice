@@ -189,9 +189,12 @@ public class LatticeLockGrainIntegrationTests
             new LockAcquireRequest(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(60)));
 
         // A patient waiter should be granted once the holder's lease lapses and is
-        // reclaimed by the in-activation lease timer.
+        // reclaimed by the in-activation lease timer. The wait is generous (well
+        // above the 2s lease) so a timer scheduled late under saturated CI load
+        // still lands inside the window; it stays under the cluster response
+        // timeout so the transport never trips first.
         var waiter = theLock.AcquireAsync(
-            new LockAcquireRequest(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(60)));
+            new LockAcquireRequest(TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(2)));
 
         var reclaimed = await waiter;
         Assert.That(reclaimed.Token.FencingToken, Is.GreaterThan(holder.Token.FencingToken),

@@ -29,14 +29,15 @@ public sealed class ClusterFixture
     /// <summary>
     /// Response timeout for both the client and the silos in the test cluster.
     /// The default is 30s, but a contended <c>ILatticeLockGrain.AcquireAsync</c>
-    /// parks server-side for up to its <c>MaxWait</c> (lock integration tests use
-    /// values up to 60s), and under a saturated CI run an in-activation lease
-    /// timer can be scheduled late. A 30s ceiling therefore surfaces a legitimate
-    /// long wait - or a starved-but-correct grant - as a false response timeout.
-    /// Raising it comfortably above the largest test <c>MaxWait</c> removes that
-    /// race without weakening any assertion (no test asserts on the ceiling).
+    /// parks server-side for up to its <c>MaxWait</c> (the lease-reclaim test
+    /// waits up to 2 min for a starved in-activation timer), and under a saturated
+    /// CI run that timer can be scheduled late. A short ceiling therefore surfaces
+    /// a legitimate long wait - or a starved-but-correct grant - as a false
+    /// response timeout. Keeping this ceiling strictly above the largest test
+    /// <c>MaxWait</c> removes that race without weakening any assertion (no test
+    /// asserts on the ceiling).
     /// </summary>
-    private static readonly TimeSpan ClusterResponseTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ClusterResponseTimeout = TimeSpan.FromMinutes(3);
 
     private sealed class SiloConfigurator : ISiloConfigurator
     {
