@@ -12,6 +12,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
@@ -84,6 +85,7 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentException.ThrowIfNullOrEmpty(operationId);

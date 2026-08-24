@@ -1428,6 +1428,10 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        var admit = ThrowIfWriteNotAdmittedAsync(cancellationToken);
+        if (!admit.IsCompletedSuccessfully)
+            return SetAdmitThenWriteAsync(admit, key, value, cancellationToken);
+        admit.GetAwaiter().GetResult();
         var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
         if (enforce.IsCompletedSuccessfully && !WriteInterceptionActive)
         {
@@ -1624,6 +1628,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1682,6 +1687,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1742,6 +1748,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfCrdtWriteViolatesReplicationMode(mode);
@@ -1784,6 +1791,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1827,6 +1835,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2026,6 +2035,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2131,6 +2141,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2179,6 +2190,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2238,6 +2250,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2295,6 +2308,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2325,6 +2339,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2350,6 +2365,10 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
+        var admit = ThrowIfWriteNotAdmittedAsync(cancellationToken);
+        if (!admit.IsCompletedSuccessfully)
+            return DeleteAdmitThenDeleteAsync(admit, key, cancellationToken);
+        admit.GetAwaiter().GetResult();
         var enforce = EnforcePointAsync(LatticeOperation.Delete, key, cancellationToken);
         if (enforce.IsCompletedSuccessfully)
         {
@@ -2398,6 +2417,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2420,6 +2440,7 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
