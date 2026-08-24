@@ -371,6 +371,55 @@ _Assert -Name 'warmup-retry signature does NOT match a load-time storage excepti
 	-Condition (-not ($loadExcLine -match $warmupSig)) `
 	-Detail "pattern '$warmupSig' wrongly matched a load-time exception"
 
+# Benign placement-convergence exclusion: since the Orleans 10.2.0 -> 10.2.2
+# bump (#1598), a fresh silo's cluster-manifest view converges lazily per
+# grain type. The FIRST hot-path message to a not-yet-resolved grain type is
+# rejected with an "OrleansException: No active nodes are compatible with
+# grain <type> ... Known nodes with grain type: none"; Orleans re-addresses
+# the waiting message once the manifest converges and the caller's op still
+# succeeds (FINAL failed=0). The burst lands in the pre-measurement warm
+# window (trimmed by the t>=15s steady-state filter), so steady throughput is
+# unaffected. The runner subtracts these current-cohort-attributable lines
+# from ExceptionCount before calling this function, so a cohort whose only
+# "exceptions" were convergence retries arrives with ExceptionCount=0 and
+# stays HEALTHY, with the excluded count surfaced as a diagnostic reason.
+$placementOnly = $clean.Clone(); $placementOnly.ExceptionCount = 0; $placementOnly.BenignPlacementConvergence = 617
+$vPC = Resolve-CohortVerdict @placementOnly
+_Assert -Name 'a cohort whose only exceptions were benign placement-convergence retries is HEALTHY' `
+	-Condition ($vPC.State -eq 'HEALTHY') `
+	-Detail "got state=$($vPC.State) reasons=$($vPC.Reasons -join '; ')"
+_Assert -Name 'the excluded benign placement-convergence count is surfaced for diagnostics' `
+	-Condition ((@($vPC.Reasons) -match 'benign placement-convergence line').Count -ge 1) `
+	-Detail "reasons=$($vPC.Reasons -join '; ')"
+
+# A genuine load-time exception still DEGRADEs even when benign convergence
+# retries were also excluded (the convergence note rides alongside the count).
+$placementPlusReal = $clean.Clone(); $placementPlusReal.ExceptionCount = 1; $placementPlusReal.BenignPlacementConvergence = 617
+$vPR = Resolve-CohortVerdict @placementPlusReal
+_Assert -Name 'a real exception alongside excluded placement-convergence retries is still DEGRADED' `
+	-Condition ($vPR.State -eq 'DEGRADED' -and (@($vPR.Reasons) -match '1 exception line').Count -ge 1 -and (@($vPR.Reasons) -match 'benign placement-convergence line').Count -ge 1) `
+	-Detail "got state=$($vPR.State) reasons=$($vPR.Reasons -join '; ')"
+
+# Guard the exact line signature the runner uses to identify benign
+# placement-convergence rejections (run-cohort.ps1 'No active nodes are
+# compatible with grain .*Known nodes with grain type: none'). The
+# cold-manifest phenotype ("Known nodes with grain type: none") must match;
+# a genuine placement fault where nodes ARE known but are version-
+# incompatible ("Known nodes with grain type: S127...") must NOT, and an
+# unrelated load-time storage exception must NOT.
+$placementSig = 'No active nodes are compatible with grain .*Known nodes with grain type: none'
+$placementLine = '19:37:34 fail: Orleans.Messaging[100071] Failed to address message Request [S127.0.0.1:11111:146518582 bplusleaf/aef673e6]->[ walmaterialiserpin/cohort-v100-h5-45s-20260823193553Z#s1] Orleans.Lattice.BPlusTree.Grains.IWalMaterialiserPinGrain.SeedManyAsync(...) Orleans.Runtime.OrleansException: No active nodes are compatible with grain walmaterialiserpin and interface ol.wpi version 0. Known nodes with grain type: none. All known nodes compatible with interface version: none'
+$placementVersionFault = '19:37:34 fail: Orleans.Messaging[100071] Failed to address message Request ...->[ walmaterialiserpin/cohort-v100-h5-45s-20260823193553Z#s1] Orleans.Runtime.OrleansException: No active nodes are compatible with grain walmaterialiserpin and interface ol.wpi version 3. Known nodes with grain type: S127.0.0.1:11111:146518582'
+_Assert -Name 'placement-convergence signature matches a cold-manifest rejection' `
+	-Condition ($placementLine -match $placementSig) `
+	-Detail "pattern '$placementSig' did not match the cold-manifest placement line"
+_Assert -Name 'placement-convergence signature does NOT match a version-incompatible placement fault' `
+	-Condition (-not ($placementVersionFault -match $placementSig)) `
+	-Detail "pattern '$placementSig' wrongly matched a version-incompatible placement fault"
+_Assert -Name 'placement-convergence signature does NOT match a load-time storage exception' `
+	-Condition (-not ($loadExcLine -match $placementSig)) `
+	-Detail "pattern '$placementSig' wrongly matched a load-time storage exception"
+
 # Benign view-maintainer drain shutdown-race exclusion: the asynchronous
 # materialised-view maintainer drains source writes into its view tree on a
 # background loop; when the silo stops, an in-flight drain is refused with a
