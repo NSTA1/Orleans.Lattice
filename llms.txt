@@ -24,6 +24,8 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 ## Key capabilities
 
 - [Atomic writes](docs/lattice/atomic-writes.md): All-or-nothing multi-key writes within a tree and across trees.
+- [Atomic action](docs/lattice/atomic-action.md): Generic saga / TCC coordinator keyed by an operation id - runs an ordered plan of forward/compensating steps all-or-nothing, with a built-in tree-write step and crash-recoverable idempotency.
+- [Distributed lock](docs/lattice/distributed-lock.md): FIFO-fair, cluster-wide lock / lease with monotonic fencing tokens and bounded leases.
 - [Predicate operations](docs/lattice/predicated-operations.md): Server-side `Expression<Func<T,bool>>` push-down for reads, writes, scans, cursors, and range deletes.
 - [Durable cursors](docs/lattice/durable-cursors.md): Server-checkpointed iterators that survive silo failover and client restart.
 - [Snapshots](docs/lattice/snapshots.md) and [snapshot cursors](docs/lattice/snapshot-cursors.md): Point-in-time copies and isolated iteration.

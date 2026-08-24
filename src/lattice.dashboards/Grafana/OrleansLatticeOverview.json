@@ -1346,6 +1346,77 @@
       "targets": [
         { "refId": "REJ", "expr": "sum by (tree, dimension) (rate(orleans_lattice_admission_rejected_total{tree=~\"$tree\",cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{tree}} {{dimension}}" }
       ]
+    },
+    {
+      "id": 54,
+      "title": "Distributed lock",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 173 },
+      "panels": []
+    },
+    {
+      "id": 55,
+      "title": "Distributed lock - acquire / release / reclaim rate",
+      "description": "Throughput of the FIFO-fair distributed lock (ILatticeLockGrain). orleans_lattice_lock_acquired_total is tagged outcome = granted | timeout | unavailable (a granted acquire, a wait-timeout or non-blocking miss, and a TryAcquire on a held lock respectively); orleans_lattice_lock_released_total counts explicit releases; orleans_lattice_lock_lease_reclaimed_total counts leases reclaimed after a holder let its lease expire without renewing. A rising reclaim rate means holders are crashing or failing to renew before expiry.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 174 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "ACQ", "expr": "sum by (outcome) (rate(orleans_lattice_lock_acquired_total{cluster=~\"$cluster\"}[5m]))", "legendFormat": "acquired {{outcome}}" },
+        { "refId": "REL", "expr": "sum (rate(orleans_lattice_lock_released_total{cluster=~\"$cluster\"}[5m]))", "legendFormat": "released" },
+        { "refId": "RECL", "expr": "sum (rate(orleans_lattice_lock_lease_reclaimed_total{cluster=~\"$cluster\"}[5m]))", "legendFormat": "lease reclaimed" }
+      ]
+    },
+    {
+      "id": 56,
+      "title": "Distributed lock - acquire wait latency",
+      "description": "Time a contended acquire spent parked in the FIFO queue before it was granted, from orleans_lattice_lock_acquire_wait_milliseconds (recorded once per grant, so an uncontended acquire records ~0). p50 / p95 / p99 over the selected cluster. A rising tail indicates deep lock contention or holders holding leases for their full duration.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 174 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_lock_acquire_wait_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p50" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_lock_acquire_wait_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p95" },
+        { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_lock_acquire_wait_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 57,
+      "title": "Atomic action (saga / TCC)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 182 },
+      "panels": []
+    },
+    {
+      "id": 58,
+      "title": "Atomic action - saga and step rate",
+      "description": "Throughput of the generic atomic-action (saga / TCC) coordinator (IAtomicActionGrain). orleans_lattice_atomic_action_completed_total is tagged outcome = committed | compensated | compensation_failed (every forward step committed, a forward fault cleanly rolled back, or a compensating effect itself faulted and parked the saga); orleans_lattice_atomic_action_step_total is tagged phase = forward | compensate and outcome = ok | fault, counting each step effect. A rising compensated or compensation_failed rate means forward effects are faulting; a non-zero compensate/fault rate means the caller's compensation contract is being violated.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 183 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "SAGA", "expr": "sum by (outcome) (rate(orleans_lattice_atomic_action_completed_total{cluster=~\"$cluster\"}[5m]))", "legendFormat": "saga {{outcome}}" },
+        { "refId": "STEP", "expr": "sum by (phase, outcome) (rate(orleans_lattice_atomic_action_step_total{cluster=~\"$cluster\"}[5m]))", "legendFormat": "step {{phase}} {{outcome}}" }
+      ]
+    },
+    {
+      "id": 59,
+      "title": "Atomic action - saga duration",
+      "description": "End-to-end atomic-action saga duration from orleans_lattice_atomic_action_duration_milliseconds (recorded once per terminal transition, measured from saga start so it includes time suspended across silo restarts). p50 / p95 / p99 over the selected cluster. A rising tail on the compensated series indicates expensive rollbacks.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 183 },
+      "fieldConfig": { "defaults": { "unit": "ms", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "P50", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p50" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p95" },
+        { "refId": "P99", "expr": "histogram_quantile(0.99, sum by (le) (rate(orleans_lattice_atomic_action_duration_milliseconds_bucket{cluster=~\"$cluster\"}[5m])))", "legendFormat": "p99" }
+      ]
     }
   ]
 }

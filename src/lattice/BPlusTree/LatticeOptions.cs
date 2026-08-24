@@ -651,6 +651,72 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultAtomicWriteRetention = TimeSpan.FromHours(48);
 
     /// <summary>
+    /// The lease duration <see cref="Orleans.Lattice.ILatticeLockGrain"/> grants
+    /// when an acquire supplies a non-positive
+    /// <see cref="Orleans.Lattice.LockAcquireRequest.LeaseDuration"/> (or a
+    /// non-positive duration to
+    /// <see cref="Orleans.Lattice.ILatticeLockGrain.TryAcquireAsync"/>), i.e. when
+    /// the caller defers to the server default. A holder that neither renews nor
+    /// releases before its lease elapses has the lock reclaimed and handed to the
+    /// next FIFO waiter, so this value bounds how long a crashed holder can wedge
+    /// the lock. Must be positive.
+    /// </summary>
+    public TimeSpan DefaultLockLeaseDuration { get; set; } = DefaultLockLeaseDurationValue;
+
+    /// <summary>Default value for <see cref="DefaultLockLeaseDuration"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultLockLeaseDurationValue = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The upper bound <see cref="Orleans.Lattice.ILatticeLockGrain"/> clamps every
+    /// granted or renewed lease to. A caller cannot pin a lock for longer than this
+    /// even by requesting a larger duration; the grant is silently capped so a
+    /// misconfigured client cannot hold a contended lock for hours. Must be
+    /// positive and at least <see cref="DefaultLockLeaseDuration"/>.
+    /// </summary>
+    public TimeSpan MaxLockLeaseDuration { get; set; } = MaxLockLeaseDurationValue;
+
+    /// <summary>Default value for <see cref="MaxLockLeaseDuration"/> (5 minutes).</summary>
+    public static readonly TimeSpan MaxLockLeaseDurationValue = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Retention window for a terminal atomic-action (saga) coordinator's state
+    /// after <see cref="Orleans.Lattice.IAtomicActionGrain.ExecuteAsync"/> reaches a
+    /// terminal outcome. A re-issue of the same operation id within this window
+    /// returns the memoized outcome (idempotent re-invocation); after it expires
+    /// the coordinator clears its persisted state and a re-issue starts a new saga.
+    /// Set to <see cref="Timeout.InfiniteTimeSpan"/> to retain saga state
+    /// indefinitely. Minimum effective interval is <c>1 minute</c> (Orleans
+    /// reminder granularity).
+    /// </summary>
+    public TimeSpan AtomicActionRetention { get; set; } = DefaultAtomicActionRetention;
+
+    /// <summary>Default value for <see cref="AtomicActionRetention"/> (48 hours).</summary>
+    public static readonly TimeSpan DefaultAtomicActionRetention = TimeSpan.FromHours(48);
+
+    /// <summary>
+    /// The maximum number of steps an atomic-action plan submitted to
+    /// <see cref="Orleans.Lattice.IAtomicActionGrain.ExecuteAsync"/> may contain. A
+    /// plan exceeding this bound is rejected before the saga starts so a
+    /// pathological plan cannot pin an activation for an unbounded time. Must be
+    /// positive.
+    /// </summary>
+    public int MaxAtomicActionSteps { get; set; } = DefaultMaxAtomicActionSteps;
+
+    /// <summary>Default value for <see cref="MaxAtomicActionSteps"/> (64).</summary>
+    public const int DefaultMaxAtomicActionSteps = 64;
+
+    /// <summary>
+    /// The maximum size, in bytes, of a single custom step's argument payload in an
+    /// atomic-action plan. A step whose payload exceeds this bound is rejected
+    /// before the saga starts so a wire- or storage-supplied payload cannot bloat
+    /// persisted saga state without bound. Must be positive.
+    /// </summary>
+    public int MaxAtomicActionArgsBytes { get; set; } = DefaultMaxAtomicActionArgsBytes;
+
+    /// <summary>Default value for <see cref="MaxAtomicActionArgsBytes"/> (32 KiB).</summary>
+    public const int DefaultMaxAtomicActionArgsBytes = 32 * 1024;
+
+    /// <summary>
     /// How long a completed saga's commit/abort decision persists in the
     /// per-tree <see cref="Orleans.Lattice.BPlusTree.Grains.TxRegistryGrain"/> as a tombstone after
     /// the saga calls <c>ForgetAsync</c>. Covers the race window where a

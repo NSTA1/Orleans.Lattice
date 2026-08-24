@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Configuration;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.TestingHost;
@@ -12,6 +15,7 @@ public sealed class ClusterFixture
     {
         var builder = new TestClusterBuilder();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        builder.AddClientBuilderConfigurator<ClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
     }
@@ -22,12 +26,39 @@ public sealed class ClusterFixture
         await Cluster.DisposeAsync();
     }
 
+    /// <summary>
+    /// Response timeout for both the client and the silos in the test cluster.
+    /// The default is 30s, but a contended <c>ILatticeLockGrain.AcquireAsync</c>
+    /// parks server-side for up to its <c>MaxWait</c> (the lease-reclaim test
+    /// waits up to 2 min for a starved in-activation timer), and under a saturated
+    /// CI run that timer can be scheduled late. A short ceiling therefore surfaces
+    /// a legitimate long wait - or a starved-but-correct grant - as a false
+    /// response timeout. Keeping this ceiling strictly above the largest test
+    /// <c>MaxWait</c> removes that race without weakening any assertion (no test
+    /// asserts on the ceiling).
+    /// </summary>
+    private static readonly TimeSpan ClusterResponseTimeout = TimeSpan.FromMinutes(3);
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
+            siloBuilder.Services.Configure<SiloMessagingOptions>(o =>
+            {
+                o.ResponseTimeout = ClusterResponseTimeout;
+                o.SystemResponseTimeout = ClusterResponseTimeout;
+            });
+        }
+    }
+
+    private sealed class ClientConfigurator : IClientBuilderConfigurator
+    {
+        public void Configure(IConfiguration configuration, IClientBuilder clientBuilder)
+        {
+            clientBuilder.Services.Configure<ClientMessagingOptions>(
+                o => o.ResponseTimeout = ClusterResponseTimeout);
         }
     }
 }

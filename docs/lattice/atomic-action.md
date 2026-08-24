@@ -1,0 +1,287 @@
+# Atomic Action (saga / TCC coordinator)
+
+`IAtomicActionGrain` is a public, generic, all-or-nothing **atomic-action
+coordinator** - a [saga](https://microservices.io/patterns/data/saga.html) /
+[TCC](https://en.wikipedia.org/wiki/Try-Confirm/Cancel) coordinator keyed by a
+caller-supplied operation id. It runs an ordered plan of steps, each a forward
+effect paired with a compensating effect, and commits all-or-nothing: if a forward
+step faults, every already-committed step is compensated in strict reverse order,
+so the action leaves no partial effect behind.
+
+It generalizes the key-only [atomic write](atomic-writes.md) to arbitrary
+caller-defined effects, and ships a built-in tree-write step that delegates to the
+verified atomic-write machinery so a Lattice-tree mutation can be one step of a
+larger business transaction without giving up the tree's atomicity guarantee.
+
+The step-sequencing and crash-resume safety of the coordinator is machine-checked;
+see [Verified Atomic Action](verified-atomic-action.md).
+
+## When to use it
+
+Use an atomic action when a single logical operation must apply several effects -
+some to Lattice trees, some to external systems (a payment gateway, an email
+service, another grain) - and a partial application is unacceptable. The
+coordinator gives you a durable, idempotent, crash-recoverable place to sequence
+those effects and roll them back on failure.
+
+If your operation only writes keys in one or more Lattice trees, you do not need an
+atomic action - use [`SetManyAtomicAsync`](atomic-writes.md) directly, which is
+simpler and fully two-phase. Reach for an atomic action when you need to mix a tree
+write with a non-tree effect.
+
+Before you choose, understand the trade you are making: an atomic action buys reach
+(it can include effects a prepared write cannot) at the cost of *isolation* - its
+steps commit and become visible one at a time, so an observer can see intermediate
+state, unlike an atomic write's single all-or-nothing flip. See
+[Visibility vs. the atomic-write feature](#visibility-vs-the-atomic-write-feature)
+for the full comparison and a decision rule.
+
+## Registering handlers
+
+A custom step never carries a delegate; it names a **handler** that you register
+once at silo start. The handler id and an opaque, size-bounded args payload are all
+that is persisted and replayed, so a plan is safe to persist (a persisted step can
+only ever name an allow-listed, pre-registered handler - resolution
+[fails closed](../../.github/instructions/security.instructions.md)).
+
+Register handlers with `AddLatticeAtomicAction` alongside `AddLattice`:
+
+```csharp verify
+siloBuilder.AddLatticeAtomicAction(handlers => handlers
+    .AddHandler(
+        "charge-card",
+        versionTag: "v1",
+        forward: async ctx =>
+        {
+            // Forward effect: charge the card. Make it idempotent keyed on
+            // ctx.OperationId so a crash-resume re-invocation does not double-charge.
+            await Task.CompletedTask;
+        },
+        compensate: async ctx =>
+        {
+            // Compensating effect: refund the charge for the same ctx.OperationId.
+            // Must fully and idempotently undo the forward effect.
+            await Task.CompletedTask;
+        }));
+```
+
+The `versionTag` is stamped into each step when a saga starts and re-checked on a
+crash-resume: if a redeploy changes a handler's tag while a saga is in flight, the
+saga parks rather than replaying a changed effect against a partially completed
+plan. Bump the tag whenever the forward/compensate semantics change in a way that
+is unsafe to replay.
+
+## Building and running a plan
+
+Build a plan with `AtomicActionPlanBuilder`, mixing built-in `TreeWrite` steps and
+custom `Step` handlers in the order they should run. Resolve the coordinator by
+operation id and call `ExecuteAsync`:
+
+```csharp verify
+var plan = new AtomicActionPlanBuilder()
+    .TreeWrite("inventory", w => w
+        .Upsert("sku-42/onhand", new byte[] { 0, 0, 0, 41 }))
+    .Step("charge-card", Encoding.UTF8.GetBytes("order-4711:1999"))
+    .Build();
+
+IAtomicActionGrain saga = grainFactory.GetGrain<IAtomicActionGrain>("order-4711");
+AtomicActionOutcome outcome = await saga.ExecuteAsync(plan);
+
+switch (outcome.Status)
+{
+    case AtomicActionStatus.Committed:
+        // Every forward step committed: stock decremented and card charged.
+        break;
+    case AtomicActionStatus.Compensated:
+        // A forward step faulted; every completed step was rolled back in reverse.
+        Console.WriteLine($"rolled back at step {outcome.FailedStepIndex}: {outcome.FailureMessage}");
+        break;
+}
+```
+
+The operation id (`"order-4711"`) is the **idempotency key**. Re-issuing the same
+plan under the same id after the saga is terminal returns the memoized outcome
+without re-running any effect, so a client that retries after a timeout observes the
+original result rather than a duplicate action. Re-issuing a *different* plan under
+a used id is rejected.
+
+Poll a saga's outcome without starting or mutating it with `TryGetOutcomeAsync`,
+which returns `null` until the saga is terminal:
+
+```csharp verify
+IAtomicActionGrain saga = grainFactory.GetGrain<IAtomicActionGrain>("order-4711");
+AtomicActionOutcome? outcome = await saga.TryGetOutcomeAsync();
+if (outcome is { Status: AtomicActionStatus.Committed })
+{
+    // The saga already committed under this operation id.
+}
+```
+
+## The built-in tree-write step
+
+`.TreeWrite(treeId, ...)` performs an atomic multi-key write to **one** Lattice tree
+as a single saga step, with **library-synthesized** compensation - you supply no
+compensating effect. Before the write, the coordinator captures each affected key's
+pre-image; if a *later* step faults, it restores those pre-images with a fresh
+write (the same pre-image / last-writer-wins technique the atomic-write coordinator
+uses). The forward write itself delegates to `IAtomicWriteGrain`, so it inherits the
+tree's verified atomicity exactly as a direct `SetManyAtomicAsync` would: every key
+in the step commits atomically across the target tree's shards, and - because a tree
+write rides the WAL and replication transport - that commit is visible atomically
+across **every cluster the tree replicates to**, never as a partial set. A single
+step never targets more than one tree.
+
+### Spanning multiple trees
+
+To mutate more than one tree in a single plan, add one `.TreeWrite` step per tree.
+The plan is then made all-or-nothing across those trees by the saga's
+**compensation**, not by a single isolated cross-tree transaction: each step's
+forward write is individually atomic, and on a later fault the coordinator restores
+each committed step's pre-image in the reverse of commit order. Between one step
+committing and a later step's fault an external reader can therefore observe one
+tree updated and another not yet touched; the guarantee is eventual all-or-nothing
+by compensation, not cross-tree isolation. When you instead need several trees to
+flip under one isolated commit, use the
+[cross-tree atomic write](atomic-writes.md#cross-tree-multi-tree-atomic-writes)
+builder directly.
+
+### Cluster scope
+
+A tree write - whether one step or several - carries Lattice's cross-cluster atomic
+visibility: it commits atomically on the local cluster and on every cluster the tree
+replicates to. That is the deliberate contrast with
+[`ILatticeLockGrain`](distributed-lock.md), a **single-cluster** primitive whose
+mutual exclusion holds within one Orleans cluster only. So when an effect must be
+atomic *across* clusters, express it as a tree write (on its own or inside an atomic
+action), not behind the lock.
+
+## Atomicity, precisely
+
+The saga does not make every step two-phase; it makes the *whole plan*
+all-or-nothing by compensation. What that means concretely differs by step kind, and
+this guide does not overclaim:
+
+| Step kind | Forward atomicity | Rollback | Correctness rests on |
+|---|---|---|---|
+| `TreeWrite` | Inherited from the atomic-write machinery: atomic across the target tree's shards, and atomic across every cluster the tree replicates to. One step targets one tree. | Library-synthesized pre-image restore. | The verified atomic-write guarantee and its cross-cluster atomic visibility. |
+| `Custom` (`Step`) | Whatever your forward effect provides. | Your registered compensating effect, best-effort and eventually consistent. | **Your** compensation contract. |
+
+For a custom step, the saga is a best-effort, eventually-consistent compensating
+transaction, not a distributed atomic commit: between a forward effect committing
+and its compensation running (after a later fault) an external observer can see the
+intermediate effect. Make forward and compensating effects idempotent, and make
+compensation actually undo the forward effect - that is the caller's contract.
+
+## Visibility vs. the atomic-write feature
+
+This coordinator and the [atomic-write feature](atomic-writes.md) sit at opposite
+ends of the *visibility* spectrum, and choosing between them is mostly a choice of
+visibility model - not of how many trees you touch.
+
+- **An atomic write is an isolated atomic commit.** `SetManyAtomicAsync` (and the
+  cross-tree builder) prepare their write set behind a single per-tree linearization
+  point, so a reader observes *either zero or all* of it and never an intermediate
+  state: in-flight entries sit in a per-leaf pending bucket that readers cannot see,
+  and they fall through to the pre-saga value until the one visibility flip. A
+  failure *aborts* the prepare, so the tentative values were never visible to anyone.
+  There is exactly one observable transition, and it holds across every cluster the
+  tree replicates to (the multi-shard receiver barrier withholds the remote flip
+  until all per-source-shard terminals arrive).
+- **An atomic action is an all-or-nothing *outcome* assembled from individually
+  visible steps.** Each forward step commits and becomes visible immediately; a later
+  fault is undone by running *new* compensating writes, not by aborting an unseen
+  prepare. So an external observer can genuinely see one step's effect while a later
+  step has not run, and a rollback is observed as value -> new value -> restored
+  value (several transitions), not one. The saga guarantees the *final* state is
+  all-or-nothing; it does **not** isolate the path to it.
+
+The downgrade is fundamental, not a shortcut: an atomic write can offer isolation
+only because every participant can be held in a prepared-but-invisible state on the
+WAL. An atomic action exists precisely to compose effects that cannot - an external
+payment, an email, another grain - so it trades isolation for reach.
+
+A useful consequence: a *single* `.TreeWrite` step, in isolation, keeps the full
+atomic-write visibility (it delegates to `IAtomicWriteGrain`) - one instantaneous,
+cross-cluster, all-or-nothing flip. The visibility downgrade appears only *across*
+steps. So:
+
+- one tree write, nothing else -> use `SetManyAtomicAsync` directly (same
+  visibility, less machinery);
+- several trees all-or-nothing *with isolation*, every effect on the WAL -> use the
+  [cross-tree atomic write](atomic-writes.md#cross-tree-multi-tree-atomic-writes)
+  builder (still an isolated commit);
+- you must include a non-tree effect (or otherwise cannot hold everything in
+  prepare) -> use this coordinator, and accept compensation-based, visibly
+  non-isolated outcome atomicity.
+
+Durability, idempotency, and crash recovery are the same on both sides; the
+visibility model is what differs.
+
+## When compensation itself fails
+
+If a compensating effect faults (after the coordinator's retry budget), the saga
+cannot guarantee it undid every committed step - the caller's compensation contract
+was violated. The saga enters the terminal `CompensationFailed` state, and
+`ExecuteAsync` throws `CompensationFailedException` rather than silently swallowing:
+an operator must intervene.
+
+```csharp verify
+IAtomicActionGrain saga = grainFactory.GetGrain<IAtomicActionGrain>("order-4711");
+AtomicActionPlan plan = new AtomicActionPlanBuilder().Step("charge-card").Build();
+try
+{
+    await saga.ExecuteAsync(plan);
+}
+catch (CompensationFailedException ex)
+{
+    // A compensating effect itself faulted; the saga parked for operator
+    // intervention. ex.StepIndex identifies the step whose compensation failed.
+    Console.WriteLine($"manual intervention required at step {ex.StepIndex}");
+}
+```
+
+## Durability and crash recovery
+
+The saga persists its plan, per-step status vector, phase, and captured tree
+pre-images after every step transition, so a reactivation resumes from the persisted
+state and reaches its terminal outcome **exactly once** - a resume neither re-runs a
+completed forward effect nor skips a pending compensation. Recovery is
+reminder-driven: a keepalive reminder registered at saga start reactivates a
+collected grain and drives the resume through the same pure decision core the Coyote
+model checks.
+
+After the saga is terminal, the grain arms a one-shot retention reminder
+(`LatticeOptions.AtomicActionRetention`, default 48h). When it fires the grain
+clears its persisted state and deactivates, so a re-issue within the window still
+observes the memoized outcome while saga state does not leak forever.
+
+## Limits
+
+| Option | Default | Meaning |
+|---|---|---|
+| `LatticeOptions.MaxAtomicActionSteps` | 64 | Maximum number of steps in one plan. |
+| `LatticeOptions.MaxAtomicActionArgsBytes` | 32 KiB | Maximum size of a custom step's args payload. |
+| `LatticeOptions.AtomicActionRetention` | 48h | How long a terminal saga's memoized outcome is retained before its state is cleared. |
+
+## Observability
+
+The coordinator emits three instruments on the `orleans.lattice` meter, charted on
+the Overview dashboard's "Atomic action (saga / TCC)" row and documented in
+[Metrics](metrics.md):
+
+- `orleans.lattice.atomic_action.completed` - terminal sagas by `outcome`
+  (`committed` / `compensated` / `compensation_failed`).
+- `orleans.lattice.atomic_action.step` - step effects by `phase` (`forward` /
+  `compensate`) and `outcome` (`ok` / `fault`).
+- `orleans.lattice.atomic_action.duration` - end-to-end saga duration by `outcome`.
+
+## Related
+
+- [Verified Atomic Action](verified-atomic-action.md) - the machine-checked safety
+  properties of the coordinator's sequencing and crash-resume core.
+- [Atomic Write](atomic-writes.md) - the key-only atomic multi-key write the
+  tree-write step delegates to.
+- [Distributed Lock](distributed-lock.md) - a sibling coordination primitive.
+- [AtomicAction sample](../../samples/AtomicAction/README.md) - a runnable saga that
+  mixes a Lattice tree write with a custom external effect, committing and rolling
+  back.

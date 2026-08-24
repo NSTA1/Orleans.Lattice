@@ -244,6 +244,29 @@ internal static class TypeAliases
     // Ambient producer-side cross-tree terminal metadata (RequestContext value).
     internal const string CrossTreeTerminalInfo = "ol.cti";
 
+    // Distributed lock / lease (#1608)
+    internal const string LockToken = "ol.lkt";
+    internal const string LockLease = "ol.lkl";
+    internal const string LockAcquireRequest = "ol.lkq";
+    internal const string LockStatus = "ol.lku";
+    internal const string LatticeLockState = "ol.lkz";
+    internal const string LatticeLockConflict = "ol.elc";
+
+    // Generic atomic-action (saga / TCC) coordinator (#1609)
+    internal const string AtomicActionStepKind = "ol.aak";
+    internal const string AtomicActionEntry = "ol.aae";
+    internal const string AtomicActionStep = "ol.aas";
+    internal const string AtomicActionPlan = "ol.aap";
+    internal const string AtomicActionStatus = "ol.aat";
+    internal const string AtomicActionOutcome = "ol.aao";
+    internal const string AtomicActionState = "ol.aaz";
+    internal const string AtomicActionPhase = "ol.aph";
+    internal const string AtomicActionStepStatus = "ol.ast";
+    internal const string AtomicActionTreePreImage = "ol.api";
+    internal const string AtomicActionTreePreValue = "ol.apw";
+    internal const string CompensationFailed = "ol.ecf";
+    internal const string AtomicActionHandlerNotRegistered = "ol.ehn";
+
     // Stateful cursor / iterator
     internal const string LatticeCursorKind = "ol.lck";
     internal const string LatticeCursorSpec = "ol.lcu";
@@ -370,6 +393,8 @@ internal static class TypeAliases
     internal const string ISnapshotBaselineStorageGrain = "ol.sbs";
     internal const string ILatticeQueueGrain = "ol.glq";
     internal const string IClusterSplitConcurrencyGrain = "ol.gcs";
+    internal const string ILatticeLockGrain = "ol.glk";
+    internal const string IAtomicActionGrain = "ol.gaa";
 
     // Cluster-internal FIFO queue (ILatticeQueue<T>) grain wire-return shape:
     // a single parked entry's monotonic id plus its opaque serialized payload.

@@ -137,6 +137,24 @@ public class LatticeOptionsResolverPropagationGuardTests
             // tree ResolvedLatticeOptions gate.
             "WalMaterialiserMaxConcurrentReplays",
             "WalReplayMaxRecordsPerTurn",
+            // Distributed-lock lease knobs (issue #1608): LatticeLockGrain reads
+            // these directly from IOptionsMonitor<LatticeOptions>.CurrentValue when
+            // it clamps a requested lease duration. The lock grain is keyed by lock
+            // name, not by tree id, and never flows through the per-tree
+            // ResolvedLatticeOptions hot path, so bypassing the resolver is
+            // intentional.
+            "DefaultLockLeaseDuration",
+            "MaxLockLeaseDuration",
+
+            // Atomic-action (saga / TCC) coordinator knobs (issue #1609):
+            // AtomicActionGrain reads these directly from
+            // IOptionsMonitor<LatticeOptions>.CurrentValue. The coordinator is keyed
+            // by operation id, not by tree id, and never flows through the per-tree
+            // ResolvedLatticeOptions hot path, so bypassing the resolver is
+            // intentional.
+            "AtomicActionRetention",
+            "MaxAtomicActionSteps",
+            "MaxAtomicActionArgsBytes",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

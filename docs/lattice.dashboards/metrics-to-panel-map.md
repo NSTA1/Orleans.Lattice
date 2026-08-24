@@ -53,6 +53,13 @@ The add-on `orleans.lattice.replication.grpc` meter is charted by the bundled Re
 | `orleans.lattice.admission.would_reject` | counter (`{write}`) | `tree`, `dimension` | Overview | Admission - would-reject rate (advisory dry-run) |
 | `orleans.lattice.admission.utilization` | observable gauge (ratio) | `tree`, `dimension` | Overview | Admission - utilization by dimension |
 | `orleans.lattice.admission.rejected` | counter (`{write}`) | `tree`, `dimension` | Overview | Admission - rejected write rate (enforced) |
+| `orleans.lattice.lock.acquired` | counter (`{acquire}`) | `outcome` | Overview | Distributed lock - acquire / release / reclaim rate |
+| `orleans.lattice.lock.released` | counter (`{release}`) | (none) | Overview | Distributed lock - acquire / release / reclaim rate |
+| `orleans.lattice.lock.lease_reclaimed` | counter (`{lease}`) | (none) | Overview | Distributed lock - acquire / release / reclaim rate |
+| `orleans.lattice.lock.acquire.wait` | histogram (ms) | (none) | Overview | Distributed lock - acquire wait latency |
+| `orleans.lattice.atomic_action.completed` | counter (`{saga}`) | `outcome` | Overview | Atomic action - saga and step rate |
+| `orleans.lattice.atomic_action.step` | counter (`{step}`) | `phase`, `outcome` | Overview | Atomic action - saga and step rate |
+| `orleans.lattice.atomic_action.duration` | histogram (ms) | `outcome` | Overview | Atomic action - saga duration |
 | `orleans.lattice.leaf.replay.duration` | histogram (ms) | `tree`, `outcome` | CommitPath | Activation replay duration by outcome |
 | `orleans.lattice.leaf.replay.entries` | counter | `tree`, `outcome` | CommitPath | Replay entries (applied vs skipped) |
 | `orleans.lattice.shard_root.forward.timeouts` | counter | `tree` | CommitPath | Shard-forward timeouts (reshard swap-phase wedge guard) |

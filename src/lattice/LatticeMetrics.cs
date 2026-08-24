@@ -532,6 +532,92 @@ public static class LatticeMetrics
             description: "Participating-tree count of each cross-tree atomic-write saga, tagged by outcome.");
 
     /// <summary>
+    /// Counter incremented once per <c>AcquireAsync</c> / <c>TryAcquireAsync</c>
+    /// terminal outcome on <c>LatticeLockGrain</c>, tagged with
+    /// <see cref="TagOutcome"/> = <c>granted</c> (the caller received the lease),
+    /// <c>timeout</c> (the FIFO wait elapsed before a grant), or
+    /// <c>unavailable</c> (a non-blocking <c>TryAcquireAsync</c> found the lock
+    /// held). Lets operators watch lock contention as the ratio of non-granted to
+    /// granted outcomes.
+    /// </summary>
+    public static readonly Counter<long> LockAcquired =
+        Meter.CreateCounter<long>("orleans.lattice.lock.acquired", unit: "{acquire}",
+            description: "Distributed-lock acquire outcomes (granted / timeout / unavailable), tagged by outcome.");
+
+    /// <summary>
+    /// Counter incremented once per honoured <c>ReleaseAsync</c> on
+    /// <c>LatticeLockGrain</c> - a release presenting the current holder's fencing
+    /// token that actually freed the lock. A stale-token release is a no-op and is
+    /// not counted here.
+    /// </summary>
+    public static readonly Counter<long> LockReleased =
+        Meter.CreateCounter<long>("orleans.lattice.lock.released", unit: "{release}",
+            description: "Distributed-lock releases that freed the lock under the current holder's fencing token.");
+
+    /// <summary>
+    /// Counter incremented once per lease reclamation on <c>LatticeLockGrain</c> -
+    /// a holder whose lease expired without a renew or release, whose lock was
+    /// reclaimed (and handed to the next FIFO waiter, if any). A sustained non-zero
+    /// rate indicates holders crashing or pausing past their lease duration, the
+    /// exact condition the fencing token protects downstream resources against.
+    /// </summary>
+    public static readonly Counter<long> LockLeaseReclaimed =
+        Meter.CreateCounter<long>("orleans.lattice.lock.lease_reclaimed", unit: "{lease}",
+            description: "Distributed-lock leases reclaimed after expiry without renew or release.");
+
+    /// <summary>
+    /// Histogram of the wall-clock time a granted acquire spent waiting in the
+    /// FIFO queue, recorded once per <c>granted</c> outcome on
+    /// <c>LatticeLockGrain</c> (zero for an uncontended immediate grant). Lets
+    /// operators plot lock-wait latency percentiles distinctly from the
+    /// granted/timeout counts on <see cref="LockAcquired"/>.
+    /// </summary>
+    public static readonly Histogram<double> LockAcquireWait =
+        Meter.CreateHistogram<double>("orleans.lattice.lock.acquire.wait", unit: "ms",
+            description: "Time a granted distributed-lock acquire spent waiting in the FIFO queue.");
+
+    /// <summary>
+    /// Counter incremented once per terminal transition of an <c>AtomicActionGrain</c>
+    /// saga (the generic atomic-action / TCC coordinator). Tagged with
+    /// <see cref="TagOutcome"/> = <c>committed</c> (every forward step committed),
+    /// <c>compensated</c> (a forward step faulted and every committed step was
+    /// rolled back in reverse order), or <c>compensation_failed</c> (a compensating
+    /// effect itself faulted, so the saga parked for operator intervention). Lets
+    /// operators watch the rollback and parked-saga rates as fractions of total
+    /// saga volume.
+    /// </summary>
+    public static readonly Counter<long> AtomicActionCompleted =
+        Meter.CreateCounter<long>("orleans.lattice.atomic_action.completed", unit: "{saga}",
+            description: "Terminal transitions of atomic-action (saga / TCC) coordinators, tagged by outcome.");
+
+    /// <summary>
+    /// Histogram of end-to-end atomic-action saga durations, recorded once per
+    /// terminal transition of an <c>AtomicActionGrain</c> next to
+    /// <see cref="AtomicActionCompleted"/>. The duration is measured from the
+    /// wall-clock time the saga first started (persisted on the saga state so it
+    /// survives a silo crash) to the time it reached its terminal outcome. Tagged
+    /// with <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
+    /// <c>compensation_failed</c> so operators can plot rollback-path latency
+    /// separately from happy-path latency.
+    /// </summary>
+    public static readonly Histogram<double> AtomicActionDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.atomic_action.duration", unit: "ms",
+            description: "End-to-end atomic-action (saga / TCC) coordinator duration, tagged by outcome.");
+
+    /// <summary>
+    /// Counter incremented once per step effect an <c>AtomicActionGrain</c> saga
+    /// runs. Tagged with <see cref="TagPhase"/> = <c>forward</c> (a forward effect
+    /// committed) or <c>compensate</c> (a compensating effect committed), and
+    /// <see cref="TagOutcome"/> = <c>ok</c> (the effect succeeded) or <c>fault</c>
+    /// (the effect threw). Lets operators watch the compensation rate and per-phase
+    /// fault rate at step granularity, below the per-saga
+    /// <see cref="AtomicActionCompleted"/> stream.
+    /// </summary>
+    public static readonly Counter<long> AtomicActionStep =
+        Meter.CreateCounter<long>("orleans.lattice.atomic_action.step", unit: "{step}",
+            description: "Atomic-action saga step effects, tagged by phase (forward / compensate) and outcome (ok / fault).");
+
+    /// <summary>
     /// Counter incremented once per successful coordinator-grain completion.
     /// Tagged with <see cref="TagKind"/> = <c>snapshot</c>, <c>resize</c>,
     /// <c>reshard</c>, <c>merge</c>, or <c>compaction</c>.
