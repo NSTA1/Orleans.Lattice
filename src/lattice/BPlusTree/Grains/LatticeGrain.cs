@@ -352,24 +352,28 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Rejects user-origin creation of a tree in the reserved
+    /// Rejects user-origin creation or mutation of a tree in a reserved
+    /// data-plane namespace: the
     /// <see cref="LatticeConstants.SystemDataTreePrefix"/> (<c>sys-</c>)
-    /// system-data namespace. Called only from the public data-mutation
+    /// system-data namespace, the <see cref="LatticeTenantTrees.SegmentPrefix"/>
+    /// (<c>t/</c>) structural tenant namespace, and the all-trees authorization
+    /// sentinel (<c>"*"</c>). Called only from the public data-mutation
     /// surface (writes, deletes, CRDT apply, bulk load) - never from reads -
     /// because a write is the operation that materialises (creates) a tree,
     /// and blocking it stops a user accidentally seeding a tree that collides
     /// with the dogfooded system-data trees (auth <c>sys-auth-*</c>, backup
-    /// <c>sys-backup-*</c>, membership <c>sys-membership-*</c>).
+    /// <c>sys-backup-*</c>, membership <c>sys-membership-*</c>) or with the
+    /// reserved tenant namespace.
     /// <para>
-    /// The guard is suppressed inside a
+    /// Each check is suppressed inside a
     /// <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> scope, so the
     /// first-party add-ons that legitimately create and mutate their own
-    /// <c>sys-</c> trees under system-origin are unaffected. Reads are never
-    /// gated (an operator may inspect a <c>sys-</c> tree through the State
-    /// API, and a first-party add-on may read its own trees under a user
-    /// identity), which is why this is deliberately not enforced at the
-    /// registry self-registration choke point where reads and writes are
-    /// indistinguishable.
+    /// <c>sys-</c> trees, and the tenancy layer that composes <c>t/</c> ids
+    /// internally, are unaffected. Reads are never gated (an operator may
+    /// inspect a <c>sys-</c> tree through the State API, and a first-party
+    /// add-on may read its own trees under a user identity), which is why this
+    /// is deliberately not enforced at the registry self-registration choke
+    /// point where reads and writes are indistinguishable.
     /// </para>
     /// </summary>
     private void ThrowIfUserOriginSystemDataTree()
@@ -381,6 +385,23 @@ internal sealed partial class LatticeGrain(
                 "are reserved for internal Lattice system-data trees (identity, authorization, backup, and " +
                 "membership add-ons) and cannot be created via the public ILattice surface. Choose a tree name " +
                 "that does not start with the 'sys-' namespace.");
+
+        // Reserve the structural tenant namespace ("t/") as a third guarded
+        // namespace alongside "_lattice_" and "sys-". A tenant's trees are named
+        // t/{tenantId}/{name} and are composed internally by the Lattice tenancy
+        // layer; a user never names one directly, so a direct user-origin write
+        // to a t/-prefixed id is refused here. Suppressed under system-origin so
+        // the tenancy layer's composed routing is unaffected, exactly as the
+        // sys- guard above. LatticeTenantTrees.SegmentPrefix is the single source
+        // of the reserved prefix, so all data-mutation call sites cover it
+        // uniformly.
+        if (LatticeTenantTrees.IsTenantScoped(TreeId)
+            && !LatticeAccessGateContext.IsSystemOrigin)
+            throw new InvalidOperationException(
+                $"Tree ID '{TreeId}' is reserved: names starting with '{LatticeTenantTrees.SegmentPrefix}' " +
+                "are reserved for the structural tenant namespace and are composed internally by the Lattice " +
+                "tenancy layer; they cannot be created via the public ILattice surface. Address a tenant tree " +
+                "by its unqualified name instead.");
 
         // Reserve the all-trees authorization sentinel ("*") as a non-creatable
         // tree id. The authorization decision engine promotes "*" into a

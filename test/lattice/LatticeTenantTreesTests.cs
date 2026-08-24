@@ -122,4 +122,76 @@ public sealed class LatticeTenantTreesTests
         Assert.That(parsed, Is.EqualTo(tenant));
         Assert.That(LatticeTenantTrees.IsTenantScoped(composed), Is.True);
     }
+
+    [Test]
+    public void GetOwner_null_throws_argument_null()
+    {
+        Assert.That(() => LatticeTenantTrees.GetOwner(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void GetOwner_tenant_scoped_id_is_owned_by_that_tenant()
+    {
+        var ownership = LatticeTenantTrees.GetOwner("t/contoso/orders");
+
+        Assert.That(ownership.IsTenantOwned, Is.True);
+        Assert.That(ownership.Tenant, Is.EqualTo(TenantId.Parse("contoso")));
+    }
+
+    [Test]
+    public void GetOwner_bare_legacy_id_is_adopted_by_the_default_tenant()
+    {
+        var ownership = LatticeTenantTrees.GetOwner("orders");
+
+        Assert.That(ownership.IsTenantOwned, Is.True);
+        Assert.That(ownership.Tenant, Is.EqualTo(TenantId.Default));
+    }
+
+    [TestCase("view-orders", TestName = "GetOwner_view_tree_is_adopted_by_the_default_tenant")]
+    [TestCase("tag-orders", TestName = "GetOwner_tag_index_tree_is_adopted_by_the_default_tenant")]
+    public void GetOwner_bare_derived_tree_is_adopted_by_the_default_tenant(string treeId)
+    {
+        var ownership = LatticeTenantTrees.GetOwner(treeId);
+
+        Assert.That(ownership.IsTenantOwned, Is.True);
+        Assert.That(ownership.Tenant, Is.EqualTo(TenantId.Default));
+    }
+
+    [TestCase("_lattice_trees", TestName = "GetOwner_system_internal_tree_is_platform_owned")]
+    [TestCase("_lattice_replog_orders", TestName = "GetOwner_replog_tree_is_platform_owned")]
+    [TestCase("sys-auth-users", TestName = "GetOwner_system_data_tree_is_platform_owned")]
+    [TestCase("sys-membership-nodes", TestName = "GetOwner_membership_tree_is_platform_owned")]
+    public void GetOwner_system_id_is_platform_owned(string treeId)
+    {
+        var ownership = LatticeTenantTrees.GetOwner(treeId);
+
+        Assert.That(ownership.IsPlatformOwned, Is.True);
+        Assert.That(ownership.Tenant, Is.EqualTo(default(TenantId)));
+    }
+
+    [TestCase("t/contoso", TestName = "GetOwner_missing_name_segment_is_platform_owned")]
+    [TestCase("t/contoso/", TestName = "GetOwner_empty_name_segment_is_platform_owned")]
+    [TestCase("t//orders", TestName = "GetOwner_empty_tenant_segment_is_platform_owned")]
+    [TestCase("t/-bad/orders", TestName = "GetOwner_invalid_tenant_grammar_is_platform_owned")]
+    [TestCase("t/CONTOSO/orders", TestName = "GetOwner_uppercase_tenant_is_platform_owned")]
+    public void GetOwner_malformed_tenant_id_is_platform_owned(string treeId)
+    {
+        // A malformed id in the reserved t/ namespace is not a bare legacy id, so
+        // it is not adopted by the default tenant; it is uncreatable and must
+        // never leak into any tenant's view.
+        var ownership = LatticeTenantTrees.GetOwner(treeId);
+
+        Assert.That(ownership.IsPlatformOwned, Is.True);
+    }
+
+    [Test]
+    public void GetOwner_bare_id_that_merely_embeds_t_slash_is_default_tenant()
+    {
+        // Only a leading "t/" is the reserved prefix; an embedded one is a normal
+        // bare id and is adopted by the default tenant.
+        var ownership = LatticeTenantTrees.GetOwner("orders/t/eu");
+
+        Assert.That(ownership.IsTenantOwned, Is.True);
+        Assert.That(ownership.Tenant, Is.EqualTo(TenantId.Default));
+    }
 }

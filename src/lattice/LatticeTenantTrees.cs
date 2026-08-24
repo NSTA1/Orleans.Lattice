@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -112,5 +114,59 @@ public static class LatticeTenantTrees
 
         tenant = TenantId.ForValidated(new string(idSpan));
         return true;
+    }
+
+    /// <summary>
+    /// Derives the owning <see cref="TreeOwnership"/> of a tree from its id
+    /// alone. Ownership is never stored (the tree registry keeps no tenant
+    /// column), so it is always re-computed from the id's structural prefix.
+    /// </summary>
+    /// <param name="treeId">The tree id to classify. Must not be <c>null</c>.</param>
+    /// <returns>
+    /// <see cref="TreeOwnership.Platform"/> for a system id (the
+    /// <c>_lattice_</c> system-internal or <c>sys-</c> system-data namespace);
+    /// the owning tenant for a well-formed tenant-scoped id
+    /// (<c>t/{tenantId}/{name}</c>); and the reserved
+    /// <see cref="TenantId.Default"/> tenant for a bare, unsegmented legacy id
+    /// (default-tenant adoption).
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
+    /// <remarks>
+    /// A tree id that opens with <see cref="SegmentPrefix"/> but is malformed
+    /// (no valid tenant id and local name) is not a bare legacy id, so it is not
+    /// adopted by the default tenant; it classifies as
+    /// <see cref="TreeOwnership.Platform"/> so it can never leak into a tenant's
+    /// view. Such an id is uncreatable in any case - the public data-plane
+    /// user-write guard refuses direct writes to the reserved <c>t/</c>
+    /// namespace.
+    /// </remarks>
+    public static TreeOwnership GetOwner(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var span = treeId.AsSpan();
+
+        // System namespaces are platform-owned and sit outside every tenant.
+        if (span.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            || span.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal))
+        {
+            return TreeOwnership.Platform;
+        }
+
+        // A well-formed tenant-scoped id is owned by the tenant it names.
+        if (TryGetTenant(treeId, out var tenant))
+        {
+            return TreeOwnership.ForTenant(tenant);
+        }
+
+        // A malformed id in the reserved t/ namespace is not a bare legacy id;
+        // treat it as platform-owned so it is excluded from every tenant view.
+        if (span.StartsWith(SegmentPrefix, StringComparison.Ordinal))
+        {
+            return TreeOwnership.Platform;
+        }
+
+        // A bare, unsegmented legacy id is adopted by the reserved default tenant.
+        return TreeOwnership.ForTenant(TenantId.Default);
     }
 }
