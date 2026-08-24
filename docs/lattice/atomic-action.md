@@ -29,6 +29,13 @@ atomic action - use [`SetManyAtomicAsync`](atomic-writes.md) directly, which is
 simpler and fully two-phase. Reach for an atomic action when you need to mix a tree
 write with a non-tree effect.
 
+Before you choose, understand the trade you are making: an atomic action buys reach
+(it can include effects a prepared write cannot) at the cost of *isolation* - its
+steps commit and become visible one at a time, so an observer can see intermediate
+state, unlike an atomic write's single all-or-nothing flip. See
+[Visibility vs. the atomic-write feature](#visibility-vs-the-atomic-write-feature)
+for the full comparison and a decision rule.
+
 ## Registering handlers
 
 A custom step never carries a delegate; it names a **handler** that you register
