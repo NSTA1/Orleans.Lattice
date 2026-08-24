@@ -222,4 +222,40 @@ public class EntraExplorerAuthMethodTests
         Assert.That(await provider.GetAuthorizationHeaderAsync(), Is.Null);
         Assert.That(acquirer.SilentCount, Is.EqualTo(1));
     }
+
+    [Test]
+    public async Task SilentRenewal_bindsToSignedInAccount_soRenewalRequestCarriesUsername()
+    {
+        // Credential-confusion regression: the initial interactive request has
+        // no username yet, but the silent-renewal request must carry the account
+        // that actually signed in, so a shared MSAL cache never renews this
+        // connection with a different operator's identity.
+        var time = new MutableTimeProvider(Start);
+        var acquirer = new FakeEntraAcquirer(time)
+        {
+            SilentResult = new EntraTokenResult
+            {
+                AccessToken = "access-2",
+                ExpiresOn = Start.AddMinutes(30),
+                Username = "user@contoso.com",
+            },
+        };
+        var method = CreateMethod(acquirer);
+
+        var signIn = await method.ChallengeAsync(ContextWithAdvertisedParameters(time));
+        var provider = signIn.Authentication.CredentialProvider!;
+
+        // The initial interactive acquisition carries no bound account yet.
+        Assert.That(acquirer.LastRequest!.Username, Is.Null.Or.Empty);
+
+        // Cross into the proactive-refresh margin to trigger silent renewal.
+        time.Advance(TimeSpan.FromMinutes(9));
+        await provider.GetAuthorizationHeaderAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(acquirer.SilentCount, Is.EqualTo(1));
+            Assert.That(acquirer.LastRequest!.Username, Is.EqualTo("user@contoso.com"));
+        });
+    }
 }

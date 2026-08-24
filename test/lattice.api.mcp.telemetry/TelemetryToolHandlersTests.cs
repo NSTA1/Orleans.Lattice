@@ -182,6 +182,27 @@ public sealed class TelemetryToolHandlersTests
     }
 
     [Test]
+    public async Task Query_in_deny_all_rejects_an_admitted_metric_ORed_with_a_bare_label_selector()
+    {
+        // Regression: a bare label selector matches series across every metric
+        // name. Padding it with an admitted metric leaves the extracted name set
+        // non-empty (["up"]) so it slips past the empty-names guard; the gate must
+        // still fail closed on the unconstrained selector, or the deny-all
+        // allow-list is bypassed and denied series carrying job="api" leak.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, DenyAll("up"), CancellationToken.None, "up or {job=\"api\"}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Is.Not.Null.And.Not.Empty);
+            Assert.That(handler.LastRequest, Is.Null, "The bypass query must not reach the backend.");
+        });
+    }
+
+    [Test]
     public async Task Query_in_deny_all_rejects_a_label_only_selector_with_no_metric_name()
     {
         var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
@@ -247,6 +268,26 @@ public sealed class TelemetryToolHandlersTests
         {
             Assert.That(result.Success, Is.False);
             Assert.That(handler.LastRequest, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task QueryRange_in_deny_all_rejects_an_admitted_metric_ORed_with_a_bare_label_selector()
+    {
+        // Regression: the same allow-list bypass must be closed on the range path.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryRangeAsync(
+            client, DenyAll("up"), Guardrails(), CancellationToken.None,
+            "up or {job=\"api\"}",
+            DateTimeOffset.FromUnixTimeSeconds(0),
+            DateTimeOffset.FromUnixTimeSeconds(600),
+            TimeSpan.FromSeconds(30));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(handler.LastRequest, Is.Null, "The bypass query must not reach the backend.");
         });
     }
 

@@ -22,4 +22,14 @@ public sealed record EntraTokenRequest
     /// redirect for the initial acquisition.
     /// </summary>
     public bool UseDeviceCode { get; init; }
+
+    /// <summary>
+    /// The username (UPN) of the account this request's silent renewal must
+    /// bind to, captured from the interactive sign-in. When set, silent
+    /// acquisition selects the matching cached account rather than an arbitrary
+    /// one, so a shared MSAL token cache holding more than one account never
+    /// renews with a different operator's identity. Empty or <see langword="null"/>
+    /// on the initial interactive request (the account is not yet known).
+    /// </summary>
+    public string? Username { get; init; }
 }

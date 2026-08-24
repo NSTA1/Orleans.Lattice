@@ -56,7 +56,17 @@ public sealed class MsalEntraInteractiveTokenAcquirer : IEntraInteractiveTokenAc
         var app = GetOrCreateApp(request);
 
         var accounts = await app.GetAccountsAsync().ConfigureAwait(false);
-        var account = accounts.FirstOrDefault();
+
+        // Bind renewal to the account that actually signed in. When the request
+        // carries no username (e.g. a hand-built request) fall back to the sole
+        // cached account. When it names an account but that account is absent
+        // from the cache, return null to force a re-challenge rather than
+        // silently renewing with a different operator's identity - the shared
+        // in-memory MSAL cache can hold more than one account, and grabbing an
+        // arbitrary one is a cross-identity credential-confusion primitive.
+        var account = string.IsNullOrEmpty(request.Username)
+            ? accounts.FirstOrDefault()
+            : accounts.FirstOrDefault(a => string.Equals(a.Username, request.Username, StringComparison.OrdinalIgnoreCase));
         if (account is null)
         {
             return null;
