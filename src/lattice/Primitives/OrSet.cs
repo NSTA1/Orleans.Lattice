@@ -340,10 +340,37 @@ public sealed class OrSet : ICrdt<OrSet>
         var adds = delta.Adds;
         if (adds is { Count: > 0 })
         {
+            // Union each add dot into the per-element list with the same
+            // de-duplication the removes path below applies to tombstones.
+            // Calling Add here would append an unconditional duplicate dot on
+            // every redelivery, so replaying the same delta twice would grow
+            // the dot list without bound and break the idempotency this method
+            // documents. Hoist a single reusable scratch buffer (CA2014).
+            Span<char> scratch = stackalloc char[MaxStackBase64Chars];
             foreach (var dot in adds)
             {
                 if (dot.Element is null) continue;
-                Add(dot.Element, dot.ReplicaId, dot.Counter);
+                var element = dot.Element;
+                var charCount = Base64CharCount(element.Length);
+                char[]? rented = charCount > scratch.Length ? ArrayPool<char>.Shared.Rent(charCount) : null;
+                Span<char> buffer = rented ?? scratch;
+                try
+                {
+                    Convert.TryToBase64Chars(element, buffer, out var written);
+                    var key = buffer[..written];
+                    var addLookup = Adds.GetAlternateLookup<ReadOnlySpan<char>>();
+                    if (!addLookup.TryGetValue(key, out var dots))
+                    {
+                        dots = [];
+                        Adds[new string(key)] = dots;
+                    }
+                    var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
+                    if (!dots.Contains(entry)) dots.Add(entry);
+                }
+                finally
+                {
+                    if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+                }
             }
         }
         var removes = delta.Removes;

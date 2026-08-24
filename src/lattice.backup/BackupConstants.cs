@@ -84,16 +84,38 @@ internal static class BackupConstants
 
     /// <summary>
     /// The exclusive upper bound of every key sharing <paramref name="prefix"/>:
-    /// the prefix with its final character advanced to the next code point. Used to
-    /// bound a prefix scan of the in-cluster sink / catalog trees.
+    /// the prefix with its last code unit below <see cref="char.MaxValue"/>
+    /// incremented and any trailing <see cref="char.MaxValue"/> units dropped.
+    /// Used to bound a prefix scan of the in-cluster sink / catalog trees.
+    /// Returns <see langword="null"/> when no finite upper bound exists - an
+    /// empty prefix, or one consisting solely of <see cref="char.MaxValue"/>
+    /// units - meaning the scan is unbounded above.
     /// </summary>
-    /// <param name="prefix">The inclusive key prefix. Must not be empty.</param>
-    /// <returns>The exclusive upper bound of the prefix range.</returns>
-    internal static string PrefixUpperBound(string prefix)
+    /// <param name="prefix">The inclusive key prefix.</param>
+    /// <returns>
+    /// The exclusive upper bound of the prefix range, or <see langword="null"/>
+    /// when the range has no finite upper bound.
+    /// </returns>
+    internal static string? PrefixUpperBound(string prefix)
     {
-        var chars = prefix.ToCharArray();
-        chars[^1] = (char)(chars[^1] + 1);
-        return new string(chars);
+        // Scan back to the last code unit that can be incremented without
+        // overflow, increment it, and drop the trailing max units. Advancing
+        // the final unit unconditionally (as `(char)(chars[^1] + 1)`) wraps a
+        // trailing U+FFFF to U+0000, producing an upper bound that sorts below
+        // the prefix and inverts the [prefix, bound) range so the scan silently
+        // captures nothing. Mirrors the canonical DataReader.PrefixUpperBound.
+        for (var i = prefix.Length - 1; i >= 0; i--)
+        {
+            if (prefix[i] < char.MaxValue)
+            {
+                var bound = new char[i + 1];
+                prefix.AsSpan(0, i + 1).CopyTo(bound);
+                bound[i]++;
+                return new string(bound);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

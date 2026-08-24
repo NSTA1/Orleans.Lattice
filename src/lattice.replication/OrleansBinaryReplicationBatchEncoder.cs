@@ -704,7 +704,12 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
             }
             var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
             cursor += 4;
-            if (length < 0 || cursor + length > payload.Length)
+            // Widen to long before summing: length is an attacker-controllable
+            // wire field (up to int.MaxValue), so cursor + length can overflow to
+            // a negative value and slip past this guard, downgrading the precise
+            // framing rejection into a raw slice exception. Mirrors the
+            // compressed-body check above.
+            if (length < 0 || (long)cursor + length > payload.Length)
             {
                 throw new ArgumentException(
                     $"Framing payload is truncated at the body for entry {i} of {parsed.EntryCount}; declared length {length} would overrun the payload (remaining {payload.Length - cursor} bytes).",
@@ -745,7 +750,9 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
             }
             var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
             cursor += 4;
-            if (length < 0 || cursor + length > tail.Length)
+            // Widen to long before summing: length is an attacker-controllable
+            // wire field, so cursor + length can overflow past this guard.
+            if (length < 0 || (long)cursor + length > tail.Length)
             {
                 throw new ArgumentException(
                     $"Inflated framing tail is truncated at the body for entry {i} of {entryCount}; declared length {length} would overrun the tail (remaining {tail.Length - cursor} bytes).",
@@ -793,7 +800,9 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
         }
         var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
         cursor += 4;
-        if (length < 0 || cursor + length > payload.Length)
+        // Widen to long before summing: length is an attacker-controllable wire
+        // field, so cursor + length can overflow past this guard.
+        if (length < 0 || (long)cursor + length > payload.Length)
         {
             throw new ArgumentException(
                 $"Framing payload is truncated at the body for {fieldName}; declared length {length} would overrun the payload (remaining {payload.Length - cursor} bytes).",
@@ -820,7 +829,9 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
         }
         var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
         cursor += 4;
-        if (length < 0 || cursor + length > tail.Length)
+        // Widen to long before summing: length is an attacker-controllable wire
+        // field, so cursor + length can overflow past this guard.
+        if (length < 0 || (long)cursor + length > tail.Length)
         {
             throw new ArgumentException(
                 $"Inflated framing tail is truncated at the body for {fieldName}; declared length {length} would overrun the tail (remaining {tail.Length - cursor} bytes).",

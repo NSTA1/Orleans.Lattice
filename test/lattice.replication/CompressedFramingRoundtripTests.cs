@@ -258,6 +258,55 @@ public class CompressedFramingRoundtripTests
     }
 
     [Test]
+    public void TryDecodeFraming_rejects_overflowing_field_length_in_uncompressed_framing()
+    {
+        // The uncompressed routing-string readers (treeName / originClusterId)
+        // apply the same truncation guard as the compressed body. A hostile
+        // sender can forge the declared field length up to int.MaxValue; a
+        // 32-bit cursor + length sum overflows to a negative value and slips
+        // past the guard, so the widened (long) check must reject it with the
+        // explicit framing-corruption message rather than a raw slice exception.
+        var encoder = NewEncoderNoCompressors();
+        var writer = new ArrayBufferWriter<byte>();
+        var entries = new[] { new ArraySegment<byte>(new byte[] { 1, 2, 3 }) };
+        encoder.EncodeFraming(Header(1, LatticeCompression.None), "tree-1", "site-a", entries, writer);
+
+        // Uncompressed layout: the treeName length-prefix is the first field
+        // after the fixed header. Patch it to int.MaxValue.
+        var payload = writer.WrittenMemory.ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(
+            payload.AsSpan(EncodedBatchHeader.WireSize, 4),
+            int.MaxValue);
+
+        Assert.That(
+            () => encoder.TryDecodeFraming(payload, out _, out _, out _, out _),
+            Throws.ArgumentException.With.Message.Contains("would overrun the payload"));
+    }
+
+    [Test]
+    public void TryDecodeFraming_rejects_overflowing_entry_length_in_uncompressed_framing()
+    {
+        // Same overflow, exercised through the per-entry body length prefix.
+        var encoder = NewEncoderNoCompressors();
+        var writer = new ArrayBufferWriter<byte>();
+        var entries = new[] { new ArraySegment<byte>(new byte[] { 1, 2, 3 }) };
+        encoder.EncodeFraming(Header(1, LatticeCompression.None), "tree-1", "site-a", entries, writer);
+
+        // Uncompressed layout: header (WireSize) + treeName (4 + 6) + origin
+        // (4 + 6) places the entry[0] length-prefix at WireSize + 20. Patch it
+        // to int.MaxValue so cursor + length overflows in 32-bit arithmetic.
+        var payload = writer.WrittenMemory.ToArray();
+        var entryLengthOffset = EncodedBatchHeader.WireSize + 4 + 6 + 4 + 6;
+        BinaryPrimitives.WriteInt32LittleEndian(
+            payload.AsSpan(entryLengthOffset, 4),
+            int.MaxValue);
+
+        Assert.That(
+            () => encoder.TryDecodeFraming(payload, out _, out _, out _, out _),
+            Throws.ArgumentException.With.Message.Contains("would overrun the payload"));
+    }
+
+    [Test]
     public void EncodeFraming_with_None_writes_canonical_uncompressed_layout()
     {
         var encoder = NewEncoderWithZstd();
