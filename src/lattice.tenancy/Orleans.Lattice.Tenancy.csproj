@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Tenancy</PackageId>
+    <Version>9.2.0</Version>
+    <Description>Durable, CRDT-backed tenant registry add-on for Orleans.Lattice. Persists tenant definitions (status, quotas, burst, placement binding, tenant-admin subjects, and cross-tenant grants) in reserved sys-tenant-* Lattice trees under system-origin, converging concurrent updates with LWW-register semantics, and fails fast at startup when tenancy is enabled without the auth and membership add-ons it depends on.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <ProjectReference Include="..\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>
