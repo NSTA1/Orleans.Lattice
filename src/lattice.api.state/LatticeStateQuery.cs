@@ -290,6 +290,31 @@ internal sealed class LatticeStateQuery(
         return routing.Map.GetPhysicalShardIndices().Count;
     }
 
+    /// <summary>
+    /// Prunes a tree-id enumeration to the trees the ambient active tenant may
+    /// observe. When tenancy is off - no <see cref="ITenantEnumerationFilter"/>
+    /// is registered, the registered filter is inactive, or no active tenant is
+    /// stamped on <see cref="LatticeActiveTenantContext"/> - the original list is
+    /// returned unchanged (same reference, zero allocation), so the catalog is
+    /// byte-for-byte identical to a non-tenant cluster. Only when a filter is
+    /// active and a tenant is present does the seam allocate the filtered subset.
+    /// </summary>
+    private IReadOnlyList<string> FilterTreeIdsByActiveTenant(IReadOnlyList<string> treeIds)
+    {
+        var filter = _services.GetService<ITenantEnumerationFilter>();
+        if (filter is not { IsActive: true })
+        {
+            return treeIds;
+        }
+
+        if (LatticeActiveTenantContext.Current is not { } tenant)
+        {
+            return treeIds;
+        }
+
+        return filter.Filter(tenant, treeIds);
+    }
+
     public async Task<TreeCatalogPage> ListTreesAsync(
         CatalogRequest request,
         CancellationToken cancellationToken = default)
@@ -306,11 +331,16 @@ internal sealed class LatticeStateQuery(
 
         // Enumerating the registry is infrastructure: run it under a system-origin
         // scope so the enumeration is not itself filtered or denied by the gate.
-        IEnumerable<string> allIds;
+        IReadOnlyList<string> allIds;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
         }
+
+        // Scope the catalog to the ambient active tenant's trees. When tenancy is
+        // off (no active filter or no active tenant) this returns the list
+        // unchanged at zero cost, so the catalog is byte-for-byte identical.
+        allIds = FilterTreeIdsByActiveTenant(allIds);
 
         var ordered = allIds
             .Where(id => !IsTagIndexTree(id))
