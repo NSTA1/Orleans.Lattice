@@ -207,6 +207,19 @@ public static class LatticeServiceCollectionExtensions
         // observer's per-record upcaster dispatch) and strips the version envelope
         // from a durable CRDT delta before it is folded.
         builder.Services.TryAddSingleton<ILatticeEnvelopeCodec, NullLatticeEnvelopeCodec>();
+        // Multi-tenancy seams (opt-in): default to the pass-through no-ops so a
+        // cluster with no tenancy add-on resolves the reserved 'default' tenant,
+        // admits every operation, and enumerates every tree unchanged - core is
+        // byte-for-byte identical with no per-operation cost. The null resolver
+        // returns a cached, synchronously-completed default-tenant result; the
+        // null admission controller and enumeration filter both report
+        // IsActive == false so a tenant-aware choke point caches the inactive
+        // flag and never calls into them. The tenancy package replaces these
+        // with the real context-reading / quota-evaluating / tenant-pruning
+        // implementations.
+        builder.Services.TryAddSingleton<ITenantContextResolver, NullTenantContextResolver>();
+        builder.Services.TryAddSingleton<ITenantAdmissionController, NullTenantAdmissionController>();
+        builder.Services.TryAddSingleton<ITenantEnumerationFilter, NullTenantEnumerationFilter>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap
