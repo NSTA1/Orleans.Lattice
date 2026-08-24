@@ -416,4 +416,21 @@ public static class LatticeEventConstants
     /// </para>
     /// </summary>
     internal const string RoutedLogicalTreeIdRequestContextKey = "ol.rlt";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key that carries the caller's active
+    /// <see cref="TenantId"/> from the client edge down to the silo so a
+    /// tenant-aware choke point can scope the operation to the tenant's
+    /// namespace. The value is an Orleans-serializable <see cref="TenantId"/>,
+    /// so it flows on every outgoing grain call and propagates across hops.
+    /// Purely a transport seam - the core library ships only the no-op
+    /// <see cref="NullTenantContextResolver"/>, which ignores this key and
+    /// resolves the reserved <see cref="TenantId.Default"/>, so an unset active
+    /// tenant adds no cost and changes no read/write semantics. The tenancy
+    /// add-on's real resolver reads this key and validates it against the
+    /// subject's membership. Public callers set this through
+    /// <see cref="LatticeActiveTenantContext"/>; they should never touch this
+    /// key directly.
+    /// </summary>
+    internal const string ActiveTenantRequestContextKey = "ol.atid";
 }
