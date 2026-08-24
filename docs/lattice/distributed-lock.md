@@ -1,6 +1,6 @@
 # Distributed Lock
 
-`ILatticeLockGrain` is a cluster-wide, FIFO-fair distributed lock / lease keyed by
+`ILatticeLockGrain` is a **single-cluster**, FIFO-fair distributed lock / lease keyed by
 name. Because an Orleans grain activation is single-threaded and processes its
 inbox in arrival order, a grain keyed by a lock name is a natural FIFO
 mutual-exclusion point; this primitive packages that pattern and gets the
@@ -13,6 +13,22 @@ saga, captures no pre-image, and offers no rollback. Use it to serialize a
 cluster-wide critical section (a singleton job, a leader election, an
 externally-visible resource that needs one writer at a time), not to make a batch
 of key writes atomic - for that, use [atomic writes](atomic-writes.md).
+
+## Scope: one Orleans cluster
+
+The lock is an ordinary grain: for a given name exactly one activation exists in the
+cluster, and its FIFO queue and fencing counter live in that activation's state.
+Mutual exclusion therefore holds **within a single Orleans cluster only**. This is
+*not* a cross-cluster (geo-distributed) lock - run two clusters and each keeps its
+own independent activation of the same name, so both can hand out the "same" lock at
+once, and a fencing token minted in one cluster is not comparable with another's.
+
+That is the deliberate counterpart to a Lattice **tree**, whose writes replicate: an
+[atomic write](atomic-writes.md) commits atomically on the local cluster *and* on
+every cluster the tree replicates to. So reach for the lock to serialize work inside
+one cluster; when you need a mutation that is atomic *across* clusters, write it to a
+tree - on its own or inside an [atomic action](atomic-action.md) - which carries the
+cross-cluster guarantee the lock does not.
 
 ## Resolving a lock
 

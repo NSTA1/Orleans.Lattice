@@ -112,20 +112,41 @@ if (outcome is { Status: AtomicActionStatus.Committed })
 
 ## The built-in tree-write step
 
-`.TreeWrite(treeId, ...)` performs an atomic multi-key write to one Lattice tree as
-a single saga step, with **library-synthesized** compensation - you supply no
+`.TreeWrite(treeId, ...)` performs an atomic multi-key write to **one** Lattice tree
+as a single saga step, with **library-synthesized** compensation - you supply no
 compensating effect. Before the write, the coordinator captures each affected key's
 pre-image; if a *later* step faults, it restores those pre-images with a fresh
 write (the same pre-image / last-writer-wins technique the atomic-write coordinator
 uses). The forward write itself delegates to `IAtomicWriteGrain`, so it inherits the
-tree's verified atomicity:
+tree's verified atomicity exactly as a direct `SetManyAtomicAsync` would: every key
+in the step commits atomically across the target tree's shards, and - because a tree
+write rides the WAL and replication transport - that commit is visible atomically
+across **every cluster the tree replicates to**, never as a partial set. A single
+step never targets more than one tree.
 
-- a single-tree write commits atomically, and
-- a write that spans multiple trees routes through the cross-tree
-  two-phase-commit coordinator,
+### Spanning multiple trees
 
-exactly as a direct `SetManyAtomicAsync` would. The tree-write step never issues
-independent per-tree writes that could partially commit across a cluster boundary.
+To mutate more than one tree in a single plan, add one `.TreeWrite` step per tree.
+The plan is then made all-or-nothing across those trees by the saga's
+**compensation**, not by a single isolated cross-tree transaction: each step's
+forward write is individually atomic, and on a later fault the coordinator restores
+each committed step's pre-image in the reverse of commit order. Between one step
+committing and a later step's fault an external reader can therefore observe one
+tree updated and another not yet touched; the guarantee is eventual all-or-nothing
+by compensation, not cross-tree isolation. When you instead need several trees to
+flip under one isolated commit, use the
+[cross-tree atomic write](atomic-writes.md#cross-tree-multi-tree-atomic-writes)
+builder directly.
+
+### Cluster scope
+
+A tree write - whether one step or several - carries Lattice's cross-cluster atomic
+visibility: it commits atomically on the local cluster and on every cluster the tree
+replicates to. That is the deliberate contrast with
+[`ILatticeLockGrain`](distributed-lock.md), a **single-cluster** primitive whose
+mutual exclusion holds within one Orleans cluster only. So when an effect must be
+atomic *across* clusters, express it as a tree write (on its own or inside an atomic
+action), not behind the lock.
 
 ## Atomicity, precisely
 
@@ -135,7 +156,7 @@ this guide does not overclaim:
 
 | Step kind | Forward atomicity | Rollback | Correctness rests on |
 |---|---|---|---|
-| `TreeWrite` | Inherited from the atomic-write machinery: single-tree atomic; cross-tree via 2PC. | Library-synthesized pre-image restore. | The verified atomic-write / cross-tree-2PC guarantee. |
+| `TreeWrite` | Inherited from the atomic-write machinery: atomic across the target tree's shards, and atomic across every cluster the tree replicates to. One step targets one tree. | Library-synthesized pre-image restore. | The verified atomic-write guarantee and its cross-cluster atomic visibility. |
 | `Custom` (`Step`) | Whatever your forward effect provides. | Your registered compensating effect, best-effort and eventually consistent. | **Your** compensation contract. |
 
 For a custom step, the saga is a best-effort, eventually-consistent compensating

@@ -2,7 +2,7 @@
 
 ## What it shows
 
-`ILatticeLockGrain` is a cluster-wide, FIFO-fair distributed lock / lease keyed by
+`ILatticeLockGrain` is a single-cluster, FIFO-fair distributed lock / lease keyed by
 name. Because an Orleans grain activation is single-threaded and processes its inbox
 in arrival order, a grain keyed by a lock name is a natural FIFO mutual-exclusion
 point - and this primitive gets the failure modes right: **monotonic fencing
@@ -57,6 +57,13 @@ Done.
 
 ## When not to use
 
+- To coordinate mutual exclusion **across** clusters. The lock is single-cluster:
+  for a given name each Orleans cluster keeps its own independent activation, so two
+  clusters can grant the same lock at once and their fencing tokens are not
+  comparable. When a mutation must be atomic across clusters, write it to a tree
+  (see [atomic writes](../../docs/lattice/atomic-writes.md) or the
+  [atomic action](../AtomicAction/README.md) coordinator), whose commit replicates
+  to every cluster the tree replicates to.
 - To make a batch of key writes atomic. That is a different problem than mutual
   exclusion - use [atomic writes](../../docs/lattice/atomic-writes.md) (or, to mix a
   tree write with other effects, the [atomic action](../AtomicAction/README.md)

@@ -35,6 +35,12 @@ handler: a custom handler has no pre-image scratch, so it cannot cleanly restore
 a tree key on compensation, whereas `.TreeWrite` captures and restores the
 pre-image for you. Reach for a custom `.Step` for the *non-tree* effects.
 
+To touch more than one tree in a single action, add one `.TreeWrite` step per tree:
+the saga makes the whole plan all-or-nothing by compensation (each step's write is
+individually atomic and, being a tree write, commits across every cluster the tree
+replicates to). See the [feature doc](../../docs/lattice/atomic-action.md) for the
+precise cross-tree and cross-cluster semantics.
+
 The sample runs:
 
 1. A **committing** plan - decrement stock in the `inventory` tree *and* reserve
@@ -84,9 +90,11 @@ Done.
 
 ## When not to use
 
-- Your operation only writes keys in one or more Lattice trees. Then you do not need
-  a saga - use [`SetManyAtomicAsync`](../../docs/lattice/atomic-writes.md) directly,
-  which is simpler and fully two-phase.
+- Your operation only writes keys, with no external effect. For one tree use
+  [`SetManyAtomicAsync`](../../docs/lattice/atomic-writes.md) directly; for several
+  trees under one isolated commit use the cross-tree atomic-write builder. Both are
+  simpler than a saga and fully two-phase, and both commit atomically across every
+  cluster the tree replicates to.
 - Remember a custom step is best-effort eventually-consistent: between a forward
   effect committing and its compensation running, an external observer can see the
   intermediate effect. Make forward and compensating effects idempotent, and make
