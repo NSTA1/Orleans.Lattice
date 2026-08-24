@@ -165,6 +165,51 @@ and its compensation running (after a later fault) an external observer can see 
 intermediate effect. Make forward and compensating effects idempotent, and make
 compensation actually undo the forward effect - that is the caller's contract.
 
+## Visibility vs. the atomic-write feature
+
+This coordinator and the [atomic-write feature](atomic-writes.md) sit at opposite
+ends of the *visibility* spectrum, and choosing between them is mostly a choice of
+visibility model - not of how many trees you touch.
+
+- **An atomic write is an isolated atomic commit.** `SetManyAtomicAsync` (and the
+  cross-tree builder) prepare their write set behind a single per-tree linearization
+  point, so a reader observes *either zero or all* of it and never an intermediate
+  state: in-flight entries sit in a per-leaf pending bucket that readers cannot see,
+  and they fall through to the pre-saga value until the one visibility flip. A
+  failure *aborts* the prepare, so the tentative values were never visible to anyone.
+  There is exactly one observable transition, and it holds across every cluster the
+  tree replicates to (the multi-shard receiver barrier withholds the remote flip
+  until all per-source-shard terminals arrive).
+- **An atomic action is an all-or-nothing *outcome* assembled from individually
+  visible steps.** Each forward step commits and becomes visible immediately; a later
+  fault is undone by running *new* compensating writes, not by aborting an unseen
+  prepare. So an external observer can genuinely see one step's effect while a later
+  step has not run, and a rollback is observed as value -> new value -> restored
+  value (several transitions), not one. The saga guarantees the *final* state is
+  all-or-nothing; it does **not** isolate the path to it.
+
+The downgrade is fundamental, not a shortcut: an atomic write can offer isolation
+only because every participant can be held in a prepared-but-invisible state on the
+WAL. An atomic action exists precisely to compose effects that cannot - an external
+payment, an email, another grain - so it trades isolation for reach.
+
+A useful consequence: a *single* `.TreeWrite` step, in isolation, keeps the full
+atomic-write visibility (it delegates to `IAtomicWriteGrain`) - one instantaneous,
+cross-cluster, all-or-nothing flip. The visibility downgrade appears only *across*
+steps. So:
+
+- one tree write, nothing else -> use `SetManyAtomicAsync` directly (same
+  visibility, less machinery);
+- several trees all-or-nothing *with isolation*, every effect on the WAL -> use the
+  [cross-tree atomic write](atomic-writes.md#cross-tree-multi-tree-atomic-writes)
+  builder (still an isolated commit);
+- you must include a non-tree effect (or otherwise cannot hold everything in
+  prepare) -> use this coordinator, and accept compensation-based, visibly
+  non-isolated outcome atomicity.
+
+Durability, idempotency, and crash recovery are the same on both sides; the
+visibility model is what differs.
+
 ## When compensation itself fails
 
 If a compensating effect faults (after the coordinator's retry budget), the saga
