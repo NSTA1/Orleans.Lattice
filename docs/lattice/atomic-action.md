@@ -209,3 +209,6 @@ the Overview dashboard's "Atomic action (saga / TCC)" row and documented in
 - [Atomic Write](atomic-writes.md) - the key-only atomic multi-key write the
   tree-write step delegates to.
 - [Distributed Lock](distributed-lock.md) - a sibling coordination primitive.
+- [AtomicAction sample](../../samples/AtomicAction/README.md) - a runnable saga that
+  mixes a Lattice tree write with a custom external effect, committing and rolling
+  back.

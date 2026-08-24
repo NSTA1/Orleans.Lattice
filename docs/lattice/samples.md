@@ -8,6 +8,7 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 
 | Sample | What it shows |
 |---|---|
+| [AtomicAction](../../samples/AtomicAction/README.md) | `IAtomicActionGrain` saga / TCC coordinator running a Lattice tree write and a custom external effect in one all-or-nothing transaction: a committing plan, a rolling-back plan that restores the tree pre-image and releases the external effect, and an idempotent retry. |
 | [AtomicWrites](../../samples/AtomicWrites/README.md) | `SetManyAtomicAsync` all-or-nothing multi-key writes, a failed-guard batch that leaves no partial state, and the cross-tree `IGrainFactory` overload. |
 | [Authorization](../../samples/Authorization/README.md) | Single-silo default-deny authorization with group and nested-group membership: a group nested inside another group, per-tree/prefix/key rules, read-visibility range pruning, and a runtime grant via nesting. |
 | [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
@@ -17,6 +18,7 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 | [CrossClusterAuthorization](../../samples/CrossClusterAuthorization/README.md) | Two in-process clusters where the reserved membership and authorization-policy system trees converge over gRPC replication, so a grant or revoke authored on one site becomes enforced on the other. |
 | [CrossClusterReplication](../../samples/CrossClusterReplication/README.md) | Two in-process clusters over gRPC where a write on one converges onto the other. |
 | [Diagnostics](../../samples/Diagnostics/README.md) | The `DiagnoseAsync` per-tree health snapshot: shard depth, live keys, tombstones, hotness. |
+| [DistributedLock](../../samples/DistributedLock/README.md) | `ILatticeLockGrain` FIFO-fair cluster-wide lock / lease: acquire / renew / release with monotonic fencing tokens, non-blocking try-acquire under contention, and a queued waiter granted the instant the holder releases. |
 | [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
 | [EntraAuthorization](../../samples/EntraAuthorization/README.md) | Single-silo authorization driven by a real Microsoft Entra ID identity: the signed-in Azure CLI user's `oid` is the tree owner (sole bootstrap administrator), so the owner writes and reads a value while an anonymous request is denied by the default-deny gate. |
 | [Events](../../samples/Events/README.md) | Subscribing to the per-tree `LatticeTreeEvent` Orleans stream. |

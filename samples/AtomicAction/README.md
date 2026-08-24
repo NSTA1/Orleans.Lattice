@@ -1,0 +1,74 @@
+# Atomic Action
+
+## What it shows
+
+`IAtomicActionGrain` is a generic, all-or-nothing saga / TCC coordinator. It runs
+an ordered plan of steps - each a forward effect paired with a compensating effect
+- and if a later step faults, every already-committed step is compensated in strict
+reverse order, so the action leaves no partial effect behind.
+
+This sample puts a **Lattice tree write in the same transaction as an external
+effect**. The built-in `.TreeWrite` step delegates to the verified atomic-write
+machinery (so it inherits the tree's atomicity) and its compensation is
+library-synthesized from a captured pre-image; a custom `.Step` names a
+pre-registered handler (here, one that reserves credit in a stand-in external
+ledger). The sample runs:
+
+1. A **committing** plan - decrement stock in the `inventory` tree *and* reserve
+   credit in the ledger, together.
+2. A **rolling-back** plan - the same shape plus a third step that faults, proving
+   the tree write is restored to its pre-saga value *and* the reservation is
+   released.
+3. An **idempotent retry** - re-issuing a terminal operation id returns the
+   memoized outcome without re-running any effect.
+
+## Run it
+
+```
+dotnet run --project samples/AtomicAction
+```
+
+## Expected output
+
+```
+== AtomicAction sample ==
+
+1) Seeded inventory 'sku-42/onhand' = 41, ledger reservation = 0.
+   Outcome: Committed
+   inventory 'sku-42/onhand' = 40
+   ledger reservation for order-1001 = 100
+   -> the tree write and the external reservation committed together.
+
+2) Seeded inventory 'sku-99/onhand' = 5, ledger reservation = 0.
+   Outcome: Compensated (faulted at step 2: carrier rejected the shipment)
+   inventory 'sku-99/onhand' = 5
+   ledger reservation for order-2002 = 0
+   -> the tree write was restored and the reservation released: no partial effect.
+
+3) Re-issuing operation 'order-1001' returns the memoized outcome: Committed
+   -> a client retry after a timeout observes the original result, not a double-apply.
+
+Done.
+```
+
+## When to use
+
+- One logical operation must apply several effects - some to Lattice trees, some to
+  external systems (a payment gateway, an email, another grain) - and a partial
+  application is unacceptable.
+- You want a durable, idempotent, crash-recoverable place to sequence those effects
+  and roll them back on failure, keyed by an operation id.
+
+## When not to use
+
+- Your operation only writes keys in one or more Lattice trees. Then you do not need
+  a saga - use [`SetManyAtomicAsync`](../../docs/lattice/atomic-writes.md) directly,
+  which is simpler and fully two-phase.
+- Remember a custom step is best-effort eventually-consistent: between a forward
+  effect committing and its compensation running, an external observer can see the
+  intermediate effect. Make forward and compensating effects idempotent, and make
+  compensation actually undo the forward effect - that is the caller's contract.
+
+## Feature doc
+
+[docs/lattice/atomic-action.md](../../docs/lattice/atomic-action.md)

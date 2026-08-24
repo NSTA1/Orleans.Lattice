@@ -222,3 +222,6 @@ integration tests. See [Verified Distributed Lock](verified-lock.md).
   all-or-nothing, which is a different problem than mutual exclusion.
 - [Configuration](configuration.md) - `DefaultLockLeaseDuration` and
   `MaxLockLeaseDuration`.
+- [DistributedLock sample](../../samples/DistributedLock/README.md) - a runnable
+  walkthrough of acquire / renew / release, non-blocking try-acquire, and FIFO
+  queueing with monotonic fencing tokens.
