@@ -44,6 +44,8 @@ Grain identity is embedded in the string key with `/` as separator:
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `WalMaterialiserPinGrain` | `{treeId}` | `"my-tree"` |
+| `LatticeLockGrain` | `{lockName}` (any non-empty string) | `"inventory/sku-42"` |
+| `AtomicActionGrain` | `{operationId}` (caller-supplied idempotency key, any non-empty string) | `"order-4711"` |
 
 Parse the tree ID from the key using `key[..key.LastIndexOf('/')]` when needed.
 

@@ -298,7 +298,35 @@ coordinator progress independently of whether the event stream is enabled.
 | `orleans.lattice.warmup.invocations` | `Counter<long>` | `{call}` | One increment per successful `ILattice.WarmUpAsync` call. Tagged `tree`. Operators alerting on cold-start health expect to see exactly one increment per silo startup per warmed tree. |
 | `orleans.lattice.warmup.duration` | `Histogram<double>` | `ms` | End-to-end duration of `ILattice.WarmUpAsync` - the wall-clock cost of pre-activating every physical shard root via a bounded-concurrency read-only probe. Tagged `tree` and `shard_count` (the per-tree physical-shard-root probe fan-out). The p99 is the primary warm-start latency signal; sustained increases are a leading indicator of placement-directory or grain-storage cold-touch cost growth. |
 
-### Event publisher health
+### Distributed lock (sourced from `LatticeLockGrain`)
+
+The FIFO-fair distributed lock / lease grain behind `ILatticeLockGrain` (see
+[Distributed lock](distributed-lock.md)). One activation per lock name serialises
+all contending callers, so these instruments carry no per-key tag; scope them by
+`cluster` (and `silo`) in the dashboards. Charted on the Overview dashboard's
+"Distributed lock" row.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.lock.acquired` | `Counter<long>` | `{acquire}` | One increment per acquire attempt that reached a terminal outcome. Tagged `outcome=granted` (the caller was handed the lease), `timeout` (a blocking `AcquireAsync` whose wait-timeout elapsed, or a non-blocking `MaxWait = 0` acquire on a held lock), or `unavailable` (a `TryAcquireAsync` that returned `null` because the lock was held). Pair `granted` with `released` to see live lock churn. |
+| `orleans.lattice.lock.released` | `Counter<long>` | `{release}` | One increment per explicit `ReleaseAsync` by the current holder (a stale-token release is a silent no-op and is not counted). |
+| `orleans.lattice.lock.lease_reclaimed` | `Counter<long>` | `{lease}` | One increment each time an expired lease was reclaimed because the holder neither renewed nor released before expiry. A sustained non-zero rate means holders are crashing or failing to renew within their lease duration; downstream resources should be relying on the fencing token to reject the reclaimed holder. |
+| `orleans.lattice.lock.acquire.wait` | `Histogram<double>` | `ms` | Time a granted acquire spent parked in the FIFO queue before it was granted (recorded once per grant, so an uncontended acquire records ~0). The p95/p99 tail is the primary lock-contention signal. |
+
+### Atomic action / saga (sourced from `AtomicActionGrain`)
+
+The generic atomic-action (saga / TCC) coordinator behind `IAtomicActionGrain` (see
+[Atomic action](atomic-action.md)). One activation per operation id, so these
+instruments carry no per-key tag; scope them by `cluster` (and `silo`) in the
+dashboards. Charted on the Overview dashboard's "Atomic action (saga / TCC)" row.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.atomic_action.completed` | `Counter<long>` | `{saga}` | One increment per terminal transition of a saga. Tagged `outcome=committed` (every forward step committed), `compensated` (a forward step faulted and every committed step was rolled back in reverse order), or `compensation_failed` (a compensating effect itself faulted, so the saga parked for operator intervention). A rising `compensation_failed` rate means a caller's compensation contract is being violated. |
+| `orleans.lattice.atomic_action.step` | `Counter<long>` | `{step}` | One increment per step effect the saga runs. Tagged `phase=forward` \| `compensate` and `outcome=ok` \| `fault`. The `compensate` series is non-zero only when a saga rolls back; a `compensate,fault` point is the leading indicator of a park. |
+| `orleans.lattice.atomic_action.duration` | `Histogram<double>` | `ms` | End-to-end saga duration measured from saga start (persisted, so it includes time suspended across silo restarts) to the terminal transition. Tagged by `outcome` so rollback-path latency is separable from happy-path latency. |
+
+
 
 These counters are emitted only when event publication is enabled on at least
 one tree. They let operators detect a misconfigured stream provider or a
