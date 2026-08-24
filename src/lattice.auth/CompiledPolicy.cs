@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 namespace Orleans.Lattice.Auth;
 
 /// <summary>
@@ -13,9 +15,9 @@ namespace Orleans.Lattice.Auth;
 /// </remarks>
 internal sealed class CompiledPolicy
 {
-    private readonly IReadOnlyDictionary<string, CompiledTree> _trees;
+    private readonly FrozenDictionary<string, CompiledTree> _trees;
 
-    private CompiledPolicy(IReadOnlyDictionary<string, CompiledTree> trees, int distinctSubjectCount)
+    private CompiledPolicy(FrozenDictionary<string, CompiledTree> trees, int distinctSubjectCount)
     {
         _trees = trees;
         DistinctSubjectCount = distinctSubjectCount;
@@ -24,7 +26,7 @@ internal sealed class CompiledPolicy
 
     /// <summary>The empty snapshot: no rules for any tree. Used before the first compile.</summary>
     public static CompiledPolicy Empty { get; } =
-        new(new Dictionary<string, CompiledTree>(0, StringComparer.Ordinal), 0);
+        new(FrozenDictionary<string, CompiledTree>.Empty, 0);
 
     /// <summary>
     /// The compiled all-trees (<c>Tree:*</c>) bucket - the rules scoped over
@@ -95,6 +97,6 @@ internal sealed class CompiledPolicy
             trees[treeId] = CompiledTree.Build(treeRules);
         }
 
-        return new CompiledPolicy(trees, distinctSubjects.Count);
+        return new CompiledPolicy(trees.ToFrozenDictionary(StringComparer.Ordinal), distinctSubjects.Count);
     }
 }
