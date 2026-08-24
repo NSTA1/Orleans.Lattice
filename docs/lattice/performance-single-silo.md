@@ -73,7 +73,7 @@ mechanical and the prose around the marker is hand-editable.
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
   dotnet=10.0.111
-  gitSha=5cc6b05d
+  gitSha=cbc92ce3
   host=Standard_D4as_v5
   rowsMeasured=2026-08-24
   methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
@@ -94,7 +94,7 @@ mechanical and the prose around the marker is hand-editable.
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-08-24 on Standard_D4as_v5 (.NET 10.0.111) at git sha 5cc6b05d, n=3 cohorts (BDN quick).
+> Measured 2026-08-24 on Standard_D4as_v5 (.NET 10.0.111) at git sha cbc92ce3, n=3 cohorts (BDN quick).
 
 **Reading the numbers.** The per-thread call rate is the derived
 `1 / p50` scaled by the per-call batch size (1 for `GetAsync` / `SetAsync`,
@@ -145,7 +145,7 @@ realistic latency the storage provider contributes.
   batchSize=4096
   cohortN=1/3
   dotnet=10.0.111
-  gitSha=5cc6b05d
+  gitSha=cbc92ce3
   host=Standard_D4as_v5
   region=westus3
   responseTimeoutSec=180
@@ -171,7 +171,7 @@ realistic latency the storage provider contributes.
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-08-24 on Standard_D4as_v5 in westus3 (.NET 10.0.111) at git sha 5cc6b05d, n=1/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
+> Measured 2026-08-24 on Standard_D4as_v5 in westus3 (.NET 10.0.111) at git sha cbc92ce3, n=1/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at a reduced per-row offered load (annotated in its operation label) to hold the single Azure Tables account below saturation.
 
 **Reading the numbers.** The biggest practical lever is **call shape**.
 Batched APIs amortise grain-RPC, WAL, and Azure round-trip cost across
