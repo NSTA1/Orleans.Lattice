@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 namespace Orleans.Lattice.Auth;
 
 /// <summary>
@@ -16,7 +18,7 @@ namespace Orleans.Lattice.Auth;
 /// </remarks>
 internal sealed class CompiledTree
 {
-    private readonly IReadOnlyDictionary<string, CompiledRule[]> _exact;
+    private readonly FrozenDictionary<string, CompiledRule[]> _exact;
 
     // Parallel arrays: _prefixes is sorted ascending (ordinal); _prefixRules[i]
     // holds the rules scoped at _prefixes[i]. Sorting lets us binary-search for
@@ -28,7 +30,7 @@ internal sealed class CompiledTree
     private readonly CompiledRule[] _treeRules;
 
     private CompiledTree(
-        IReadOnlyDictionary<string, CompiledRule[]> exact,
+        FrozenDictionary<string, CompiledRule[]> exact,
         string[] prefixes,
         CompiledRule[][] prefixRules,
         CompiledRule[] treeRules)
@@ -122,8 +124,13 @@ internal sealed class CompiledTree
         var found = false;
         var bestScore = -1;
 
-        foreach (var rule in rules)
+        // Walk by readonly reference so each ~40-byte CompiledRule struct is read
+        // in place rather than copied into a loop variable every iteration; the
+        // single copy into `winner` happens only when a better rule is found.
+        var span = rules.AsSpan();
+        for (var i = 0; i < span.Length; i++)
         {
+            ref readonly var rule = ref span[i];
             if (!OperationMatches(rule.Operations, operation))
             {
                 continue;
@@ -330,7 +337,7 @@ internal sealed class CompiledTree
         list.Add(rule);
     }
 
-    private static IReadOnlyDictionary<string, CompiledRule[]> Freeze(Dictionary<string, List<CompiledRule>>? builder)
+    private static FrozenDictionary<string, CompiledRule[]> Freeze(Dictionary<string, List<CompiledRule>>? builder)
     {
         if (builder is null)
         {
@@ -343,9 +350,9 @@ internal sealed class CompiledTree
             frozen[key] = list.ToArray();
         }
 
-        return frozen;
+        return frozen.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
-    private static readonly IReadOnlyDictionary<string, CompiledRule[]> EmptyExact =
-        new Dictionary<string, CompiledRule[]>(0, StringComparer.Ordinal);
+    private static readonly FrozenDictionary<string, CompiledRule[]> EmptyExact =
+        FrozenDictionary<string, CompiledRule[]>.Empty;
 }
