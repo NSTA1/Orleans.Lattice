@@ -103,6 +103,13 @@ if (!string.IsNullOrWhiteSpace(filterRaw))
     config = config.AddFilter(new GlobFilter(globs));
 }
 
+if (string.Equals(suite, "authdecision", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> authdecision (AuthDecisionBenchmarks)");
+    var authSummary = BenchmarkRunner.Run<AuthDecisionBenchmarks>(config);
+    return authSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
 var bdnExitCode = summary.HasCriticalValidationErrors ? 1 : 0;
 
