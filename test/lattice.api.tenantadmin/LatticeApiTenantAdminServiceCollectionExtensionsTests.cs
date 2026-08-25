@@ -46,6 +46,10 @@ public sealed class LatticeApiTenantAdminServiceCollectionExtensionsTests
             Assert.That(builder.Services.Count(d => d.ServiceType == typeof(ILatticeTenantAdmin)), Is.EqualTo(1));
             Assert.That(builder.Services.Any(d => d.ServiceType == typeof(ITenantAdminClock)), Is.True);
             Assert.That(builder.Services.Any(d => d.ServiceType == typeof(ITenantTreeCascade)), Is.True);
+            Assert.That(
+                builder.Services.Count(d => d.ServiceType == typeof(ILatticeTenantSelfService)),
+                Is.EqualTo(1),
+                "The read-only tenant self-awareness facade is the single tenancy-enabled signal the MCP binding keys off.");
         });
     }
 

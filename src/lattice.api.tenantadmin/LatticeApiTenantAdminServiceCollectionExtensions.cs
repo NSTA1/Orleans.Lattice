@@ -97,6 +97,20 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
         builder.Services.TryAddSingleton<TenantRegionLifecycleDriver>();
 
+        // T21 tenant self-awareness. The read-only counterpart to the lifecycle
+        // facade: it projects the caller's current tenant, the tenants it may
+        // enumerate, and the read-only status/residency of one such tenant, scoped
+        // fail-closed to the caller's subject through the tenancy policy engine. It
+        // grants no lifecycle authority of its own, so it is registered whenever
+        // tenancy is wired (this call already requires AddLatticeTenancy). The MCP
+        // binding contributes its read-only tools exactly when this facade is
+        // present, which is the single "tenancy enabled" signal it keys off.
+        builder.Services.TryAddSingleton<ILatticeTenantSelfService>(sp => new LatticeTenantSelfService(
+            sp.GetRequiredService<ITenantContextResolver>(),
+            sp.GetRequiredService<ITenantPolicyEngine>(),
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetService<ILatticeMembershipContext>()));
+
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any
         // supplied configure delegate above, matching how the sibling add-ons
