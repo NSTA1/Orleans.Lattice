@@ -78,4 +78,15 @@ public enum LatticeApiMcpGroup
     /// tool yet; the capture, maintenance, and retrieval tools land in later work.
     /// </summary>
     RepoContext,
+
+    /// <summary>
+    /// The tenant-administration control-plane facade
+    /// (<c>ILatticeTenantAdmin</c>): the tenant lifecycle - create, suspend,
+    /// resume, and delete (delete cascading the tenant's trees). Advertised only
+    /// when the caller holds an administrator grant (<c>Admin</c>). The tenant
+    /// lifecycle is all-mutating, so the group contributes tools only when the
+    /// host opts tenant-admin control in; a cluster that does not opt in exposes
+    /// no tenant-admin capability and no tenant-admin tools at all (fail-closed).
+    /// </summary>
+    TenantAdmin,
 }

@@ -1,0 +1,206 @@
+using System.ComponentModel;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
+using Orleans.Lattice.Api.TenantAdmin;
+
+namespace Orleans.Lattice.Api.Mcp;
+
+/// <summary>
+/// The tenant-admin tool module: an <see cref="ILatticeApiMcpToolGroup"/> for
+/// <see cref="LatticeApiMcpGroup.TenantAdmin"/> whose tools are thin adapters over
+/// the <see cref="ILatticeTenantAdmin"/> control facade. The tenant lifecycle is
+/// all-mutating - there is no read-only inspect operation - so the group
+/// contributes its four control tools (<c>lattice_tenant_create</c>,
+/// <c>lattice_tenant_suspend</c>, <c>lattice_tenant_resume</c>,
+/// <c>lattice_tenant_delete</c>) only when tenant-admin control is opted in via
+/// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> or
+/// <c>AddTenantAdminTools(enableControl: true)</c>. Every tool is annotated
+/// destructive and non-read-only.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The tools are built <b>once</b> in the constructor and are stateless: each
+/// resolves the facade from the tool invocation's request service provider and
+/// stamps the caller credential - bridged from the request's authenticated
+/// principal - onto the ambient <see cref="LatticeCredentialContext"/> for the
+/// duration of the facade call, so the facade's own fail-closed tenant-admin
+/// access gate resolves the caller's subject and authorizes every mutation. The
+/// module adds no authorization path of its own.
+/// </para>
+/// <para>
+/// Every tenant lifecycle operation mutates cluster state (delete cascades the
+/// tenant's trees), so all four tools carry <c>destructiveHint</c>. The group
+/// itself is advertised only to a caller whose effective permissions grant
+/// <see cref="LatticeOperation.Admin"/> - an agent without the grant is offered no
+/// tenant-admin tools at all - and only when the host has opted the group in, so a
+/// cluster that never calls <c>AddTenantAdminTools</c> exposes nothing.
+/// </para>
+/// </remarks>
+internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
+{
+    /// <summary>
+    /// Builds the tenant-admin tool set once from the resolved MCP options,
+    /// contributing the mutating control tools only when tenant-admin control is
+    /// opted in.
+    /// </summary>
+    /// <param name="options">The resolved MCP binding options. Must not be <c>null</c>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <c>null</c>.</exception>
+    public TenantAdminToolGroup(IOptions<LatticeApiMcpOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Tools = BuildTools(options.Value.EnableTenantAdminControlTools);
+    }
+
+    /// <inheritdoc />
+    public LatticeApiMcpGroup Group => LatticeApiMcpGroup.TenantAdmin;
+
+    /// <inheritdoc />
+    public IReadOnlyList<McpServerTool> Tools { get; }
+
+    private static IReadOnlyList<McpServerTool> BuildTools(bool enableControl)
+    {
+        if (!enableControl)
+        {
+            return [];
+        }
+
+        return
+        [
+            CreateCreateTool(),
+            CreateSuspendTool(),
+            CreateResumeTool(),
+            CreateDeleteTool(),
+        ];
+    }
+
+    private static McpServerTool CreateCreateTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id to create. Must be a valid, non-empty tenant id that is not already registered.")] string tenantId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
+                return TenantAdminToolInvocations.CreateTenantAsync(admin, tenantId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_create",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Create tenant",
+                Description =
+                    "Registers a new tenant in the active status. Fails closed if a tenant with the same id "
+                    + "already exists (create is not an idempotent upsert, so it never resets or reuses another "
+                    + "tenant). Subject to the fail-closed tenant-admin access gate. Requires tenant-admin control "
+                    + "to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSuspendTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id to suspend. Must be a valid, non-empty tenant id.")] string tenantId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
+                return TenantAdminToolInvocations.SuspendTenantAsync(admin, tenantId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_suspend",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Suspend tenant",
+                Description =
+                    "Suspends a tenant, transitioning it to the suspended status. Idempotent - suspending an "
+                    + "already-suspended tenant reports changed=false and makes no change. The reserved default "
+                    + "tenant can never be suspended. Fails closed if the tenant is not registered. Subject to the "
+                    + "fail-closed tenant-admin access gate. Requires tenant-admin control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateResumeTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id to resume. Must be a valid, non-empty tenant id.")] string tenantId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
+                return TenantAdminToolInvocations.ResumeTenantAsync(admin, tenantId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_resume",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Resume tenant",
+                Description =
+                    "Resumes a tenant, transitioning it back to the active status. Idempotent - resuming an "
+                    + "already-active tenant reports changed=false and makes no change. Fails closed if the tenant "
+                    + "is not registered. Subject to the fail-closed tenant-admin access gate. Requires tenant-admin "
+                    + "control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateDeleteTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id to delete. Must be a valid, non-empty tenant id.")] string tenantId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
+                return TenantAdminToolInvocations.DeleteTenantAsync(admin, tenantId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_delete",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Delete tenant",
+                Description =
+                    "Deletes a tenant, cascading the delete to every tree the tenant owns (each of the tenant's "
+                    + "trees is soft-deleted) before the tenant's registry record is removed. The result reports the "
+                    + "number of trees cascaded. The reserved default tenant can never be deleted. Fails closed if "
+                    + "the tenant is not registered. Subject to the fail-closed tenant-admin access gate. Requires "
+                    + "tenant-admin control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static IDisposable StampCredential(IServiceProvider services)
+    {
+        var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
+        if (httpContext is null)
+        {
+            return NullScope.Instance;
+        }
+
+        var credential = services.GetService<ILatticeApiMcpCredentialBridge>()?.Resolve(httpContext);
+        // A null credential leaves the ambient context cleared (fail-closed): the
+        // facade's access gate then denies the caller as anonymous.
+        return LatticeCredentialContext.With(credential);
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        public static readonly NullScope Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
+}

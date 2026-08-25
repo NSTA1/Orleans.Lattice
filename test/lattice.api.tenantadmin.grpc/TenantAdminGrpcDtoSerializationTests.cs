@@ -1,0 +1,175 @@
+using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans;
+using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Serialization;
+
+namespace Orleans.Lattice.Api.TenantAdmin.Grpc.Tests;
+
+/// <summary>
+/// Round-trips the gRPC-layer wire messages (the <c>Model</c> request records the
+/// binding marshals with the Orleans serializer) and the transport-agnostic facade
+/// result DTOs the RPCs return, proving the transport contract is coherent across
+/// the wire. Also asserts alias hygiene: every gRPC wire message carries a unique
+/// <c>[Alias]</c> drawn from the <see cref="GrpcTenantAdminTypeAliases"/> registry
+/// under the reserved <c>oitng.</c> prefix.
+/// </summary>
+[TestFixture]
+public sealed class TenantAdminGrpcDtoSerializationTests
+{
+    private ServiceProvider _services = null!;
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp() =>
+        _services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown() => _services.Dispose();
+
+    private T RoundTrip<T>(T value)
+    {
+        var serializer = _services.GetRequiredService<Serializer<T>>();
+        return serializer.Deserialize(serializer.SerializeToArray(value));
+    }
+
+    [Test]
+    public void TenantAdminTenantRequest_round_trips()
+    {
+        Assert.That(RoundTrip(new TenantAdminTenantRequest { TenantId = "acme" }).TenantId, Is.EqualTo("acme"));
+    }
+
+    [Test]
+    public void AuthSchemeAdvertisementRequest_round_trips() =>
+        Assert.That(RoundTrip(new AuthSchemeAdvertisementRequest()), Is.Not.Null);
+
+    [Test]
+    public void AuthSchemeDescriptor_round_trips_with_parameters()
+    {
+        var copy = RoundTrip(new AuthSchemeDescriptor
+        {
+            SchemeId = "entra",
+            DisplayName = "Microsoft Entra ID",
+            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["authority"] = "https://login.microsoftonline.com/contoso",
+                ["clientId"] = "abc123",
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.SchemeId, Is.EqualTo("entra"));
+            Assert.That(copy.DisplayName, Is.EqualTo("Microsoft Entra ID"));
+            Assert.That(copy.Parameters["authority"], Is.EqualTo("https://login.microsoftonline.com/contoso"));
+            Assert.That(copy.Parameters["clientId"], Is.EqualTo("abc123"));
+        });
+    }
+
+    [Test]
+    public void AuthSchemeAdvertisement_round_trips_its_schemes()
+    {
+        var copy = RoundTrip(new AuthSchemeAdvertisement
+        {
+            Schemes = new[]
+            {
+                new AuthSchemeDescriptor { SchemeId = "basic", DisplayName = "Basic" },
+                new AuthSchemeDescriptor { SchemeId = "entra", DisplayName = "Entra" },
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Schemes, Has.Count.EqualTo(2));
+            Assert.That(copy.Schemes[0].SchemeId, Is.EqualTo("basic"));
+            Assert.That(copy.Schemes[1].SchemeId, Is.EqualTo("entra"));
+        });
+    }
+
+    [Test]
+    public void TenantCreationResult_response_round_trips()
+    {
+        var copy = RoundTrip(new TenantCreationResult { TenantId = "acme", Status = TenantLifecycleStatus.Active });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Status, Is.EqualTo(TenantLifecycleStatus.Active));
+        });
+    }
+
+    [Test]
+    public void TenantStatusChangeResult_response_round_trips()
+    {
+        var copy = RoundTrip(new TenantStatusChangeResult
+        {
+            TenantId = "acme",
+            PreviousStatus = TenantLifecycleStatus.Active,
+            NewStatus = TenantLifecycleStatus.Suspended,
+            Changed = true,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.PreviousStatus, Is.EqualTo(TenantLifecycleStatus.Active));
+            Assert.That(copy.NewStatus, Is.EqualTo(TenantLifecycleStatus.Suspended));
+            Assert.That(copy.Changed, Is.True);
+        });
+    }
+
+    [Test]
+    public void TenantDeletionResult_response_round_trips()
+    {
+        var copy = RoundTrip(new TenantDeletionResult { TenantId = "acme", CascadedTreeCount = 4 });
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.CascadedTreeCount, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
+    {
+        var aliases = RegistryAliasValues();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(GrpcTenantAdminTypeAliases.AliasPrefix, Is.EqualTo("oitng."));
+            Assert.That(aliases, Is.Unique);
+            Assert.That(aliases, Is.All.StartsWith(GrpcTenantAdminTypeAliases.AliasPrefix));
+        });
+    }
+
+    [Test]
+    public void Every_grpc_wire_message_carries_a_unique_registry_alias()
+    {
+        var registry = new HashSet<string>(RegistryAliasValues(), StringComparer.Ordinal);
+
+        var wireMessages = typeof(GrpcTenantAdminTypeAliases).Assembly
+            .GetTypes()
+            .Where(t => t.GetCustomAttribute<GenerateSerializerAttribute>() is not null)
+            .Where(t => t.GetCustomAttribute<AliasAttribute>()?.Alias
+                is { } alias && alias.StartsWith(GrpcTenantAdminTypeAliases.AliasPrefix, StringComparison.Ordinal))
+            .ToList();
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        Assert.That(wireMessages, Is.Not.Empty);
+        foreach (var type in wireMessages)
+        {
+            var alias = type.GetCustomAttribute<AliasAttribute>()!.Alias;
+            Assert.Multiple(() =>
+            {
+                Assert.That(registry, Does.Contain(alias), $"{type.Name} alias '{alias}' is not in GrpcTenantAdminTypeAliases.");
+                Assert.That(seen.Add(alias), Is.True, $"Alias '{alias}' is used by more than one wire message.");
+            });
+        }
+    }
+
+    private static IReadOnlyList<string> RegistryAliasValues() =>
+        typeof(GrpcTenantAdminTypeAliases)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f is { IsLiteral: true, IsInitOnly: false } && f.FieldType == typeof(string))
+            .Where(f => f.Name != nameof(GrpcTenantAdminTypeAliases.AliasPrefix))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+}

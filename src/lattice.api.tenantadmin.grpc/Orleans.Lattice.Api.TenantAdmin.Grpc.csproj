@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.TenantAdmin.Grpc</PackageId>
+    <Version>9.2.0</Version>
+    <Description>Code-first gRPC transport binding and strongly-typed client for Orleans.Lattice.Api.TenantAdmin. Exposes the tenant-administration control facade (create, suspend, resume, and delete-with-tree-cascade) over a remote gRPC surface, with a default-deny authorization interceptor and an unauthenticated auth-scheme discovery RPC. Fail-closed: every lifecycle RPC is rejected until the host opts in.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin.Grpc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.83.0" />
+  </ItemGroup>
+
+</Project>

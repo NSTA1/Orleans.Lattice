@@ -25,6 +25,8 @@
   <Project Path="src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj" />
   <Project Path="src/lattice.auth/Orleans.Lattice.Auth.csproj" />
   <Project Path="src/lattice.tenancy/Orleans.Lattice.Tenancy.csproj" />
+  <Project Path="src/lattice.api.tenantadmin/Orleans.Lattice.Api.TenantAdmin.csproj" />
+  <Project Path="src/lattice.api.tenantadmin.grpc/Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
   <Project Path="src/lattice.schema/Orleans.Lattice.Schema.csproj" />
   <Project Path="src/lattice.backup/Orleans.Lattice.Backup.csproj" />
   <Project Path="src/lattice.dashboards/Orleans.Lattice.Dashboards.csproj" />
@@ -88,4 +90,6 @@
   <Project Path="test/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.Tests.csproj" />
   <Project Path="test/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.Tests.csproj" />
   <Project Path="test/microbench/Orleans.Lattice.Benchmark.Microbench.Tests.csproj" />
+  <Project Path="test/lattice.api.tenantadmin/Orleans.Lattice.Api.TenantAdmin.Tests.csproj" />
+  <Project Path="test/lattice.api.tenantadmin.grpc/Orleans.Lattice.Api.TenantAdmin.Grpc.Tests.csproj" />
 </Solution>
