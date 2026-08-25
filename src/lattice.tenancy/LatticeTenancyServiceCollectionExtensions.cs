@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
@@ -132,6 +133,26 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton<LatticeTenantPolicyEngine>();
         builder.Services.TryAddSingleton<ITenantPolicyEngine>(
             sp => sp.GetRequiredService<LatticeTenantPolicyEngine>());
+
+        // The per-tenant, silo-local request-rate limiter (T9): a per-silo
+        // singleton token-bucket service the data-plane entry path consults with a
+        // lock-free, allocation-free, grain-hop-free acquire. A low-frequency
+        // budget coordinator (hosted service) apportions each tenant's cluster-wide
+        // rate across the live silos at lease cadence and (re)sizes the buckets;
+        // nothing on the hot path is a grain call. Registering it is inert until a
+        // later feature threads it into the write path. Appended at the end of the
+        // once-only block so the whole limiter stack registers exactly once.
+        builder.Services.AddOptions<LatticeTenantRateLimiterOptions>();
+        builder.Services.TryAddSingleton(TimeProvider.System);
+        builder.Services.TryAddSingleton<SiloLocalTenantRateLimiter>();
+        builder.Services.TryAddSingleton<ITenantRateLimiter>(
+            sp => sp.GetRequiredService<SiloLocalTenantRateLimiter>());
+        builder.Services.TryAddSingleton<ITenantRateProvider, RegistryTenantRateProvider>();
+        builder.Services.TryAddSingleton<ILiveSiloCountProvider, ManagementLiveSiloCountProvider>();
+        builder.Services.TryAddSingleton<ITenantClusterDemandExchange, LocalTenantClusterDemandExchange>();
+        builder.Services.TryAddSingleton<TenantRateBudgetCoordinator>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenantRateBudgetCoordinatorHostedService>());
 
         return builder;
     }
