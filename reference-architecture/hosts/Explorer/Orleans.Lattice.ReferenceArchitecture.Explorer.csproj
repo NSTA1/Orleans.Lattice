@@ -38,14 +38,14 @@
     token survives replica scale/restart and is shared across warm replicas.
   -->
   <ItemGroup>
-    <0 PackageReference Include="Orleans.Lattice.Explorer.Web" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Explorer.Core" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Explorer.Access" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Explorer.UI" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Explorer.Backup" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Explorer.Schema" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="9.3.0" />
-    <0 PackageReference Include="Orleans.Lattice.Caching.AzureBlob" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Web" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Core" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Access" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.UI" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Backup" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Schema" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Explorer.Entra.Web" Version="9.3.0" />
+    <PackageReference Include="Orleans.Lattice.Caching.AzureBlob" Version="9.3.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
   </ItemGroup>
 
