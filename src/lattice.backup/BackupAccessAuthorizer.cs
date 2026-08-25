@@ -41,6 +41,7 @@ internal sealed class BackupAccessAuthorizer
 {
     private readonly ILatticeAccessGate _gate;
     private readonly ILatticeMembershipContext? _membership;
+    private readonly ILatticeBackupTenantScope _tenantScope;
 
     /// <summary>
     /// Initializes a new <see cref="BackupAccessAuthorizer"/>.
@@ -55,12 +56,21 @@ internal sealed class BackupAccessAuthorizer
     /// when none is registered (every caller then resolves to
     /// <see cref="LatticeSubject.Anonymous"/>).
     /// </param>
+    /// <param name="tenantScope">
+    /// The tenancy seam consulted to keep a capture / restore inside the active
+    /// tenant's namespace, or <c>null</c> when none is registered (the inert
+    /// <see cref="NullLatticeBackupTenantScope"/> is used, so no tenant check runs).
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="gate"/> is <c>null</c>.</exception>
-    public BackupAccessAuthorizer(ILatticeAccessGate gate, ILatticeMembershipContext? membership = null)
+    public BackupAccessAuthorizer(
+        ILatticeAccessGate gate,
+        ILatticeMembershipContext? membership = null,
+        ILatticeBackupTenantScope? tenantScope = null)
     {
         ArgumentNullException.ThrowIfNull(gate);
         _gate = gate;
         _membership = membership;
+        _tenantScope = tenantScope ?? NullLatticeBackupTenantScope.Instance;
     }
 
     /// <summary>
@@ -93,6 +103,24 @@ internal sealed class BackupAccessAuthorizer
     private ValueTask AuthorizeAsync(LatticeOperation operation, BackupScopeSelector scope, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(scope);
+
+        // Tenant isolation runs before the capability gate: when a tenancy add-on
+        // is active, a capture / restore of a tree the active tenant does not own
+        // is refused here, at the single choke point every capture and restore
+        // entry point funnels through. When no tenancy add-on is registered the
+        // scope is inert and this is a single branch with no further work.
+        if (_tenantScope.IsActive)
+        {
+            if (operation == LatticeOperation.Backup)
+            {
+                _tenantScope.AuthorizeCapture(scope.TreeId);
+            }
+            else
+            {
+                _tenantScope.AuthorizeRestoreTarget(scope.TreeId);
+            }
+        }
+
         return scope.Kind switch
         {
             BackupScopeKind.WholeTree => LatticeAccessGateEnforcement.EnforceWholeTreeAsync(

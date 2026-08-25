@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Backup;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Tenancy;
@@ -217,6 +218,17 @@ public static class LatticeTenancyServiceCollectionExtensions
         // after the core default, so a single ITenantAdmissionController resolve on
         // the write path returns this quota-enforcing controller.
         builder.Services.AddSingleton<ITenantAdmissionController, LatticeTenantAdmissionController>();
+
+        // Tenant-aware backup / restore isolation (issue #1632, T15). The active
+        // TenantBackupScope replaces the backup package's inert
+        // NullLatticeBackupTenantScope so a capture is confined to the active
+        // tenant's namespace and a restore is confined to that namespace and the
+        // tenant's key quota. Replace (not TryAdd) guarantees the active scope is
+        // the one that resolves regardless of add-on registration order.
+        builder.Services.TryAddSingleton<TenantBackupScope>();
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ILatticeBackupTenantScope>(
+                sp => sp.GetRequiredService<TenantBackupScope>()));
 
         return builder;
     }

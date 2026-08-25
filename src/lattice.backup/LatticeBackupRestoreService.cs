@@ -32,6 +32,7 @@ internal sealed class LatticeBackupRestoreService(
     Serializer serializer,
     ITagIndexReconcileTrigger tagIndexReconcileTrigger,
     IServiceProvider serviceProvider,
+    ILatticeBackupTenantScope tenantScope,
     ILogger<LatticeBackupRestoreService> logger)
     : ILatticeBackupRestoreService, ILatticeCoordinatedRestoreEngine
 {
@@ -89,12 +90,19 @@ internal sealed class LatticeBackupRestoreService(
             var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
             var chainIds = chain.Select(m => m.Id).ToArray();
 
+            // Open a per-record admission controller when a tenancy add-on is
+            // active, resolving the tenant's quota once. It is null on the
+            // tenancy-off path, so the apply loops pay only a null check per record.
+            var admission = tenantScope.IsActive
+                ? await tenantScope.BeginRestoreAsync(targetTreeId, cancellationToken).ConfigureAwait(false)
+                : null;
+
             phase = LatticeBackupMetrics.PhaseMerge;
             long entriesApplied;
             if (request.Mode == LatticeRestoreMode.ShadowCutover)
             {
                 var (shadowTreeId, previousPhysical, applied) = await RestoreShadowCutoverAsync(
-                    targetTreeId, chain, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, cancellationToken)
+                    targetTreeId, chain, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, admission, cancellationToken)
                     .ConfigureAwait(false);
 
                 logger.LogInformation(
@@ -105,11 +113,13 @@ internal sealed class LatticeBackupRestoreService(
                 LatticeBackupMetrics.RecordRestoreSuccess(stopwatch.Elapsed.TotalMilliseconds, applied);
                 return new LatticeRestoreResult(
                     request.BackupId, targetTreeId, request.Mode, operationId, chainIds, applied,
-                    shadowPhysicalTreeId: shadowTreeId, previousPhysicalTreeId: previousPhysical);
+                    shadowPhysicalTreeId: shadowTreeId, previousPhysicalTreeId: previousPhysical,
+                    deadLetteredCrossTenant: admission?.DeadLetteredCrossTenant ?? 0,
+                    deadLetteredOverQuota: admission?.DeadLetteredOverQuota ?? 0);
             }
 
             entriesApplied = await RestoreInPlaceAsync(
-                targetTreeId, chain, effectiveScope, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, cancellationToken)
+                targetTreeId, chain, effectiveScope, rangeStart, rangeEnd, operationId, request.ApplyBatchSize, admission, cancellationToken)
                 .ConfigureAwait(false);
 
             logger.LogInformation(
@@ -118,7 +128,9 @@ internal sealed class LatticeBackupRestoreService(
 
             LatticeBackupMetrics.RecordRestoreSuccess(stopwatch.Elapsed.TotalMilliseconds, entriesApplied);
             return new LatticeRestoreResult(
-                request.BackupId, targetTreeId, request.Mode, operationId, chainIds, entriesApplied);
+                request.BackupId, targetTreeId, request.Mode, operationId, chainIds, entriesApplied,
+                deadLetteredCrossTenant: admission?.DeadLetteredCrossTenant ?? 0,
+                deadLetteredOverQuota: admission?.DeadLetteredOverQuota ?? 0);
         }
         catch (Exception ex) when (LatticeBackupMetrics.EmitRestoreFailure(phase, ex))
         {
@@ -255,6 +267,7 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeEnd,
         string operationId,
         int applyBatchSize,
+        IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -282,8 +295,8 @@ internal sealed class LatticeBackupRestoreService(
             && effectiveScope.Kind == BackupScopeKind.WholeTree;
 
         return fastPath
-            ? await BulkLoadRawAsync(routing, chain, rangeStart, rangeEnd, operationId, cancellationToken).ConfigureAwait(false)
-            : await MergeApplyAsync(routing, chain, rangeStart, rangeEnd, applyBatchSize, cancellationToken).ConfigureAwait(false);
+            ? await BulkLoadRawAsync(routing, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken).ConfigureAwait(false)
+            : await MergeApplyAsync(routing, chain, rangeStart, rangeEnd, applyBatchSize, admission, cancellationToken).ConfigureAwait(false);
     }
 
     // ---- Shadow-cutover restore -----------------------------------------
@@ -295,6 +308,7 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeEnd,
         string operationId,
         int applyBatchSize,
+        IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
         // The local (single-cluster) shadow-cutover path composes the same two
@@ -302,7 +316,7 @@ internal sealed class LatticeBackupRestoreService(
         // commit the atomic alias swap. There is no fence here because a
         // single-cluster restore has no peer that could re-advance the tree.
         var (shadowPhysical, previousPhysical, applied) = await BuildShadowCoreAsync(
-            targetTreeId, chain, rangeStart, rangeEnd, operationId, cancellationToken).ConfigureAwait(false);
+            targetTreeId, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken).ConfigureAwait(false);
 
         await CommitShadowCoreAsync(
             targetTreeId, shadowPhysical, previousPhysical, operationId, cancellationToken)
@@ -323,6 +337,7 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeStart,
         string? rangeEnd,
         string operationId,
+        IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
         var shadowTreeId = ShadowTreeId(targetTreeId, operationId);
@@ -348,7 +363,7 @@ internal sealed class LatticeBackupRestoreService(
 
         // The shadow tree is always fresh, so it takes the bulk-load fast path. A
         // whole-tree scope loads everything; a narrower scope loads its subset.
-        var applied = await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, cancellationToken)
+        var applied = await BulkLoadRawAsync(shadowRouting, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken)
             .ConfigureAwait(false);
 
         return (shadowRouting.PhysicalTreeId, previousPhysical, applied);
@@ -483,8 +498,12 @@ internal sealed class LatticeBackupRestoreService(
         var operationId = request.OperationId ?? DeriveOperationId(request, targetTreeId, effectiveScope);
         var chainIds = chain.Select(m => m.Id).ToArray();
 
+        var admission = tenantScope.IsActive
+            ? await tenantScope.BeginRestoreAsync(targetTreeId, cancellationToken).ConfigureAwait(false)
+            : null;
+
         var (shadowPhysical, previousPhysical, applied) = await BuildShadowCoreAsync(
-            targetTreeId, chain, rangeStart, rangeEnd, operationId, cancellationToken).ConfigureAwait(false);
+            targetTreeId, chain, rangeStart, rangeEnd, operationId, admission, cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation(
             "Built restore shadow for backup {BackupId} into tree {TreeId} ({EntryCount} entries) at shadow "
@@ -493,7 +512,9 @@ internal sealed class LatticeBackupRestoreService(
 
         return new LatticeRestoreResult(
             request.BackupId, targetTreeId, LatticeRestoreMode.ShadowCutover, operationId, chainIds, applied,
-            shadowPhysicalTreeId: shadowPhysical, previousPhysicalTreeId: previousPhysical);
+            shadowPhysicalTreeId: shadowPhysical, previousPhysicalTreeId: previousPhysical,
+            deadLetteredCrossTenant: admission?.DeadLetteredCrossTenant ?? 0,
+            deadLetteredOverQuota: admission?.DeadLetteredOverQuota ?? 0);
     }
 
     /// <inheritdoc />
@@ -663,6 +684,7 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeStart,
         string? rangeEnd,
         string operationId,
+        IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
         // Entries stream in ascending key order within each manifest, so grouping
@@ -672,6 +694,14 @@ internal sealed class LatticeBackupRestoreService(
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
         {
+            // Per-record tenant admission: a record addressed outside the active
+            // tenant's namespace or beyond its quota is dead-lettered (skipped),
+            // never written. Null on the tenancy-off path (a single branch).
+            if (admission is not null && admission.Admit(entry.Key) != BackupRestoreRecordDisposition.Admit)
+            {
+                continue;
+            }
+
             var shardIndex = routing.Map.Resolve(entry.Key);
             if (!perShard.TryGetValue(shardIndex, out var list))
             {
@@ -702,6 +732,7 @@ internal sealed class LatticeBackupRestoreService(
         string? rangeStart,
         string? rangeEnd,
         int applyBatchSize,
+        IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
         var perShard = new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>();
@@ -710,6 +741,14 @@ internal sealed class LatticeBackupRestoreService(
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
         {
+            // Per-record tenant admission: a record addressed outside the active
+            // tenant's namespace or beyond its quota is dead-lettered (skipped),
+            // never merged. Null on the tenancy-off path (a single branch).
+            if (admission is not null && admission.Admit(entry.Key) != BackupRestoreRecordDisposition.Admit)
+            {
+                continue;
+            }
+
             var shardIndex = routing.Map.Resolve(entry.Key);
             if (!perShard.TryGetValue(shardIndex, out var batch))
             {

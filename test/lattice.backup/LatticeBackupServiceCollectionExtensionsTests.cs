@@ -73,6 +73,24 @@ public sealed class LatticeBackupServiceCollectionExtensionsTests
         Assert.That(options.EnableDurableHistoryView, Is.False);
     }
 
+    [Test]
+    public void AddLatticeBackup_registers_the_inert_tenant_scope_by_default()
+    {
+        var builder = new FakeSiloBuilder();
+        builder.Services.AddSingleton<IValidateOptions<LatticeOptions>>(
+            new PassthroughLatticeOptionsValidator());
+
+        builder.AddLatticeBackup();
+
+        var scope = builder.Services.BuildServiceProvider().GetRequiredService<ILatticeBackupTenantScope>();
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope, Is.InstanceOf<NullLatticeBackupTenantScope>(),
+                "with no tenancy add-on the inert null scope is registered");
+            Assert.That(scope.IsActive, Is.False);
+        });
+    }
+
     private sealed class PassthroughLatticeOptionsValidator : IValidateOptions<LatticeOptions>
     {
         public ValidateOptionsResult Validate(string? name, LatticeOptions options) =>

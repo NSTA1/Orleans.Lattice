@@ -189,6 +189,88 @@ public sealed class BackupAccessAuthorizerTests
         Assert.That(ex!.SubjectId, Is.EqualTo(LatticeSubject.AnonymousSubjectId));
     }
 
+    // ---- Tenant isolation seam ------------------------------------------
+
+    [Test]
+    public async Task AuthorizeBackup_active_tenant_scope_authorizes_capture()
+    {
+        var gate = new CapturingAccessGate();
+        var scope = new RecordingTenantScope();
+        var authorizer = new BackupAccessAuthorizer(gate, membership: null, tenantScope: scope);
+
+        await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.CapturedTreeId, Is.EqualTo(Tree), "a capture consults AuthorizeCapture with the tree id");
+            Assert.That(scope.RestoreTargetTreeId, Is.Null, "a capture never consults the restore-target check");
+            Assert.That(gate.Last.Operation, Is.EqualTo(LatticeOperation.Backup),
+                "the capability gate still runs after the tenant check");
+        });
+    }
+
+    [Test]
+    public async Task AuthorizeRestore_active_tenant_scope_authorizes_restore_target()
+    {
+        var gate = new CapturingAccessGate();
+        var scope = new RecordingTenantScope();
+        var authorizer = new BackupAccessAuthorizer(gate, membership: null, tenantScope: scope);
+
+        await authorizer.AuthorizeRestoreAsync(BackupScopeSelector.WholeTree(Tree));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.RestoreTargetTreeId, Is.EqualTo(Tree),
+                "a restore consults AuthorizeRestoreTarget with the target tree id");
+            Assert.That(scope.CapturedTreeId, Is.Null, "a restore never consults the capture check");
+        });
+    }
+
+    [Test]
+    public void AuthorizeBackup_tenant_scope_refusal_propagates_before_the_gate()
+    {
+        var gate = new CapturingAccessGate();
+        var scope = new RecordingTenantScope { Refuse = true };
+        var authorizer = new BackupAccessAuthorizer(gate, membership: null, tenantScope: scope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)),
+                Throws.InstanceOf<LatticeBackupTenantIsolationException>(),
+                "a cross-tenant capture is refused by the tenant scope");
+            Assert.That(gate.Consulted, Is.False,
+                "the tenant check runs before the capability gate, so a refusal short-circuits it");
+        });
+    }
+
+    [Test]
+    public async Task AuthorizeBackup_inactive_tenant_scope_runs_no_tenant_check()
+    {
+        var gate = new CapturingAccessGate();
+        var scope = new RecordingTenantScope { Active = false };
+        var authorizer = new BackupAccessAuthorizer(gate, membership: null, tenantScope: scope);
+
+        await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.CapturedTreeId, Is.Null, "an inactive tenant scope is never consulted");
+            Assert.That(gate.Last.Operation, Is.EqualTo(LatticeOperation.Backup), "the capability gate still runs");
+        });
+    }
+
+    [Test]
+    public void Constructor_null_tenant_scope_defaults_to_the_inert_scope()
+    {
+        var authorizer = new BackupAccessAuthorizer(new CapturingAccessGate(), membership: null, tenantScope: null);
+
+        Assert.That(
+            async () => await authorizer.AuthorizeBackupAsync(BackupScopeSelector.WholeTree(Tree)),
+            Throws.Nothing,
+            "with no tenancy add-on the null scope is inert and runs no tenant check");
+    }
+
     // ---- Construction guards --------------------------------------------
 
     [Test]
@@ -245,13 +327,58 @@ public sealed class BackupAccessAuthorizerTests
 
         public LatticeAccessRequest Last { get; private set; }
 
+        public bool Consulted { get; private set; }
+
         public ValueTask<LatticeAccessDecision> AuthorizeAsync(
             in LatticeAccessRequest request,
             CancellationToken cancellationToken = default)
         {
             Last = request;
+            Consulted = true;
             return new ValueTask<LatticeAccessDecision>(_decide(request));
         }
+    }
+
+    /// <summary>
+    /// A recording <see cref="ILatticeBackupTenantScope"/> double: captures which
+    /// authorization method the seam invoked and the tree id it passed, can be made
+    /// inactive, and can be made to refuse (throw) so the fail-fast ordering is
+    /// asserted without a real tenant registry.
+    /// </summary>
+    private sealed class RecordingTenantScope : ILatticeBackupTenantScope
+    {
+        public bool Active { get; init; } = true;
+
+        public bool Refuse { get; init; }
+
+        public string? CapturedTreeId { get; private set; }
+
+        public string? RestoreTargetTreeId { get; private set; }
+
+        public bool IsActive => Active;
+
+        public void AuthorizeCapture(string treeId)
+        {
+            CapturedTreeId = treeId;
+            if (Refuse)
+            {
+                throw new LatticeBackupTenantIsolationException("refused");
+            }
+        }
+
+        public void AuthorizeRestoreTarget(string treeId)
+        {
+            RestoreTargetTreeId = treeId;
+            if (Refuse)
+            {
+                throw new LatticeBackupTenantIsolationException("refused");
+            }
+        }
+
+        public ValueTask<IBackupRestoreAdmission> BeginRestoreAsync(
+            string targetTreeId,
+            CancellationToken cancellationToken = default) =>
+            new(PermissiveBackupRestoreAdmission.Instance);
     }
 
     /// <summary>
