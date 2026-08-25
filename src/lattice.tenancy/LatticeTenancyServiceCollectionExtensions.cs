@@ -113,6 +113,26 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton<TenantRegistryInitializer>();
         builder.Services.TryAddSingleton<ITenantRegistry, LatticeTenantRegistry>();
 
+        // The compiled tenant-policy snapshot maintainer: a per-silo singleton
+        // registered twice at the same instance - once as the concrete singleton
+        // and once as an IMutationObserver - so a sys-tenant-registry write
+        // refreshes the exact snapshot the tenant-policy engine reads. The
+        // AddSingleton<IMutationObserver>(...) factory is intentionally not
+        // idempotent under TryAdd, which is why the whole block runs only once
+        // (guarded by TenancyRegistrationMarker above).
+        builder.Services.TryAddSingleton<CompiledTenantPolicySnapshotMaintainer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
+
+        // The tenant-policy decision engine: the in-memory decision surface that
+        // resolves a subject's allowed tenants, validates an active tenant, and
+        // resolves cross-tenant grants against the compiled snapshot. Registering
+        // it is inert: nothing on the data path consults it until a later feature
+        // wires enforcement in.
+        builder.Services.TryAddSingleton<LatticeTenantPolicyEngine>();
+        builder.Services.TryAddSingleton<ITenantPolicyEngine>(
+            sp => sp.GetRequiredService<LatticeTenantPolicyEngine>());
+
         return builder;
     }
 
