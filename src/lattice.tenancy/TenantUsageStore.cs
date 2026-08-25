@@ -61,7 +61,7 @@ internal sealed class TenantUsageStore(
     {
         using (LatticeSystemOrigin.Enter())
         {
-            await foreach (var entry in Usage.EntriesAsync(_serializer, cancellationToken: cancellationToken).ConfigureAwait(false))
+            await foreach (var entry in Usage.ScanEntriesAsync(_serializer, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 if (entry.Value is { } record)
                 {

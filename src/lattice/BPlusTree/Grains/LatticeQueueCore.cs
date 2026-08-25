@@ -114,7 +114,7 @@ internal sealed class LatticeQueueCore(
             }
         }
 
-        await foreach (var kvp in store.EntriesAsync(
+        await foreach (var kvp in store.ScanEntriesAsync(
             startInclusive: start,
             endExclusive: _prefixEnd,
             cancellationToken: cancellationToken).ConfigureAwait(true))

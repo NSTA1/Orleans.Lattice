@@ -302,7 +302,7 @@ public class MaterialisedViewReplicationLifecycleTests
 
         var viewTree = await _fixture.ActiveViewTreeAsync(viewName);
         var rows = new List<HistoryRow>();
-        await foreach (var entry in viewTree.EntriesAsync())
+        await foreach (var entry in viewTree.ScanEntriesAsync())
         {
             rows.Add(_fixture.SiloServices.GetRequiredService<HistoryRowCodec>().Decode(entry.Value));
         }

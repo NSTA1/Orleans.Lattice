@@ -49,7 +49,7 @@ internal sealed class LatticeMembershipDirectory(
     {
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            await foreach (var entry in Groups.EntriesAsync<MembershipGroup>(cancellationToken: cancellationToken).ConfigureAwait(false))
+            await foreach (var entry in Groups.ScanEntriesAsync<MembershipGroup>(cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 if (entry.Value is { } group)
                 {

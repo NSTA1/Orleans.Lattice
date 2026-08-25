@@ -92,7 +92,7 @@ public class StronglyConsistentScanIntegrationTests
         await split.RunSplitPassAsync();
 
         var actual = new Dictionary<string, byte[]>();
-        await foreach (var kv in tree.EntriesAsync()) actual[kv.Key] = kv.Value;
+        await foreach (var kv in tree.ScanEntriesAsync()) actual[kv.Key] = kv.Value;
 
         Assert.That(actual.Keys, Is.EquivalentTo(expected.Keys));
         foreach (var (k, v) in expected)

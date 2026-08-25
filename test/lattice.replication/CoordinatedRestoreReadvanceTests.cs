@@ -202,7 +202,7 @@ public sealed class CoordinatedRestoreReadvanceTests
             return;
         }
 
-        await foreach (var entry in source.EntriesAsync())
+        await foreach (var entry in source.ScanEntriesAsync())
         {
             await dest.SetAsync(entry.Key, entry.Value);
         }

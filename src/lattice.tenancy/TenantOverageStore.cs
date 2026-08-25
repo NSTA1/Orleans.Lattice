@@ -61,7 +61,7 @@ internal sealed class TenantOverageStore(
     {
         using (LatticeSystemOrigin.Enter())
         {
-            await foreach (var entry in Overage.EntriesAsync(_serializer, cancellationToken: cancellationToken).ConfigureAwait(false))
+            await foreach (var entry in Overage.ScanEntriesAsync(_serializer, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 if (entry.Value is { } record)
                 {

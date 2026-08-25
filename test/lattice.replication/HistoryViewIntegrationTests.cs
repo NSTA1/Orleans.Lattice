@@ -100,7 +100,7 @@ public sealed class HistoryViewIntegrationTests
 
         var rows = new List<HistoryRow>();
         using var scope = ViewReadContext.BeginScope();
-        await foreach (var entry in viewTree.EntriesAsync())
+        await foreach (var entry in viewTree.ScanEntriesAsync())
         {
             rows.Add(Codec.Decode(entry.Value));
         }

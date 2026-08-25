@@ -2,6 +2,7 @@ using MultiSiteManufacturing.Host.Domain;
 using MultiSiteManufacturing.Host.Federation;
 using MultiSiteManufacturing.Host.Lattice;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice;
 
 namespace MultiSiteManufacturing.Host.Dashboard;
 
@@ -94,7 +95,7 @@ public sealed partial class DashboardBroadcaster
         // accumulator carries the fact-derived half of the summary - lattice
         // state, latest stage, fact count.
         var parts = new List<(PartSerialNumber Serial, ComplianceAccumulator Accumulator)>();
-        await foreach (var entry in view.EntriesAsync(cancellationToken: cancellationToken))
+        await foreach (var entry in view.ScanEntriesAsync(cancellationToken: cancellationToken))
         {
             parts.Add((new PartSerialNumber(entry.Key), Accumulators.Deserialize(entry.Value)));
         }

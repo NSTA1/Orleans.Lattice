@@ -550,7 +550,7 @@ internal sealed partial class ViewMaintainerGrain
         var entryHash = new byte[16];
         var lengthPrefix = new byte[4];
 
-        await foreach (var entry in tree.EntriesAsync(floor, cancellationToken: cancellationToken))
+        await foreach (var entry in tree.ScanEntriesAsync(floor, cancellationToken: cancellationToken))
         {
             var keyBytes = Encoding.UTF8.GetBytes(entry.Key);
             BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, keyBytes.Length);
