@@ -97,7 +97,7 @@ internal sealed class BackupCatalogIndexQuery
         CancellationToken cancellationToken)
     {
         var referenced = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in view.EntriesAsync(null, null, cancellationToken).ConfigureAwait(false))
+        await foreach (var entry in view.ScanEntriesAsync(null, null, cancellationToken: cancellationToken).ConfigureAwait(false))
         {
             var row = RowSerializer.Deserialize(entry.Value);
             if (row.BaseBackupId is { Length: > 0 } baseId)
@@ -145,7 +145,7 @@ internal sealed class BackupCatalogIndexQuery
             // Proceed with the current view generation.
         }
 
-        await foreach (var entry in view.EntriesAsync(startKey, null, cancellationToken).ConfigureAwait(false))
+        await foreach (var entry in view.ScanEntriesAsync(startKey, null, cancellationToken: cancellationToken).ConfigureAwait(false))
         {
             yield return new IndexEntry(entry.Key, RowSerializer.Deserialize(entry.Value), Manifest: null);
         }

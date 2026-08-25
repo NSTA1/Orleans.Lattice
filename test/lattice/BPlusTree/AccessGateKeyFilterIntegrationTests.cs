@@ -96,7 +96,7 @@ public class AccessGateKeyFilterIntegrationTests
         await SeedAsync(tree, "user/alice", "user/amy", "user/bob", "user/carol");
         FilterUserAToTree(treeId);
 
-        var entries = await CollectAsync(tree.EntriesAsync());
+        var entries = await CollectAsync(tree.ScanEntriesAsync());
 
         Assert.Multiple(() =>
         {

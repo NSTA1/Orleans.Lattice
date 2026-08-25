@@ -87,7 +87,7 @@ public class SystemLatticeIntegrationTests
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync())
+        await foreach (var e in tree.ScanEntriesAsync())
             entries.Add(e);
 
         Assert.That(entries, Has.Count.EqualTo(5));

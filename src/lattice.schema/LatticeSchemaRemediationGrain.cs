@@ -306,7 +306,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var outcome = await LatticeSchemaRemediation.DryRunCoreAsync(
-            source.EntriesAsync(),
+            source.ScanEntriesAsync(),
             CreateRewrite(),
             PolicyViewOrNull(),
             CompiledPolicyOrNull(),
@@ -338,7 +338,7 @@ internal sealed class LatticeSchemaRemediationGrain(
         var rewrite = CreateRewrite();
         var scanned = 0;
 
-        await foreach (var entry in source.EntriesAsync())
+        await foreach (var entry in source.ScanEntriesAsync())
         {
             scanned++;
 

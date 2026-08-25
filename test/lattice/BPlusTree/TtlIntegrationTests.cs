@@ -63,7 +63,7 @@ public class TtlIntegrationTests
         await Task.Delay(TimeSpan.FromMilliseconds(500));
 
         var pairs = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var kv in tree.EntriesAsync()) pairs.Add(kv);
+        await foreach (var kv in tree.ScanEntriesAsync()) pairs.Add(kv);
 
         Assert.That(pairs.Select(kv => kv.Key), Is.EqualTo(new[] { "a", "c" }));
         Assert.That(pairs.Select(kv => Encoding.UTF8.GetString(kv.Value)),

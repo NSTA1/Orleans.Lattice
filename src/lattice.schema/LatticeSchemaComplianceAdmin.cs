@@ -48,7 +48,7 @@ internal sealed class LatticeSchemaComplianceAdmin(
 
         var source = _grainFactory.GetGrain<ILattice>(treeId);
         await foreach (var entry in source
-            .EntriesAsync(cancellationToken: cancellationToken)
+            .ScanEntriesAsync(cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
