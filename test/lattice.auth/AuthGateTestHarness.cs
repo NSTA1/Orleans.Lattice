@@ -89,6 +89,19 @@ internal static class AuthGateHarness
     /// </summary>
     public static async Task<Harness> CreateAsync(
         LatticeAuthOptions options,
+        params LatticeAuthorizationRule[] rules) =>
+        await CreateAsync(options, tenantEnforcer: null, rules);
+
+    /// <summary>
+    /// Creates a harness with an explicit <see cref="ITenantGateEnforcer"/> so the
+    /// tenant-isolation composition path can be exercised; a <c>null</c>
+    /// <paramref name="tenantEnforcer"/> falls back to the allow-everything
+    /// <see cref="NullTenantGateEnforcer"/>, matching a cluster without the
+    /// tenancy add-on.
+    /// </summary>
+    public static async Task<Harness> CreateAsync(
+        LatticeAuthOptions options,
+        ITenantGateEnforcer? tenantEnforcer,
         params LatticeAuthorizationRule[] rules)
     {
         var store = new CovPolicyStore();
@@ -102,7 +115,8 @@ internal static class AuthGateHarness
             Array.Empty<ILatticeAuthAuditSink>(),
             optionsMonitor,
             NullLogger<LatticeAuthDecisionObserver>.Instance);
-        var gate = new PolicyAccessGate(engine, maintainer, observer, optionsMonitor);
+        var gate = new PolicyAccessGate(
+            engine, maintainer, observer, optionsMonitor, tenantEnforcer ?? new NullTenantGateEnforcer());
         return new Harness(gate, engine, maintainer, options);
     }
 }

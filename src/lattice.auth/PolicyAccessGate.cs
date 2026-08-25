@@ -30,7 +30,8 @@ internal sealed class PolicyAccessGate(
     LatticeDecisionEngine engine,
     CompiledPolicySnapshotMaintainer maintainer,
     LatticeAuthDecisionObserver observer,
-    IOptionsMonitor<LatticeAuthOptions> options) : ILatticeAccessGate, ILatticeReadGrantProbe
+    IOptionsMonitor<LatticeAuthOptions> options,
+    ITenantGateEnforcer tenantEnforcer) : ILatticeAccessGate, ILatticeReadGrantProbe
 {
     /// <inheritdoc />
     public ValueTask<LatticeAccessDecision> AuthorizeAsync(
@@ -137,6 +138,24 @@ internal sealed class PolicyAccessGate(
         else
         {
             decision = Evaluate(in request);
+        }
+
+        // Tenant-isolation composition (issue #1624). When the tenancy add-on is
+        // installed it replaces the null enforcer with the active one, so an allow
+        // from the policy engine is additionally gated by tenant isolation and a
+        // deny from EITHER side denies (the tenant enforcer never turns a policy
+        // deny into an allow). When tenancy is absent the null enforcer's
+        // IsActive is false: the guard short-circuits after a single bool read, so
+        // the decision and the whole no-tenancy path are byte-for-byte unchanged -
+        // no allocation, no async state machine. The enforcer is consulted only
+        // for an already-allowed request, keeping it off the deny fast path.
+        if (decision.Allowed && tenantEnforcer.IsActive)
+        {
+            var tenantDecision = tenantEnforcer.Enforce(in request);
+            if (!tenantDecision.Allowed)
+            {
+                decision = tenantDecision;
+            }
         }
 
         observer.Observe(in request, in decision, in match, maintainer.CurrentEpoch, start);

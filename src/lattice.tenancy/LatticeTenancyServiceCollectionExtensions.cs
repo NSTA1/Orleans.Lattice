@@ -154,6 +154,20 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, TenantRateBudgetCoordinatorHostedService>());
 
+        // Tenant-aware gate enforcement (issue #1624, T7). The residency/online
+        // resolver is a nested null-default seam: register the allow-everything
+        // default so a residency feature (T20) can later Replace it. The active
+        // TenantGateEnforcer replaces the auth package's NullTenantGateEnforcer
+        // (registered by AddLatticeAuth, which runs before this) so the auth gate
+        // composes tenant isolation on top of its policy decision. Replace (not
+        // TryAdd) guarantees exactly one ITenantGateEnforcer resolves and it is
+        // the active one.
+        builder.Services.TryAddSingleton<ITenantResidencyResolver, NullTenantResidencyResolver>();
+        builder.Services.TryAddSingleton<TenantGateEnforcer>();
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantGateEnforcer>(
+                sp => sp.GetRequiredService<TenantGateEnforcer>()));
+
         return builder;
     }
 
