@@ -4,7 +4,7 @@ Optional, opt-in **Model Context Protocol (MCP) server** add-on for [`Orleans.La
 
 ## What it gives you
 
-- **Four opt-in tool modules** - `AddStateTools()` (read-only introspection), `AddDataTools()` (reads always, writes opt-in), `AddBackupTools()` (inspect always, control verbs opt-in), and `AddAuthTools()` (admin-gated introspection, admin verbs opt-in). Each tool is a thin adapter over the matching facade, named `lattice_<group>_<verb>`.
+- **Opt-in tool modules** - `AddStateTools()` (read-only introspection), `AddDataTools()` (reads always, writes opt-in), `AddBackupTools()` (inspect always, control verbs opt-in), and `AddAuthTools()` (admin-gated introspection, admin verbs opt-in), with further modules for replication, tree administration, and - on a tenancy-enabled cluster - tenant self-awareness and administration. Each tool is a thin adapter over the matching facade, named `lattice_<group>_<verb>`.
 - **Permission-aware discovery** - a `lattice_capabilities` meta-tool and a per-session tool list computed from the caller's effective permissions, so a caller sees and can invoke only the tools its grants allow. An ungranted tool is never listed, not listed-then-denied.
 - **Fail-closed by construction** - the default `DenyAllMcpAuthorizer`, a fail-closed credential bridge, and `RequireAuthorization` (default `true`) mean an unauthenticated session is default-denied and can enumerate or call nothing.
 - **In-silo or remote hosting** - co-host the server on a silo that exposes the facades in-process, or run it out-of-silo with `AddLatticeMcpRemote(...)`, bound over the `Orleans.Lattice.Api.*.Grpc` clients, to front a cluster it is not co-located with.
