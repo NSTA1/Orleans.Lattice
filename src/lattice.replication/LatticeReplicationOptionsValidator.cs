@@ -272,6 +272,15 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "to disable the probe entirely.");
         }
 
+        if (options.ShipSourceIdentityRefreshInterval < TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipSourceIdentityRefreshInterval)} "
+                + $"must be greater than or equal to {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + $"{nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} re-resolves the source physical identity on every "
+                + "pump tick (the pre-cache behaviour); a negative interval is meaningless.");
+        }
+
         if (options.ShipBackoffMax < options.ShipBackoffInitial)
         {
             return ValidateOptionsResult.Fail(

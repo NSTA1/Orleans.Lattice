@@ -1386,6 +1386,54 @@ public class LatticeReplicationOptionsValidatorTests
     }
 
     // ------------------------------------------------------------------
+    // Source-identity refresh backstop
+    // ------------------------------------------------------------------
+
+    [Test]
+    public void Validate_succeeds_for_default_source_identity_refresh_interval()
+    {
+        var opts = new LatticeReplicationOptions { ClusterId = "site-a" };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_succeeds_when_source_identity_refresh_interval_is_zero()
+    {
+        // Zero is the explicit "re-resolve every tick" (pre-cache) escape
+        // hatch and must validate.
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipSourceIdentityRefreshInterval = TimeSpan.Zero,
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void Validate_fails_when_source_identity_refresh_interval_is_negative()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            ShipSourceIdentityRefreshInterval = TimeSpan.FromTicks(-1),
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.ShipSourceIdentityRefreshInterval)));
+        });
+    }
+
+    // ------------------------------------------------------------------
     // Wire-version capability negotiation
     // ------------------------------------------------------------------
 

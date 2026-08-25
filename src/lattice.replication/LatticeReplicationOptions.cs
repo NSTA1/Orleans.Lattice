@@ -742,6 +742,34 @@ public class LatticeReplicationOptions
     public TimeSpan ShipPhaseTimerPeriod { get; set; } = DefaultShipPhaseTimerPeriod;
 
     /// <summary>
+    /// Backstop interval at which the per-<c>(tree, peer)</c> shipper
+    /// re-resolves its source tree's physical identity from the tree
+    /// registry. The shipper rebinds to the source's current physical WAL
+    /// so a registry alias swap (shadow-cutover restore, resize, reshard)
+    /// is picked up under a live shipper; the persisted per-partition
+    /// cursors are absolute offsets into the retired log, so on a swap they
+    /// are reset and the shipper re-ships from the new source's log start.
+    /// The logical-to-physical mapping changes only on a rare administrative
+    /// operation, so re-reading the registry on every
+    /// <see cref="ShipPhaseTimerPeriod"/> tick is pure idle load: on an
+    /// otherwise-quiet link it is the shipper's only steady-state registry
+    /// read. Caching the resolved identity and refreshing it only once per
+    /// this interval collapses that idle read rate from one read per
+    /// <see cref="ShipPhaseTimerPeriod"/> to one read per this interval,
+    /// while bounding alias-swap detection latency to at most this interval
+    /// (detection is already eventual, so a coarse bound is safe). The
+    /// per-tick WAL-tail poll that primes and ships is untouched, so
+    /// shipping latency and dropped-doorbell recovery are unchanged.
+    /// <para>
+    /// Defaults to <see cref="DefaultShipSourceIdentityRefreshInterval"/>.
+    /// Set to <see cref="TimeSpan.Zero"/> to re-resolve on every pump tick
+    /// (the pre-cache behaviour); any other value must be strictly greater
+    /// than <see cref="TimeSpan.Zero"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan ShipSourceIdentityRefreshInterval { get; set; } = DefaultShipSourceIdentityRefreshInterval;
+
+    /// <summary>
     /// Maximum interval between successful outbound contacts with a
     /// peer. When the per-<c>(tree, peer)</c> shipper grain's pump
     /// tick finds the drain buffer empty AND the wall-clock interval
@@ -1757,6 +1785,17 @@ public class LatticeReplicationOptions
     /// timer so the option is a strict superset of prior behaviour.
     /// </summary>
     public static readonly TimeSpan DefaultShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Default value for <see cref="ShipSourceIdentityRefreshInterval"/>:
+    /// 5 seconds. Long enough to erase the shipper's idle per-tick registry
+    /// read (a 50x reduction against the 100 ms default
+    /// <see cref="DefaultShipPhaseTimerPeriod"/>) yet short enough that an
+    /// alias swap under a live shipper is still detected within a few
+    /// seconds - well inside the eventual-convergence window the swap
+    /// heal already operates in.
+    /// </summary>
+    public static readonly TimeSpan DefaultShipSourceIdentityRefreshInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Default value for <see cref="LivenessProbeInterval"/>: 30 s.

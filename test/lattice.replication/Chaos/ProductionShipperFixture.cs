@@ -230,6 +230,17 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
                 .Where(id => id != localClusterId)
                 .ToArray();
             options.ShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(50);
+            // Resolve the logical source tree's physical identity on every pump
+            // tick (disable the idle source-identity cache). This suite pins the
+            // identity-swap abandonment MECHANISM - on a registry alias swap the
+            // shipper must clear its cursors and abandon the retired WAL within a
+            // few ticks, which each test relies on by cutting over while
+            // partitioned and healing ~250-300ms later. The production default
+            // (LatticeReplicationOptions.ShipSourceIdentityRefreshInterval, 5s)
+            // only trades idle-read cost for swap-detection latency and does not
+            // change the mechanism, so the chaos suite selects per-tick detection
+            // (TimeSpan.Zero) to exercise it deterministically in-window.
+            options.ShipSourceIdentityRefreshInterval = TimeSpan.Zero;
             options.MaintenanceGcInterval = TimeSpan.FromSeconds(1);
             options.LivenessProbeInterval = fixture._livenessProbeInterval;
         }

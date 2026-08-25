@@ -500,12 +500,14 @@ internal sealed class ReplicationShipperGrain(
     private DateTime _oldestPendingCursorWriteUtc = DateTime.MinValue;
 
     /// <summary>
-    /// Clock used to evaluate the time dimension of the cursor-write
-    /// coalescing rule. Aliased to <see cref="TimeProvider.System"/> in
-    /// production; unit tests substitute a controllable provider via
-    /// <see cref="SetCursorFlushClockForTesting(TimeProvider)"/> so the
-    /// elapsed-since-first-pending check is deterministic without a real
-    /// wall-clock wait.
+    /// Activation-scoped wall clock used to evaluate the time dimension of the
+    /// shipper's coalescing decisions - the cursor-write flush rule and the
+    /// source-identity refresh backstop
+    /// (<see cref="_lastSourceIdentityRefreshUtc"/>). Aliased to
+    /// <see cref="TimeProvider.System"/> in production; unit tests substitute a
+    /// controllable provider via
+    /// <see cref="SetCursorFlushClockForTesting(TimeProvider)"/> so both
+    /// elapsed-time checks are deterministic without a real wall-clock wait.
     /// </summary>
     private TimeProvider _cursorFlushClock = TimeProvider.System;
 
@@ -529,6 +531,21 @@ internal sealed class ReplicationShipperGrain(
     /// is added.
     /// </summary>
     private DateTime _lastSuccessfulContactUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Wall-clock instant of the most recent source physical-identity
+    /// re-resolve in <see cref="EnsureBoundToCurrentSourceIdentityAsync"/>.
+    /// Anchored at activation in <see cref="DateTime.MinValue"/> so the
+    /// first pump tick of an activation always resolves and binds. Gated by
+    /// <see cref="LatticeReplicationOptions.ShipSourceIdentityRefreshInterval"/>:
+    /// once bound, the shipper skips the per-tick registry read and
+    /// re-resolves only after the interval has elapsed, collapsing the
+    /// steady-state registry read rate of an idle shipper (its only
+    /// per-tick registry access). Evaluated against
+    /// <see cref="_cursorFlushClock"/> so it is deterministic under test.
+    /// Activation-scoped; no persisted state is added.
+    /// </summary>
+    private DateTime _lastSourceIdentityRefreshUtc = DateTime.MinValue;
 
     /// <inheritdoc />
     protected override string KeepaliveReminderName => "shipper-keepalive";
@@ -2210,7 +2227,7 @@ internal sealed class ReplicationShipperGrain(
         // underneath a live shipper; the persisted per-partition cursors are
         // absolute offsets into the retired log, so on an identity change they
         // are reset and the shipper re-ships from the new source's log start.
-        await EnsureBoundToCurrentSourceIdentityAsync(partitions);
+        await EnsureBoundToCurrentSourceIdentityAsync(partitions, options.ShipSourceIdentityRefreshInterval);
 
 
         // and _partitionPageIndex always reset (they're tick-scoped);
@@ -3712,11 +3729,36 @@ internal sealed class ReplicationShipperGrain(
     /// against the new one. Re-shipping from the new log start is safe because
     /// the peer merges every entry by <see cref="HybridLogicalClock"/> (LWW),
     /// making the replay idempotent.
+    /// <para>
+    /// The resolve is the shipper's only per-tick registry read, so on an idle
+    /// link it is gated by <paramref name="refreshInterval"/>: once bound this
+    /// activation, the resolve is skipped until the interval elapses, and the
+    /// cached <see cref="_walTreeId"/> continues to address the source WAL. The
+    /// first tick of an activation (<see cref="_lastSourceIdentityRefreshUtc"/>
+    /// still at <see cref="DateTime.MinValue"/>) always resolves, and a
+    /// non-positive interval disables the cache so every tick resolves (the
+    /// pre-cache behaviour). Bounding the refresh to a coarse interval only
+    /// grows alias-swap detection latency to that interval, which is safe
+    /// because the swap heal is already eventual.
+    /// </para>
     /// </summary>
-    private async Task EnsureBoundToCurrentSourceIdentityAsync(int partitions)
+    private async Task EnsureBoundToCurrentSourceIdentityAsync(int partitions, TimeSpan refreshInterval)
     {
+        // Idle fast path: the cached physical identity is still fresh, so skip
+        // the registry read entirely. Only engages once this activation has
+        // bound at least once (MinValue sentinel) and only when caching is
+        // enabled (positive interval); either condition failing falls through
+        // to an unconditional resolve, preserving the pre-cache semantics.
+        if (refreshInterval > TimeSpan.Zero
+            && _lastSourceIdentityRefreshUtc != DateTime.MinValue
+            && (_cursorFlushClock.GetUtcNow().UtcDateTime - _lastSourceIdentityRefreshUtc) < refreshInterval)
+        {
+            return;
+        }
+
         var physical = await ResolveSourcePhysicalAsync();
         _walTreeId = physical;
+        _lastSourceIdentityRefreshUtc = _cursorFlushClock.GetUtcNow().UtcDateTime;
 
         var bound = state.State.BoundPhysicalTreeId;
         if (string.IsNullOrEmpty(bound))
