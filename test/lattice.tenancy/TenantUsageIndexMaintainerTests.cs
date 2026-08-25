@@ -1,6 +1,9 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 using Orleans.Configuration;
+using Orleans.Streams;
 using static Orleans.Lattice.Tenancy.Tests.TenantPolicyTestData;
 using static Orleans.Lattice.Tenancy.Tests.UsageTestData;
 
@@ -24,6 +27,32 @@ public sealed class TenantUsageIndexMaintainerTests
 
     private static TenantUsageIndexMaintainer Create(FakeTenantRegistry registry, FakeTenantUsageStore usage) =>
         new(registry, usage, Cluster, NullLogger<TenantUsageIndexMaintainer>.Instance);
+
+    private static TenantUsageIndexMaintainer Create(ITenantRegistry registry, ITenantUsageStore usage) =>
+        new(registry, usage, Cluster, NullLogger<TenantUsageIndexMaintainer>.Instance);
+
+    private static async IAsyncEnumerable<TenantRecord> Stream(
+        IEnumerable<TenantRecord> records,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        foreach (var record in records)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return record;
+        }
+
+        await Task.CompletedTask;
+    }
+
+#pragma warning disable CS1998 // async iterator with no await: it aborts before yielding
+    private static async IAsyncEnumerable<TenantRecord> ThrowAsync(Exception ex)
+    {
+        throw ex;
+#pragma warning disable CS0162 // unreachable: present only to make this a valid iterator
+        yield break;
+#pragma warning restore CS0162
+    }
+#pragma warning restore CS1998
 
     [Test]
     public void Constructor_null_arguments_throw()
@@ -49,6 +78,60 @@ public sealed class TenantUsageIndexMaintainerTests
         {
             Assert.That(maintainer.CurrentEpoch, Is.EqualTo(0));
             Assert.That(maintainer.Current, Is.SameAs(CompiledTenantUsage.Empty));
+        });
+    }
+
+    [Test]
+    public async Task RebuildNowAsync_retries_the_scan_on_a_transient_enumeration_abort()
+    {
+        var attempts = 0;
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            // Abort the first three cold registry scans, then succeed. A cold
+            // ListAsync enumeration can be aborted by concurrent silo activity; the
+            // test-facing rebuild must re-enumerate immediately (no delay) rather than
+            // flake, mirroring how the production background loop self-heals.
+            attempts++;
+            return attempts <= 3
+                ? ThrowAsync(new EnumerationAbortedException())
+                : Stream([Record("acme", admins: ["alice"])]);
+        });
+        var maintainer = Create(registry, new FakeTenantUsageStore());
+
+        await maintainer.RebuildNowAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempts, Is.EqualTo(4), "the scan must be re-enumerated after each transient abort");
+            Assert.That(maintainer.CurrentEpoch, Is.EqualTo(1),
+                "the snapshot must swap exactly once, after the successful read");
+        });
+    }
+
+    [Test]
+    public void RebuildNowAsync_rethrows_once_the_scan_abort_budget_is_exhausted()
+    {
+        var attempts = 0;
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            attempts++;
+            return ThrowAsync(new EnumerationAbortedException());
+        });
+        var maintainer = Create(registry, new FakeTenantUsageStore());
+
+        // A persistent abort must surface, never be swallowed - the test-facing path
+        // deliberately does not self-heal the way production's background loop does,
+        // so a genuine fault still fails the test rather than hiding behind a stale
+        // snapshot. The budget is a fixed 8 attempts (no timing, no wall-clock).
+        Assert.That(
+            async () => await maintainer.RebuildNowAsync(),
+            Throws.TypeOf<EnumerationAbortedException>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempts, Is.EqualTo(8), "the read is retried up to the bounded budget, then rethrows");
+            Assert.That(maintainer.CurrentEpoch, Is.Zero, "no snapshot is published when every scan attempt aborts");
         });
     }
 

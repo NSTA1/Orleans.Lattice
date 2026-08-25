@@ -105,13 +105,43 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
 
     /// <summary>
     /// Rebuilds the snapshot synchronously and returns the epoch it produced.
-    /// Exposed for tests that need to force a deterministic rebuild.
+    /// Exposed for tests that need to force a deterministic rebuild; unlike the
+    /// production background path it does not swallow a genuine rebuild failure, but
+    /// it tolerates a transient Orleans streaming <see cref="EnumerationAbortedException"/>
+    /// on the registry scan by re-enumerating immediately, a small bounded number of
+    /// times.
     /// </summary>
     /// <param name="cancellationToken">Cancels the rebuild.</param>
     /// <returns>The epoch of the rebuilt snapshot.</returns>
     internal async Task<long> RebuildNowAsync(CancellationToken cancellationToken = default)
     {
-        await RebuildOnceAsync(cancellationToken).ConfigureAwait(false);
+        const int maxScanAttempts = 8;
+
+        await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            List<TenantRecord> records;
+            var attempt = 1;
+            while (true)
+            {
+                try
+                {
+                    records = await ScanRecordsAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+                }
+                catch (EnumerationAbortedException) when (attempt < maxScanAttempts)
+                {
+                    attempt++;
+                }
+            }
+
+            PublishSnapshot(records);
+        }
+        finally
+        {
+            _rebuildLock.Release();
+        }
+
         return CurrentEpoch;
     }
 
@@ -174,19 +204,40 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var records = new List<TenantRecord>();
-            await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
-            {
-                records.Add(record);
-            }
-
-            var compiled = CompiledTenantPolicy.Compile(records);
-            Volatile.Write(ref _current, compiled);
-            Interlocked.Increment(ref _epoch);
+            PublishSnapshot(await ScanRecordsAsync(cancellationToken).ConfigureAwait(false));
         }
         finally
         {
             _rebuildLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Enumerates every tenant record from the registry. This is the only step that
+    /// touches the (grain-backed) registry, so it is the only step that can raise a
+    /// transient <see cref="EnumerationAbortedException"/> when the registry grain
+    /// deactivates mid-scan.
+    /// </summary>
+    private async Task<List<TenantRecord>> ScanRecordsAsync(CancellationToken cancellationToken)
+    {
+        var records = new List<TenantRecord>();
+        await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            records.Add(record);
+        }
+
+        return records;
+    }
+
+    /// <summary>
+    /// Compiles a freshly scanned record set into the current snapshot, swapping it
+    /// in atomically and advancing the epoch exactly once. Pure and non-faulting - it
+    /// never touches the registry. The caller holds <see cref="_rebuildLock"/>.
+    /// </summary>
+    private void PublishSnapshot(List<TenantRecord> records)
+    {
+        var compiled = CompiledTenantPolicy.Compile(records);
+        Volatile.Write(ref _current, compiled);
+        Interlocked.Increment(ref _epoch);
     }
 }

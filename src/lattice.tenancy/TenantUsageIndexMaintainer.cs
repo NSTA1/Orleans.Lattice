@@ -127,13 +127,43 @@ internal sealed class TenantUsageIndexMaintainer : IMutationObserver, ITenantUsa
 
     /// <summary>
     /// Rebuilds the snapshot synchronously and returns the epoch it produced.
-    /// Exposed for tests that need to force a deterministic rebuild.
+    /// Exposed for tests that need to force a deterministic rebuild; unlike the
+    /// production background path it does not swallow a genuine rebuild failure, but
+    /// it tolerates a transient Orleans streaming <see cref="EnumerationAbortedException"/>
+    /// on either registry scan by re-enumerating immediately, a small bounded number
+    /// of times.
     /// </summary>
     /// <param name="cancellationToken">Cancels the rebuild.</param>
     /// <returns>The epoch of the rebuilt snapshot.</returns>
     internal async Task<long> RebuildNowAsync(CancellationToken cancellationToken = default)
     {
-        await RebuildOnceAsync(cancellationToken).ConfigureAwait(false);
+        const int maxScanAttempts = 8;
+
+        await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            (List<TenantRecord> Registry, List<TenantUsageRecord> Usage) scan;
+            var attempt = 1;
+            while (true)
+            {
+                try
+                {
+                    scan = await ScanAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+                }
+                catch (EnumerationAbortedException) when (attempt < maxScanAttempts)
+                {
+                    attempt++;
+                }
+            }
+
+            PublishSnapshot(scan);
+        }
+        finally
+        {
+            _rebuildLock.Release();
+        }
+
         return CurrentEpoch;
     }
 
@@ -192,25 +222,49 @@ internal sealed class TenantUsageIndexMaintainer : IMutationObserver, ITenantUsa
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var registryRecords = new List<TenantRecord>();
-            await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
-            {
-                registryRecords.Add(record);
-            }
-
-            var usageRecords = new List<TenantUsageRecord>();
-            await foreach (var record in _usage.ListAsync(cancellationToken).ConfigureAwait(false))
-            {
-                usageRecords.Add(record);
-            }
-
-            var compiled = CompiledTenantUsage.Compile(registryRecords, usageRecords, _localClusterId);
-            Volatile.Write(ref _current, compiled);
-            Interlocked.Increment(ref _epoch);
+            PublishSnapshot(await ScanAsync(cancellationToken).ConfigureAwait(false));
         }
         finally
         {
             _rebuildLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Enumerates the tenant registry (quotas) and the usage store (per-cluster
+    /// slots) into materialised lists. These are the only steps that touch the
+    /// (grain-backed) registry and usage trees, so they are the only steps that can
+    /// raise a transient <see cref="EnumerationAbortedException"/> when a tree grain
+    /// deactivates mid-scan.
+    /// </summary>
+    private async Task<(List<TenantRecord> Registry, List<TenantUsageRecord> Usage)> ScanAsync(
+        CancellationToken cancellationToken)
+    {
+        var registryRecords = new List<TenantRecord>();
+        await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            registryRecords.Add(record);
+        }
+
+        var usageRecords = new List<TenantUsageRecord>();
+        await foreach (var record in _usage.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            usageRecords.Add(record);
+        }
+
+        return (registryRecords, usageRecords);
+    }
+
+    /// <summary>
+    /// Compiles a freshly scanned registry and usage set into the current snapshot,
+    /// swapping it in atomically and advancing the epoch exactly once. Pure and
+    /// non-faulting - it never touches a grain. The caller holds
+    /// <see cref="_rebuildLock"/>.
+    /// </summary>
+    private void PublishSnapshot((List<TenantRecord> Registry, List<TenantUsageRecord> Usage) scan)
+    {
+        var compiled = CompiledTenantUsage.Compile(scan.Registry, scan.Usage, _localClusterId);
+        Volatile.Write(ref _current, compiled);
+        Interlocked.Increment(ref _epoch);
     }
 }

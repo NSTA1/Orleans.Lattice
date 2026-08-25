@@ -53,7 +53,14 @@ internal sealed class LatticeTenantRegistry(
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeSystemOrigin.Enter())
         {
-            await foreach (var entry in Registry.EntriesAsync(_serializer, cancellationToken: cancellationToken).ConfigureAwait(false))
+            // Use the resilient ScanEntriesAsync wrapper (not the low-level
+            // EntriesAsync): a full registry scan can outlive the remote enumerator
+            // when the registry tree grain deactivates mid-stream (idle expiry, cold
+            // start, failover, or concurrent scan activity under load), and the
+            // wrapper transparently reopens the scan from the last yielded key with
+            // no duplicates or gaps, so every consumer (the snapshot maintainers, and
+            // callers listing tenants directly) sees one deterministic enumeration.
+            await foreach (var entry in Registry.ScanEntriesAsync(_serializer, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 if (entry.Value is { } record)
                 {

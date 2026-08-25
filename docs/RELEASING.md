@@ -37,7 +37,10 @@ The package family ships from this repository:
 | `Orleans.Lattice.Api.Schema.Grpc` | `src/lattice.api.schema.grpc/Orleans.Lattice.Api.Schema.Grpc.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin` | `src/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.csproj` |
 | `Orleans.Lattice.Api.TreeAdmin.Grpc` | `src/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.csproj` |
+| `Orleans.Lattice.Api.TenantAdmin` | `src/lattice.api.tenantadmin/Orleans.Lattice.Api.TenantAdmin.csproj` |
+| `Orleans.Lattice.Api.TenantAdmin.Grpc` | `src/lattice.api.tenantadmin.grpc/Orleans.Lattice.Api.TenantAdmin.Grpc.csproj` |
 | `Orleans.Lattice.Schema` | `src/lattice.schema/Orleans.Lattice.Schema.csproj` |
+| `Orleans.Lattice.Tenancy` | `src/lattice.tenancy/Orleans.Lattice.Tenancy.csproj` |
 | `Orleans.Lattice.Explorer.Core` | `src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj` |
 | `Orleans.Lattice.Explorer.UI` | `src/lattice.explorer/UI/Orleans.Lattice.Explorer.UI.csproj` |
 | `Orleans.Lattice.Explorer.Backup` | `src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj` |
@@ -84,7 +87,10 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Api.Schema.Grpc` | `lattice.api.schema.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin` | `lattice.api.treeadmin-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.TreeAdmin.Grpc` | `lattice.api.treeadmin.grpc-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.TenantAdmin` | `lattice.api.tenantadmin-v<X.Y.Z>` |
+| `Orleans.Lattice.Api.TenantAdmin.Grpc` | `lattice.api.tenantadmin.grpc-v<X.Y.Z>` |
 | `Orleans.Lattice.Schema` | `lattice.schema-v<X.Y.Z>` |
+| `Orleans.Lattice.Tenancy` | `lattice.tenancy-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Core` | `lattice.explorer.core-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.UI` | `lattice.explorer.ui-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Backup` | `lattice.explorer.backup-v<X.Y.Z>` |

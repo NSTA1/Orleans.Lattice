@@ -142,7 +142,7 @@ public sealed class LatticeApiMcpRegionRouterTests
 
         Assert.That(
             snapshot[0].Groups.Select(g => g.Group),
-            Is.EquivalentTo(new[] { "state", "data", "backup", "auth", "telemetry", "replication", "treeadmin", "repocontext" }),
+            Is.EquivalentTo(new[] { "state", "data", "backup", "auth", "telemetry", "replication", "treeadmin", "repocontext", "tenantadmin" }),
             "Every facade group must have a reachability slot so a caller can read a complete picture.");
     }
 
