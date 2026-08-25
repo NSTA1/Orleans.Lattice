@@ -124,4 +124,18 @@ public enum LatticeDashboardKind
     /// replication transport is registered on the silo.
     /// </summary>
     ReplicationGrpc = 8,
+
+    /// <summary>
+    /// Per-tenant observability operator view for the
+    /// <c>Orleans.Lattice.Tenancy</c> package. Charts the registered-tenant count
+    /// (cluster aggregate) and, dimensioned by tenant, the usage series (stored
+    /// bytes, live keys, resident memory, owned trees), the quota ceilings and
+    /// burst-headroom percentage, and the durable metered overage series (bytes /
+    /// keys / memory / trees) so a burst or sustained overage is attributable to a
+    /// tenant. A templated <c>tenant</c> variable scopes every panel to one tenant
+    /// (a tenant's own view) or to all tenants (the platform-operator view).
+    /// Sources the <c>orleans.lattice.tenancy</c> meter; useful only when the
+    /// tenancy package is registered on the silo.
+    /// </summary>
+    Tenancy = 9,
 }

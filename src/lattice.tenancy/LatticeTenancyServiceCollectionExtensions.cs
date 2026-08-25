@@ -260,6 +260,25 @@ public static class LatticeTenancyServiceCollectionExtensions
             ServiceDescriptor.Singleton<IReplicationTenantIsolationGate>(
                 sp => sp.GetRequiredService<ReplicationTenantIsolationGate>()));
 
+        // Per-tenant observability dimensioning (issue #1634, T17). The source
+        // composes the warm usage index (T8) and the durable overage billing seam
+        // (T10) into per-tenant snapshots; the publisher hosted service samples
+        // them on a TimeProvider-driven cadence, off the metric scrape path, and
+        // publishes pre-built measurement arrays to the observable gauges on the
+        // orleans.lattice.tenancy meter. The fail-closed read surface
+        // (ITenantObservabilityView) resolves the caller's own active tenant by
+        // default and exposes the all-tenant view only under an explicit,
+        // gate-validated platform-operator scope assertion. The whole stack is
+        // registered only here, so a cluster without tenancy publishes no tenancy
+        // meter and adds no per-tenant series - the tenancy-off path is unchanged.
+        builder.Services.AddOptions<TenantObservabilityOptions>();
+        builder.Services.TryAddSingleton<TenantObservabilitySource>();
+        builder.Services.TryAddSingleton<ITenantObservabilityView, TenantObservabilityView>();
+        builder.Services.TryAddSingleton<TenantObservabilityPublisher>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService>(
+                sp => sp.GetRequiredService<TenantObservabilityPublisher>()));
+
         return builder;
     }
 

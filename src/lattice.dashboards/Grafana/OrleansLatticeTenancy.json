@@ -1,0 +1,343 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the orleans.lattice.tenancy meter.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "11.3.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "tenancy"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "description": "Scope every per-tenant panel to a single tenant (a tenant's own view) or to all tenants (the platform-operator view).",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_tenancy_usage_bytes, tenant)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {},
+        "sort": 1,
+        "hide": 0
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "Orleans.Lattice - Per-Tenant Observability",
+  "uid": "orleans-lattice-tenancy",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Registered tenants",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Number of tenants in the warm per-tenant usage index. A cluster aggregate (the platform-operator view); this series is not tenant-scoped and carries no tenant label.",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(orleans_lattice_tenancy_tenants)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Stored bytes by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant stored value bytes (global cross-cluster fold), overlaid with the tenant's byte quota ceiling where one is set.",
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_usage_bytes{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} usage"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_quota_bytes{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} quota"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Live keys by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant live key count (global cross-cluster fold), overlaid with the tenant's key quota ceiling where one is set.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_usage_keys{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} usage"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_quota_keys{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} quota"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Resident memory by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant resident memory bytes (global cross-cluster fold), overlaid with the tenant's memory quota ceiling where one is set.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_usage_memory_bytes{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} usage"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_quota_memory_bytes{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} quota"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Owned trees by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant owned tree count (global cross-cluster fold), overlaid with the tenant's tree-count quota ceiling where one is set.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_usage_trees{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} usage"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_quota_trees{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} quota"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Burst headroom by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant transient burst headroom above the bounded ceilings, as a percentage. The band a tenant may momentarily exceed its quotas by before admission control engages.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_quota_burst_percent{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Metered byte overage by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant durable metered byte overage accrued by the overage meter (the first-class billing overage signal). A monotone Riemann sum that only grows for a tenant in sustained overage.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_overage_bytes{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Metered overage (keys / memory / trees) by tenant",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Per-tenant durable metered overage on the non-byte dimensions accrued by the overage meter: keys, resident memory, and owned trees over the steady-state ceiling.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_overage_keys{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} keys"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_overage_memory_bytes{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} memory"
+        },
+        {
+          "refId": "C",
+          "expr": "max by (tenant) (orleans_lattice_tenancy_overage_trees{tenant=~\"$tenant\"})",
+          "legendFormat": "{{tenant}} trees"
+        }
+      ]
+    }
+  ]
+}

@@ -84,6 +84,9 @@ internal sealed class TenantUsageIndexMaintainer : IMutationObserver, ITenantUsa
     public bool TryGetView(TenantId tenant, out TenantUsageView view) =>
         Current.TryGetView(tenant, out view);
 
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, TenantUsageView> EnumerateViews() => Current.Tenants;
+
     /// <summary>
     /// <c>true</c> when <paramref name="mutation"/> targets the reserved tenant
     /// registry or usage tree and so must trigger a snapshot rebuild. A pure

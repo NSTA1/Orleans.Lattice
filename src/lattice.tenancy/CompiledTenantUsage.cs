@@ -34,6 +34,14 @@ internal sealed class CompiledTenantUsage
     internal int TenantCount => _tenants.Count;
 
     /// <summary>
+    /// The tenants in the snapshot, keyed by tenant id text, each with its usage
+    /// view. Exposed for the off-path per-tenant observability enumeration; the
+    /// warm admission path uses only <see cref="TryGetView"/>. The backing frozen
+    /// dictionary is immutable, so this is a zero-copy view.
+    /// </summary>
+    public IReadOnlyDictionary<string, TenantUsageView> Tenants => _tenants;
+
+    /// <summary>
     /// Attempts to get the warm admission view for a tenant. A pure in-memory
     /// lookup with no allocation on either path.
     /// </summary>

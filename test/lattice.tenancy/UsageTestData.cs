@@ -96,6 +96,10 @@ internal static class UsageTestData
             view = default;
             return false;
         }
+
+        public Task EnsureWarmAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public IReadOnlyDictionary<string, TenantUsageView> EnumerateViews() => Views;
     }
 
     /// <summary>A fixed-scope <see cref="ITenantEnforcementScopeResolver"/>.</summary>
