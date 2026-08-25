@@ -66,6 +66,46 @@ public static class TypedLatticeViewExtensions
         view.EntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, cancellationToken);
 
     /// <summary>
+    /// Resilient typed entry scan over a view. Composes
+    /// <see cref="LatticeViewExtensions.ScanEntriesAsync(ILatticeView, string?, string?, int?, CancellationToken)"/>
+    /// with <paramref name="serializer"/>, so typed view exports automatically
+    /// recover from <c>Orleans.Runtime.EnumerationAbortedException</c> without
+    /// duplicates or gaps. This is the recommended client API for long-running
+    /// typed view scans; the raw <see cref="EntriesAsync{T}(ILatticeView, ILatticeSerializer{T}, string, string, CancellationToken)"/>
+    /// primitive is retained for deliberate low-level use.
+    /// </summary>
+    /// <param name="view">The view to scan.</param>
+    /// <param name="serializer">Value deserializer.</param>
+    /// <param name="startInclusive">Inclusive lower bound, or <c>null</c> for the view's lowest (non-reserved) key.</param>
+    /// <param name="endExclusive">Exclusive upper bound, or <c>null</c> for the view's end.</param>
+    /// <param name="maxAttempts">Optional per-call override for the reconnect budget; defaults to <see cref="LatticeExtensions.DefaultScanReconnectAttempts"/>.</param>
+    /// <param name="cancellationToken">Cancellation token; honoured between reconnects and during backoff.</param>
+    public static async IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(
+        this ILatticeView view,
+        ILatticeSerializer<T> serializer,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        int? maxAttempts = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(serializer);
+        await foreach (var entry in view.ScanEntriesAsync(startInclusive, endExclusive, maxAttempts, cancellationToken).ConfigureAwait(false))
+        {
+            yield return new KeyValuePair<string, T>(entry.Key, serializer.Deserialize(entry.Value));
+        }
+    }
+
+    /// <inheritdoc cref="ScanEntriesAsync{T}(ILatticeView, ILatticeSerializer{T}, string?, string?, int?, CancellationToken)"/>
+    public static IAsyncEnumerable<KeyValuePair<string, T>> ScanEntriesAsync<T>(
+        this ILatticeView view,
+        string? startInclusive = null,
+        string? endExclusive = null,
+        int? maxAttempts = null,
+        CancellationToken cancellationToken = default) =>
+        view.ScanEntriesAsync(JsonLatticeSerializer<T>.Default, startInclusive, endExclusive, maxAttempts, cancellationToken);
+
+    /// <summary>
     /// Reads a <see cref="double"/> aggregate (a <see cref="AggregationKind.Sum"/>,
     /// <see cref="AggregationKind.Min"/>, or <see cref="AggregationKind.Max"/>
     /// view's materialised group value) for <paramref name="groupKey"/>, decoded

@@ -1966,8 +1966,9 @@ string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
 | `AddLatticeViews(configure?)` | Silo-builder registration for the view catalog, factory, and hosted maintainer. Part of the core `Orleans.Lattice` package. Declares startup views through the builder (`AddView` / `AddAggregationView` / `AddFoldedView`). |
 | `ConfigureLatticeView(viewName?, configure)` | Sets `LatticeViewOptions` defaults (no name) or per-view overrides. |
 | `ILatticeViewFactory` | Injected entry point: `CreateAsync(source, viewName, definition, ct?)` persists a durable runtime registration before returning an `ILatticeView` handle; the synchronous `Create(...)` compatibility path persists and activates in the background. `GetAsync(viewName, ct?)` opens an existing view by name without re-supplying its source or projection; `DeleteAsync(viewName, ct?)` tears a runtime view down completely and is idempotent. Registered as a singleton by `AddLatticeViews`. |
-| `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. |
-| `TypedLatticeViewExtensions` | Typed read helpers over `ILatticeView`: `GetAsync<T>` / `EntriesAsync<T>` (deserialize via `ILatticeSerializer<T>`, default `JsonLatticeSerializer<T>`) and `GetAggregateDoubleAsync` / `GetAggregateInt64Async` (decode aggregate values via `LatticeAggregationValue`). |
+| `ILatticeView` | The view handle: `ViewName`, `GetAsync`, `CountAsync`, `KeysAsync`, `EntriesAsync`, `GetLagAsync`, `RebuildAsync`, `ReconcileAsync`, `ComputeDigestAsync`, `WaitForSourceHlcAsync`, `WaitForSourceHeadAsync`. The raw `KeysAsync` / `EntriesAsync` streams omit reconnect handling; use `LatticeViewExtensions.ScanKeysAsync` / `ScanEntriesAsync` for long-running scans. |
+| `LatticeViewExtensions` | Resilient forward view-scan wrappers over `ILatticeView`: `ScanKeysAsync(string? startInclusive, string? endExclusive, int? maxAttempts)` and `ScanEntriesAsync(...)` transparently recover from `EnumerationAbortedException` (remote enumerator reclaimed mid-walk by grain deactivation, idle expiry, or a rebuild's shadow-swap) by resuming from the successor of the last-yielded key - no gaps, no duplicates, ordering preserved. They pass `startInclusive` through unchanged so the view's reserved-floor semantics still apply, and share the `ILattice` wrappers' bounded reconnect budget (`maxAttempts`, default `LatticeExtensions.DefaultScanReconnectAttempts = 8`). Recommended surface for long-running view scans. |
+| `TypedLatticeViewExtensions` | Typed read helpers over `ILatticeView`: `GetAsync<T>` / `EntriesAsync<T>` (deserialize via `ILatticeSerializer<T>`, default `JsonLatticeSerializer<T>`), the resilient `ScanEntriesAsync<T>` (typed layer over `LatticeViewExtensions.ScanEntriesAsync`), and `GetAggregateDoubleAsync` / `GetAggregateInt64Async` (decode aggregate values via `LatticeAggregationValue`). |
 | `LatticeViewDefinition` | Pairs a view name with either an `ILatticeViewProjection` (filter / re-project) or an `ILatticeAggregationProjection` (aggregation). |
 | `ILatticeViewProjection` / `PredicateLatticeViewProjection` | Filter / re-project projection: a predicate, optional value transform, and optional injective key re-map. `ProjectionVersion` is a structural hash that drives rebuild-on-change. `Create<T>(...)` builds one whose value transform runs against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
 | `ILatticeAggregationProjection` / `AggregationLatticeViewProjection` | Aggregation projection: an `AggregationKind`, group-key selector, selector-version tag, and the value / member selector the kind needs. `Create<T>(...)` builds one whose selectors run against a deserialized `T` (defaulting to `JsonLatticeSerializer<T>`). |
@@ -2019,6 +2020,17 @@ string? names = await nameTrail.GetAsync<string>("30", cancellationToken);
 - **Atomic visibility.** A source atomic write (single-tree or cross-tree) is
   surfaced atomically in the derived views; see
   [Materialised views](materialised-views.md#atomic-write-visibility).
+- **Resilient view scans.** `ILatticeView.KeysAsync` / `EntriesAsync` are raw
+  streams with no reconnect handling - a rebuild's shadow-swap, grain
+  deactivation, or idle-expiry can abort the remote enumerator mid-walk with
+  `Orleans.Runtime.EnumerationAbortedException`. For long-running scans use the
+  `LatticeViewExtensions.ScanKeysAsync` / `ScanEntriesAsync` wrappers (and the
+  typed `TypedLatticeViewExtensions.ScanEntriesAsync<T>`), which transparently
+  reconnect - resuming from the successor of the last-yielded key so the stream
+  has no gaps or duplicates and preserves ordering, the range bounds, the view's
+  reserved floor, and cancellation. They mirror the `ILattice`
+  `ScanKeysAsync` / `ScanEntriesAsync` wrappers and share their bounded
+  reconnect budget (`maxAttempts`, default `8`).
 - **Runtime-view durability.** `CreateAsync` returns after the runtime registration
   is durable. Filter-only predicates are encoded automatically; other stateful or
   delegate-backed projections require a host-registered provider descriptor, and
