@@ -79,6 +79,15 @@ public sealed class LatticeQuotaExceededException : InvalidOperationException
     public long Limit { get; }
 
     /// <summary>
+    /// The id of the tenant whose aggregate quota was breached, when the refusal
+    /// originates from the per-tenant usage-accounting layer; the empty string
+    /// otherwise (a per-tree admission-cap breach carries no tenant). Populated by
+    /// the tenancy add-on's admission controller.
+    /// </summary>
+    [Id(4)]
+    public string TenantId { get; }
+
+    /// <summary>
     /// Initialises a new instance with no diagnostic message and empty / zero
     /// diagnostic context. Provided to satisfy the framework's exception
     /// construction contract; production throw sites use the overload that
@@ -88,6 +97,7 @@ public sealed class LatticeQuotaExceededException : InvalidOperationException
     {
         TreeId = string.Empty;
         Dimension = string.Empty;
+        TenantId = string.Empty;
     }
 
     /// <summary>
@@ -99,6 +109,7 @@ public sealed class LatticeQuotaExceededException : InvalidOperationException
     {
         TreeId = string.Empty;
         Dimension = string.Empty;
+        TenantId = string.Empty;
     }
 
     /// <summary>
@@ -112,6 +123,7 @@ public sealed class LatticeQuotaExceededException : InvalidOperationException
     {
         TreeId = string.Empty;
         Dimension = string.Empty;
+        TenantId = string.Empty;
     }
 
     /// <summary>
@@ -132,6 +144,32 @@ public sealed class LatticeQuotaExceededException : InvalidOperationException
         Dimension = dimension;
         Current = current;
         Limit = limit;
+        TenantId = string.Empty;
+    }
+
+    /// <summary>
+    /// Initialises a new instance carrying the full admission-control diagnostic
+    /// context <em>and</em> the id of the tenant whose aggregate quota was
+    /// breached. Used by the tenancy add-on's per-tenant usage-accounting layer so
+    /// a caller can attribute the refusal to a tenant without parsing the message.
+    /// </summary>
+    /// <param name="message">Diagnostic context describing which write was refused and why.</param>
+    /// <param name="treeId">Logical tree id the refused write targeted.</param>
+    /// <param name="dimension">The breached dimension.</param>
+    /// <param name="current">The tenant's observed usage on the breached dimension.</param>
+    /// <param name="limit">The configured cap the write would have exceeded.</param>
+    /// <param name="tenantId">The id of the tenant whose quota was breached.</param>
+    public LatticeQuotaExceededException(string message, string treeId, string dimension, long current, long limit, string tenantId)
+        : base(message)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(dimension);
+        ArgumentNullException.ThrowIfNull(tenantId);
+        TreeId = treeId;
+        Dimension = dimension;
+        Current = current;
+        Limit = limit;
+        TenantId = tenantId;
     }
 }
 

@@ -23,6 +23,17 @@ internal static class TenantTreeNames
     /// <summary>Durable per-key history view name for <see cref="RegistryTree"/>.</summary>
     internal const string RegistryHistoryView = "sys-tenant-registry-history";
 
+    /// <summary>
+    /// Tree holding one <see cref="TenantUsageRecord"/> per tenant, keyed by the
+    /// tenant id text. Backs the aggregate per-tenant usage accounting and quota
+    /// enforcement layer; each cluster publishes only its own usage slot into the
+    /// per-tenant record, and the global fold sums the slots. It is not part of
+    /// <see cref="AllTrees"/>: the registry initializer's history-retention and
+    /// history-view bootstrap is scoped to the definition registry, and the usage
+    /// tree carries transient converged aggregates that need no durable history.
+    /// </summary>
+    internal const string UsageTree = "sys-tenant-usage";
+
     /// <summary>Enumerates the backing tree names.</summary>
     internal static IReadOnlyList<string> AllTrees { get; } = new[] { RegistryTree };
 }

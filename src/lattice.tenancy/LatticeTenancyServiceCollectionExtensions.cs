@@ -186,6 +186,38 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<TenantPlacementSnapshotMaintainer>());
 
+        // Per-tenant aggregate usage accounting and quota enforcement (T8). The
+        // usage store dogfoods the reserved sys-tenant-usage tree through the same
+        // Orleans binary serializer and optimistic-merge path the registry uses;
+        // the index maintainer folds the registry quotas and the per-cluster usage
+        // slots into a warm snapshot, refreshed by observing sys-tenant-registry
+        // and sys-tenant-usage mutations; the publisher rolls per-tree samples up
+        // into this cluster's slot on a hysteresis-gated cadence; and the admission
+        // controller enforces the folded quota on the write-admission path.
+        builder.Services.AddOptions<TenantUsageAccountingOptions>();
+        builder.Services.TryAddSingleton<ITenantUsageStore, TenantUsageStore>();
+        builder.Services.TryAddSingleton<ITenantEnforcementScopeResolver, OptionsTenantEnforcementScopeResolver>();
+
+        // The usage index maintainer: a per-silo singleton registered at one
+        // instance three ways - as itself, as the ITenantUsageIndex the admission
+        // controller reads, and as an IMutationObserver so a registry or usage
+        // write refreshes the exact snapshot enforcement admits against. As with
+        // the policy maintainer above, the AddSingleton<IMutationObserver>(...)
+        // factory is deliberately not idempotent, so this whole block runs once.
+        builder.Services.TryAddSingleton<TenantUsageIndexMaintainer>();
+        builder.Services.TryAddSingleton<ITenantUsageIndex>(
+            sp => sp.GetRequiredService<TenantUsageIndexMaintainer>());
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<TenantUsageIndexMaintainer>());
+
+        builder.Services.TryAddSingleton<TenantUsagePublisher>();
+
+        // The real admission controller overrides the core NullTenantAdmissionController
+        // (registered with TryAdd). A non-Try AddSingleton appends this registration
+        // after the core default, so a single ITenantAdmissionController resolve on
+        // the write path returns this quota-enforcing controller.
+        builder.Services.AddSingleton<ITenantAdmissionController, LatticeTenantAdmissionController>();
+
         return builder;
     }
 
