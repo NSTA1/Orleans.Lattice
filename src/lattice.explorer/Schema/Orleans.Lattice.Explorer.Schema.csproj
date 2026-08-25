@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Schema</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Schema</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>Schema (enforcement, versioning, remediation, and compliance) management area for the Orleans.Lattice Explorer: bridges the schema control-API gRPC client to the explorer's navigation and capability model, and gates the Schema area behind a capability probe. Companion to Orleans.Lattice.Explorer.Core.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

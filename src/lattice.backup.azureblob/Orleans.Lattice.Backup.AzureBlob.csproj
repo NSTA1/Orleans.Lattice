@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Backup.AzureBlob</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>Azure Blob Storage ILatticeBackupSink for Orleans.Lattice. Persists backup manifests and content-addressed artifacts to an Azure Storage account (append blobs for artifact chains, block blobs for manifests) so backups are durable off-cluster. Selectable purely by DI; core and the capture engine stay unaware of Azure specifics.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

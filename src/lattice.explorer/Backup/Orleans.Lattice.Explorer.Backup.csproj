@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Backup</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Backup</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>Backups management area for the Orleans.Lattice Explorer: bridges the backup control-API gRPC client to the explorer's navigation and capability model, and gates the Backups area and its per-scope actions behind a capability probe. Companion to Orleans.Lattice.Explorer.Core.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
