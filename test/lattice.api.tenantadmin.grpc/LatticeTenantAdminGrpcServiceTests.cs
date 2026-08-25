@@ -21,24 +21,30 @@ public sealed class LatticeTenantAdminGrpcServiceTests
 {
     private ServiceProvider _serializers = null!;
     private FakeTenantAdmin _facade = null!;
+    private FakeTenantSelfService _selfService = null!;
     private LatticeTenantAdminApiGrpcClient _client = null!;
+    private LatticeTenantSelfServiceApiGrpcClient _selfClient = null!;
 
     [SetUp]
     public void SetUp()
     {
         _serializers = new ServiceCollection().AddSerializer().BuildServiceProvider();
         _facade = new FakeTenantAdmin();
+        _selfService = new FakeTenantSelfService();
         var methods = LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers);
         var service = new LatticeTenantAdminGrpcService(
             methods,
             _facade,
+            _selfService,
             new NullCredentialBridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement
             {
                 Schemes = new[] { new AuthSchemeDescriptor { SchemeId = "basic", DisplayName = "Basic" } },
             }),
             NullLogger<LatticeTenantAdminGrpcService>.Instance);
-        _client = new LatticeTenantAdminApiGrpcClient(new LoopbackCallInvoker(service, _serializers), methods);
+        var invoker = new LoopbackCallInvoker(service, _serializers);
+        _client = new LatticeTenantAdminApiGrpcClient(invoker, methods);
+        _selfClient = new LatticeTenantSelfServiceApiGrpcClient(invoker, methods);
     }
 
     [TearDown]
@@ -125,6 +131,98 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             new Exception("boom"), StatusCode.Internal).SetName("Unexpected_to_Internal");
     }
 
+    // ----- self-service round-trips -----
+
+    [Test]
+    public async Task GetCurrentTenant_round_trips_the_current_descriptor()
+    {
+        var descriptor = await _selfClient.GetCurrentTenantAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptor.TenantId, Is.EqualTo("acme"));
+            Assert.That(descriptor.Status, Is.EqualTo(TenantLifecycleStatus.Active));
+            Assert.That(descriptor.IsDefault, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task ListAccessibleTenants_round_trips_and_unwraps_the_descriptor_list()
+    {
+        var tenants = await _selfClient.ListAccessibleTenantsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tenants, Has.Count.EqualTo(2));
+            Assert.That(tenants[0].TenantId, Is.EqualTo("acme"));
+            Assert.That(tenants[1].TenantId, Is.EqualTo("beta"));
+        });
+    }
+
+    [Test]
+    public async Task GetTenant_round_trips_the_status_report()
+    {
+        var report = await _selfClient.GetTenantAsync("acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TenantId, Is.EqualTo("acme"));
+            Assert.That(report.Status, Is.EqualTo(TenantLifecycleStatus.Active));
+            Assert.That(report.Regions, Is.Empty);
+            Assert.That(_selfService.LastTenantId, Is.EqualTo("acme"));
+        });
+    }
+
+    [TestCaseSource(nameof(SelfServiceExceptionMappings))]
+    public void Self_service_exceptions_map_to_the_expected_status_code(Exception thrown, StatusCode expected)
+    {
+        _selfService.Throw = thrown;
+
+        var rpc = Assert.ThrowsAsync<RpcException>(async () => await _selfClient.GetTenantAsync("acme"));
+        Assert.That(rpc!.StatusCode, Is.EqualTo(expected));
+    }
+
+    private static IEnumerable<TestCaseData> SelfServiceExceptionMappings()
+    {
+        yield return new TestCaseData(
+            new TenantNotFoundException("acme"), StatusCode.NotFound).SetName("SelfService_NotFound_to_NotFound");
+        yield return new TestCaseData(
+            new LatticeAuthorizationDeniedException("*", LatticeOperation.Read, "anon", "denied"),
+            StatusCode.PermissionDenied).SetName("SelfService_AuthorizationDenied_to_PermissionDenied");
+        yield return new TestCaseData(
+            new ArgumentException("bad arg"), StatusCode.InvalidArgument).SetName("SelfService_Argument_to_InvalidArgument");
+        yield return new TestCaseData(
+            new Exception("boom"), StatusCode.Internal).SetName("SelfService_Unexpected_to_Internal");
+    }
+
+    [Test]
+    public void Self_service_client_GetTenant_rejects_a_null_or_empty_tenant_id()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await _selfClient.GetTenantAsync(null!), Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _selfClient.GetTenantAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
+        });
+    }
+
+    [Test]
+    public void Self_service_client_Create_rejects_null_arguments()
+    {
+        var methods = LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers);
+        var invoker = new LoopbackCallInvoker(
+            new LatticeTenantAdminGrpcService(
+                methods, _facade, _selfService, new NullCredentialBridge(),
+                new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
+                NullLogger<LatticeTenantAdminGrpcService>.Instance),
+            _serializers);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => LatticeTenantSelfServiceApiGrpcClient.Create(null!, _serializers), Throws.ArgumentNullException);
+            Assert.That(() => LatticeTenantSelfServiceApiGrpcClient.Create(invoker, null!), Throws.ArgumentNullException);
+        });
+    }
+
     // ----- constructor / static-binding guards -----
 
     [Test]
@@ -145,11 +243,12 @@ public sealed class LatticeTenantAdminGrpcServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeTenantAdminGrpcService(null!, _facade, bridge, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, null!, bridge, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, null!, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, bridge, null!, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, bridge, source, null!), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(null!, _facade, _selfService, bridge, source, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, null!, _selfService, bridge, source, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, null!, bridge, source, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, null!, source, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, null!, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, null!), Throws.ArgumentNullException);
         });
     }
 
@@ -164,7 +263,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             Assert.That(() => LatticeTenantAdminApiGrpcClient.Create(new LoopbackCallInvoker(
                 new LatticeTenantAdminGrpcService(
                     LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers),
-                    _facade, new NullCredentialBridge(), new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
+                    _facade, _selfService, new NullCredentialBridge(), new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
                     NullLogger<LatticeTenantAdminGrpcService>.Instance),
                 _serializers), null!), Throws.ArgumentNullException);
         });

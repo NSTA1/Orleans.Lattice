@@ -84,4 +84,27 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
                 Method(LatticeTenantAdminGrpcMethods.DeleteTenantMethodName)), Is.False);
         });
     }
+
+    [Test]
+    public void IsSelfServiceMethod_exempts_only_the_three_read_only_self_service_rpcs()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.GetCurrentTenantMethodName)), Is.True);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.ListAccessibleTenantsMethodName)), Is.True);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.GetTenantMethodName)), Is.True);
+
+            // The mutating lifecycle RPCs are never self-service-exempt: they stay
+            // behind the default-deny admin authorizer.
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.CreateTenantMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.DeleteTenantMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.GetAuthSchemeMethodName)), Is.False);
+        });
+    }
 }

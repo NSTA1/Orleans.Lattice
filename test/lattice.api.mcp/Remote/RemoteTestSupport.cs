@@ -7,6 +7,7 @@ using Orleans.Lattice.Api.Data.Grpc;
 using Orleans.Lattice.Api.Replication.Grpc;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TenantAdmin.Grpc;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Serialization;
 
@@ -66,4 +67,12 @@ internal static class RemoteTestSupport
     /// <summary>Builds a schema-API client over <paramref name="invoker"/>.</summary>
     public static LatticeSchemaApiGrpcClient SchemaClient(CallInvoker invoker)
         => LatticeSchemaApiGrpcClient.Create(invoker, Serializer);
+
+    /// <summary>Builds a tenant-administration-API client over <paramref name="invoker"/>.</summary>
+    public static LatticeTenantAdminApiGrpcClient TenantAdminClient(CallInvoker invoker)
+        => LatticeTenantAdminApiGrpcClient.Create(invoker, Serializer);
+
+    /// <summary>Builds a tenant self-service-API client over <paramref name="invoker"/>.</summary>
+    public static LatticeTenantSelfServiceApiGrpcClient TenantSelfServiceClient(CallInvoker invoker)
+        => LatticeTenantSelfServiceApiGrpcClient.Create(invoker, Serializer);
 }

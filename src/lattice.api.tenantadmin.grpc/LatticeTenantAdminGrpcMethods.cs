@@ -42,6 +42,15 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
+    /// <summary>The unary, read-only "current tenant" self-service RPC method name.</summary>
+    public const string GetCurrentTenantMethodName = "GetCurrentTenant";
+
+    /// <summary>The unary, read-only "list accessible tenants" self-service RPC method name.</summary>
+    public const string ListAccessibleTenantsMethodName = "ListAccessibleTenants";
+
+    /// <summary>The unary, read-only "get tenant status" self-service RPC method name.</summary>
+    public const string GetTenantMethodName = "GetTenant";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
@@ -49,7 +58,12 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantStatusChangeResult> statusChangeResultSerializer,
         Serializer<TenantDeletionResult> deletionResultSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
-        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
+        Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
+        Serializer<TenantSelfCurrentRequest> selfCurrentRequestSerializer,
+        Serializer<TenantSelfListRequest> selfListRequestSerializer,
+        Serializer<TenantDescriptor> tenantDescriptorSerializer,
+        Serializer<TenantSelfDescriptorList> selfDescriptorListSerializer,
+        Serializer<TenantStatusReport> tenantStatusReportSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
         ArgumentNullException.ThrowIfNull(creationResultSerializer);
@@ -57,6 +71,11 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(deletionResultSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
+        ArgumentNullException.ThrowIfNull(selfCurrentRequestSerializer);
+        ArgumentNullException.ThrowIfNull(selfListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(tenantDescriptorSerializer);
+        ArgumentNullException.ThrowIfNull(selfDescriptorListSerializer);
+        ArgumentNullException.ThrowIfNull(tenantStatusReportSerializer);
 
         CreateTenant = new Method<TenantAdminTenantRequest, TenantCreationResult>(
             type: MethodType.Unary,
@@ -92,6 +111,27 @@ internal sealed class LatticeTenantAdminGrpcMethods
             name: GetAuthSchemeMethodName,
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(authSchemeRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(authSchemeAdvertisementSerializer));
+
+        GetCurrentTenant = new Method<TenantSelfCurrentRequest, TenantDescriptor>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetCurrentTenantMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(selfCurrentRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantDescriptorSerializer));
+
+        ListAccessibleTenants = new Method<TenantSelfListRequest, TenantSelfDescriptorList>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListAccessibleTenantsMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(selfListRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(selfDescriptorListSerializer));
+
+        GetTenant = new Method<TenantAdminTenantRequest, TenantStatusReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTenantMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantStatusReportSerializer));
     }
 
     /// <summary>The unary tenant-creation RPC.</summary>
@@ -109,6 +149,15 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
 
+    /// <summary>The unary, read-only "current tenant" self-service RPC.</summary>
+    public Method<TenantSelfCurrentRequest, TenantDescriptor> GetCurrentTenant { get; }
+
+    /// <summary>The unary, read-only "list accessible tenants" self-service RPC.</summary>
+    public Method<TenantSelfListRequest, TenantSelfDescriptorList> ListAccessibleTenants { get; }
+
+    /// <summary>The unary, read-only "get tenant status" self-service RPC.</summary>
+    public Method<TenantAdminTenantRequest, TenantStatusReport> GetTenant { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -124,7 +173,12 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantStatusChangeResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantDeletionResult>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
-            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
+            serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantSelfCurrentRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantSelfListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantDescriptor>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantSelfDescriptorList>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantStatusReport>>());
     }
 }
 

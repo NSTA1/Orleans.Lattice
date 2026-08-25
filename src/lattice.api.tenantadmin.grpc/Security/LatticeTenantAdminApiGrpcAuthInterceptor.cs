@@ -13,7 +13,11 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// the tenant-administration control-API service by matching on the service-name
 /// prefix, so unrelated gRPC services hosted in the same ASP.NET Core pipeline are
 /// unaffected. The unauthenticated <c>GetAuthScheme</c> discovery RPC is exempt so
-/// a client can learn how to sign in before it holds any credential.
+/// a client can learn how to sign in before it holds any credential, and the three
+/// read-only self-service RPCs (<c>GetCurrentTenant</c>,
+/// <c>ListAccessibleTenants</c>, <c>GetTenant</c>) are exempt because they must be
+/// reachable by any read-capable caller and enforce their own fail-closed per-caller
+/// scoping at the facade rather than through this default-deny admin gate.
 /// </summary>
 /// <remarks>
 /// Registered globally via
@@ -57,7 +61,9 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeTenantAdminApiMethod(context.Method) || IsUnauthenticatedMethod(context.Method))
+        if (!IsLatticeTenantAdminApiMethod(context.Method)
+            || IsUnauthenticatedMethod(context.Method)
+            || IsSelfServiceMethod(context.Method))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
@@ -152,5 +158,27 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
     {
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
         return string.Equals(methodName, LatticeTenantAdminGrpcMethods.GetAuthSchemeMethodName, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether the call targets a read-only tenant self-service method
+    /// (<c>GetCurrentTenant</c>, <c>ListAccessibleTenants</c>, <c>GetTenant</c>).
+    /// These are exempt from the tenant-admin authorizer: the tenant-admin gate is
+    /// default-deny and gates the destructive lifecycle surface, whereas self-service
+    /// must be reachable by any read-capable (even anonymous) caller. The caller
+    /// credential is still bridged into the ambient context by the service, so the
+    /// <see cref="ILatticeTenantSelfService"/> facade resolves the caller's subject
+    /// and scopes enumeration and inspection fail-closed - enforcement lives at that
+    /// single narrowest seam, not at this transport gate, exactly as it does for the
+    /// co-hosted MCP self-awareness tools.
+    /// </summary>
+    /// <remarks>Exposed as <c>internal</c> so the exemption can be asserted directly
+    /// in unit tests without standing up a gRPC server.</remarks>
+    internal static bool IsSelfServiceMethod(string fullMethodName)
+    {
+        var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
+        return string.Equals(methodName, LatticeTenantAdminGrpcMethods.GetCurrentTenantMethodName, StringComparison.Ordinal)
+            || string.Equals(methodName, LatticeTenantAdminGrpcMethods.ListAccessibleTenantsMethodName, StringComparison.Ordinal)
+            || string.Equals(methodName, LatticeTenantAdminGrpcMethods.GetTenantMethodName, StringComparison.Ordinal);
     }
 }

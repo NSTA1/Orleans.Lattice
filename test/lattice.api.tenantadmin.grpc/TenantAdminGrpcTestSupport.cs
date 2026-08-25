@@ -69,6 +69,48 @@ internal sealed class NullCredentialBridge : ILatticeTenantAdminApiCredentialBri
     public LatticeCredential? Resolve(ServerCallContext context) => null;
 }
 
+/// <summary>
+/// Configurable in-memory <see cref="ILatticeTenantSelfService"/> facade for the
+/// gRPC self-service tests. Returns canned read-only results per operation, or
+/// throws a pre-seeded exception, so the service's self-service result-mapping and
+/// its exception-to-<see cref="StatusCode"/> translation can be exercised without a
+/// real tenancy engine.
+/// </summary>
+internal sealed class FakeTenantSelfService : ILatticeTenantSelfService
+{
+    public Exception? Throw { get; set; }
+
+    public string? LastTenantId { get; private set; }
+
+    public Task<TenantDescriptor> GetCurrentTenantAsync(CancellationToken cancellationToken = default)
+        => Throw is not null
+            ? Task.FromException<TenantDescriptor>(Throw)
+            : Task.FromResult(new TenantDescriptor { TenantId = "acme", Status = TenantLifecycleStatus.Active, IsDefault = false });
+
+    public Task<IReadOnlyList<TenantDescriptor>> ListAccessibleTenantsAsync(CancellationToken cancellationToken = default)
+        => Throw is not null
+            ? Task.FromException<IReadOnlyList<TenantDescriptor>>(Throw)
+            : Task.FromResult<IReadOnlyList<TenantDescriptor>>(new[]
+            {
+                new TenantDescriptor { TenantId = "acme", Status = TenantLifecycleStatus.Active, IsDefault = false },
+                new TenantDescriptor { TenantId = "beta", Status = TenantLifecycleStatus.Suspended, IsDefault = false },
+            });
+
+    public Task<TenantStatusReport> GetTenantAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        return Throw is not null
+            ? Task.FromException<TenantStatusReport>(Throw)
+            : Task.FromResult(new TenantStatusReport
+            {
+                TenantId = tenantId,
+                Status = TenantLifecycleStatus.Active,
+                IsDefault = false,
+                Regions = Array.Empty<TenantRegionStatusDescriptor>(),
+            });
+    }
+}
+
 /// <summary>A fixed auth-scheme source returning a pre-built advertisement.</summary>
 internal sealed class FixedAuthSchemeSource(AuthSchemeAdvertisement advertisement) : ILatticeTenantAdminApiAuthSchemeSource
 {
@@ -119,6 +161,9 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "ResumeTenant" => await service.ResumeTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             "DeleteTenant" => await service.DeleteTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             "GetAuthScheme" => await service.GetAuthScheme((AuthSchemeAdvertisementRequest)(object)wireRequest, context),
+            "GetCurrentTenant" => await service.GetCurrentTenant((TenantSelfCurrentRequest)(object)wireRequest, context),
+            "ListAccessibleTenants" => await service.ListAccessibleTenants((TenantSelfListRequest)(object)wireRequest, context),
+            "GetTenant" => await service.GetTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };
 
