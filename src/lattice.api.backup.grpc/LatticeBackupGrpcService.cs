@@ -524,10 +524,36 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        catch (Exception ex) when (BackupReminderResilience.IsTransientReminderFailure(ex))
+        {
+            // A transient reminder-registry / storage failure (for example a
+            // reminder-table registration racing the reminder service's async
+            // startup, or timing out under load) leaked past the scheduler grain's
+            // bounded retry. It is infrastructure-transient, not a genuine internal
+            // fault, so surface it as the retryable Unavailable with a correlation
+            // id the operator can tie to the logged server exception - never the
+            // exception's own message, which may carry internal detail.
+            var correlationId = Guid.NewGuid().ToString("N");
+            _logger.LogWarning(
+                ex,
+                "Api.Backup: gRPC call to {Method} hit a transient infrastructure failure (correlationId {CorrelationId}).",
+                context.Method, correlationId);
+            throw new RpcException(new Status(
+                StatusCode.Unavailable,
+                $"The backup control-API request failed transiently; retry. (ref: {correlationId})"));
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Api.Backup: gRPC call to {Method} failed.", context.Method);
-            throw new RpcException(new Status(StatusCode.Internal, "The backup control-API request failed."));
+            // Attach a correlation id so an operator can tie this opaque client-side
+            // failure to the fully-logged server exception; the surfaced message
+            // stays opaque and leaks no internal detail.
+            var correlationId = Guid.NewGuid().ToString("N");
+            _logger.LogError(
+                ex, "Api.Backup: gRPC call to {Method} failed (correlationId {CorrelationId}).",
+                context.Method, correlationId);
+            throw new RpcException(new Status(
+                StatusCode.Internal,
+                $"The backup control-API request failed. (ref: {correlationId})"));
         }
     }
 
