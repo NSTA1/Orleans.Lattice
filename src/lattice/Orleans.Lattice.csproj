@@ -70,6 +70,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.File" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.File.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.LeafCacheGrowth" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />

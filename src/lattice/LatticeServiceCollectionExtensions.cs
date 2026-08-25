@@ -220,6 +220,14 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<ITenantContextResolver, NullTenantContextResolver>();
         builder.Services.TryAddSingleton<ITenantAdmissionController, NullTenantAdmissionController>();
         builder.Services.TryAddSingleton<ITenantEnumerationFilter, NullTenantEnumerationFilter>();
+        // Physical tree-placement seam (opt-in): default to the pass-through no-op
+        // so a cluster with no tenancy add-on seeds every tree with the baseline WAL
+        // placement (the catalog's default provider key, no override) - byte-for-byte
+        // identical to pre-placement behaviour with no per-registration cost. The
+        // null resolver resolves synchronously and allocation-free. The tenancy
+        // package replaces it with the resolver that pins a tenant's trees to the
+        // dedicated WAL provider named on the tenant's placement binding.
+        builder.Services.TryAddSingleton<ITreePlacementResolver, NullTreePlacementResolver>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap

@@ -168,6 +168,24 @@ public static class LatticeTenancyServiceCollectionExtensions
             ServiceDescriptor.Singleton<ITenantGateEnforcer>(
                 sp => sp.GetRequiredService<TenantGateEnforcer>()));
 
+        // Replace the core null tree-placement seam with the active resolver that
+        // pins a tenant's trees to its dedicated WAL provider at registration. Using
+        // Replace (not TryAdd) deterministically supersedes the NullTreePlacementResolver
+        // that AddLattice registered, regardless of registration order.
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITreePlacementResolver, TenantWalPlacementResolver>());
+
+        // The active resolver reads placement from an in-memory snapshot kept
+        // current off the core change-feed, NOT from a live registry read. That is
+        // load-bearing: the resolver runs inside the singleton, non-reentrant
+        // registry grain's RegisterAsync turn, so a live registry read would
+        // re-enter the same grain and self-deadlock. Register the maintainer once
+        // and expose the same instance as an IMutationObserver so it rebuilds when
+        // the sys-tenant-registry tree mutates.
+        builder.Services.TryAddSingleton<TenantPlacementSnapshotMaintainer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<TenantPlacementSnapshotMaintainer>());
+
         return builder;
     }
 
