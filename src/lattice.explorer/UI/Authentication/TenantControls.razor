@@ -1,0 +1,134 @@
+@using Orleans.Lattice.Explorer.Core.Tenancy
+@implements IDisposable
+@inject IServiceProvider Services
+@inject IExplorerAuthSession AuthSession
+
+@if (_active)
+{
+    <span class="explorer-tenant" title="Active tenant">
+        <span class="explorer-tenant-label">tenant</span>
+        <span class="explorer-tenant-id">@(_activeTenant?.Value ?? "none")</span>
+    </span>
+
+    @if (_isOperator)
+    {
+        <div class="explorer-tenant-switch">
+            <label class="explorer-tenant-alltenants" title="Show every tenant's trees">
+                <input type="checkbox" checked="@_allTenants" @onchange="OnAllTenantsChangedAsync" />
+                all tenants
+            </label>
+            <input type="text"
+                   class="explorer-tenant-input"
+                   placeholder="tenant id"
+                   aria-label="Switch to tenant"
+                   @bind="_tenantInput"
+                   @bind:event="oninput" />
+            <button type="button"
+                    class="explorer-btn-link"
+                    title="Switch to tenant"
+                    disabled="@(string.IsNullOrWhiteSpace(_tenantInput))"
+                    @onclick="OnSwitchTenantAsync">
+                Switch
+            </button>
+        </div>
+    }
+}
+
+@code {
+    private bool _active;
+    private bool _isOperator;
+    private ExplorerTenantId? _activeTenant;
+    private bool _allTenants;
+    private string? _tenantInput;
+
+    private IExplorerTenantSwitcher? _switcher;
+    private IExplorerTenantIdentityResolver? _resolver;
+    private bool _subscribed;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Resolve the tenancy seams optionally: when tenant scoping is not enabled
+        // neither is registered, so this component stays inert and renders nothing -
+        // the sign-in area is byte-for-byte unchanged from a non-tenant deployment.
+        _switcher = Services.GetService(typeof(IExplorerTenantSwitcher)) as IExplorerTenantSwitcher;
+        _resolver = Services.GetService(typeof(IExplorerTenantIdentityResolver)) as IExplorerTenantIdentityResolver;
+
+        if (_switcher is null || !_switcher.IsActive)
+        {
+            return;
+        }
+
+        _active = true;
+        AuthSession.AuthenticationChanged += OnAuthenticationChanged;
+        _subscribed = true;
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_switcher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Establish the active tenant from the current sign-in, then read the
+            // resulting scope back for display. The resolver is a no-op for the
+            // inactive view, so this is safe on every auth transition.
+            if (_resolver is not null)
+            {
+                await _resolver.ResolveAsync();
+            }
+
+            _isOperator = await _switcher.IsOperatorAsync();
+            _activeTenant = _switcher.ActiveTenant;
+            _allTenants = _switcher.RequestedVisibility == ExplorerTenantVisibility.AllTenants;
+        }
+        catch
+        {
+            // The tenant controls are best-effort presentation: a failure to resolve
+            // must never disrupt the shell. The server stays the enforcement point.
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnAllTenantsChangedAsync(ChangeEventArgs e)
+    {
+        if (_switcher is null)
+        {
+            return;
+        }
+
+        var requested = e.Value is true
+            ? ExplorerTenantVisibility.AllTenants
+            : ExplorerTenantVisibility.ActiveTenant;
+
+        // The switcher is fail-closed: a non-operator request changes nothing. We
+        // re-read the effective state afterwards so the toggle reflects the truth.
+        await _switcher.SetVisibilityAsync(requested);
+        await RefreshAsync();
+    }
+
+    private async Task OnSwitchTenantAsync()
+    {
+        if (_switcher is null || string.IsNullOrWhiteSpace(_tenantInput))
+        {
+            return;
+        }
+
+        await _switcher.SwitchTenantAsync(new ExplorerTenantId(_tenantInput.Trim()));
+        await RefreshAsync();
+    }
+
+    private void OnAuthenticationChanged() => _ = RefreshAsync();
+
+    public void Dispose()
+    {
+        if (_subscribed)
+        {
+            AuthSession.AuthenticationChanged -= OnAuthenticationChanged;
+        }
+    }
+}

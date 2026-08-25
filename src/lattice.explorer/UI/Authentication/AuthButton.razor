@@ -14,6 +14,7 @@
             </svg>
             <span class="explorer-auth-name">@AuthSession.Username</span>
         </span>
+        <TenantControls />
         @if (_signOut.UseServerFormPost)
         {
             <form method="post" action="@_signOut.FormAction" class="explorer-auth-form" data-enhance="false">
