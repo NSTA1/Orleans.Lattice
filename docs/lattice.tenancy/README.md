@@ -242,6 +242,28 @@ old one is fully drained.
 - **Enable-gated.** No tenant can be created unless the feature is enabled, and every
   mutating control-plane tool is contributed only when the host opts writes in.
 
+## Tenant-aware surfaces
+
+Tenancy also reaches the operator- and agent-facing surfaces. Each is activated purely
+by whether tenancy is enabled - there is no separate opt-in flag - so a deployment
+without tenancy keeps a byte-for-byte-unchanged UI and tool surface.
+
+- **Explorer.** When the Explorer's tenant view is enabled, the signed-in header shows
+  the caller's current tenant and, for a platform operator, a selector to switch the
+  active tenant or request an all-tenant view. The controls render nothing for an
+  anonymous caller or a non-tenancy deployment, and every switch is authorized
+  fail-closed through the operator gate. See
+  [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md).
+- **MCP.** When tenancy is wired, the MCP server contributes three read-only tenant
+  self-awareness tools - `lattice_tenant_current` (the tenant the caller is operating
+  as), `lattice_tenant_list` (the tenants the caller may access), and
+  `lattice_tenant_get` (one accessible tenant's lifecycle and per-region residency).
+  They are scoped fail-closed to the caller's subject: an anonymous caller lists
+  nothing, and an inaccessible tenant is indistinguishable from an absent one. The
+  mutating tenant-admin tools remain separately gated behind
+  `EnableTenantAdminControlTools`. See
+  [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md).
+
 ## Configuration reference
 
 ### `LatticeTenancyOptions`
@@ -259,6 +281,10 @@ old one is fully drained.
   transport-agnostic tenant-administration and region-residency control facades.
 - [`Orleans.Lattice.Api.TenantAdmin.Grpc`](../lattice.api.tenantadmin.grpc/README.md) -
   the code-first gRPC binding and remote client for the tenant-administration facade.
+- [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md) - the web UI whose
+  tenant view surfaces the signed-in tenant crumb and operator tenant selector.
+- [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) - the MCP server that
+  contributes the read-only tenant self-awareness tools.
 - [`Orleans.Lattice.Auth`](../lattice.auth/README.md) - the authorization gate the
   tenant boundary is enforced at.
 - [`Orleans.Lattice.Membership`](../lattice.membership/README.md) - the identity layer
