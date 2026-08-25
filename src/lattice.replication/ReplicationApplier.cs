@@ -32,8 +32,26 @@ internal sealed partial class ReplicationApplier(
     ReplicationPeerStats? peerStats = null,
     ReceiverAppliedContentIndex? appliedContentIndex = null,
     ILatticeReplicationContext? replicationContext = null,
-    IReplicationReceiveGate? receiveGate = null) : IReplicationApplier
+    IReplicationReceiveGate? receiveGate = null,
+    IReplicationTenantIsolationGate? tenantIsolationGate = null) : IReplicationApplier
 {
+    /// <summary>
+    /// Optional tenant-isolation gate (issue #1633). When non-<see langword="null"/>
+    /// and <see cref="IReplicationTenantIsolationGate.IsActive"/> is
+    /// <see langword="true"/> (the tenancy add-on wired a real gate), every inbound
+    /// run is classified against the tenant namespace its tree id names: a write for
+    /// a non-existent tenant, or for a tenant not resident in this serving region, is
+    /// dead-lettered rather than applied, and never auto-creates a tenant. The gate
+    /// enforces the isolation boundary only - it never gates on quota, because a
+    /// replicated apply converges a write that already happened on the origin.
+    /// Optional so existing call sites that construct the applier without a gate
+    /// continue to compile and behave exactly as before (isolation not enforced);
+    /// the null default's <see cref="IReplicationTenantIsolationGate.IsActive"/> is
+    /// <see langword="false"/>, so replication is byte-for-byte unchanged when
+    /// tenancy is off.
+    /// </summary>
+    private readonly IReplicationTenantIsolationGate? _tenantIsolationGate = tenantIsolationGate;
+
     /// <summary>
     /// Optional inbound receive fence. When non-<see langword="null"/> and a
     /// tree's receive fence is engaged by an in-flight restore saga, peer
@@ -252,6 +270,36 @@ internal sealed partial class ReplicationApplier(
                     await DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken).ConfigureAwait(false);
                     outcome = LatticeReplicationMetrics.OutcomeRejectedModeMismatch;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
+            // RECEIVER-SIDE TENANT-ISOLATION GATE (issue #1633). After the tree is
+            // confirmed enrolled here, keep the write inside its correct tenant
+            // namespace. The owning tenant is derived from the tree id alone (never
+            // from a wire-supplied field), so a peer cannot redirect a write into a
+            // foreign tenant. A write whose tree names a non-existent tenant, or a
+            // tenant not resident in this serving region, is refused and
+            // dead-lettered (the tree is enrolled and therefore bounded) with the
+            // HWM left unchanged so the sender re-ships and convergence recovers once
+            // the tenant exists / becomes resident. This is the isolation boundary
+            // only: it never gates on quota (a replicated apply converges a write
+            // that already happened on the origin), and it is bypassed entirely when
+            // tenancy is off - the null gate's IsActive is false, so this is a single
+            // bool read that leaves replication byte-for-byte unchanged. Platform /
+            // definition trees and bare legacy trees always admit, so definitions
+            // converge everywhere.
+            if (_tenantIsolationGate is not null && _tenantIsolationGate.IsActive)
+            {
+                var decision = await _tenantIsolationGate
+                    .EvaluateAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+                if (decision != ReplicationTenantIsolationDecision.Admit)
+                {
+                    await DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)
+                        .ConfigureAwait(false);
+                    outcome = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
+                        ? LatticeReplicationMetrics.OutcomeRejectedTenantOffline
+                        : LatticeReplicationMetrics.OutcomeRejectedForeignTenant;
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+                }
             }
 
             // DURABLE RECEIVE FENCE (issue #1173). While a cross-cluster restore
@@ -1158,6 +1206,39 @@ internal sealed partial class ReplicationApplier(
                 + "rejected so a peer cannot override the local merge algebra via the wire mode field.",
             retryCount: 0,
             reasonTag: LatticeReplicationMetrics.ReasonModeMismatch,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Dead-letters an inbound entry the receiver-side tenant-isolation gate
+    /// (issue #1633) refused because its tree id names a non-existent tenant, or a
+    /// tenant not resident in this serving region. Only reached on the rejection
+    /// path, so the interpolated diagnostic string is not on any steady-state hot
+    /// path. The tree is enrolled and therefore bounded, so parking the entry cannot
+    /// be used to spawn unbounded dead-letter-queue activations. The owning tenant is
+    /// derived from the tree id alone, never from a wire-supplied field.
+    /// </summary>
+    private Task DeadLetterTenantIsolationAsync(
+        WalRecord entry,
+        ReplicationTenantIsolationDecision decision,
+        CancellationToken cancellationToken)
+    {
+        var (reasonTag, failureReason) = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
+            ? (LatticeReplicationMetrics.ReasonTenantOffline,
+                $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that is not "
+                + "resident in the region serving this receiver; the write was refused so it cannot "
+                + "land in a region outside the tenant's residency set.")
+            : (LatticeReplicationMetrics.ReasonForeignTenant,
+                $"Inbound replicated write for tree '{entry.TreeId}' targets a tenant that does not "
+                + "exist on this receiver; the write was refused so a peer cannot create or smuggle "
+                + "into a foreign or non-existent tenant.");
+
+        var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
+        return dlq.EnqueueAsync(
+            entry,
+            failureReason: failureReason,
+            retryCount: 0,
+            reasonTag: reasonTag,
             cancellationToken);
     }
 

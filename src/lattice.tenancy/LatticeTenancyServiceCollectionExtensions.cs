@@ -6,6 +6,7 @@ using Orleans.Hosting;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Membership;
+using Orleans.Lattice.Replication;
 
 namespace Orleans.Lattice.Tenancy;
 
@@ -229,6 +230,22 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.Replace(
             ServiceDescriptor.Singleton<ILatticeBackupTenantScope>(
                 sp => sp.GetRequiredService<TenantBackupScope>()));
+
+        // Tenant-aware replication isolation (issue #1633, T16). Replace the core
+        // replication package's NullReplicationTenantIsolationGate (registered by
+        // AddLatticeReplication) with the active gate so the inbound apply path keeps
+        // a replicated write inside its correct tenant namespace: it refuses a write
+        // for a non-existent tenant or a tenant not resident in this serving region,
+        // deriving ownership from the tree id and never auto-creating a tenant. It
+        // consults the same ITenantRegistry and ITenantResidencyResolver as the T7
+        // authoring gate, so replication and authoring share one isolation policy.
+        // Replace (not TryAdd) guarantees exactly one IReplicationTenantIsolationGate
+        // resolves and it is the active one. When tenancy is never added, the core
+        // null default (IsActive=false) leaves replication byte-for-byte unchanged.
+        builder.Services.TryAddSingleton<ReplicationTenantIsolationGate>();
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<IReplicationTenantIsolationGate>(
+                sp => sp.GetRequiredService<ReplicationTenantIsolationGate>()));
 
         return builder;
     }
