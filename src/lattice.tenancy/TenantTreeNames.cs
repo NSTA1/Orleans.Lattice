@@ -34,6 +34,16 @@ internal static class TenantTreeNames
     /// </summary>
     internal const string UsageTree = "sys-tenant-usage";
 
+    /// <summary>
+    /// Tree holding one <see cref="TenantOverageRecord"/> per tenant, keyed by the
+    /// tenant id text. Backs the first-class, billing-ready per-tenant overage
+    /// meter; each cluster advances only its own grow-only counter component in the
+    /// per-tenant record, and the global fold sums the components. Like
+    /// <see cref="UsageTree"/> it is not part of <see cref="AllTrees"/>: it carries
+    /// converged grow-only aggregates that need no durable per-key history.
+    /// </summary>
+    internal const string OverageTree = "sys-tenant-overage";
+
     /// <summary>Enumerates the backing tree names.</summary>
     internal static IReadOnlyList<string> AllTrees { get; } = new[] { RegistryTree };
 }

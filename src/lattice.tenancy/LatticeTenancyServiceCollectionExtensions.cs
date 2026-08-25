@@ -214,6 +214,19 @@ public static class LatticeTenancyServiceCollectionExtensions
 
         builder.Services.TryAddSingleton<TenantUsagePublisher>();
 
+        // First-class, billing-ready per-tenant overage metering (T10). The overage
+        // store dogfoods the reserved sys-tenant-overage tree through the same
+        // Orleans binary serializer and optimistic-merge path the usage store uses;
+        // the meter accrues observed overage (usage above the steady-state cap) into
+        // this cluster's grow-only counter component on the caller's cadence; and the
+        // public billing reader folds every cluster's counters into a converged
+        // aggregate a billing consumer can poll. Overage never sits on the warm
+        // admission path. Registering the stack is inert until a later feature drives
+        // the metering cadence in.
+        builder.Services.TryAddSingleton<ITenantOverageStore, TenantOverageStore>();
+        builder.Services.TryAddSingleton<TenantOverageMeter>();
+        builder.Services.TryAddSingleton<ITenantOverageBilling, LatticeTenantOverageBilling>();
+
         // The real admission controller overrides the core NullTenantAdmissionController
         // (registered with TryAdd). A non-Try AddSingleton appends this registration
         // after the core default, so a single ITenantAdmissionController resolve on

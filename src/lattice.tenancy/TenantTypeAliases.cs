@@ -44,4 +44,7 @@ internal static class TenantTypeAliases
 
     /// <summary>Alias for <see cref="Tenancy.TenantUsageRecord"/>.</summary>
     internal const string TenantUsageRecord = "olt.usg";
+
+    /// <summary>Alias for <see cref="Tenancy.TenantOverageRecord"/>.</summary>
+    internal const string TenantOverageRecord = "olt.ovr";
 }
