@@ -12,6 +12,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled per project. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Security
+
+- **The TreeAdmin cluster-telemetry authorizer no longer fails open under `DefaultEffect = Allow`.** `TreeAdminAccessAuthorizer.AuthorizeClusterTelemetryAsync` authorized the cluster-wide storage-accounting (telemetry) view over the data-plane sentinel scope `"*"`, which `PolicyAccessGate` evaluates on the ordinary data-plane path; under `LatticeAuthOptions.DefaultEffect = Allow` with no rule authored, any caller (including an anonymous one) was therefore authorized for the elevated all-tree telemetry scope it was never granted. The authorizer now routes the request through the reserved `sys-auth-policy` tree, which the gate evaluates with control-plane isolation and denies when unmatched regardless of `DefaultEffect`; per-tree verbs and the deny-by-default paths are unchanged. Covered by a new fail-open regression. ([#1646](https://github.com/NSTA1/Orleans.Lattice/issues/1646), `Orleans.Lattice.Api.TreeAdmin`)
+
 ## Released
 
 Published releases, newest first. Each section is keyed by its publish date; within a date, packages advance on their own patch digits per [`docs/RELEASING.md`](docs/RELEASING.md).
