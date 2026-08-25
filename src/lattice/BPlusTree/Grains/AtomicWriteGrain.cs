@@ -796,40 +796,21 @@ internal sealed class AtomicWriteGrain(
 #endif
         var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
 
-        // Touched-shard set capture. Populated from the routing
-        // snapshot's Map.Resolve(key) per entry, deduplicated and
-        // sorted for stable persistence ordering. Drives the
-        // post-execute terminal broadcast loop: one
-        // AppendTxTerminalAsync call per distinct physical shard,
-        // never per key. A migration that remaps slots between
-        // capture and broadcast is handled in BroadcastTerminalsAsync
-        // via StaleShardRoutingException / StaleTreeRoutingException
-        // retry, which re-resolves the owner against a fresh routing
-        // snapshot.
-        var touched = new HashSet<int>();
-        foreach (var entry in entries)
-        {
-            touched.Add(routing.Map.Resolve(entry.Key));
-        }
-        var touchedSorted = new List<int>(touched);
-        touchedSorted.Sort();
-        state.State.TouchedShards = touchedSorted;
-
-        // Pre-saga value capture: group keys by their routed shard, then
-        // issue ONE batched GetRawEntriesAsync RPC per shard in parallel.
-        // The earlier shape was a 16-iteration sequential per-entry
-        // foreach that paid one cross-grain Task allocation per entry
-        // (16 in the microbench atomic batch); the batched shape pays
-        // one Task allocation per distinct touched shard (1 in the
-        // single-shard microbench, up to 4 in the 4-shards variant).
-        // Stale-routing retry is per-shard with the same wall-clock
-        // budget as the original loop, since a topology change must be
-        // re-resolved against a fresh snapshot regardless of fan-out
-        // shape. The per-shard call returns a list aligned by index
-        // with its input keys list, so the scatter back into PreValues
+        // Pre-saga value capture + touched-shard set. Group keys by their
+        // routed shard once (one Map.Resolve per entry), then issue ONE
+        // batched GetRawEntriesAsync RPC per distinct shard in parallel -
+        // one Task allocation per touched shard, never per key. The distinct
+        // touched-shard set is read off the bucket keys and sorted for stable
+        // persistence ordering; it drives the post-execute terminal broadcast
+        // loop (one AppendTxTerminalAsync per physical shard). A migration
+        // that remaps slots between capture and broadcast is handled in
+        // BroadcastTerminalsAsync via StaleShardRoutingException /
+        // StaleTreeRoutingException retry, which re-resolves the owner against
+        // a fresh routing snapshot. The per-shard call returns a list aligned
+        // by index with its input keys, so the scatter back into PreValues
         // tracks (key -> original entry index) explicitly.
         var preValuesArray = new AtomicPreValue[entries.Count];
-        var shardBuckets = new Dictionary<int, List<(string Key, int Index)>>(touched.Count);
+        var shardBuckets = new Dictionary<int, List<(string Key, int Index)>>();
         for (int i = 0; i < entries.Count; i++)
         {
             var key = entries[i].Key;
@@ -841,6 +822,16 @@ internal sealed class AtomicWriteGrain(
             }
             bucket.Add((key, i));
         }
+
+        // Derive the sorted distinct touched-shard set directly from the
+        // bucket keys computed above rather than resolving every key a
+        // second time into a separate HashSet: the bucket dictionary keys
+        // already are the distinct touched shards. Saves one HashSet<int>
+        // allocation plus a full second Map.Resolve pass over the batch on
+        // every saga prepare.
+        var touchedSorted = new List<int>(shardBuckets.Keys);
+        touchedSorted.Sort();
+        state.State.TouchedShards = touchedSorted;
 
         var capturePending = new List<Task>(shardBuckets.Count);
         foreach (var (shardIndex, bucket) in shardBuckets)

@@ -217,6 +217,44 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// Allocation-free batch-write gate for the common
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetManyAsync"/> /
+    /// <c>SetManyWherePredicateAsync</c> entry shape. Iterates the entry
+    /// keys directly rather than through a <c>Select(e =&gt; e.Key)</c>
+    /// projection, so the steady-state (no split, no moved slots) call
+    /// allocates no <c>SelectListIterator</c>. Behaviourally identical to
+    /// <see cref="ThrowIfRejectedForAnyKey(IEnumerable{string})"/>.
+    /// </summary>
+    private void ThrowIfRejectedForAnyKey(List<KeyValuePair<string, byte[]>> entries)
+    {
+        ThrowIfWriteFenced();
+
+        var sip = state.State.SplitInProgress;
+        var rejectActive = sip is not null && sip.Phase == ShardSplitPhase.Reject;
+        var moved = state.State.MovedAwaySlots;
+        var movedActive = moved.Count > 0 && state.State.MovedAwayVirtualShardCount is not null;
+        if (!rejectActive && !movedActive) return;
+
+        var movedVsc = state.State.MovedAwayVirtualShardCount ?? 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var key = entries[i].Key;
+            if (rejectActive)
+            {
+                var slot = ShardMap.GetVirtualSlot(key, sip!.VirtualShardCount);
+                if (sip.IsMovedSlot(slot))
+                    throw new StaleShardRoutingException(MyShardIndex, sip.ShadowTargetShardIndex, slot);
+            }
+            if (movedActive)
+            {
+                var slot = ShardMap.GetVirtualSlot(key, movedVsc);
+                if (moved.TryGetValue(slot, out var target))
+                    throw new StaleShardRoutingException(MyShardIndex, target, slot);
+            }
+        }
+    }
+
+    /// <summary>
     /// Read-path gate. Throws <see cref="StaleShardRoutingException"/> as
     /// soon as a split has advanced to <see cref="ShardSplitPhase.Swap"/>
     /// (the registry's <see cref="ShardMap"/> has been swapped to the new

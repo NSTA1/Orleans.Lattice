@@ -349,9 +349,7 @@ internal sealed partial class LatticeGrain
                     nameof(items));
             }
 
-            using (LatticeOriginContext.With(item.OriginClusterId))
-            using (LatticeVectorClockContext.With(item.SourceVectorClock))
-            using (LatticeHlcOverrideContext.With(item.SourceHlc))
+            using (CrdtReceiverAmbientScope.Enter(item.OriginClusterId, item.SourceVectorClock, item.SourceHlc))
             {
                 // Route through the guarded flow (not the public no-TTL
                 // overload) so the item's absolute expiry rides the fold. The
@@ -360,6 +358,54 @@ internal sealed partial class LatticeGrain
                 // from a relative TTL) so it stays strictly convergent.
                 await ApplyCrdtDeltaGuardedAsync(item.Key, item.Mode, item.Delta, item.ExpiresAtTicks, CancellationToken.None);
             }
+        }
+    }
+
+    /// <summary>
+    /// Allocation-free replacement for the three nested
+    /// <see cref="LatticeOriginContext.With(string?)"/> /
+    /// <see cref="LatticeVectorClockContext.With(VersionVector?)"/> /
+    /// <see cref="LatticeHlcOverrideContext.With(HybridLogicalClock?)"/>
+    /// scopes the batched CRDT receiver fold wraps around every item. Each
+    /// public <c>With</c> allocates a heap <c>IDisposable</c> scope object;
+    /// this <see langword="readonly"/> <see langword="struct"/> captures and
+    /// restores all three ambient <see cref="Orleans.Runtime.RequestContext"/>
+    /// slots on the stack, so a batch of N items pays no per-item scope
+    /// allocation instead of 3N. Behaviour is identical: it sets the same
+    /// three ambient slots (via the public <c>Current</c> setters) and
+    /// restores their prior values on <see cref="Dispose"/>.
+    /// </summary>
+    private readonly struct CrdtReceiverAmbientScope : IDisposable
+    {
+        private readonly string? _previousOrigin;
+        private readonly VersionVector? _previousVectorClock;
+        private readonly HybridLogicalClock? _previousHlc;
+
+        private CrdtReceiverAmbientScope(
+            string? previousOrigin, VersionVector? previousVectorClock, HybridLogicalClock? previousHlc)
+        {
+            _previousOrigin = previousOrigin;
+            _previousVectorClock = previousVectorClock;
+            _previousHlc = previousHlc;
+        }
+
+        public static CrdtReceiverAmbientScope Enter(
+            string originClusterId, VersionVector? sourceVectorClock, HybridLogicalClock? sourceHlc)
+        {
+            var previousOrigin = LatticeOriginContext.Current;
+            var previousVectorClock = LatticeVectorClockContext.Current;
+            var previousHlc = LatticeHlcOverrideContext.Current;
+            LatticeOriginContext.Current = originClusterId;
+            LatticeVectorClockContext.Current = sourceVectorClock;
+            LatticeHlcOverrideContext.Current = sourceHlc;
+            return new CrdtReceiverAmbientScope(previousOrigin, previousVectorClock, previousHlc);
+        }
+
+        public void Dispose()
+        {
+            LatticeOriginContext.Current = _previousOrigin;
+            LatticeVectorClockContext.Current = _previousVectorClock;
+            LatticeHlcOverrideContext.Current = _previousHlc;
         }
     }
 
