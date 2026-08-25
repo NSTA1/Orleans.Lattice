@@ -131,6 +131,15 @@ public static class LatticeAuthServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILatticeAuthAuditSink, DurableAuthAuditTrailSink>());
 
+        // Tenant-isolation seam (issue #1624). The gate composes tenant isolation
+        // through the ITenantGateEnforcer null seam so it needs no reference into
+        // the tenancy add-on (Orleans.Lattice.Tenancy references this package, not
+        // the reverse). Register the allow-everything null default so the gate
+        // always resolves one and an auth-only cluster is unchanged; the tenancy
+        // add-on's AddLatticeTenancy runs after this and Replaces it with the
+        // active enforcer.
+        builder.Services.TryAddSingleton<ITenantGateEnforcer, NullTenantGateEnforcer>();
+
         // Enforcement wiring: replace the core default NullLatticeAccessGate
         // (registered by AddLattice via TryAddSingleton) with PolicyAccessGate,
         // so this add-on becomes the enforcement control point. Replace (not

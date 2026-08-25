@@ -84,7 +84,8 @@ public partial class LeafCacheGrainTests
         // (and not the TTL fast-path) on every read.
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
+        var resolver = CreateResolver(grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, resolver, TestOriginClusterIdResolver.Default());
         return (cache, registryPopulator, mockPrimary, leafId);
     }
 
@@ -147,7 +148,8 @@ public partial class LeafCacheGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
+        var resolver = CreateResolver(grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, resolver, TestOriginClusterIdResolver.Default());
 
         // Pre-condition: registry has no entry for this leaf id.
         Assert.That(BPlusLeafGrain.TryGetLeafRevision(leafId, out _), Is.False,
@@ -190,7 +192,8 @@ public partial class LeafCacheGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
+        var resolver = CreateResolver(grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, resolver, TestOriginClusterIdResolver.Default());
 
         // First activation: many writes -> cookie advances; cache
         // observes it via one RPC.

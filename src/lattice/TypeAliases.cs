@@ -50,6 +50,19 @@ internal static class TypeAliases
     // access-gate seam references it and core cannot depend on Membership.
     internal const string LatticeSubject = "ol.sub";
 
+    // Multi-tenancy (opt-in): the tenant identity value type. The core
+    // library defines the primitive and the null tenant seams so a cluster
+    // with no tenancy add-on resolves the reserved 'default' tenant and
+    // behaves byte-for-byte as today; the tenancy package fills the seams.
+    internal const string TenantId = "ol.tid";
+
+    // Multi-tenancy (opt-in): the fail-closed denial thrown at the ILattice
+    // tenant-resolution boundary when the active-tenant context resolver
+    // denies an operation (an absent or invalid active tenant). Serializable
+    // so it round-trips if the deny is surfaced from a resolver consulted on
+    // a grain-call path.
+    internal const string LatticeTenantAccessDenied = "ol.tad";
+
     // Access-gate enforcement: the fail-closed denial the public write /
     // delete / CRDT / atomic / range-delete / bulk-load / lifecycle surface
     // throws when the registered access gate denies the caller. Serialized so

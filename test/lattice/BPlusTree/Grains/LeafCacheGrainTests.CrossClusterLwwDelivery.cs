@@ -75,7 +75,8 @@ public partial class LeafCacheGrainTests
         // both gates to clear, which the real leaf does naturally.
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions { CacheTtl = TimeSpan.Zero });
 
-        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
+        var resolver = CreateResolver(grainFactory, optionsMonitor);
+        var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, resolver, TestOriginClusterIdResolver.Default());
         return (cache, leaf, leafId);
     }
 

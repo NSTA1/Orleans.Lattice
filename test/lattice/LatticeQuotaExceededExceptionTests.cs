@@ -73,6 +73,55 @@ public class LatticeQuotaExceededExceptionTests
     }
 
     [Test]
+    public void Full_constructor_leaves_TenantId_empty()
+    {
+        var ex = new LatticeQuotaExceededException("m", treeId: "t", dimension: "keys", current: 1, limit: 1);
+        Assert.That(ex.TenantId, Is.EqualTo(string.Empty),
+            "a per-tree admission-cap breach carries no tenant id");
+    }
+
+    [Test]
+    public void Tenant_constructor_preserves_all_diagnostic_context_and_the_tenant_id()
+    {
+        var ex = new LatticeQuotaExceededException(
+            "tenant 'acme' rejected: bytes 2000 exceeds the cap of 1000.",
+            treeId: "orders",
+            dimension: LatticeQuotaExceededException.BytesDimension,
+            current: 2000,
+            limit: 1000,
+            tenantId: "acme");
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.TreeId, Is.EqualTo("orders"));
+            Assert.That(ex.Dimension, Is.EqualTo("bytes"));
+            Assert.That(ex.Current, Is.EqualTo(2000L));
+            Assert.That(ex.Limit, Is.EqualTo(1000L));
+            Assert.That(ex.TenantId, Is.EqualTo("acme"));
+        });
+    }
+
+    [Test]
+    public void Tenant_constructor_rejects_null_treeId()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => new LatticeQuotaExceededException("m", treeId: null!, dimension: "keys", current: 1, limit: 1, tenantId: "acme"));
+    }
+
+    [Test]
+    public void Tenant_constructor_rejects_null_dimension()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => new LatticeQuotaExceededException("m", treeId: "t", dimension: null!, current: 1, limit: 1, tenantId: "acme"));
+    }
+
+    [Test]
+    public void Tenant_constructor_rejects_null_tenantId()
+    {
+        Assert.Throws<ArgumentNullException>(
+            () => new LatticeQuotaExceededException("m", treeId: "t", dimension: "keys", current: 1, limit: 1, tenantId: null!));
+    }
+
+    [Test]
     public void Full_constructor_rejects_null_treeId()
     {
         Assert.Throws<ArgumentNullException>(
@@ -154,6 +203,7 @@ public class LatticeQuotaExceededExceptionTests
             AssertHasId(nameof(LatticeQuotaExceededException.Dimension), 1);
             AssertHasId(nameof(LatticeQuotaExceededException.Current), 2);
             AssertHasId(nameof(LatticeQuotaExceededException.Limit), 3);
+            AssertHasId(nameof(LatticeQuotaExceededException.TenantId), 4);
         });
     }
 

@@ -28,6 +28,16 @@ public sealed record LatticeRestoreResult
     /// For a shadow-cutover restore, the physical tree id the alias resolved to
     /// before the cutover (retained for revert); <c>null</c> for an in-place restore.
     /// </param>
+    /// <param name="deadLetteredCrossTenant">
+    /// The number of records refused (dead-lettered) during the restore because they
+    /// were addressed outside the active tenant's namespace. Zero when no tenancy
+    /// add-on is active. Must not be negative.
+    /// </param>
+    /// <param name="deadLetteredOverQuota">
+    /// The number of records refused (dead-lettered) during the restore because
+    /// admitting them would exceed the active tenant's key quota. Zero when no
+    /// tenancy add-on is active. Must not be negative.
+    /// </param>
     /// <exception cref="ArgumentException">A required string argument is <c>null</c> or empty.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="manifestChain"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="entriesApplied"/> is negative.</exception>
@@ -39,13 +49,17 @@ public sealed record LatticeRestoreResult
         IReadOnlyList<string> manifestChain,
         long entriesApplied,
         string? shadowPhysicalTreeId = null,
-        string? previousPhysicalTreeId = null)
+        string? previousPhysicalTreeId = null,
+        long deadLetteredCrossTenant = 0,
+        long deadLetteredOverQuota = 0)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         ArgumentException.ThrowIfNullOrEmpty(targetTreeId);
         ArgumentException.ThrowIfNullOrEmpty(operationId);
         ArgumentNullException.ThrowIfNull(manifestChain);
         ArgumentOutOfRangeException.ThrowIfNegative(entriesApplied);
+        ArgumentOutOfRangeException.ThrowIfNegative(deadLetteredCrossTenant);
+        ArgumentOutOfRangeException.ThrowIfNegative(deadLetteredOverQuota);
 
         BackupId = backupId;
         TargetTreeId = targetTreeId;
@@ -55,6 +69,8 @@ public sealed record LatticeRestoreResult
         EntriesApplied = entriesApplied;
         ShadowPhysicalTreeId = shadowPhysicalTreeId;
         PreviousPhysicalTreeId = previousPhysicalTreeId;
+        DeadLetteredCrossTenant = deadLetteredCrossTenant;
+        DeadLetteredOverQuota = deadLetteredOverQuota;
     }
 
     /// <summary>The backup id restored.</summary>
@@ -80,4 +96,16 @@ public sealed record LatticeRestoreResult
 
     /// <summary>The physical tree id retained for revert (shadow-cutover only).</summary>
     public string? PreviousPhysicalTreeId { get; init; }
+
+    /// <summary>
+    /// The number of records refused (dead-lettered) because they were addressed
+    /// outside the active tenant's namespace. Zero when no tenancy add-on is active.
+    /// </summary>
+    public long DeadLetteredCrossTenant { get; init; }
+
+    /// <summary>
+    /// The number of records refused (dead-lettered) because admitting them would
+    /// exceed the active tenant's key quota. Zero when no tenancy add-on is active.
+    /// </summary>
+    public long DeadLetteredOverQuota { get; init; }
 }

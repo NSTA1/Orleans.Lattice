@@ -53,5 +53,6 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.schema",
         "docs/lattice.storage.azuretable",
         "docs/lattice.storage.file",
+        "docs/lattice.tenancy",
     };
 }

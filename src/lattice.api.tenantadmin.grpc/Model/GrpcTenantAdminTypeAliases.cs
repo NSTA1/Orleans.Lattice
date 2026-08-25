@@ -1,0 +1,35 @@
+namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
+
+/// <summary>
+/// Centralized Orleans serialization alias constants for the wire messages the
+/// <c>Orleans.Lattice.Api.TenantAdmin.Grpc</c> binding adds on top of the
+/// transport-agnostic tenant-administration control facade DTOs. Grpc-binding
+/// aliases use the <c>oitng.</c> prefix (Orleans Lattice Api TenantAdmin Grpc) to
+/// avoid collision with the tenant-administration control-API facade
+/// (<c>oitn.</c>), the tree-administration control-API facade (<c>oit.</c>), its
+/// gRPC binding (<c>oitg.</c>), and the core (<c>ol.</c>) alias namespaces.
+/// </summary>
+/// <remarks>
+/// Never rename or reuse an alias value: it is part of the on-the-wire format.
+/// New types append new constants.
+/// </remarks>
+public static class GrpcTenantAdminTypeAliases
+{
+    /// <summary>
+    /// The reserved alias prefix owned by the tenant-administration gRPC binding.
+    /// Every alias constant added here starts with this value.
+    /// </summary>
+    public const string AliasPrefix = "oitng.";
+
+    /// <summary>Alias for <see cref="TenantAdminTenantRequest"/>.</summary>
+    public const string TenantAdminTenantRequest = "oitng.tenreq";
+
+    /// <summary>Alias for <see cref="AuthSchemeAdvertisementRequest"/>.</summary>
+    public const string AuthSchemeAdvertisementRequest = "oitng.asreq";
+
+    /// <summary>Alias for <see cref="AuthSchemeDescriptor"/>.</summary>
+    public const string AuthSchemeDescriptor = "oitng.asdesc";
+
+    /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
+    public const string AuthSchemeAdvertisement = "oitng.asadv";
+}

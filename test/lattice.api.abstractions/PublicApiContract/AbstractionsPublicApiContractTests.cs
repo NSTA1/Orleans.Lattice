@@ -47,6 +47,7 @@ public class AbstractionsPublicApiContractTests
         "Orleans.Lattice.Api.Schema",
         "Orleans.Lattice.Api.Replication",
         "Orleans.Lattice.Api.Region",
+        "Orleans.Lattice.Api.TenantAdmin",
         "Orleans.Lattice.Api.TreeAdmin",
     };
 

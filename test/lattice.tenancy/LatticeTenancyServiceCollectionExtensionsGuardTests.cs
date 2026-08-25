@@ -1,0 +1,152 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using NSubstitute;
+using Orleans.Hosting;
+using Orleans.Lattice.Auth;
+using Orleans.Lattice.Membership;
+
+namespace Orleans.Lattice.Tenancy.Tests;
+
+/// <summary>
+/// Registration-time unit tests for
+/// <see cref="LatticeTenancyServiceCollectionExtensions.AddLatticeTenancy"/> that
+/// do not require a live silo: the three ordering guards (core, membership, and
+/// auth must each be registered first, so enabling tenancy without auth or
+/// membership fails fast), the success path (all deps present wires the registry
+/// once), and the idempotent repeat-call path (a second call layers a supplied
+/// configure delegate but performs the structural wiring only once).
+/// </summary>
+[TestFixture]
+public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
+{
+    [Test]
+    public void AddLatticeTenancy_without_core_throws()
+    {
+        var builder = new CovSiloBuilder();
+
+        Assert.That(
+            () => builder.AddLatticeTenancy(),
+            Throws.InvalidOperationException.With.Message.Contains("AddLattice()"));
+    }
+
+    [Test]
+    public void AddLatticeTenancy_without_membership_throws()
+    {
+        var builder = new CovSiloBuilder();
+        builder.Services.AddSingleton(Substitute.For<IValidateOptions<LatticeOptions>>());
+
+        Assert.That(
+            () => builder.AddLatticeTenancy(),
+            Throws.InvalidOperationException.With.Message.Contains("AddLatticeMembership"));
+    }
+
+    [Test]
+    public void AddLatticeTenancy_without_auth_throws()
+    {
+        var builder = new CovSiloBuilder();
+        builder.Services.AddSingleton(Substitute.For<IValidateOptions<LatticeOptions>>());
+        builder.Services.AddSingleton(Substitute.For<ILatticeMembershipDirectory>());
+
+        Assert.That(
+            () => builder.AddLatticeTenancy(),
+            Throws.InvalidOperationException.With.Message.Contains("AddLatticeAuth"));
+    }
+
+    [Test]
+    public void AddLatticeTenancy_with_all_dependencies_registers_the_registry_once()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        var result = builder.AddLatticeTenancy();
+
+        Assert.That(result, Is.SameAs(builder));
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.Services.Count(d => d.ServiceType == typeof(ITenantRegistry)), Is.EqualTo(1));
+            Assert.That(builder.Services.Count(d => d.ServiceType == typeof(TenantRegistryInitializer)), Is.EqualTo(1));
+            Assert.That(builder.Services.Any(d => d.ServiceType == typeof(TenancyRegistrationMarker)), Is.True);
+        });
+    }
+
+    [Test]
+    public void AddLatticeTenancy_maps_the_registry_to_the_lattice_implementation()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        builder.AddLatticeTenancy();
+
+        var descriptor = builder.Services.Single(d => d.ServiceType == typeof(ITenantRegistry));
+        Assert.That(descriptor.ImplementationType, Is.EqualTo(typeof(LatticeTenantRegistry)));
+    }
+
+    [Test]
+    public void AddLatticeTenancy_repeat_call_wires_structure_only_once()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        builder.AddLatticeTenancy();
+        builder.AddLatticeTenancy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.Services.Count(d => d.ServiceType == typeof(ITenantRegistry)), Is.EqualTo(1));
+            Assert.That(builder.Services.Count(d => d.ServiceType == typeof(TenancyRegistrationMarker)), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AddLatticeTenancy_repeat_call_still_layers_configuration()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        builder.AddLatticeTenancy();
+        builder.AddLatticeTenancy(o => o.SeedDefaultTenant = false);
+
+        var options = builder.Services
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<LatticeTenancyOptions>>()
+            .Value;
+        Assert.That(options.SeedDefaultTenant, Is.False);
+    }
+
+    [Test]
+    public void ConfigureLatticeTenancy_layers_a_configuration_delegate()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+
+        builder.ConfigureLatticeTenancy(o => o.EnableDurableHistoryView = false);
+
+        var options = builder.Services
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<LatticeTenancyOptions>>()
+            .Value;
+        Assert.That(options.EnableDurableHistoryView, Is.False);
+    }
+
+    [Test]
+    public void ConfigureLatticeTenancy_null_configure_throws()
+    {
+        var builder = new CovSiloBuilder();
+
+        Assert.That(() => builder.ConfigureLatticeTenancy(null!), Throws.ArgumentNullException);
+    }
+
+    private static CovSiloBuilder NewBuilderWithDependencies()
+    {
+        var builder = new CovSiloBuilder();
+        builder.Services.AddSingleton(Substitute.For<IValidateOptions<LatticeOptions>>());
+        builder.Services.AddSingleton(Substitute.For<ILatticeMembershipDirectory>());
+        builder.Services.AddSingleton(Substitute.For<ILatticeDecisionEngine>());
+        return builder;
+    }
+
+    /// <summary>A minimal <see cref="ISiloBuilder"/> backed by a plain service collection.</summary>
+    private sealed class CovSiloBuilder : ISiloBuilder
+    {
+        public IServiceCollection Services { get; } = new ServiceCollection();
+
+        public IConfiguration Configuration { get; } = new ConfigurationBuilder().Build();
+    }
+}

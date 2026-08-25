@@ -18,7 +18,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class LatticeRegistryGrain(
     IGrainFactory grainFactory,
-    IOptionsMonitor<LatticeOptions> optionsMonitor) : ILatticeRegistry
+    IOptionsMonitor<LatticeOptions> optionsMonitor,
+    ITreePlacementResolver? placementResolver = null) : ILatticeRegistry
 {
     private static readonly byte[] EmptyEntry = SerializeEntry(new TreeRegistryEntry());
 
@@ -61,6 +62,7 @@ internal sealed class LatticeRegistryGrain(
         // internals, and shard maps share the same invariants as user
         // trees.
         var seeded = SeedStructuralDefaults(entry, optionsMonitor.Get(treeId).WalPartitions);
+        seeded = await ApplyRegistrationWalPlacementAsync(treeId, seeded);
 #if LATTICE_DIAG
         try
         {
@@ -90,6 +92,62 @@ internal sealed class LatticeRegistryGrain(
             // the activation-time materialiser always agree on the
             // partition fan-out shape for the lifetime of the tree.
             WalPartitions = entry.WalPartitions ?? siloDefaultWalPartitions,
+        };
+    }
+
+    /// <summary>
+    /// Seeds the tree's durable WAL placement pin from the physical placement the
+    /// <see cref="ITreePlacementResolver"/> seam resolves for a newly registered
+    /// tree. Runs only on first registration (callers reach here past the
+    /// already-registered idempotency guard), so a tree's physical placement is
+    /// immutable for its lifetime: re-registration never re-resolves, and a later
+    /// change to a tenant's placement binding does not re-place trees that already
+    /// exist (a migration would require data movement, out of scope for v1).
+    /// <para>
+    /// When the resolver reports the baseline key (which is every tree when tenancy
+    /// is off, and every shared / non-tenant tree when it is on), the entry is
+    /// returned unchanged with a <c>null</c> <see cref="TreeRegistryEntry.WalPlacement"/>,
+    /// so routing is byte-for-byte identical to pre-placement behaviour and the
+    /// default-key path in <see cref="LatticeOptionsResolver"/> still honours any
+    /// legacy per-tree <see cref="LatticeOptions.WalStorageProvider"/> resolver. A
+    /// non-baseline key pins every partition to the dedicated provider by seeding the
+    /// pin's default key; the existing catalog machinery then routes the tree's WAL
+    /// shards there and fails closed (via <see cref="LatticeWalProviderMissingException"/>)
+    /// if the key is absent on a silo.
+    /// </para>
+    /// </summary>
+    private async ValueTask<TreeRegistryEntry> ApplyRegistrationWalPlacementAsync(
+        string treeId, TreeRegistryEntry seeded)
+    {
+        // No resolver (tenancy off in a direct-construction context) or a
+        // caller-supplied explicit placement pin: leave the entry untouched. The
+        // resolver only seeds the INITIAL pin for a tree that has none.
+        if (placementResolver is null || seeded.WalPlacement is not null)
+        {
+            return seeded;
+        }
+
+        if (!placementResolver.TryResolveForRegistration(treeId, out var placement))
+        {
+            placement = await placementResolver
+                .ResolveForRegistrationAsync(treeId);
+        }
+
+        var key = placement.WalProviderKey;
+        if (string.IsNullOrEmpty(key) ||
+            string.Equals(key, IWalStorageProviderCatalog.DefaultProviderKey, StringComparison.Ordinal))
+        {
+            // Baseline placement: behaviour byte-for-byte identical to a cluster
+            // with no per-tenant placement.
+            return seeded;
+        }
+
+        // Pin every partition to the dedicated provider by seeding the pin's default
+        // key. Version 0 marks an initial seed rather than a managed move; the pin is
+        // thereafter mutated only through the ILatticeAdmin move surface.
+        return seeded with
+        {
+            WalPlacement = WalPlacementPin.Create() with { DefaultProviderKey = key },
         };
     }
 
@@ -261,6 +319,23 @@ internal sealed class LatticeRegistryGrain(
 
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { MaintainProjectionDigest = enabled };
+        await UpdateAsync(treeId, updated);
+    }
+
+    public async Task SetMaxCacheValueBytesAsync(string treeId, long? maxCacheValueBytes)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (maxCacheValueBytes is { } cap && cap < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxCacheValueBytes), cap,
+                $"{nameof(LatticeOptions.MaxCacheValueBytes)} must be greater than or equal to 1 when set "
+                + "(null leaves the read-through cache mirror unbounded; a positive value caps the resident "
+                + "value-payload bytes per cache activation with LRU payload eviction).");
+        }
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { MaxCacheValueBytes = maxCacheValueBytes };
         await UpdateAsync(treeId, updated);
     }
 

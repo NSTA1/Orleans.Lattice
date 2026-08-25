@@ -132,7 +132,7 @@ internal static class AuthBench
 
             _membership = new FixedSubjectMembershipContext(
                 new LatticeSubject(BenchSubjectId));
-            _gate = new PolicyAccessGate(engine, maintainer, observer, options);
+            _gate = new PolicyAccessGate(engine, maintainer, observer, options, new NullTenantGateEnforcer());
         }
     }
 

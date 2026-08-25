@@ -164,6 +164,29 @@ public static class LatticeReplicationMetrics
     public const string OutcomeRejectedModeMismatch = "rejected-mode-mismatch";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value: the inbound entry was rejected by the
+    /// receiver-side tenant-isolation gate because its <see cref="WalRecord.TreeId"/>
+    /// names a tenant that does not exist in the tenant registry. A replicated write
+    /// must never create or smuggle into a foreign or non-existent tenant, so the
+    /// entry is not applied; because the tree is enrolled (and therefore bounded) it
+    /// is dead-lettered with <see cref="ReasonForeignTenant"/> for operator
+    /// visibility rather than silently dropped. The owning tenant is derived from the
+    /// tree id alone, never from a wire-supplied field.
+    /// </summary>
+    public const string OutcomeRejectedForeignTenant = "rejected-foreign-tenant";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value: the inbound entry was rejected by the
+    /// receiver-side tenant-isolation gate because its tenant, while it exists, is
+    /// not resident / online in the region serving this receiver. The entry is not
+    /// applied; because the tree is enrolled (and therefore bounded) it is
+    /// dead-lettered with <see cref="ReasonTenantOffline"/> for operator visibility.
+    /// The high-water-mark is left unchanged so the sender re-ships the entry, which
+    /// converges once the tenant becomes resident here.
+    /// </summary>
+    public const string OutcomeRejectedTenantOffline = "rejected-tenant-offline";
+
+    /// <summary>
     /// Tag key for the dead-letter enqueue / removal reason. Values are
     /// drawn from <see cref="ReasonDiscarded"/>, <see cref="ReasonReplayed"/>,
     /// <see cref="ReasonEvicted"/>, <see cref="ReasonSchema"/>,
@@ -242,6 +265,25 @@ public static class LatticeReplicationMetrics
     /// algebra, so the receiver never trusts the wire mode field.
     /// </summary>
     public const string ReasonModeMismatch = "mode_mismatch";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was an inbound replicated write whose
+    /// <see cref="WalRecord.TreeId"/> names a tenant that does not exist in the
+    /// tenant registry. Raised by the receiver-side tenant-isolation gate when an
+    /// enrolled tenant tree is shipped a write for a foreign or non-existent tenant,
+    /// so a replicated write can never create or smuggle into a tenant that was not
+    /// provisioned on this receiver.
+    /// </summary>
+    public const string ReasonForeignTenant = "foreign_tenant";
+
+    /// <summary>
+    /// Reason tag value: enqueue cause was an inbound replicated write for a tenant
+    /// that exists but is not resident / online in the region serving this receiver,
+    /// as reported by the residency resolver. Raised by the receiver-side
+    /// tenant-isolation gate so a write is refused for a region outside the tenant's
+    /// residency set.
+    /// </summary>
+    public const string ReasonTenantOffline = "tenant_offline";
 
     /// <summary>
     /// Reason tag value: catch-all bucket for enqueue causes the inbound

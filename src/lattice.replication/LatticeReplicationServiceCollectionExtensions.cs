@@ -346,6 +346,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ISagaCompletionSource, CoordinatorSagaCompletionSource>();
         builder.Services.TryAddSingleton<IReplicationReceiveGate, ReplicationReceiveGate>();
 
+        // Tenant-isolation seam (issue #1633). Core replication ships only the no-op
+        // NullReplicationTenantIsolationGate (IsActive=false), so the inbound apply
+        // path skips tenant isolation and behaves byte-for-byte as before. The
+        // tenancy add-on's AddLatticeTenancy replaces this with a real gate that
+        // keeps a replicated write inside its correct tenant namespace. TryAddSingleton
+        // so the add-on (or a test) can substitute an alternative.
+        builder.Services.TryAddSingleton<IReplicationTenantIsolationGate, NullReplicationTenantIsolationGate>();
+
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IMutationObserver, ReplicationMutationObserver>());
         builder.Services.TryAddEnumerable(

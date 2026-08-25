@@ -25,6 +25,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Replication,
         LatticeApiMcpGroup.TreeAdmin,
         LatticeApiMcpGroup.RepoContext,
+        LatticeApiMcpGroup.TenantAdmin,
     };
 
     /// <summary>
@@ -81,6 +82,12 @@ internal static class LatticeApiMcpGroupCapabilityMap
             | LatticeOperation.AtomicWrite
             | LatticeOperation.BulkLoad,
 
+        // Tenant-administration control plane: the tenant lifecycle is a
+        // cluster-wide administrative surface, so it is gated by the administrator
+        // capability. The facade's own fail-closed gate re-authorizes every
+        // operation cluster-wide at call time.
+        LatticeApiMcpGroup.TenantAdmin => LatticeOperation.Admin,
+
         _ => LatticeOperation.None,
     };
 
@@ -95,6 +102,7 @@ internal static class LatticeApiMcpGroupCapabilityMap
         LatticeApiMcpGroup.Replication => "replication",
         LatticeApiMcpGroup.TreeAdmin => "treeadmin",
         LatticeApiMcpGroup.RepoContext => "repocontext",
+        LatticeApiMcpGroup.TenantAdmin => "tenantadmin",
         _ => group.ToString().ToLowerInvariant(),
     };
 }

@@ -143,6 +143,11 @@ public static class LatticeBackupServiceCollectionExtensions
         // single concrete instance and forwarded to both its full-capture and
         // incremental-capture interfaces so the WAL cursor pin and per-tree state
         // are shared across both entry points.
+        //
+        // The tenancy seam defaults to the inert null scope so a host with no
+        // tenancy add-on captures and restores exactly as before; the tenancy
+        // add-on replaces this registration with its active tenant scope.
+        builder.Services.TryAddSingleton<ILatticeBackupTenantScope>(NullLatticeBackupTenantScope.Instance);
         builder.Services.TryAddSingleton<BackupAccessAuthorizer>();
         builder.Services.TryAddSingleton<LatticeBackupCaptureService>();
         builder.Services.TryAddSingleton<ILatticeBackupCaptureService>(

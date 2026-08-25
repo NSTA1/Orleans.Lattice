@@ -179,4 +179,26 @@ public sealed class LatticeApiMcpOptions
     /// the authorization server and run the OAuth flow itself.
     /// </summary>
     public LatticeApiMcpProtectedResourceMetadata? ProtectedResourceMetadata { get; set; }
+
+    /// <summary>
+    /// Whether the tenant-administration tool module is registered, advertising
+    /// the <c>tenantadmin</c> capability to a caller granted
+    /// <see cref="LatticeOperation.Admin"/>. Defaults to <see langword="false"/> so
+    /// a cluster that never calls <c>AddTenantAdminTools(...)</c> exposes no
+    /// tenant-admin capability at all (fail-closed, byte-for-byte unchanged versus
+    /// before). Set by <c>AddTenantAdminTools(...)</c>.
+    /// </summary>
+    public bool EnableTenantAdminTools { get; set; }
+
+    /// <summary>
+    /// Whether the tenant-administration tool module contributes its
+    /// <b>mutating</b> tenant-lifecycle tools (create, suspend, resume, delete).
+    /// The tenant lifecycle is all-mutating, so the group contributes no tools
+    /// until the host explicitly opts control in - either by setting this flag or
+    /// by passing <c>enableControl: true</c> to <c>AddTenantAdminTools(...)</c>.
+    /// Every tool it then contributes is annotated destructive and non-read-only,
+    /// and remains subject to the same fail-closed cluster-wide <c>Admin</c> access
+    /// gate the <c>ILatticeTenantAdmin</c> facade enforces.
+    /// </summary>
+    public bool EnableTenantAdminControlTools { get; set; }
 }

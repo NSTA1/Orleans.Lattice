@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.TenantAdmin</PackageId>
+    <Version>9.2.0</Version>
+    <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice multi-tenant clusters. Presents one discoverable, fail-closed control surface for the tenant lifecycle - create, suspend, resume, and delete (delete cascading the tenant's trees) - over the tenancy add-on's tenant registry. Every operation authorizes the caller through the Lattice access gate before acting, so an unauthenticated or unauthorized caller is refused. Registered separately; adds no transport behaviour of its own (the gRPC and MCP bindings adapt over it).</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <ProjectReference Include="..\lattice.schema\Orleans.Lattice.Schema.csproj" />
+    <ProjectReference Include="..\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>

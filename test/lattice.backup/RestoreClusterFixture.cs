@@ -76,6 +76,7 @@ public sealed class RestoreClusterFixture
             Serializer,
             SiloServices.GetRequiredService<ITagIndexReconcileTrigger>(),
             SiloServices,
+            SiloServices.GetRequiredService<ILatticeBackupTenantScope>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupRestoreService>());
 
     /// <summary>Stops and disposes the cluster.</summary>

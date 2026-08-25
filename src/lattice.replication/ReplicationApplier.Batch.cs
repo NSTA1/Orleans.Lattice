@@ -510,6 +510,29 @@ internal sealed partial class ReplicationApplier
                 .ConfigureAwait(false);
         }
 
+        // RECEIVER-SIDE TENANT-ISOLATION GATE (issue #1633). Mirror the per-entry
+        // gate in ApplyAsync for the batch path. A run is a single (treeId, origin)
+        // segment, so its one tree id names one owning tenant and a single check
+        // covers the whole run. A run whose tree names a non-existent tenant, or a
+        // tenant not resident in this serving region, is refused: each entry is
+        // dead-lettered (the tree is enrolled and therefore bounded) and the HWM is
+        // left unchanged so the sender re-ships and convergence recovers once the
+        // tenant exists / becomes resident. Bypassed entirely when tenancy is off
+        // (the null gate's IsActive is false), so the batch path is byte-for-byte
+        // unchanged. Checked before any HWM grain call so a refused run costs no
+        // round-trip.
+        if (_tenantIsolationGate is not null && _tenantIsolationGate.IsActive)
+        {
+            var decision = await _tenantIsolationGate
+                .EvaluateAsync(treeId, cancellationToken).ConfigureAwait(false);
+            if (decision != ReplicationTenantIsolationDecision.Admit)
+            {
+                return await RejectTenantIsolationRunAsync(
+                    entries, startInclusive, endExclusive, decision, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
         var resolved = options.Get(treeId);
         if (string.Equals(origin, resolved.ClusterId, StringComparison.Ordinal))
         {
@@ -1219,6 +1242,51 @@ internal sealed partial class ReplicationApplier
             cancellationToken.ThrowIfCancellationRequested();
             var startTs = Stopwatch.GetTimestamp();
             RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeRejectedNotReplicated);
+        }
+
+        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+    }
+
+    /// <summary>
+    /// Terminal handler for a run the receiver-side tenant-isolation gate refused
+    /// (issue #1633). The whole run shares one (treeId, origin), so its one tree id
+    /// names one owning tenant and a single decision covers every entry. Because the
+    /// tree is enrolled (and therefore bounded), every entry is dead-lettered with
+    /// the matching reason tag - <see cref="LatticeReplicationMetrics.ReasonForeignTenant"/>
+    /// for a non-existent tenant or <see cref="LatticeReplicationMetrics.ReasonTenantOffline"/>
+    /// for an out-of-region tenant - and records the matching apply-duration outcome,
+    /// so per-entry receiver observability is preserved. A single warning is logged
+    /// per run rather than per entry to avoid a log-flood amplification from a hostile
+    /// peer. Returns a non-applied, HWM-unchanged result so the run neither merges nor
+    /// advances the per-origin high-water-mark, and the sender re-ships (converging
+    /// once the tenant exists / becomes resident).
+    /// </summary>
+    private async Task<ApplyResult> RejectTenantIsolationRunAsync(
+        IReadOnlyList<WalRecord> entries,
+        int startInclusive,
+        int endExclusive,
+        ReplicationTenantIsolationDecision decision,
+        CancellationToken cancellationToken)
+    {
+        var first = entries[startInclusive];
+        var treeId = first.TreeId;
+        var origin = first.OriginClusterId ?? string.Empty;
+
+        var outcome = decision == ReplicationTenantIsolationDecision.RejectOutOfRegion
+            ? LatticeReplicationMetrics.OutcomeRejectedTenantOffline
+            : LatticeReplicationMetrics.OutcomeRejectedForeignTenant;
+
+        _logger.LogWarning(
+            "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "
+            + "the tenant-isolation gate refused the write ({Decision}); the run was not applied.",
+            endExclusive - startInclusive, treeId, origin, decision);
+
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var startTs = Stopwatch.GetTimestamp();
+            await DeadLetterTenantIsolationAsync(entries[k], decision, cancellationToken).ConfigureAwait(false);
+            RecordApplyDuration(treeId, origin, startTs, outcome);
         }
 
         return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };

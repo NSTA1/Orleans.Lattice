@@ -174,4 +174,23 @@ internal sealed record TreeRegistryEntry
     /// alias without a naming convention.
     /// </summary>
     [Id(13)] public string? RestoreShadowOfTreeId { get; init; }
+
+    /// <summary>
+    /// Per-tree runtime override for <see cref="LatticeOptions.MaxCacheValueBytes"/>.
+    /// When <c>null</c> (the default), the silo-wide option value is used;
+    /// when set to a positive byte count, the override takes priority over the
+    /// silo option for this tree only, capping the resident value-payload bytes
+    /// per read-through cache activation with LRU payload eviction. Mutated at
+    /// runtime through <see cref="ILatticeRegistry.SetMaxCacheValueBytesAsync(string, long?)"/>
+    /// and read back through <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver"/>
+    /// (both the full <c>ResolveAsync</c> record and the lightweight
+    /// <see cref="Orleans.Lattice.BPlusTree.LatticeOptionsResolver.GetMaxCacheValueBytesAsync(string)"/>
+    /// fast path). Propagation to other silo activations is best-effort: each
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.LeafCacheGrain"/> activation
+    /// re-resolves the cap on each cache refresh, so toggling it on a warm
+    /// activation only bounds payloads merged after the change. Validated to be
+    /// greater than or equal to 1 when supplied, exactly mirroring the silo-wide
+    /// option's validation.
+    /// </summary>
+    [Id(14)] public long? MaxCacheValueBytes { get; init; }
 }

@@ -173,6 +173,13 @@ public static class LatticeServiceCollectionExtensions
         // gate. The null gate returns a cached, synchronously-completed allow
         // decision, so an unregistered gate adds no per-call allocation.
         builder.Services.TryAddSingleton<ILatticeAccessGate, NullLatticeAccessGate>();
+        // Tenant-administration capability seam: the single core choke point that
+        // resolves the platform-operator vs delegated-per-tenant-admin distinction
+        // (a scope over the existing Admin capability) against the registered gate.
+        // Stateless over ILatticeAccessGate, so a singleton is safe and cheap; with
+        // the default null gate every check short-circuits to allow, so registering
+        // it changes no behaviour until a real gate is present.
+        builder.Services.TryAddSingleton<LatticeTenantAdminAuthorizer>();
         // Write-path value interceptor seam: default to the always-accept no-op
         // so the data-plane choke point always resolves an interceptor and the
         // write path is byte-for-byte unchanged until a companion package (for
@@ -207,6 +214,27 @@ public static class LatticeServiceCollectionExtensions
         // observer's per-record upcaster dispatch) and strips the version envelope
         // from a durable CRDT delta before it is folded.
         builder.Services.TryAddSingleton<ILatticeEnvelopeCodec, NullLatticeEnvelopeCodec>();
+        // Multi-tenancy seams (opt-in): default to the pass-through no-ops so a
+        // cluster with no tenancy add-on resolves the reserved 'default' tenant,
+        // admits every operation, and enumerates every tree unchanged - core is
+        // byte-for-byte identical with no per-operation cost. The null resolver
+        // returns a cached, synchronously-completed default-tenant result; the
+        // null admission controller and enumeration filter both report
+        // IsActive == false so a tenant-aware choke point caches the inactive
+        // flag and never calls into them. The tenancy package replaces these
+        // with the real context-reading / quota-evaluating / tenant-pruning
+        // implementations.
+        builder.Services.TryAddSingleton<ITenantContextResolver, NullTenantContextResolver>();
+        builder.Services.TryAddSingleton<ITenantAdmissionController, NullTenantAdmissionController>();
+        builder.Services.TryAddSingleton<ITenantEnumerationFilter, NullTenantEnumerationFilter>();
+        // Physical tree-placement seam (opt-in): default to the pass-through no-op
+        // so a cluster with no tenancy add-on seeds every tree with the baseline WAL
+        // placement (the catalog's default provider key, no override) - byte-for-byte
+        // identical to pre-placement behaviour with no per-registration cost. The
+        // null resolver resolves synchronously and allocation-free. The tenancy
+        // package replaces it with the resolver that pins a tenant's trees to the
+        // dedicated WAL provider named on the tenant's placement binding.
+        builder.Services.TryAddSingleton<ITreePlacementResolver, NullTreePlacementResolver>();
         // CRDT shape registry: closed-shape modes (OrSet / PnCounter /
         // VersionVector / MvRegister) are pre-populated on construction
         // so no host registration is required for them. Generic OrMap

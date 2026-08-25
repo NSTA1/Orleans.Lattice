@@ -1533,6 +1533,61 @@ code, .explorer-mono {
     line-height: 1;
 }
 
+.explorer-tenant {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+}
+
+.explorer-tenant-label {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.7rem;
+}
+
+.explorer-tenant-id {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 8rem;
+}
+
+.explorer-tenant-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+}
+
+.explorer-tenant-alltenants {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.explorer-tenant-input {
+    width: 6rem;
+    padding: 0.15rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
+.explorer-tenant-input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
 /*
   Accessibility: honour a reduced-motion preference (or a future reduced-motion
   toggle that sets the same media state) without touching individual rules.

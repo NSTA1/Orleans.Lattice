@@ -1,5 +1,6 @@
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 
 namespace Orleans.Lattice.Explorer.Core.Catalog;
 
@@ -7,7 +8,7 @@ namespace Orleans.Lattice.Explorer.Core.Catalog;
 /// Default <see cref="ICatalogReader"/> that fans out to the state API's
 /// discovery endpoints and maps the responses to <see cref="CatalogItem"/>s.
 /// </summary>
-public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
+public sealed class CatalogReader : ICatalogReader
 {
     /// <summary>
     /// Reserved tree-name prefix for materialised-view trees, mirrored from
@@ -18,7 +19,29 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
     /// </summary>
     private const string ViewTreePrefix = "view-";
 
-    private readonly ILatticeStateClient _client = client ?? throw new ArgumentNullException(nameof(client));
+    private static readonly Func<CatalogItem, string> TreeIdOf = static item => item.Id;
+
+    private readonly ILatticeStateClient _client;
+    private readonly IExplorerTenantView _tenantView;
+
+    /// <summary>
+    /// Creates a catalog reader over the state API <paramref name="client"/>. When
+    /// <paramref name="tenantView"/> is supplied and active, the trees catalog is
+    /// scoped to the caller's active tenant; when it is <see langword="null"/> or
+    /// inactive (the default when tenant scoping is not enabled) the catalog is
+    /// returned exactly as the server sent it, so a non-tenant cluster is
+    /// byte-for-byte unchanged.
+    /// </summary>
+    /// <param name="client">The read-only state API client. Must not be <see langword="null"/>.</param>
+    /// <param name="tenantView">
+    /// The optional fail-closed tenant-view seam. Defaults to <see langword="null"/>,
+    /// treated as the inactive view.
+    /// </param>
+    public CatalogReader(ILatticeStateClient client, IExplorerTenantView? tenantView = null)
+    {
+        _client = client ?? throw new ArgumentNullException(nameof(client));
+        _tenantView = tenantView ?? NullExplorerTenantView.Instance;
+    }
 
     /// <inheritdoc />
     public async Task<CatalogPage> LoadAsync(
@@ -59,7 +82,18 @@ public sealed class CatalogReader(ILatticeStateClient client) : ICatalogReader
             });
         }
 
-        return new CatalogPage { Items = items, NextPageToken = page.NextPageToken };
+        // Scope the trees catalog to the caller's active tenant. When tenant
+        // scoping is not enabled the view is inactive and this branch is skipped
+        // entirely, so the catalog is byte-for-byte identical to a non-tenant
+        // cluster (the server already scopes a tenant caller's catalog; this is
+        // the client-side view layer and the operator all-tenant toggle).
+        IReadOnlyList<CatalogItem> scoped = items;
+        if (_tenantView.IsActive)
+        {
+            scoped = await _tenantView.ScopeAsync(items, TreeIdOf, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new CatalogPage { Items = scoped, NextPageToken = page.NextPageToken };
     }
 
     private async Task<CatalogPage> LoadViewsAsync(CatalogRequest request, CancellationToken cancellationToken)

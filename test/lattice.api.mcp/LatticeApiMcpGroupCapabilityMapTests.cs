@@ -23,6 +23,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             LatticeApiMcpGroup.Replication,
             LatticeApiMcpGroup.TreeAdmin,
             LatticeApiMcpGroup.RepoContext,
+            LatticeApiMcpGroup.TenantAdmin,
         }));
     }
 
@@ -43,6 +44,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             Assert.That((int)LatticeApiMcpGroup.Replication, Is.EqualTo(5));
             Assert.That((int)LatticeApiMcpGroup.TreeAdmin, Is.EqualTo(6));
             Assert.That((int)LatticeApiMcpGroup.RepoContext, Is.EqualTo(7));
+            Assert.That((int)LatticeApiMcpGroup.TenantAdmin, Is.EqualTo(8));
         });
     }
 
@@ -184,6 +186,14 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
             Is.EqualTo(expected));
     }
 
+    [Test]
+    public void TenantAdmin_mask_is_admin_only()
+    {
+        Assert.That(
+            LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.TenantAdmin),
+            Is.EqualTo(LatticeOperation.Admin));
+    }
+
     [TestCase(LatticeApiMcpGroup.State, "state")]
     [TestCase(LatticeApiMcpGroup.Data, "data")]
     [TestCase(LatticeApiMcpGroup.Backup, "backup")]
@@ -192,6 +202,7 @@ public sealed class LatticeApiMcpGroupCapabilityMapTests
     [TestCase(LatticeApiMcpGroup.Replication, "replication")]
     [TestCase(LatticeApiMcpGroup.TreeAdmin, "treeadmin")]
     [TestCase(LatticeApiMcpGroup.RepoContext, "repocontext")]
+    [TestCase(LatticeApiMcpGroup.TenantAdmin, "tenantadmin")]
     public void DisplayName_is_the_stable_lowercase_name(LatticeApiMcpGroup group, string expected)
     {
         Assert.That(LatticeApiMcpGroupCapabilityMap.DisplayName(group), Is.EqualTo(expected));

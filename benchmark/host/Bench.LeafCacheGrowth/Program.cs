@@ -288,7 +288,7 @@ static async Task<CellResult> RunCellAsync(
     // GrainId string so LeafCacheGrain.PrimaryLeafId parses back to the leaf.
     var cacheContext = Substitute.For<IGrainContext>();
     cacheContext.GrainId.Returns(GrainId.Create("leafcache", leafGrainId.ToString()));
-    var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, originResolver);
+    var cache = new LeafCacheGrain(cacheContext, grainFactory, optionsMonitor, optionsResolver, originResolver);
 
     // Settle memory and take the pre-warmup baseline: the leaf's source
     // projection is resident, the cache mirror is not yet.
