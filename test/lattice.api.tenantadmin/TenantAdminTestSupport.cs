@@ -1,4 +1,5 @@
 using Orleans.Lattice;
+using Orleans.Lattice.Auth;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin.Tests;
@@ -94,6 +95,60 @@ internal static class TenantAdminTestSupport
         {
             subject = _subject;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// A gate double that <b>faithfully models the real core
+    /// <c>PolicyAccessGate</c> under <c>LatticeAuthOptions.DefaultEffect = Allow</c>
+    /// with no policy rules authored</b>. It reproduces the gate's routing exactly:
+    /// a request on a control-plane id - the reserved authorization namespace
+    /// (<see cref="LatticeAuthReservedTrees.IsReserved"/>) or the tenant-admin
+    /// capability namespace (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/>)
+    /// - is governed by control-plane isolation and, absent an explicit grant, is
+    /// denied regardless of the default effect; every other (data-plane) scope
+    /// takes the ordinary path where an unmatched request inherits the
+    /// <c>DefaultEffect = Allow</c> and is allowed. An optional grant admits a named
+    /// subject on the reserved policy tree, modelling a real platform operator.
+    /// This lets a unit test prove that authorizing tenant administration over a
+    /// data-plane <c>"*"</c> scope fails open, while the reserved policy tree stays
+    /// fail-closed - without spinning up a cluster.
+    /// </summary>
+    internal sealed class DefaultEffectAllowGate : ILatticeAccessGate
+    {
+        private readonly string? _policyTreeAdminSubjectId;
+
+        public DefaultEffectAllowGate(string? policyTreeAdminSubjectId = null) =>
+            _policyTreeAdminSubjectId = policyTreeAdminSubjectId;
+
+        public int Calls { get; private set; }
+
+        public string? LastScope { get; private set; }
+
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            LastScope = request.TreeId;
+
+            var isControlPlane =
+                LatticeAuthReservedTrees.IsReserved(request.TreeId)
+                || request.TreeId.StartsWith(LatticeTenantAdminScope.TenantScopePrefix, StringComparison.Ordinal);
+
+            if (isControlPlane)
+            {
+                // Control-plane isolation: denied unless an explicit matched grant
+                // names this subject on the policy tree. Never inherits DefaultEffect.
+                var granted = _policyTreeAdminSubjectId is not null
+                    && string.Equals(request.TreeId, LatticeAuthReservedTrees.PolicyTreeId, StringComparison.Ordinal)
+                    && string.Equals(request.Subject.SubjectId, _policyTreeAdminSubjectId, StringComparison.Ordinal);
+                return new(granted
+                    ? LatticeAccessDecision.Allow()
+                    : LatticeAccessDecision.Deny("Control-plane isolation: unmatched request denied."));
+            }
+
+            // Data-plane scope: an unmatched request inherits DefaultEffect = Allow.
+            return new(LatticeAccessDecision.Allow());
         }
     }
 

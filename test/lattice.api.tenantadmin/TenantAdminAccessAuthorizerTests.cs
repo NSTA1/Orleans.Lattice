@@ -51,7 +51,7 @@ public sealed class TenantAdminAccessAuthorizerTests
     }
 
     [Test]
-    public async Task AuthorizeTenantAdminAsync_authorizes_the_cluster_wide_admin_capability()
+    public async Task AuthorizeTenantAdminAsync_authorizes_the_platform_operator_admin_capability()
     {
         var gate = new RecordingGate();
         var authorizer = new TenantAdminAccessAuthorizer(gate);
@@ -62,8 +62,67 @@ public sealed class TenantAdminAccessAuthorizerTests
         {
             Assert.That(gate.Calls, Is.EqualTo(1));
             Assert.That(gate.LastOperation, Is.EqualTo(LatticeOperation.Admin));
-            Assert.That(gate.LastScope, Is.EqualTo(TenantAdminAccessAuthorizer.ClusterWideScope));
+            // Tenant administration is a control-plane action: it authorizes over the
+            // reserved policy tree (control-plane isolated), NOT the data-plane "*"
+            // sentinel, which would fail open under DefaultEffect=Allow.
+            Assert.That(gate.LastScope, Is.EqualTo(TenantAdminAccessAuthorizer.PlatformOperatorScope));
+            Assert.That(gate.LastScope, Is.EqualTo(Orleans.Lattice.Auth.LatticeAuthReservedTrees.PolicyTreeId));
         });
+    }
+
+    // ----- Control-plane isolation regression (issue #1616 tenancy security review):
+    // tenant administration must fail closed under DefaultEffect=Allow, not inherit
+    // the data-plane default effect the way a cluster-wide "*" data scope does. -----
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_denies_an_anonymous_caller_under_default_allow()
+    {
+        // Regression proof. The gate faithfully models the real PolicyAccessGate
+        // under LatticeAuthOptions.DefaultEffect=Allow with no rules authored.
+        // Authorizing over a data-plane "*" scope (the prior behaviour) inherits
+        // Allow there and hands full tenant administration - create/suspend/resume/
+        // delete of ANY tenant - to any caller, including an anonymous one. Routing
+        // through the control-plane-isolated policy tree denies the unmatched
+        // request regardless of the default effect.
+        var gate = new DefaultEffectAllowGate();
+        // No membership context -> the caller resolves to anonymous.
+        var authorizer = new TenantAdminAccessAuthorizer(gate);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await authorizer.AuthorizeTenantAdminAsync(),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(gate.LastScope, Is.EqualTo(Orleans.Lattice.Auth.LatticeAuthReservedTrees.PolicyTreeId),
+                "the request must target the control-plane-isolated policy tree, not a data-plane scope");
+        });
+    }
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_denies_a_non_operator_subject_under_default_allow()
+    {
+        // A genuine (non-anonymous) but non-operator caller is likewise denied under
+        // DefaultEffect=Allow: it holds no Admin grant on the reserved policy tree.
+        var gate = new DefaultEffectAllowGate(policyTreeAdminSubjectId: "platform-operator");
+        var membership = new FixedMembershipContext(new LatticeSubject("regular-user"));
+        var authorizer = new TenantAdminAccessAuthorizer(gate, membership);
+
+        Assert.That(async () => await authorizer.AuthorizeTenantAdminAsync(),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+    }
+
+    [Test]
+    public async Task AuthorizeTenantAdminAsync_allows_a_platform_operator_granted_on_the_policy_tree_under_default_allow()
+    {
+        // Positive control: a real platform operator (Admin on the reserved policy
+        // tree) is still authorized under DefaultEffect=Allow, so the fix denies the
+        // unauthorized without also denying the legitimately authorized.
+        var gate = new DefaultEffectAllowGate(policyTreeAdminSubjectId: "platform-operator");
+        var membership = new FixedMembershipContext(new LatticeSubject("platform-operator"));
+        var authorizer = new TenantAdminAccessAuthorizer(gate, membership);
+
+        await authorizer.AuthorizeTenantAdminAsync();
+
+        Assert.Pass("A platform operator granted on the policy tree is authorized under DefaultEffect=Allow.");
     }
 
     [Test]

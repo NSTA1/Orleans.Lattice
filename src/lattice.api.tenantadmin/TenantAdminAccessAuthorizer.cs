@@ -1,23 +1,38 @@
 using Orleans.Lattice;
+using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.TenantAdmin;
 
 /// <summary>
 /// The tenant-administration authorization seam. Given the resolved caller, it
 /// consults the registered core <see cref="ILatticeAccessGate"/> for the
-/// cluster-wide <see cref="LatticeOperation.Admin"/> capability a tenant
-/// lifecycle operation requires, and fails closed by throwing
-/// <see cref="LatticeAuthorizationDeniedException"/> when the request is not
-/// authorized. It is the single choke point the tenant-administration facade
-/// consults before touching the tenant registry or a tenant's trees.
+/// platform-operator <see cref="LatticeOperation.Admin"/> capability a tenant
+/// lifecycle operation requires - <see cref="LatticeOperation.Admin"/> on the
+/// reserved authorization policy tree (<see cref="PlatformOperatorScope"/>) - and
+/// fails closed by throwing <see cref="LatticeAuthorizationDeniedException"/> when
+/// the request is not authorized. It is the single choke point the
+/// tenant-administration facade consults before touching the tenant registry or a
+/// tenant's trees.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Faithfully reproduces the core whole-tree enforcement</b> using only the
-/// public access-gate seams, because this add-on package is not on the core
-/// library's <c>InternalsVisibleTo</c> list and must not edit the core to add
-/// itself. The reproduced rule is exactly the one the core data plane applies for
-/// a whole-tree, keyless operation: the <b>system-origin</b> gate bypass
+/// <b>Control-plane isolation.</b> Tenant lifecycle (create / suspend / resume /
+/// delete) is a platform-operator control-plane action, not data-plane traffic, so
+/// it authorizes over the reserved policy tree exactly as the sibling
+/// <see cref="TenantRegionResidencyAuthorizer"/> operator tier and the
+/// tenant-observability view do. The core gate routes the reserved namespace
+/// through its control-plane-isolated path, which never inherits the data-plane
+/// default effect, so an unmatched caller is denied even under
+/// <c>LatticeAuthOptions.DefaultEffect = Allow</c>. A cluster-wide <c>"*"</c> data
+/// scope is deliberately <b>not</b> used: it takes the ordinary data-plane path and
+/// would fail open to any caller (including an anonymous one) under
+/// <c>DefaultEffect = Allow</c>, silently handing full tenant administration to
+/// every caller.
+/// </para>
+/// <para>
+/// The enforcement uses only the public access-gate seams, because this add-on
+/// package is not on the core library's <c>InternalsVisibleTo</c> list and must not
+/// edit the core to add itself: the <b>system-origin</b> gate bypass
 /// (<see cref="LatticeSystemOrigin.IsActive"/>), caller-subject resolution through
 /// the membership seam (anonymous when no membership context is registered), a
 /// single <see cref="LatticeAccessRequest"/> for
@@ -35,13 +50,18 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 public sealed class TenantAdminAccessAuthorizer
 {
     /// <summary>
-    /// The cluster-wide scope sentinel tenant-administration operations authorize
-    /// against. Tenant lifecycle is a cluster-global administrative action (it is
-    /// not scoped to one tree), so it is authored as an ordinary cluster-wide
-    /// rule. Mirrors the sibling tree-admin authorizer's <c>"*"</c> sentinel
-    /// without taking a dependency on the auth add-on.
+    /// The control-plane scope tenant-administration operations authorize against:
+    /// the reserved authorization policy tree
+    /// (<see cref="LatticeTenantAdminScope.PlatformScopeId"/>, which equals
+    /// <see cref="LatticeAuthReservedTrees.PolicyTreeId"/>). Tenant lifecycle is a
+    /// platform-operator control-plane action, so it is authored as whole-scope
+    /// <see cref="LatticeOperation.Admin"/> on this reserved tree, which the core
+    /// gate governs with control-plane isolation (fail-closed independent of the
+    /// data-plane default effect). Mirrors the platform-operator scope the sibling
+    /// <see cref="TenantRegionResidencyAuthorizer"/> and the tenant-observability
+    /// view use.
     /// </summary>
-    public const string ClusterWideScope = "*";
+    public const string PlatformOperatorScope = LatticeTenantAdminScope.PlatformScopeId;
 
     private readonly ILatticeAccessGate _gate;
     private readonly ILatticeMembershipContext? _membership;
@@ -69,10 +89,11 @@ public sealed class TenantAdminAccessAuthorizer
 
     /// <summary>
     /// Authorizes a tenant-administration <b>mutation</b> (create, suspend,
-    /// resume, delete) for the current caller over the cluster-wide scope,
-    /// throwing <see cref="LatticeAuthorizationDeniedException"/> when
-    /// <see cref="LatticeOperation.Admin"/> authority is not granted. A partial /
-    /// filtered allow is refused, fail-closed.
+    /// resume, delete) for the current caller over the platform-operator
+    /// control-plane scope, throwing
+    /// <see cref="LatticeAuthorizationDeniedException"/> when
+    /// <see cref="LatticeOperation.Admin"/> authority on the reserved policy tree
+    /// is not granted. A partial / filtered allow is refused, fail-closed.
     /// </summary>
     /// <param name="cancellationToken">Cancels the authorization.</param>
     /// <returns>A task that completes when the operation is authorized.</returns>
@@ -92,15 +113,18 @@ public sealed class TenantAdminAccessAuthorizer
         var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
 
         // Build the request outside any system-origin scope so the gate sees the
-        // real caller, then authorize the whole-scope Admin capability.
+        // real caller, then authorize the platform-operator Admin capability on the
+        // reserved policy tree. The gate routes this reserved id through its
+        // control-plane-isolated path, so an unmatched request is denied even under
+        // DefaultEffect=Allow (a cluster-wide "*" data scope would fail open there).
         var request = new LatticeAccessRequest(
-            ClusterWideScope, LatticeOperation.Admin, subject, key: null, rangeStart: null, rangeEnd: null);
+            PlatformOperatorScope, LatticeOperation.Admin, subject, key: null, rangeStart: null, rangeEnd: null);
         var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
 
         if (!decision.Allowed)
         {
             throw new LatticeAuthorizationDeniedException(
-                ClusterWideScope,
+                PlatformOperatorScope,
                 LatticeOperation.Admin,
                 subject.SubjectId,
                 decision.Reason ?? "Tenant administration is not authorized for the caller.");
@@ -111,7 +135,7 @@ public sealed class TenantAdminAccessAuthorizer
         if (decision.KeyFilter is not null)
         {
             throw new LatticeAuthorizationDeniedException(
-                ClusterWideScope,
+                PlatformOperatorScope,
                 LatticeOperation.Admin,
                 subject.SubjectId,
                 decision.Reason ?? "Tenant administration is not fully authorized over the cluster; "
