@@ -277,6 +277,55 @@ public class IReplicationBatchEncoderDefaultFramingTests
             Throws.ArgumentException);
     }
 
+    [Test]
+    public void TryDecodeFraming_rejects_entry_body_length_that_overflows_cursor()
+    {
+        // Regression: forge an entry length of int.MaxValue. By the time the
+        // entry body is read the cursor is a small positive offset, so a naive
+        // int `cursor + length` overflows to a negative value and slips past the
+        // truncation guard - downgrading the fail-closed framing rejection into a
+        // raw ArraySegment "out of bounds" ArgumentException (no ParamName). The
+        // fix widens the sum to long so the guard still fires with the descriptive
+        // framing error naming the payload.
+        var header = MakeHeader(1);
+        var writer = new ArrayBufferWriter<byte>();
+        var headerSpan = writer.GetSpan(EncodedBatchHeader.WireSize);
+        header.WriteTo(headerSpan);
+        writer.Advance(EncodedBatchHeader.WireSize);
+        WriteLengthPrefixedAscii(writer, TreeName);
+        WriteLengthPrefixedAscii(writer, OriginClusterId);
+        var lenSpan = writer.GetSpan(4);
+        BinaryPrimitives.WriteInt32LittleEndian(lenSpan, int.MaxValue);
+        writer.Advance(4);
+        var payload = writer.WrittenMemory.ToArray();
+
+        Assert.That(
+            () => _encoder.TryDecodeFraming(payload, out _, out _, out _, out _),
+            Throws.TypeOf<ArgumentException>()
+                .With.Property("ParamName").EqualTo("payload")
+                .And.Message.Contains("would overrun the payload"));
+    }
+
+    [Test]
+    public void TryDecodeFraming_rejects_treeName_length_that_overflows_cursor()
+    {
+        // Regression: forge a treeName length of int.MaxValue. As above, a naive
+        // int `cursor + length` overflows past the guard, and the raw
+        // Span.Slice/UTF8.GetString throws an ArgumentOutOfRangeException instead
+        // of the descriptive fail-closed framing rejection. The widening fix
+        // restores the precise ArgumentException naming the payload.
+        var buffer = new byte[EncodedBatchHeader.WireSize + 4];
+        MakeHeader(0).WriteTo(buffer);
+        BinaryPrimitives.WriteInt32LittleEndian(
+            buffer.AsSpan(EncodedBatchHeader.WireSize, 4), int.MaxValue);
+
+        Assert.That(
+            () => _encoder.TryDecodeFraming(buffer, out _, out _, out _, out _),
+            Throws.TypeOf<ArgumentException>()
+                .With.Property("ParamName").EqualTo("payload")
+                .And.Message.Contains("would overrun the payload"));
+    }
+
     private static void WriteLengthPrefixedAscii(IBufferWriter<byte> writer, string value)
     {
         var body = System.Text.Encoding.UTF8.GetBytes(value);

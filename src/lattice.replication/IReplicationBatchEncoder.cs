@@ -343,7 +343,12 @@ public interface IReplicationBatchEncoder
             }
             var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
             cursor += 4;
-            if (length < 0 || cursor + length > payload.Length)
+            // Widen to long before summing: length is an attacker-controllable
+            // wire field (up to int.MaxValue), so cursor + length can overflow to
+            // a negative value and slip past this guard, downgrading the precise
+            // framing rejection into a raw slice exception. Mirrors the fix in
+            // OrleansBinaryReplicationBatchEncoder.
+            if (length < 0 || (long)cursor + length > payload.Length)
             {
                 throw new ArgumentException(
                     $"Framing payload is truncated at the body for entry {i} of "
@@ -375,7 +380,12 @@ public interface IReplicationBatchEncoder
         }
         var length = BinaryPrimitives.ReadInt32LittleEndian(span[cursor..(cursor + 4)]);
         cursor += 4;
-        if (length < 0 || cursor + length > payload.Length)
+        // Widen to long before summing: length is an attacker-controllable wire
+        // field (up to int.MaxValue), so cursor + length can overflow to a
+        // negative value and slip past this guard, downgrading the precise framing
+        // rejection into a raw slice exception. Mirrors the fix in
+        // OrleansBinaryReplicationBatchEncoder.
+        if (length < 0 || (long)cursor + length > payload.Length)
         {
             throw new ArgumentException(
                 $"Framing payload is truncated at the body for {fieldName}; declared "
