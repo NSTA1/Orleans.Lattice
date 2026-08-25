@@ -173,6 +173,13 @@ public static class LatticeServiceCollectionExtensions
         // gate. The null gate returns a cached, synchronously-completed allow
         // decision, so an unregistered gate adds no per-call allocation.
         builder.Services.TryAddSingleton<ILatticeAccessGate, NullLatticeAccessGate>();
+        // Tenant-administration capability seam: the single core choke point that
+        // resolves the platform-operator vs delegated-per-tenant-admin distinction
+        // (a scope over the existing Admin capability) against the registered gate.
+        // Stateless over ILatticeAccessGate, so a singleton is safe and cheap; with
+        // the default null gate every check short-circuits to allow, so registering
+        // it changes no behaviour until a real gate is present.
+        builder.Services.TryAddSingleton<LatticeTenantAdminAuthorizer>();
         // Write-path value interceptor seam: default to the always-accept no-op
         // so the data-plane choke point always resolves an interceptor and the
         // write path is byte-for-byte unchanged until a companion package (for

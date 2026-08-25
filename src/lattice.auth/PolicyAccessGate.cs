@@ -51,23 +51,30 @@ internal sealed class PolicyAccessGate(
             return new ValueTask<LatticeAccessDecision>(allow);
         }
 
-        // Control-plane isolation (issue #1103). The reserved authorization
-        // namespace (sys-auth-*) governs the gate itself - membership and policy -
-        // so its access decision must be independent of the data-plane
-        // DefaultEffect. A non-bootstrap caller only reaches this point because it
-        // is not a break-glass administrator; an unmatched request MUST fail closed
-        // to Deny even under DefaultEffect=Allow. Without this, an unmatched admin
-        // request would inherit Allow and any caller (including an anonymous one)
-        // could rewrite membership and policy - a full control-plane takeover. The
-        // infrastructure's own reads and writes of this namespace run system-origin
-        // and never reach the gate, so they are unaffected; only a genuine external
-        // control-plane request is governed here. An explicit matched Allow is
-        // honoured: this is the access-administration delegation grant (a whole-tree
-        // Admin rule on the policy tree, authorable only when
-        // AccessAdministrationDelegationEnabled is set on LatticeAuthOptions), which
-        // lets a bootstrap admin delegate access administration to a chosen subject
-        // without weakening the fail-closed default for every other case.
-        if (LatticeAuthReservedTrees.IsReserved(request.TreeId))
+        // Control-plane isolation (issue #1103, extended for tenant-administration
+        // capabilities). The reserved authorization namespace (sys-auth-*) governs
+        // the gate itself - membership and policy - and the tenant-administration
+        // capability namespace (LatticeTenantAdminScope.TenantScopePrefix, an
+        // _lattice_ platform-owned control-plane id) names the platform-operator and
+        // delegated-per-tenant-admin capabilities. Both are control-plane, so their
+        // access decision must be independent of the data-plane DefaultEffect. A
+        // non-bootstrap caller only reaches this point because it is not a break-glass
+        // administrator; an unmatched request MUST fail closed to Deny even under
+        // DefaultEffect=Allow. Without this, an unmatched admin request would inherit
+        // Allow and any caller (including an anonymous one) could rewrite membership
+        // and policy, or seize a tenant-admin capability across tenants - a full
+        // control-plane takeover. The infrastructure's own reads and writes of the
+        // reserved namespace run system-origin and never reach the gate, so they are
+        // unaffected; only a genuine external control-plane request is governed here.
+        // An explicit matched Allow is honoured: for the reserved namespace this is
+        // the access-administration delegation grant (a whole-tree Admin rule on the
+        // policy tree, authorable only when AccessAdministrationDelegationEnabled is
+        // set); for the tenant-administration namespace it is an ordinary Admin grant
+        // on the exact tenant-scope id (authorable because the id is not sys-auth-*),
+        // so a delegated per-tenant admin is honoured only for its own tenant and can
+        // never inherit Allow for another's.
+        if (LatticeAuthReservedTrees.IsReserved(request.TreeId)
+            || IsTenantAdminCapabilityNamespace(request.TreeId))
         {
             var controlPlane = EvaluateControlPlane(in request);
             observer.Observe(in request, in controlPlane, default, maintainer.CurrentEpoch, start);
@@ -172,17 +179,19 @@ internal sealed class PolicyAccessGate(
             request.RangeEnd);
 
     /// <summary>
-    /// Evaluates a request that targets the reserved authorization namespace
-    /// (<c>sys-auth-*</c>) with <b>control-plane isolation</b>: the decision is
-    /// forced closed (Deny) on every outcome that is not an explicit matched
-    /// Allow, so the data-plane <see cref="LatticeAuthOptions.DefaultEffect"/> can
-    /// never grant control of the gate. Bootstrap administrators never reach here
-    /// (they are allowed earlier), so this governs only non-bootstrap callers. Such
-    /// a caller is allowed only by an explicit matched allow rule on the reserved
-    /// namespace - the access-administration delegation grant (a whole-tree
-    /// <see cref="LatticeOperation.Admin"/> rule on the policy tree, authorable only
-    /// when <c>AccessAdministrationDelegationEnabled</c> is set); absent such a
-    /// grant, the request always resolves to Deny.
+    /// Evaluates a request that targets a control-plane capability namespace - the
+    /// reserved authorization namespace (<c>sys-auth-*</c>) or the
+    /// tenant-administration capability namespace
+    /// (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/>) - with
+    /// <b>control-plane isolation</b>: the decision is forced closed (Deny) on every
+    /// outcome that is not an explicit matched Allow, so the data-plane
+    /// <see cref="LatticeAuthOptions.DefaultEffect"/> can never grant a control-plane
+    /// capability. Bootstrap administrators never reach here (they are allowed
+    /// earlier), so this governs only non-bootstrap callers. Such a caller is allowed
+    /// only by an explicit matched allow rule on the exact id - the
+    /// access-administration delegation grant on the policy tree, or an ordinary
+    /// whole-scope <see cref="LatticeOperation.Admin"/> grant on the caller's own
+    /// tenant-admin scope id; absent such a grant, the request always resolves to Deny.
     /// </summary>
     private LatticeAccessDecision EvaluateControlPlane(in LatticeAccessRequest request)
     {
@@ -201,10 +210,22 @@ internal sealed class PolicyAccessGate(
         }
 
         return LatticeAccessDecision.Deny(
-            "Control-plane isolation: the reserved authorization namespace is governed only by "
-            + "bootstrap administrators (or an explicit matched allow rule); an unmatched request is "
-            + "denied independently of the data-plane default effect.");
+            "Control-plane isolation: a control-plane capability namespace (the reserved authorization "
+            + "namespace or a tenant-administration capability) is governed only by bootstrap administrators "
+            + "(or an explicit matched allow rule); an unmatched request is denied independently of the "
+            + "data-plane default effect.");
     }
+
+    /// <summary>
+    /// Whether <paramref name="treeId"/> names a tenant-administration control-plane
+    /// capability (the platform-operator or a delegated per-tenant-admin scope), so it
+    /// must be governed with control-plane isolation rather than the data-plane default
+    /// effect. The platform-operator scope id is the reserved policy tree and is already
+    /// covered by <see cref="LatticeAuthReservedTrees.IsReserved"/>; this covers the
+    /// <see cref="LatticeTenantAdminScope.TenantScopePrefix"/> per-tenant ids.
+    /// </summary>
+    private static bool IsTenantAdminCapabilityNamespace(string treeId) =>
+        treeId.StartsWith(LatticeTenantAdminScope.TenantScopePrefix, StringComparison.Ordinal);
 
     private bool IsBootstrapAdministrator(string subjectId)
     {
