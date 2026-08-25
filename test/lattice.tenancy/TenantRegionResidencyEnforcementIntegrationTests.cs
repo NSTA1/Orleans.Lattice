@@ -43,6 +43,9 @@ public sealed class TenantRegionResidencyEnforcementIntegrationTests
     private TenantResidencySnapshotMaintainer Maintainer =>
         _fixture.SiloServices.GetRequiredService<TenantResidencySnapshotMaintainer>();
 
+    private CompiledTenantPolicySnapshotMaintainer PolicyMaintainer =>
+        _fixture.SiloServices.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>();
+
     private ILatticeAccessGate Gate =>
         _fixture.SiloServices.GetRequiredService<ILatticeAccessGate>();
 
@@ -96,7 +99,7 @@ public sealed class TenantRegionResidencyEnforcementIntegrationTests
         record.SetRegionStatus("other-region", TenantRegionStatus.Online, Clock(2), "seed");
         record.AddAdminSubject(Admin, Clock(3), "seed");
         await _fixture.Registry.PutAsync(record);
-        await Maintainer.RebuildNowAsync();
+        await RebuildSnapshotsAsync();
 
         Assert.That(await OwnerAllowedAsync(tenant), Is.False,
             "a tenant resident only in another region is not online here, so the gate refuses");
@@ -140,6 +143,19 @@ public sealed class TenantRegionResidencyEnforcementIntegrationTests
         record.SetRegionStatus(regionId, status, Clock(3), "seed");
         record.AddAdminSubject(Admin, Clock(4), "seed");
         await _fixture.Registry.PutAsync(record);
+        await RebuildSnapshotsAsync();
+    }
+
+    /// <summary>
+    /// Forces a deterministic rebuild of both per-silo snapshots the gate consults:
+    /// the compiled tenant-policy snapshot (which <see cref="ITenantPolicyEngine"/>
+    /// reads to validate that a subject may act as the active tenant) and the
+    /// residency snapshot. Both are normally rebuilt asynchronously off the core
+    /// change-feed; forcing both keeps the test free of any rebuild race.
+    /// </summary>
+    private async Task RebuildSnapshotsAsync()
+    {
+        await PolicyMaintainer.RebuildNowAsync();
         await Maintainer.RebuildNowAsync();
     }
 
