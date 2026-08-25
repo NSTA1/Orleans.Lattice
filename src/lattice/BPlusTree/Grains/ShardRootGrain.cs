@@ -584,7 +584,7 @@ internal sealed partial class ShardRootGrain(
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
-        ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
+        ThrowIfRejectedForAnyKey(entries);
         RecordWrite();
 
         if (entries.Count == 0) return;
@@ -884,7 +884,7 @@ internal sealed partial class ShardRootGrain(
         ArgumentNullException.ThrowIfNull(entries);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
-        ThrowIfRejectedForAnyKey(entries.Select(e => e.Key));
+        ThrowIfRejectedForAnyKey(entries);
         RecordWrite();
 
         if (entries.Count == 0) return Array.Empty<string>();

@@ -110,6 +110,13 @@ if (string.Equals(suite, "authdecision", StringComparison.OrdinalIgnoreCase))
     return authSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "hotpath", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> hotpath (HotPathAllocationBenchmarks)");
+    var hotpathSummary = BenchmarkRunner.Run<HotPathAllocationBenchmarks>(config);
+    return hotpathSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
 var bdnExitCode = summary.HasCriticalValidationErrors ? 1 : 0;
 
