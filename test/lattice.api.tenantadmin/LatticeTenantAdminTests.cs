@@ -316,6 +316,38 @@ public sealed class LatticeTenantAdminTests
     }
 
     [Test]
+    public async Task DeleteTenantAsync_reruns_after_a_partial_cascade_failure_and_completes()
+    {
+        // Simulate an interrupted delete: the first attempt suspends the tenant then
+        // fails mid-cascade, leaving the registry record intact (retriable). The
+        // second attempt re-enumerates and completes, removing the record.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecord(Tenant));
+        var cascade = new FlakyCascade(registry, countOnSuccess: 4);
+        var facade = Create(registry, cascade: cascade);
+
+        Assert.That(async () => await facade.DeleteTenantAsync(Tenant),
+            Throws.TypeOf<InvalidOperationException>(), "The first attempt fails mid-cascade.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.ObservedStatusOnFirstCall, Is.EqualTo(TenantStatus.Suspended),
+                "The tenant was suspended before the (failing) cascade ran.");
+            Assert.That(registry.Contains(Tenant), Is.True, "A partial failure leaves the registry record.");
+            Assert.That(registry.Peek(Tenant)!.Status, Is.EqualTo(TenantStatus.Suspended));
+        });
+
+        var result = await facade.DeleteTenantAsync(Tenant);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cascade.Calls, Is.EqualTo(2), "The re-run invokes the cascade again.");
+            Assert.That(result.CascadedTreeCount, Is.EqualTo(4));
+            Assert.That(registry.Contains(Tenant), Is.False, "The re-run removes the registry record.");
+            Assert.That(registry.Deletes, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void DeleteTenantAsync_of_an_unknown_tenant_fails_closed_without_cascading()
     {
         var registry = new FakeTenantRegistry();

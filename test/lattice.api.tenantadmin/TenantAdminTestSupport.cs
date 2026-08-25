@@ -159,6 +159,40 @@ internal static class TenantAdminTestSupport
         }
     }
 
+    /// <summary>
+    /// A cascade that throws on its first invocation (simulating a partial failure
+    /// mid-delete) and succeeds on every subsequent call, so a test can prove a
+    /// re-run after a partial failure completes. Records the registry status it
+    /// observed on each call.
+    /// </summary>
+    internal sealed class FlakyCascade : ITenantTreeCascade
+    {
+        private readonly FakeTenantRegistry _registry;
+        private readonly int _countOnSuccess;
+
+        public FlakyCascade(FakeTenantRegistry registry, int countOnSuccess)
+        {
+            _registry = registry;
+            _countOnSuccess = countOnSuccess;
+        }
+
+        public int Calls { get; private set; }
+
+        public TenantStatus? ObservedStatusOnFirstCall { get; private set; }
+
+        public Task<int> DeleteTenantTreesAsync(TenantId tenant, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            if (Calls == 1)
+            {
+                ObservedStatusOnFirstCall = _registry.Peek(tenant.Value)?.Status;
+                throw new InvalidOperationException("simulated partial cascade failure");
+            }
+
+            return Task.FromResult(_countOnSuccess);
+        }
+    }
+
     /// <summary>A minimal in-memory <see cref="ITenantRegistry"/> backed by a dictionary, with call counters.</summary>
     internal sealed class FakeTenantRegistry : ITenantRegistry
     {
