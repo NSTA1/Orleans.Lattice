@@ -96,8 +96,11 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
         // Quiesce the snapshot maintainer: the PutRuleAsync above fires the
         // mutation observer, which rebuilds the compiled snapshot by scanning the
         // reserved policy tree. Awaiting an explicit rebuild here drains that
-        // in-flight scan so the raw diagnostic scan below does not race a
-        // concurrent enumeration of the same policy-tree activation.
+        // in-flight scan so the diagnostic scan below does not needlessly race a
+        // concurrent enumeration of the same policy-tree activation. The scan
+        // itself uses the resilient ScanEntriesAsync wrapper, which transparently
+        // reconnects on EnumerationAbortedException should the enumerator still be
+        // aborted by a deactivation or idle-expiry mid-walk.
         await _fixture.RebuildPolicyAsync();
 
         // Read the rule directly from the durable reserved tree through a fresh
@@ -109,7 +112,7 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
         LatticeAuthorizationRule? fromTree = null;
         using (AuthClusterFixture.AsSubject(AuthClusterFixture.BootstrapAdmin))
         {
-            await foreach (var entry in policyTree.EntriesAsync<LatticeAuthorizationRule>())
+            await foreach (var entry in policyTree.ScanEntriesAsync<LatticeAuthorizationRule>())
             {
                 if (entry.Value is { RuleId: "durable-1" } r)
                 {

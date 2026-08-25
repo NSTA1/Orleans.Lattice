@@ -86,7 +86,7 @@ public class TenantTreeRoutingIntegrationTests
             Assert.That(keys, Is.EqualTo(new[] { "a", "b", "c" }));
 
             var entries = new List<string>();
-            await foreach (var e in tree.EntriesAsync())
+            await foreach (var e in tree.ScanEntriesAsync())
                 entries.Add($"{e.Key}={Encoding.UTF8.GetString(e.Value)}");
             Assert.That(entries, Is.EqualTo(new[] { "a=1", "b=2", "c=3" }));
         }
