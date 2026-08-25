@@ -295,9 +295,15 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton<TenantObservabilitySource>();
         builder.Services.TryAddSingleton<ITenantObservabilityView, TenantObservabilityView>();
         builder.Services.TryAddSingleton<TenantObservabilityPublisher>();
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IHostedService>(
-                sp => sp.GetRequiredService<TenantObservabilityPublisher>()));
+        // Register the shared publisher singleton as a hosted service. AddSingleton
+        // (not TryAddEnumerable) is required here: the host resolves IHostedService as
+        // an enumerable, and a factory-form descriptor whose delegate returns the
+        // IHostedService interface itself has no distinct implementation type, so
+        // TryAddEnumerable rejects it as indistinguishable. The surrounding block runs
+        // exactly once (guarded by TenancyRegistrationMarker above), so a plain append
+        // is idempotent across repeat AddLatticeTenancy calls.
+        builder.Services.AddSingleton<IHostedService>(
+            sp => sp.GetRequiredService<TenantObservabilityPublisher>());
 
         return builder;
     }
