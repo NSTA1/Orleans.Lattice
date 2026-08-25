@@ -28,20 +28,35 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// Diagnostics reads are whole-tree scoped (they address a tree or the whole
 /// cluster, never a single key), so every check is a whole-tree check: a partial /
 /// filtered allow is refused, fail-closed, exactly as an admin operation is. The
-/// cluster-wide storage accounting is scoped to the sentinel all-trees id
-/// (<c>"*"</c>), so its <see cref="LatticeOperation.Telemetry"/> grant is authored as
-/// an ordinary cluster-wide rule.
+/// cluster-wide storage accounting summary addresses no single tree, so it is
+/// authorized over the reserved auth policy-tree scope (<c>"sys-auth-policy"</c>)
+/// rather than the data-plane all-trees sentinel (<c>"*"</c>): the reserved
+/// namespace routes through the gate's control-plane isolation, which denies an
+/// unmatched request regardless of the data-plane
+/// <c>DefaultEffect</c> - so its <see cref="LatticeOperation.Telemetry"/> grant
+/// fails closed under <c>DefaultEffect = Allow</c> instead of being inherited by
+/// any caller. Authorizing over <c>"*"</c> would take the ordinary data-plane
+/// path and leak the elevated all-tree observability scope to an anonymous caller
+/// whenever a host opts into the permissive default.
 /// </para>
 /// </remarks>
 internal sealed class TreeAdminAccessAuthorizer
 {
     /// <summary>
-    /// The cluster-wide scope sentinel the storage accounting summary authorizes
-    /// against. Mirrors <c>Orleans.Lattice.Auth.LatticeScope.ClusterWideTreeId</c>
-    /// (<c>"*"</c>) without taking a dependency on the auth add-on: the facade never
-    /// references it, so the sentinel is repeated locally as a plain constant.
+    /// The reserved auth policy-tree scope the cluster-wide storage accounting
+    /// summary authorizes against. Mirrors
+    /// <c>Orleans.Lattice.Auth.LatticeAuthReservedTrees.PolicyTreeId</c>
+    /// (<c>"sys-auth-policy"</c>) without taking a dependency on the auth add-on:
+    /// the facade never references it, so the id is repeated locally as a plain
+    /// constant. Because the id lies in the reserved <c>sys-auth-*</c> namespace,
+    /// the access gate routes it through control-plane isolation and denies an
+    /// unmatched request independently of the data-plane <c>DefaultEffect</c>, so
+    /// the cluster-telemetry capability fails closed under
+    /// <c>DefaultEffect = Allow</c> exactly as an admin control-plane operation
+    /// does. When no auth gate is registered the no-op gate still short-circuits to
+    /// allow at zero cost, so the auth-off surface is unchanged.
     /// </summary>
-    internal const string ClusterWideScope = "*";
+    internal const string PolicyTreeScope = "sys-auth-policy";
 
     private readonly ILatticeAccessGate _gate;
     private readonly ILatticeMembershipContext? _membership;
@@ -86,14 +101,18 @@ internal sealed class TreeAdminAccessAuthorizer
     /// Authorizes the cluster-wide storage accounting <b>read</b> for the current
     /// caller, throwing <see cref="LatticeAuthorizationDeniedException"/> when the
     /// distinct <see cref="LatticeOperation.Telemetry"/> capability is not granted over
-    /// the cluster-wide scope.
+    /// the reserved auth policy-tree scope (<see cref="PolicyTreeScope"/>). Because
+    /// that scope lies in the reserved <c>sys-auth-*</c> namespace, the gate routes
+    /// it through control-plane isolation and denies an unmatched request regardless
+    /// of the data-plane <c>DefaultEffect</c>, so this elevated all-tree
+    /// observability capability fails closed under <c>DefaultEffect = Allow</c>.
     /// </summary>
     /// <param name="cancellationToken">Cancels the authorization.</param>
     /// <returns>A task that completes when the read is authorized.</returns>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for cluster telemetry.</exception>
     public ValueTask AuthorizeClusterTelemetryAsync(CancellationToken cancellationToken = default) =>
         LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
-            _gate, _membership, ClusterWideScope, LatticeOperation.Telemetry, cancellationToken);
+            _gate, _membership, PolicyTreeScope, LatticeOperation.Telemetry, cancellationToken);
 
     /// <summary>
     /// Authorizes a per-tree lifecycle <b>mutation</b> (tree creation, alias
