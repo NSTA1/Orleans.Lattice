@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Explorer.Core</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.Core</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>Head-agnostic core of the Orleans.Lattice Explorer: the read-only state-API connection seam, configuration store, session, capability model, and the catalog / metrics / topology / data / dead-letter / history navigation services shared by every explorer head. Its only cluster dependency is the public read-only state-API gRPC client.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

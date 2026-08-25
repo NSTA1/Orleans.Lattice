@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TreeAdmin.Grpc</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>Code-first gRPC transport binding and strongly-typed client for Orleans.Lattice.Api.TreeAdmin. Exposes the tree-administration control facade over a remote gRPC surface, with a default-deny authorization interceptor and an unauthenticated auth-scheme discovery RPC. Binds a fail-closed capability probe; individual whole-tree lifecycle operations are added as RPCs as they become available.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

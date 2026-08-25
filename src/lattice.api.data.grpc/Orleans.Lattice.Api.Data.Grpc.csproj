@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Data.Grpc</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>gRPC transport binding for Orleans.Lattice.Api.Data. Exposes the read-write external data-plane API (set, delete, single-tree and cross-tree atomic batches, point read, bounded range read) as unary gRPC RPCs over a code-first, Orleans-serialized contract, with a header-based identity bridge, a pluggable coarse authorization seam, and a default-deny posture. Registered with AddLatticeDataApiGrpc(...) and mapped with MapLatticeDataApiGrpc().</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

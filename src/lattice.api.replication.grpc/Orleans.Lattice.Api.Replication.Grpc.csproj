@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Replication.Grpc</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>gRPC transport binding for Orleans.Lattice.Api.Replication - the transport-agnostic runtime per-tree replication control facade. Exposes the facade as a code-first, Orleans-serialized gRPC service and ships a strongly-typed client. Default-deny: every replication control RPC is rejected until the host opts in; the unauthenticated GetAuthScheme discovery RPC is the single exemption.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

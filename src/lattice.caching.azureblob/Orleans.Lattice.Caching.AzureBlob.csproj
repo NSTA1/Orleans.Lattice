@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Orleans.Lattice.Caching.AzureBlob</RootNamespace>
     <PackageId>Orleans.Lattice.Caching.AzureBlob</PackageId>
-    <Version>9.2.0</Version>
+    <Version>9.3.0</Version>
     <Description>Azure Blob Storage IDistributedCache for Orleans.Lattice. Backs the ASP.NET Core distributed-cache abstraction with an Azure Storage account (one block blob per entry, expiry tracked in blob metadata, sliding-window support), so a multi-replica web head - for example a hosted Explorer console using Microsoft.Identity.Web token caches - has a shared, off-cluster cache without needing Redis or SQL. Selectable purely by DI.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
