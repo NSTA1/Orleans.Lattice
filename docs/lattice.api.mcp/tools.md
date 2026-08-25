@@ -1,6 +1,6 @@
 # Tools
 
-The MCP server exposes its capabilities as **tools**, grouped into six opt-in modules plus a `lattice_capabilities` and a `lattice_list_regions` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
+The MCP server exposes its capabilities as **tools**, grouped into opt-in modules plus a `lattice_capabilities` and a `lattice_list_regions` meta-tool. Every tool is a thin adapter over the matching `Orleans.Lattice.Api.*` facade and is named `lattice_<group>_<verb>`. The server ships with no tools; each module is added explicitly.
 
 ## Opting in
 
@@ -26,6 +26,8 @@ Each module registration is idempotent, and within a module the destructive verb
 | Auth | `AddAuthTools(enableAdministration)` | always | user / group / rule mutation, gated by `enableAdministration` |
 | Replication | `AddReplicationTools(enableControl)` | always | enable / disable replication, gated by `enableControl` |
 | TreeAdmin | `AddTreeAdminTools(enableSchemaControl, enableLifecycle)` | always | schema policy / version / remediation mutation, gated by `enableSchemaControl`; tree lifecycle, restore, bulk-load, WAL-move, view, tag-index, compaction, and retention control, gated by `enableLifecycle` |
+| Tenant self-awareness | `AddTenantSelfAwarenessTools()` | always (self-gates on tenancy) | none (read-only facade) |
+| Tenant-admin | `AddTenantAdminTools(enableControl)` | none | tenant create / suspend / resume / delete, gated by `enableControl` |
 
 Read tools carry `readOnlyHint = true`; destructive tools carry `destructiveHint = true` and `readOnlyHint = false`, so a well-behaved MCP client can surface the distinction to the operator. Enabling a destructive verb only advertises it - it stays subject to the same fail-closed access gate the facade enforces (see [Security](security.md)).
 
@@ -278,6 +280,35 @@ Explicit tree lifecycle, per-tree registry configuration, bulk-load, restore, WA
 The read tools carry `readOnlyHint = true` and `destructiveHint = false`; the manage tools carry `destructiveHint = true` and `readOnlyHint = false`. The registry-persisted shard-map read is distinct from the diagnostics `lattice_treeadmin_shard_map_inspect` tool, which inspects live routing rather than the durable registry map.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted `ILatticeTreeAdmin` facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTreeAdmin` off the `RemoteOptions.TreeAdmin` endpoint, with the mutating lifecycle/control tools additionally requiring `RemoteOptions.EnableLifecycleControl = true` (which maps onto `enableLifecycle`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+
+## Tenant self-awareness tools (`lattice_tenant_current`, `lattice_tenant_list`, `lattice_tenant_get`)
+
+Read-only tenant discovery over the tenant self-service facade, registered by `AddTenantSelfAwarenessTools()`. The module **self-gates on whether tenancy is enabled**: it takes no opt-in flag of its own and contributes its tools only when the tenancy-gated self-service facade is present, so a non-tenancy deployment - even one that calls the extension - is byte-for-byte unchanged. The tools advertise under the existing read-only `State` group rather than a new discovery group.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_tenant_current` | inspect | Report the tenant the calling credential is operating as, with its lifecycle status and whether it is the reserved default tenant. |
+| `lattice_tenant_list` | inspect | List the tenants the caller is authorized to access, in ascending tenant-id order, scoped fail-closed to the caller. |
+| `lattice_tenant_get` | inspect | Read one authorized tenant's lifecycle status and per-region residency; fails closed with a not-found when the tenant does not exist or the caller may not see it. |
+
+Every tool carries `readOnlyHint = true` and `destructiveHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's leak-free, fail-closed per-tenant scoping, so an unauthorized caller sees only its own default context, an empty accessible list, and a fail-closed not-found on inspect.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted self-service facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTenantSelfService` off the `RemoteOptions.TenantAdmin` endpoint (the self-service reads share the tenant-administration gRPC service address). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed per-tenant scoping.
+
+## Tenant-admin tools (`lattice_tenant_create`, `lattice_tenant_suspend`, `lattice_tenant_resume`, `lattice_tenant_delete`)
+
+Tenant lifecycle control over the tenant-administration facade, registered by `AddTenantAdminTools(enableControl)`. The lifecycle verbs are all mutating, so the module contributes tools only when `enableControl: true`; called without it, the `tenantadmin` capability is advertised to an `Admin` caller but no tools are contributed, and a cluster that never calls `AddTenantAdminTools` exposes no tenant-admin capability at all. The group is discovered only by a caller granted `LatticeOperation.Admin`.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `lattice_tenant_create` | manage | Register a new tenant in the active status. Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
+| `lattice_tenant_suspend` | manage | Move a tenant to the suspended status. Idempotent; the reserved default tenant cannot be suspended. |
+| `lattice_tenant_resume` | manage | Return a suspended tenant to the active status. Idempotent; fails closed if the tenant does not exist. |
+| `lattice_tenant_delete` | manage | Delete a tenant, cascading a soft-delete to every tree the tenant owns before removing its registry record. The reserved default tenant cannot be deleted. |
+
+Every tool carries `destructiveHint = true` and `readOnlyHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's own fail-closed tenant-admin access gate, so an unauthorized caller is default-denied on every mutation.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted tenant-administration facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTenantAdmin` off the `RemoteOptions.TenantAdmin` endpoint, with the mutating tools additionally requiring `RemoteOptions.EnableTenantControl = true` (which maps onto `enableControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
 
 ## Error handling
 

@@ -5,11 +5,14 @@ Optional, opt-in **gRPC transport binding** for
 transport-agnostic tenant-administration control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
-a strongly-typed `LatticeTenantAdminApiGrpcClient`. It binds the four tenant
+strongly-typed clients. `LatticeTenantAdminApiGrpcClient` binds the four tenant
 lifecycle operations - **create**, **suspend**, **resume**, and **delete** (which
 cascades the tenant's trees) - alongside the unauthenticated auth-scheme discovery
-RPC. Every wire message rides the Orleans serializer, so the contract stays
-versioned and additive-only.
+RPC. A read-only `LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted
+self-service reads - **current tenant**, **list accessible tenants**, and **get
+tenant** - which any authenticated caller may invoke and which the facade scopes
+fail-closed to that caller. Every wire message rides the Orleans serializer, so the
+contract stays versioned and additive-only.
 
 Wiring is two calls on the co-hosting silo:
 
