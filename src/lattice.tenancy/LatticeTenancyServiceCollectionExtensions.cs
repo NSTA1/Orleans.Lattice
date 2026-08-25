@@ -170,6 +170,26 @@ public static class LatticeTenancyServiceCollectionExtensions
             ServiceDescriptor.Singleton<ITenantGateEnforcer>(
                 sp => sp.GetRequiredService<TenantGateEnforcer>()));
 
+        // Per-tenant region residency (issue #1637, T20). Replace the null residency
+        // seam with the active resolver, which reads its decision from an in-memory
+        // per-region snapshot kept current off the core change-feed - NOT from a live
+        // registry read, so the resolver stays a pure synchronous O(1) lookup even
+        // when consulted inside the singleton, non-reentrant registry grain's turn
+        // (same re-entrancy constraint as the placement resolver above). The
+        // maintainer is registered once and exposed as an IMutationObserver so it
+        // rebuilds when the sys-tenant-registry tree mutates, and a start-up warm-up
+        // hosted service closes the cold-start admit-all window promptly. Replace (not
+        // TryAdd) guarantees the active resolver is the one that resolves.
+        builder.Services.TryAddSingleton<TenantResidencySnapshotMaintainer>();
+        builder.Services.AddSingleton<IMutationObserver>(
+            sp => sp.GetRequiredService<TenantResidencySnapshotMaintainer>());
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantResidencyResolver>(
+                sp => new TenantResidencyResolver(
+                    sp.GetRequiredService<TenantResidencySnapshotMaintainer>())));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenantResidencyWarmupHostedService>());
+
         // Replace the core null tree-placement seam with the active resolver that
         // pins a tenant's trees to its dedicated WAL provider at registration. Using
         // Replace (not TryAdd) deterministically supersedes the NullTreePlacementResolver

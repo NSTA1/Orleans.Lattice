@@ -39,6 +39,24 @@ public sealed class TenantRecord
     [Id(5)]
     internal Dictionary<string, TenantGrantSlot> GrantSlots { get; set; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The LWW-element-set of operator-authorized allowed regions, keyed by region
+    /// id. Written only by the operator tier; the tenant admin sets residency
+    /// within it. Stamped independently of <see cref="RegionStatuses"/> so operator
+    /// and tenant-admin writes converge without clobbering each other.
+    /// </summary>
+    [Id(6)]
+    internal Dictionary<string, TenantRegionAllowSlot> AllowedRegions { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The LWW-element-map of per-region lifecycle statuses, keyed by region id.
+    /// Written by the tenant-admin residency operations and the backfill/drain
+    /// promotion driver. A region absent from this map is
+    /// <see cref="TenantRegionStatus.None"/>.
+    /// </summary>
+    [Id(7)]
+    internal Dictionary<string, TenantRegionStatusSlot> RegionStatuses { get; set; } = new(StringComparer.Ordinal);
+
     /// <summary>Parameterless constructor for the Orleans serializer.</summary>
     public TenantRecord()
     {
@@ -282,6 +300,172 @@ public sealed class TenantRecord
     }
 
     /// <summary>
+    /// Authorizes <paramref name="regionId"/> in the operator-written allowed set
+    /// (add-wins by stamp). Only an authorized region may be made resident.
+    /// </summary>
+    /// <param name="regionId">The region id to authorize. Must not be <c>null</c> or empty.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
+    public void AuthorizeRegion(string regionId, HybridLogicalClock clock, string? writerId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        ApplyAllowedRegion(regionId, present: true, clock, writerId);
+    }
+
+    /// <summary>
+    /// Revokes <paramref name="regionId"/> from the operator-written allowed set (a
+    /// tombstone by stamp).
+    /// </summary>
+    /// <param name="regionId">The region id to revoke. Must not be <c>null</c> or empty.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
+    public void RevokeRegion(string regionId, HybridLogicalClock clock, string? writerId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        ApplyAllowedRegion(regionId, present: false, clock, writerId);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="regionId"/> is a live
+    /// operator-authorized region. A zero-allocation membership check.
+    /// </summary>
+    /// <param name="regionId">The region id to test. Must not be <c>null</c> or empty.</param>
+    /// <returns><c>true</c> when the region's winning allow slot is present.</returns>
+    /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
+    public bool IsRegionAllowed(string regionId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        return AllowedRegions.TryGetValue(regionId, out var slot) && slot.Present;
+    }
+
+    /// <summary>
+    /// Sets the lifecycle status of <paramref name="regionId"/> if the stamp
+    /// supersedes the region's current status stamp. A no-op when an older or equal
+    /// stamp is written.
+    /// </summary>
+    /// <param name="regionId">The region id. Must not be <c>null</c> or empty.</param>
+    /// <param name="status">The new lifecycle status.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
+    public void SetRegionStatus(string regionId, TenantRegionStatus status, HybridLogicalClock clock, string? writerId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        var slot = new TenantRegionStatusSlot { Status = status, Clock = clock, WriterId = writerId };
+        RegionStatuses[regionId] = RegionStatuses.TryGetValue(regionId, out var existing)
+            ? TenantRegionStatusSlot.Merge(existing, slot)
+            : slot;
+    }
+
+    /// <summary>
+    /// The lifecycle status of <paramref name="regionId"/>, or
+    /// <see cref="TenantRegionStatus.None"/> when the region has no status. A
+    /// zero-allocation lookup.
+    /// </summary>
+    /// <param name="regionId">The region id to look up. Must not be <c>null</c> or empty.</param>
+    /// <returns>The region's resolved status.</returns>
+    /// <exception cref="ArgumentException"><paramref name="regionId"/> is <c>null</c> or empty.</exception>
+    public TenantRegionStatus GetRegionStatus(string regionId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(regionId);
+        return RegionStatuses.TryGetValue(regionId, out var slot) ? slot.Status : TenantRegionStatus.None;
+    }
+
+    /// <summary>
+    /// <c>true</c> when the tenant has any region with a status other than
+    /// <see cref="TenantRegionStatus.None"/>, i.e. residency has been configured at
+    /// least once. When <c>false</c>, the tenant is unconfigured and treated as
+    /// online in every region (backward-compatible admit-all).
+    /// </summary>
+    public bool HasResidencyConfiguration
+    {
+        get
+        {
+            foreach (var slot in RegionStatuses.Values)
+            {
+                if (slot.Status != TenantRegionStatus.None)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The number of regions currently resident (status
+    /// <see cref="TenantRegionStatus.Provisioning"/>,
+    /// <see cref="TenantRegionStatus.Backfilling"/>, or
+    /// <see cref="TenantRegionStatus.Online"/>). The last-resident-region guard uses
+    /// this to refuse draining the final resident region.
+    /// </summary>
+    public int ResidentRegionCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var slot in RegionStatuses.Values)
+            {
+                if (TenantRegionLifecycle.IsResident(slot.Status))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// The live operator-authorized region ids, in ordinal order. Materialised on
+    /// each access; prefer <see cref="IsRegionAllowed"/> for a single membership test.
+    /// </summary>
+    public IReadOnlyList<string> AllowedRegionIds
+    {
+        get
+        {
+            var result = new List<string>(AllowedRegions.Count);
+            foreach (var (regionId, slot) in AllowedRegions)
+            {
+                if (slot.Present)
+                {
+                    result.Add(regionId);
+                }
+            }
+
+            result.Sort(StringComparer.Ordinal);
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// The per-region lifecycle statuses (excluding
+    /// <see cref="TenantRegionStatus.None"/>), ordered by region id. Materialised on
+    /// each access; prefer <see cref="GetRegionStatus"/> for a single lookup. This is
+    /// the queryable per-region status the tenant-administration read op returns.
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, TenantRegionStatus>> RegionStatusEntries
+    {
+        get
+        {
+            var result = new List<KeyValuePair<string, TenantRegionStatus>>(RegionStatuses.Count);
+            foreach (var (regionId, slot) in RegionStatuses)
+            {
+                if (slot.Status != TenantRegionStatus.None)
+                {
+                    result.Add(new KeyValuePair<string, TenantRegionStatus>(regionId, slot.Status));
+                }
+            }
+
+            result.Sort(static (a, b) => string.CompareOrdinal(a.Key, b.Key));
+            return result;
+        }
+    }
+
+    /// <summary>
     /// Produces an independent deep copy of this record, so it can be merged or
     /// mutated without affecting the original.
     /// </summary>
@@ -294,6 +478,8 @@ public sealed class TenantRecord
             PlacementRegister = PlacementRegister,
             Subjects = new Dictionary<string, TenantSubjectSlot>(Subjects, StringComparer.Ordinal),
             GrantSlots = new Dictionary<string, TenantGrantSlot>(GrantSlots, StringComparer.Ordinal),
+            AllowedRegions = new Dictionary<string, TenantRegionAllowSlot>(AllowedRegions, StringComparer.Ordinal),
+            RegionStatuses = new Dictionary<string, TenantRegionStatusSlot>(RegionStatuses, StringComparer.Ordinal),
         };
 
     /// <summary>
@@ -330,6 +516,20 @@ public sealed class TenantRecord
         {
             GrantSlots[grantId] = GrantSlots.TryGetValue(grantId, out var mine)
                 ? TenantGrantSlot.Merge(mine, slot)
+                : slot;
+        }
+
+        foreach (var (regionId, slot) in other.AllowedRegions)
+        {
+            AllowedRegions[regionId] = AllowedRegions.TryGetValue(regionId, out var mine)
+                ? TenantRegionAllowSlot.Merge(mine, slot)
+                : slot;
+        }
+
+        foreach (var (regionId, slot) in other.RegionStatuses)
+        {
+            RegionStatuses[regionId] = RegionStatuses.TryGetValue(regionId, out var mine)
+                ? TenantRegionStatusSlot.Merge(mine, slot)
                 : slot;
         }
 
@@ -375,6 +575,14 @@ public sealed class TenantRecord
         var slot = new TenantGrantSlot { Grant = grant, Present = present, Clock = clock, WriterId = writerId };
         GrantSlots[grantId] = GrantSlots.TryGetValue(grantId, out var existing)
             ? TenantGrantSlot.Merge(existing, slot)
+            : slot;
+    }
+
+    private void ApplyAllowedRegion(string regionId, bool present, HybridLogicalClock clock, string? writerId)
+    {
+        var slot = new TenantRegionAllowSlot { Present = present, Clock = clock, WriterId = writerId };
+        AllowedRegions[regionId] = AllowedRegions.TryGetValue(regionId, out var existing)
+            ? TenantRegionAllowSlot.Merge(existing, slot)
             : slot;
     }
 }

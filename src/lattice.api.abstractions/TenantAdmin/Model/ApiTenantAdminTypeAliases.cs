@@ -34,4 +34,19 @@ public static class ApiTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantDeletionResult"/>.</summary>
     public const string TenantDeletionResult = "oitn.dl";
+
+    /// <summary>Alias for <see cref="TenantRegionLifecycleStatus"/>.</summary>
+    public const string TenantRegionLifecycleStatus = "oitn.rl";
+
+    /// <summary>Alias for <see cref="TenantRegionStatusDescriptor"/>.</summary>
+    public const string TenantRegionStatusDescriptor = "oitn.rd";
+
+    /// <summary>Alias for <see cref="TenantRegionStatusReport"/>.</summary>
+    public const string TenantRegionStatusReport = "oitn.rr";
+
+    /// <summary>Alias for <see cref="TenantRegionAuthorizationResult"/>.</summary>
+    public const string TenantRegionAuthorizationResult = "oitn.ra";
+
+    /// <summary>Alias for <see cref="TenantResidencyChangeResult"/>.</summary>
+    public const string TenantResidencyChangeResult = "oitn.rc";
 }

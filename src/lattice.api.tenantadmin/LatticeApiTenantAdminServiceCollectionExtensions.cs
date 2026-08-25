@@ -85,6 +85,18 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         // that every transport binding (for example gRPC, MCP) adapts over.
         builder.Services.TryAddSingleton<ILatticeTenantAdmin, LatticeTenantAdmin>();
 
+        // T20 per-tenant region residency. The two-tier fail-closed authorizer
+        // (operator authorizes the allowed set; tenant-admin sets residency within
+        // it), the region-residency control facade every transport binding adapts
+        // over, and the system-driven backfill/drain promotion driver. All are
+        // append-only siblings of the tenant-lifecycle facade above.
+        builder.Services.TryAddSingleton(sp => new TenantRegionResidencyAuthorizer(
+            sp.GetRequiredService<ILatticeAccessGate>(),
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetService<ILatticeMembershipContext>()));
+        builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
+        builder.Services.TryAddSingleton<TenantRegionLifecycleDriver>();
+
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any
         // supplied configure delegate above, matching how the sibling add-ons
