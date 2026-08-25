@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Streams;
 
 namespace Orleans.Lattice.Tenancy;
 
@@ -100,9 +101,52 @@ internal sealed class TenantPlacementSnapshotMaintainer : IMutationObserver
     /// Rebuilds the snapshot synchronously and returns the epoch it produced.
     /// Exposed for tests that need to force a deterministic rebuild.
     /// </summary>
+    /// <remarks>
+    /// Unlike the production background path (<see cref="RunRebuildLoopAsync"/>),
+    /// which catches every rebuild failure and self-heals on the next change-feed
+    /// tick, this test-facing entry point deliberately does <b>not</b> swallow
+    /// failures - a genuine, persistent fault must still surface to the calling
+    /// test. It does, however, tolerate a <i>transient</i> Orleans streaming
+    /// <see cref="EnumerationAbortedException"/> on the registry scan (a cold
+    /// <see cref="ITenantRegistry.ListAsync"/> enumeration can be aborted by
+    /// concurrent silo activity when fixtures run cold together), which production
+    /// never surfaces. It retries only the read, a small bounded number of times,
+    /// re-enumerating immediately with no delay or wall-clock wait, so the test stays
+    /// deterministic; on budget exhaustion the abort rethrows rather than being
+    /// hidden. The atomic snapshot swap and epoch bump still happen exactly once,
+    /// after a successful read.
+    /// </remarks>
     internal async Task<long> RebuildNowAsync(CancellationToken cancellationToken = default)
     {
-        await RebuildOnceAsync(cancellationToken).ConfigureAwait(false);
+        // Matches the repo's other bounded scan-reopen budgets (see the resilient
+        // scan extensions in the core library).
+        const int maxScanAttempts = 8;
+
+        await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Dictionary<TenantId, TenantPlacement> byTenant;
+            var attempt = 1;
+            while (true)
+            {
+                try
+                {
+                    byTenant = await ScanPlacementsAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+                }
+                catch (EnumerationAbortedException) when (attempt < maxScanAttempts)
+                {
+                    attempt++;
+                }
+            }
+
+            SwapSnapshot(byTenant);
+        }
+        finally
+        {
+            _rebuildLock.Release();
+        }
+
         return CurrentEpoch;
     }
 
@@ -164,18 +208,40 @@ internal sealed class TenantPlacementSnapshotMaintainer : IMutationObserver
         await _rebuildLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var byTenant = new Dictionary<TenantId, TenantPlacement>();
-            await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
-            {
-                byTenant[record.Id] = record.Placement;
-            }
-
-            Volatile.Write(ref _current, TenantPlacementSnapshot.Build(byTenant));
-            Interlocked.Increment(ref _epoch);
+            var byTenant = await ScanPlacementsAsync(cancellationToken).ConfigureAwait(false);
+            SwapSnapshot(byTenant);
         }
         finally
         {
             _rebuildLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Enumerates the tenant registry into a placement map. This is the only step
+    /// that touches the (grain-backed) registry, so it is the only step that can
+    /// raise a transient <see cref="EnumerationAbortedException"/>; callers that
+    /// need resilience retry this method, never the swap.
+    /// </summary>
+    private async Task<Dictionary<TenantId, TenantPlacement>> ScanPlacementsAsync(CancellationToken cancellationToken)
+    {
+        var byTenant = new Dictionary<TenantId, TenantPlacement>();
+        await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            byTenant[record.Id] = record.Placement;
+        }
+
+        return byTenant;
+    }
+
+    /// <summary>
+    /// Publishes a freshly scanned placement map as the current snapshot: builds the
+    /// immutable snapshot, swaps it in atomically, and advances the epoch exactly
+    /// once. Pure and non-faulting - it never touches the registry.
+    /// </summary>
+    private void SwapSnapshot(Dictionary<TenantId, TenantPlacement> byTenant)
+    {
+        Volatile.Write(ref _current, TenantPlacementSnapshot.Build(byTenant));
+        Interlocked.Increment(ref _epoch);
     }
 }

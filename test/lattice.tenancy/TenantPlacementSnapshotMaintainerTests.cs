@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Streams;
 
 namespace Orleans.Lattice.Tenancy.Tests;
 
@@ -41,6 +42,16 @@ public sealed class TenantPlacementSnapshotMaintainerTests
     private static TenantPlacementSnapshotMaintainer Maintainer(
         ITenantRegistry registry) =>
         new(registry, NullLogger<TenantPlacementSnapshotMaintainer>.Instance);
+
+#pragma warning disable CS1998 // async iterator with no await: it aborts before yielding
+    private static async IAsyncEnumerable<TenantRecord> ThrowAsync(Exception ex)
+    {
+        throw ex;
+#pragma warning disable CS0162 // unreachable: present only to make this a valid iterator
+        yield break;
+#pragma warning restore CS0162
+    }
+#pragma warning restore CS1998
 
     [Test]
     public void Ctor_null_registry_throws()
@@ -191,5 +202,66 @@ public sealed class TenantPlacementSnapshotMaintainerTests
             CancellationToken.None);
 
         Assert.That(task.IsCompletedSuccessfully, Is.True);
+    }
+
+    [Test]
+    public async Task RebuildNowAsync_retries_the_scan_on_a_transient_enumeration_abort()
+    {
+        var acme = TenantId.Parse("acme");
+        var attempts = 0;
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            // Abort the first three cold registry scans, then succeed. A cold
+            // ListAsync enumeration can be aborted by concurrent silo activity; the
+            // test-facing rebuild must re-enumerate immediately (no delay) rather than
+            // flake, mirroring how the production background loop self-heals.
+            attempts++;
+            return attempts <= 3
+                ? ThrowAsync(new EnumerationAbortedException())
+                : Stream(new[]
+                {
+                    RecordWith(acme, new TenantPlacement { WalProviderName = "wal-acme", DedicatedWal = true }),
+                });
+        });
+        var maintainer = Maintainer(registry);
+
+        await maintainer.RebuildNowAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempts, Is.EqualTo(4), "the scan must be re-enumerated after each transient abort");
+            Assert.That(maintainer.Current.TryGetPlacement(acme, out var placement), Is.True);
+            Assert.That(placement.WalProviderName, Is.EqualTo("wal-acme"));
+            Assert.That(maintainer.CurrentEpoch, Is.EqualTo(1),
+                "the snapshot must swap exactly once, after the successful read");
+        });
+    }
+
+    [Test]
+    public void RebuildNowAsync_rethrows_once_the_scan_abort_budget_is_exhausted()
+    {
+        var attempts = 0;
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            attempts++;
+            return ThrowAsync(new EnumerationAbortedException());
+        });
+        var maintainer = Maintainer(registry);
+
+        // A persistent abort must surface, never be swallowed - the test-facing path
+        // deliberately does not self-heal the way production's background loop does,
+        // so a genuine fault still fails the test rather than hiding behind a stale
+        // snapshot. The budget is a fixed 8 attempts (no timing, no wall-clock).
+        Assert.That(
+            async () => await maintainer.RebuildNowAsync(),
+            Throws.TypeOf<EnumerationAbortedException>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(attempts, Is.EqualTo(8), "the read is retried up to the bounded budget, then rethrows");
+            Assert.That(maintainer.CurrentEpoch, Is.Zero,
+                "a failed rebuild must not swap the snapshot or advance the epoch");
+        });
     }
 }
