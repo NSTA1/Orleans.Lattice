@@ -8,6 +8,7 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TreeAdmin;
 
 namespace Orleans.Lattice.Api.Mcp.Tests;
@@ -50,6 +51,7 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
                 o.Backup = Endpoint("https://backup:5004");
                 o.Replication = Endpoint("https://replication:5005");
                 o.TreeAdmin = Endpoint("https://treeadmin:5006");
+                o.TenantAdmin = Endpoint("https://tenant:5007");
             })
             .BuildServiceProvider();
 
@@ -62,6 +64,8 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.TypeOf<GrpcLatticeReplicationControl>());
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.TypeOf<GrpcLatticeTreeAdmin>());
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.TypeOf<GrpcLatticeSchemaControl>());
+            Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.TypeOf<GrpcLatticeTenantSelfService>());
+            Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.TypeOf<GrpcLatticeTenantAdmin>());
         });
     }
 
@@ -81,6 +85,59 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeReplicationControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTreeAdmin>(), Is.Null);
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.Null);
+        });
+    }
+
+    [Test]
+    public void Tenant_endpoint_absent_advertises_no_tenant_tools()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableTenantAdminTools, Is.False);
+            Assert.That(options.EnableTenantAdminControlTools, Is.False);
+        });
+    }
+
+    [Test]
+    public void Tenant_control_flag_off_advertises_read_only()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.TenantAdmin = Endpoint("https://tenant:5007"))
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.TypeOf<GrpcLatticeTenantSelfService>());
+            Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.TypeOf<GrpcLatticeTenantAdmin>());
+            Assert.That(options.EnableTenantAdminTools, Is.True);
+            Assert.That(options.EnableTenantAdminControlTools, Is.False);
+        });
+    }
+
+    [Test]
+    public void Tenant_control_flag_on_advertises_mutating_tools()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.TenantAdmin = Endpoint("https://tenant:5007");
+                o.EnableTenantControl = true;
+            })
+            .BuildServiceProvider();
+
+        var options = provider.GetRequiredService<IOptions<LatticeApiMcpOptions>>().Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.EnableTenantAdminTools, Is.True);
+            Assert.That(options.EnableTenantAdminControlTools, Is.True);
         });
     }
 

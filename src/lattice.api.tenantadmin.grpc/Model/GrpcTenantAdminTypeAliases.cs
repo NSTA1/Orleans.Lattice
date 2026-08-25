@@ -32,4 +32,13 @@ public static class GrpcTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="AuthSchemeAdvertisement"/>.</summary>
     public const string AuthSchemeAdvertisement = "oitng.asadv";
+
+    /// <summary>Alias for <see cref="TenantSelfCurrentRequest"/>.</summary>
+    public const string TenantSelfCurrentRequest = "oitng.selfcur";
+
+    /// <summary>Alias for <see cref="TenantSelfListRequest"/>.</summary>
+    public const string TenantSelfListRequest = "oitng.selflist";
+
+    /// <summary>Alias for <see cref="TenantSelfDescriptorList"/>.</summary>
+    public const string TenantSelfDescriptorList = "oitng.selftdl";
 }

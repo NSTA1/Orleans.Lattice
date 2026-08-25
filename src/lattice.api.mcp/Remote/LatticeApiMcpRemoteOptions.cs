@@ -129,6 +129,21 @@ public sealed class LatticeApiMcpRemoteOptions
     public LatticeApiMcpRemoteEndpoint? TreeAdmin { get; set; }
 
     /// <summary>
+    /// The remote endpoint for the tenant-administration control facade
+    /// (<c>ILatticeTenantAdmin</c>) and its read-only self-awareness facade
+    /// (<c>ILatticeTenantSelfService</c>), or <see langword="null"/> to not serve
+    /// the tenant surfaces remotely. Both facades are reached at this one endpoint
+    /// - the self-service and tenant-admin gRPC services are co-hosted on the same
+    /// silo address - so the tenant group maps to a single endpoint throughout
+    /// discovery, region routing, and the capabilities report, exactly like every
+    /// sibling group. Wiring it serves the read-only tenant self-awareness tools
+    /// (current / list / get); the mutating tenant-lifecycle tools are added when
+    /// <see cref="EnableTenantControl"/> is set. Left unset, the split head
+    /// advertises no tenant tools and is byte-for-byte unchanged.
+    /// </summary>
+    public LatticeApiMcpRemoteEndpoint? TenantAdmin { get; set; }
+
+    /// <summary>
     /// The request header the resolved caller credential is stamped onto for the
     /// outbound gRPC call. Defaults to <c>authorization</c>, matching the gRPC
     /// bindings' default credential header.
@@ -206,4 +221,14 @@ public sealed class LatticeApiMcpRemoteOptions
     /// <see cref="TreeAdmin"/> is unset.
     /// </summary>
     public bool EnableLifecycleControl { get; set; }
+
+    /// <summary>
+    /// Whether the tenant-administration group's mutating tenant-lifecycle tools
+    /// (create, suspend, resume, delete) are advertised. Forwarded to
+    /// <c>AddTenantAdminTools</c> and mapped onto
+    /// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/>. Defaults to
+    /// <see langword="false"/> (the read-only tenant self-awareness tools only).
+    /// Ignored when <see cref="TenantAdmin"/> is unset.
+    /// </summary>
+    public bool EnableTenantControl { get; set; }
 }

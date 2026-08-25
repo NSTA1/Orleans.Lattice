@@ -43,6 +43,31 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
     public abstract Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context);
 
     /// <summary>
+    /// Reports the caller's current tenant. Read-only self-service: this RPC is
+    /// exempt from the tenant-admin authorization interceptor and defers to the
+    /// facade's own fail-closed per-caller scoping. Implemented in
+    /// <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantDescriptor> GetCurrentTenant(TenantSelfCurrentRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Lists the tenants the caller is authorized to see. Read-only self-service:
+    /// this RPC is exempt from the tenant-admin authorization interceptor and defers
+    /// to the facade's own fail-closed per-caller scoping. Implemented in
+    /// <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantSelfDescriptorList> ListAccessibleTenants(TenantSelfListRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Reads the read-only status of one tenant the caller may see. Read-only
+    /// self-service: this RPC is exempt from the tenant-admin authorization
+    /// interceptor and defers to the facade's own fail-closed per-caller scoping
+    /// (an unseeable tenant is indistinguishable from an absent one). Implemented in
+    /// <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantStatusReport> GetTenant(TenantAdminTenantRequest request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
     /// method metadata; the actual service instance is resolved per request from
@@ -66,6 +91,9 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.ResumeTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>?)null);
             binder.AddMethod(methods.DeleteTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantDeletionResult>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
+            binder.AddMethod(methods.GetCurrentTenant, (UnaryServerMethod<TenantSelfCurrentRequest, TenantDescriptor>?)null);
+            binder.AddMethod(methods.ListAccessibleTenants, (UnaryServerMethod<TenantSelfListRequest, TenantSelfDescriptorList>?)null);
+            binder.AddMethod(methods.GetTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusReport>?)null);
             return;
         }
 
@@ -74,6 +102,9 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.ResumeTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>(serviceImpl.ResumeTenant));
         binder.AddMethod(methods.DeleteTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantDeletionResult>(serviceImpl.DeleteTenant));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
+        binder.AddMethod(methods.GetCurrentTenant, new UnaryServerMethod<TenantSelfCurrentRequest, TenantDescriptor>(serviceImpl.GetCurrentTenant));
+        binder.AddMethod(methods.ListAccessibleTenants, new UnaryServerMethod<TenantSelfListRequest, TenantSelfDescriptorList>(serviceImpl.ListAccessibleTenants));
+        binder.AddMethod(methods.GetTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusReport>(serviceImpl.GetTenant));
     }
 }
 
@@ -87,6 +118,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
 internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServiceBase
 {
     private readonly ILatticeTenantAdmin _control;
+    private readonly ILatticeTenantSelfService _selfService;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
     private readonly ILogger<LatticeTenantAdminGrpcService> _logger;
@@ -104,17 +136,20 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     public LatticeTenantAdminGrpcService(
         LatticeTenantAdminGrpcMethods methods,
         ILatticeTenantAdmin control,
+        ILatticeTenantSelfService selfService,
         ILatticeTenantAdminApiCredentialBridge credentialBridge,
         ILatticeTenantAdminApiAuthSchemeSource authSchemeSource,
         ILogger<LatticeTenantAdminGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
+        ArgumentNullException.ThrowIfNull(selfService);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
+        _selfService = selfService;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _logger = logger;
@@ -161,6 +196,24 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         // credential is bridged and only the public advertisement is returned.
         return Task.FromResult(_authSchemeSource.GetAdvertisement());
     }
+
+    /// <inheritdoc />
+    public override Task<TenantDescriptor> GetCurrentTenant(TenantSelfCurrentRequest request, ServerCallContext context)
+        => InvokeSelfServiceAsync(request, context, static (service, _, ct) => service.GetCurrentTenantAsync(ct));
+
+    /// <inheritdoc />
+    public override async Task<TenantSelfDescriptorList> ListAccessibleTenants(TenantSelfListRequest request, ServerCallContext context)
+    {
+        var tenants = await InvokeSelfServiceAsync(
+            request,
+            context,
+            static (service, _, ct) => service.ListAccessibleTenantsAsync(ct)).ConfigureAwait(false);
+        return new TenantSelfDescriptorList { Tenants = tenants };
+    }
+
+    /// <inheritdoc />
+    public override Task<TenantStatusReport> GetTenant(TenantAdminTenantRequest request, ServerCallContext context)
+        => InvokeSelfServiceAsync(request, context, static (service, req, ct) => service.GetTenantAsync(req.TenantId, ct));
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
@@ -218,6 +271,58 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         {
             _logger.LogError(ex, "Api.TenantAdmin: gRPC call to {Method} failed.", context.Method);
             throw new RpcException(new Status(StatusCode.Internal, "The tenant-administration control-API request failed."));
+        }
+    }
+
+    /// <summary>
+    /// Runs a read-only self-service call under the caller-credential scope, mapping
+    /// the facade's fail-closed outcomes onto gRPC status codes. The self-service
+    /// facade never mutates and unifies "no such tenant" with "not authorized to see
+    /// it" into a single <see cref="TenantNotFoundException"/> (NotFound), so a
+    /// caller can never probe for a tenant outside its authority; an invalid tenant
+    /// id surfaces as InvalidArgument. The credential is stamped exactly as for the
+    /// admin path, but the interceptor exempts these methods from the admin
+    /// authorizer, so scoping is enforced solely at the facade - the single narrowest
+    /// seam.
+    /// </summary>
+    private async Task<TResponse> InvokeSelfServiceAsync<TRequest, TResponse>(
+        TRequest request,
+        ServerCallContext context,
+        Func<ILatticeTenantSelfService, TRequest, CancellationToken, Task<TResponse>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        using var credentialScope = StampCallerCredential(context);
+
+        try
+        {
+            return await handler(_selfService, request, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new RpcException(new Status(StatusCode.Cancelled, "The tenant self-service request was cancelled."));
+        }
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (TenantNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.TenantAdmin: gRPC self-service call to {Method} failed.", context.Method);
+            throw new RpcException(new Status(StatusCode.Internal, "The tenant self-service request failed."));
         }
     }
 }

@@ -128,6 +128,57 @@ public sealed class TenantAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TenantSelfCurrentRequest_round_trips() =>
+        Assert.That(RoundTrip(new TenantSelfCurrentRequest()), Is.Not.Null);
+
+    [Test]
+    public void TenantSelfListRequest_round_trips() =>
+        Assert.That(RoundTrip(new TenantSelfListRequest()), Is.Not.Null);
+
+    [Test]
+    public void TenantSelfDescriptorList_round_trips_its_descriptors()
+    {
+        var copy = RoundTrip(new TenantSelfDescriptorList
+        {
+            Tenants = new[]
+            {
+                new TenantDescriptor { TenantId = "acme", Status = TenantLifecycleStatus.Active, IsDefault = false },
+                new TenantDescriptor { TenantId = "default", Status = TenantLifecycleStatus.Active, IsDefault = true },
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Tenants, Has.Count.EqualTo(2));
+            Assert.That(copy.Tenants[0].TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Tenants[1].IsDefault, Is.True);
+        });
+    }
+
+    [Test]
+    public void TenantSelfDescriptorList_defaults_to_an_empty_list() =>
+        Assert.That(new TenantSelfDescriptorList().Tenants, Is.Empty);
+
+    [Test]
+    public void TenantStatusReport_response_round_trips()
+    {
+        var copy = RoundTrip(new TenantStatusReport
+        {
+            TenantId = "acme",
+            Status = TenantLifecycleStatus.Suspended,
+            IsDefault = false,
+            Regions = Array.Empty<TenantRegionStatusDescriptor>(),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Status, Is.EqualTo(TenantLifecycleStatus.Suspended));
+            Assert.That(copy.Regions, Is.Empty);
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

@@ -71,4 +71,12 @@ public sealed class LatticeApiMcpRemoteRegionOptions
     /// tree-administration group in this region.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? TreeAdmin { get; set; }
+
+    /// <summary>
+    /// The region's endpoint for the tenant-administration control facade
+    /// (<c>ILatticeTenantAdmin</c>) and its read-only self-awareness facade
+    /// (<c>ILatticeTenantSelfService</c>), or <see langword="null"/> to not serve
+    /// the tenant group in this region.
+    /// </summary>
+    public LatticeApiMcpRemoteEndpoint? TenantAdmin { get; set; }
 }

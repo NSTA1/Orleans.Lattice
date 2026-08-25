@@ -16,6 +16,8 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.TenantAdmin;
+using Orleans.Lattice.Api.TenantAdmin.Grpc;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Serialization;
@@ -176,6 +178,30 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.AddTreeAdminTools(options.EnableSchemaControl, options.EnableLifecycleControl);
         }
 
+        if (options.TenantAdmin is { } tenantAdmin)
+        {
+            // Both tenant facades are reached at the one tenant endpoint: the
+            // read-only self-service gRPC service and the mutating tenant-admin gRPC
+            // service are co-hosted on the same silo address, exactly like the
+            // tree-administration / schema pair above. The read-only self-awareness
+            // facade is registered whenever the endpoint is present, so its tool
+            // group (which self-gates on the facade's presence) lights up; the
+            // mutating tenant-admin facade and its control tools are wired the same
+            // way but the destructive lifecycle tools stay gated behind
+            // EnableTenantControl. No endpoint => neither facade registered =>
+            // both tool groups contribute zero tools => the head is byte-for-byte
+            // unchanged (fail-closed parity with a co-hosted head).
+            services.TryAddSingleton<ILatticeTenantSelfService>(sp =>
+                new GrpcLatticeTenantSelfService(LatticeTenantSelfServiceApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, tenantAdmin, static r => r.TenantAdmin), sp)));
+            services.AddTenantSelfAwarenessTools();
+
+            services.TryAddSingleton<ILatticeTenantAdmin>(sp =>
+                new GrpcLatticeTenantAdmin(LatticeTenantAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, tenantAdmin, static r => r.TenantAdmin), sp)));
+            services.AddTenantAdminTools(options.EnableTenantControl);
+        }
+
         return services;
     }
 
@@ -238,7 +264,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = options.ClusterId ?? string.Empty,
                 IsCurrent = true,
                 Groups = GroupEndpoints(
-                    options.State, options.Data, options.Backup, options.Auth, options.Replication, options.TreeAdmin,
+                    options.State, options.Data, options.Backup, options.Auth, options.Replication, options.TreeAdmin, options.TenantAdmin,
                     telemetryAvailable: telemetryRegistered),
             },
         };
@@ -251,7 +277,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
                 ClusterId = region.ClusterId ?? string.Empty,
                 IsCurrent = false,
                 Groups = GroupEndpoints(
-                    region.State, region.Data, region.Backup, region.Auth, region.Replication, region.TreeAdmin,
+                    region.State, region.Data, region.Backup, region.Auth, region.Replication, region.TreeAdmin, region.TenantAdmin,
                     telemetryAvailable: false),
             });
         }
@@ -266,6 +292,7 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         LatticeApiMcpRemoteEndpoint? auth,
         LatticeApiMcpRemoteEndpoint? replication,
         LatticeApiMcpRemoteEndpoint? treeAdmin,
+        LatticeApiMcpRemoteEndpoint? tenantAdmin,
         bool telemetryAvailable)
     {
         var groups = new Dictionary<LatticeApiMcpGroup, string?>();
@@ -297,6 +324,11 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
         if (treeAdmin is not null)
         {
             groups[LatticeApiMcpGroup.TreeAdmin] = treeAdmin.Endpoint;
+        }
+
+        if (tenantAdmin is not null)
+        {
+            groups[LatticeApiMcpGroup.TenantAdmin] = tenantAdmin.Endpoint;
         }
 
         // Telemetry is a head-local PromQL proxy with no per-region gRPC endpoint,

@@ -25,6 +25,7 @@ public sealed class LatticeApiMcpRemoteGroupEndpointSourceTests
             o.Backup = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://backup:5004" };
             o.Replication = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://replication:5005" };
             o.TreeAdmin = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://treeadmin:5006" };
+            o.TenantAdmin = new LatticeApiMcpRemoteEndpoint { Endpoint = "https://tenant:5007" };
         }));
 
         Assert.Multiple(() =>
@@ -35,6 +36,7 @@ public sealed class LatticeApiMcpRemoteGroupEndpointSourceTests
             Assert.That(source.EndpointFor(LatticeApiMcpGroup.Backup), Is.EqualTo("https://backup:5004"));
             Assert.That(source.EndpointFor(LatticeApiMcpGroup.Replication), Is.EqualTo("https://replication:5005"));
             Assert.That(source.EndpointFor(LatticeApiMcpGroup.TreeAdmin), Is.EqualTo("https://treeadmin:5006"));
+            Assert.That(source.EndpointFor(LatticeApiMcpGroup.TenantAdmin), Is.EqualTo("https://tenant:5007"));
         });
     }
 
@@ -52,6 +54,7 @@ public sealed class LatticeApiMcpRemoteGroupEndpointSourceTests
             Assert.That(source.EndpointFor(LatticeApiMcpGroup.Backup), Is.Null);
             Assert.That(source.EndpointFor(LatticeApiMcpGroup.Replication), Is.Null);
             Assert.That(source.EndpointFor(LatticeApiMcpGroup.TreeAdmin), Is.Null);
+            Assert.That(source.EndpointFor(LatticeApiMcpGroup.TenantAdmin), Is.Null);
         });
     }
 }
