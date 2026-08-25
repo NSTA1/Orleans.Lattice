@@ -222,6 +222,47 @@ public sealed class LatticeTenantPolicyEngineTests
     }
 
     [Test]
+    public async Task ResolveCrossTenantGrant_denies_a_sibling_tree_that_only_shares_a_name_prefix()
+    {
+        // The gate passes the full composed tree id (t/{tenant}/{name}) as the
+        // requested scope. A grant scoped to one tree must not leak to a distinct
+        // sibling tree that merely shares a leading substring of its id.
+        var engine = await CreateEngineAsync(
+            Record("acme", admins: ["alice"], grants: [TenantGrant("beta", "t/acme/orders", TenantGrantOperations.Read)]));
+
+        // "t/acme/orders-archive" is a different tree, not a hierarchical child of
+        // "t/acme/orders"; the grant must not cover it.
+        var decision = engine.ResolveCrossTenantGrant(Beta, Acme, "t/acme/orders-archive", TenantGrantOperations.Read);
+
+        Assert.That(decision.Allowed, Is.False, "a grant for one tree must not cover a sibling tree sharing its name prefix");
+    }
+
+    [Test]
+    public async Task ResolveCrossTenantGrant_allows_a_hierarchical_child_of_the_grant_scope()
+    {
+        var engine = await CreateEngineAsync(
+            Record("acme", admins: ["alice"], grants: [TenantGrant("beta", "t/acme/orders", TenantGrantOperations.Read)]));
+
+        // A '/'-delimited child of the grant scope is covered (segment-boundary prefix).
+        var decision = engine.ResolveCrossTenantGrant(Beta, Acme, "t/acme/orders/2024", TenantGrantOperations.Read);
+
+        Assert.That(decision.Allowed, Is.True, "a hierarchical child tree under the grant scope is covered");
+    }
+
+    [Test]
+    public async Task ResolveCrossTenantGrant_allows_a_whole_tenant_prefix_scope_ending_in_separator()
+    {
+        var engine = await CreateEngineAsync(
+            Record("acme", admins: ["alice"], grants: [TenantGrant("beta", "t/acme/", TenantGrantOperations.Read)]));
+
+        // A grant scope that already ends in the segment separator covers every
+        // tree under it.
+        var decision = engine.ResolveCrossTenantGrant(Beta, Acme, "t/acme/orders", TenantGrantOperations.Read);
+
+        Assert.That(decision.Allowed, Is.True, "a scope ending in the '/' separator covers trees beneath it");
+    }
+
+    [Test]
     public async Task ResolveCrossTenantGrant_denies_when_no_grant_exists_for_the_source()
     {
         var engine = await CreateEngineAsync(

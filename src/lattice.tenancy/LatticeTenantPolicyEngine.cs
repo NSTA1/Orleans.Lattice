@@ -90,10 +90,29 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
     /// <summary>
     /// <c>true</c> when a grant issued for <paramref name="grantScope"/> covers the
     /// requested <paramref name="requestedScope"/>: an exact match, or the grant
-    /// scope is a prefix of the requested scope (a grant's scope is a tree name or
-    /// tree-name prefix). The enforcement layer may refine this interpretation.
+    /// scope is a <b>segment-boundary</b> prefix of the requested scope (a grant's
+    /// scope is a tree name or tree-name prefix). The prefix must end at a tree-id
+    /// segment separator (<c>/</c>) - either the grant scope already ends in it, or
+    /// the requested scope has it immediately after the prefix - so a grant for
+    /// <c>t/acme/orders</c> covers the child <c>t/acme/orders/2024</c> but never a
+    /// distinct sibling tree such as <c>t/acme/orders-archive</c> that merely shares
+    /// a leading substring. The enforcement layer may refine this interpretation.
     /// </summary>
-    private static bool ScopeCovers(string grantScope, string requestedScope) =>
-        string.Equals(grantScope, requestedScope, StringComparison.Ordinal) ||
-        requestedScope.StartsWith(grantScope, StringComparison.Ordinal);
+    private static bool ScopeCovers(string grantScope, string requestedScope)
+    {
+        if (string.Equals(grantScope, requestedScope, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (grantScope.Length == 0 || !requestedScope.StartsWith(grantScope, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // requestedScope is strictly longer than grantScope here (equal was handled
+        // above), so indexing at grantScope.Length is in range. Require the prefix
+        // to land on a segment boundary to avoid a sibling substring over-match.
+        return grantScope[^1] == '/' || requestedScope[grantScope.Length] == '/';
+    }
 }
