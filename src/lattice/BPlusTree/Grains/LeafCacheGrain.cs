@@ -32,6 +32,7 @@ internal sealed class LeafCacheGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
+    LatticeOptionsResolver optionsResolver,
     ILatticeOriginClusterIdResolver originClusterIdResolver) : ILeafCacheGrain
 #pragma warning restore CS9113
 {
@@ -631,11 +632,15 @@ internal sealed class LeafCacheGrain(
         }
 
         // Apply the per-activation payload budget before merging new entries.
-        // Re-read from options each refresh so a live reconfiguration takes
-        // effect; a null budget (the default) leaves the mirror unbounded and
-        // the store keeps its zero-overhead path. Eviction runs inside
-        // LeafPayloadCache.Set as entries are merged below.
-        _cache.SetBudget(optionsMonitor.Get(_treeId ?? string.Empty).MaxCacheValueBytes ?? 0);
+        // Re-resolve the effective cap each refresh so a live reconfiguration -
+        // whether a silo-wide IOptionsMonitor change or a per-tree registry
+        // runtime override - takes effect on a warm activation; a null cap (the
+        // default) leaves the mirror unbounded and the store keeps its
+        // zero-overhead path. Eviction runs inside LeafPayloadCache.Set as
+        // entries are merged below. The resolved cap is applied once per refresh
+        // (not per cache operation): LeafPayloadCache holds the budget internally
+        // so subsequent per-key Set calls perform no override lookup.
+        _cache.SetBudget(await ResolveCacheBudgetBytesAsync());
 
         // Merge each entry using LWW semantics.
         foreach (var (key, lww) in delta.Entries)
@@ -666,6 +671,33 @@ internal sealed class LeafCacheGrain(
             _treeId = await primaryLeaf.GetTreeIdAsync() ?? string.Empty;
         }
         return optionsMonitor.Get(_treeId).CacheTtl;
+    }
+
+    /// <summary>
+    /// Resolves the effective read-through-cache payload budget in bytes for
+    /// this activation's tree, honouring the per-tree runtime
+    /// <see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/> override when one
+    /// is pinned and falling back to the silo-wide static
+    /// <see cref="LatticeOptions.MaxCacheValueBytes"/> otherwise. Returns
+    /// <c>0</c> (unbounded) when neither is set. Called once per cache refresh
+    /// (never per cache operation), so the registry read it may incur is
+    /// amortised against the delta-shipping RPCs that same refresh already made;
+    /// the resolved cap is then held inside <see cref="LeafPayloadCache"/> so
+    /// per-key merges pay no override lookup.
+    /// </summary>
+    private async ValueTask<long> ResolveCacheBudgetBytesAsync()
+    {
+        var treeId = _treeId;
+        if (string.IsNullOrEmpty(treeId))
+        {
+            // No tree id resolved yet (the same-silo revision fast path can
+            // reach here before GetCacheTtlAsync has populated _treeId): fall
+            // back to the silo-wide static option exactly as the pre-override
+            // behaviour did, rather than consulting the registry with an empty
+            // key.
+            return optionsMonitor.Get(string.Empty).MaxCacheValueBytes ?? 0;
+        }
+        return (await optionsResolver.GetMaxCacheValueBytesAsync(treeId)) ?? 0;
     }
 
     /// <summary>

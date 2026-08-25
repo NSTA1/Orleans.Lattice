@@ -2,6 +2,7 @@ using NSubstitute;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using System.Text;
@@ -13,6 +14,11 @@ public partial class LeafCacheGrainTests
     private static readonly GrainId LeafGrainId = GrainId.Create("leaf", "primary-leaf");
 
     private static (LeafCacheGrain grain, IBPlusLeafGrain leaf) CreateGrain(LatticeOptions? options = null)
+        => CreateGrain(options, registryOverrideMaxCacheValueBytes: null);
+
+    private static (LeafCacheGrain grain, IBPlusLeafGrain leaf) CreateGrain(
+        LatticeOptions? options,
+        long? registryOverrideMaxCacheValueBytes)
     {
         var leafMock = Substitute.For<IBPlusLeafGrain>();
         leafMock.GetTreeIdAsync().Returns("test-tree");
@@ -31,8 +37,37 @@ public partial class LeafCacheGrainTests
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
 
-        var grain = new LeafCacheGrain(context, grainFactory, optionsMonitor, TestOriginClusterIdResolver.Default());
+        // The cache grain now resolves its payload budget through the
+        // LatticeOptionsResolver so it honours a per-tree runtime override. Wire
+        // a stubbed registry: by default it reports no entry (no override), so
+        // the resolved cap falls back to the static option - byte-for-byte the
+        // pre-override behaviour. A test may pin an override via the parameter.
+        var resolver = CreateResolver(grainFactory, optionsMonitor, registryOverrideMaxCacheValueBytes);
+
+        var grain = new LeafCacheGrain(context, grainFactory, optionsMonitor, resolver, TestOriginClusterIdResolver.Default());
         return (grain, leafMock);
+    }
+
+    /// <summary>
+    /// Builds a <see cref="LatticeOptionsResolver"/> over the supplied grain
+    /// factory and options monitor, wiring a stubbed <see cref="ILatticeRegistry"/>
+    /// that reports either no entry (no per-tree override) or an entry pinning
+    /// <paramref name="registryOverrideMaxCacheValueBytes"/>. Shared by every
+    /// <see cref="LeafCacheGrain"/> harness so the cache's budget-resolution path
+    /// has a registry to consult.
+    /// </summary>
+    private static LatticeOptionsResolver CreateResolver(
+        IGrainFactory grainFactory,
+        IOptionsMonitor<LatticeOptions> optionsMonitor,
+        long? registryOverrideMaxCacheValueBytes = null)
+    {
+        var registry = Substitute.For<ILatticeRegistry>();
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
+            registryOverrideMaxCacheValueBytes is null
+                ? null
+                : new TreeRegistryEntry { MaxCacheValueBytes = registryOverrideMaxCacheValueBytes }));
+        return new LatticeOptionsResolver(grainFactory, optionsMonitor);
     }
 
     private static StateDelta EmptyDelta() => new()

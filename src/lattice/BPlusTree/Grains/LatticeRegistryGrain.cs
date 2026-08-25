@@ -264,6 +264,23 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task SetMaxCacheValueBytesAsync(string treeId, long? maxCacheValueBytes)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (maxCacheValueBytes is { } cap && cap < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxCacheValueBytes), cap,
+                $"{nameof(LatticeOptions.MaxCacheValueBytes)} must be greater than or equal to 1 when set "
+                + "(null leaves the read-through cache mirror unbounded; a positive value caps the resident "
+                + "value-payload bytes per cache activation with LRU payload eviction).");
+        }
+
+        var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
+        var updated = existing with { MaxCacheValueBytes = maxCacheValueBytes };
+        await UpdateAsync(treeId, updated);
+    }
+
     public async Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);

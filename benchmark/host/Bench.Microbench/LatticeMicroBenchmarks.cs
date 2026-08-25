@@ -1012,7 +1012,7 @@ public class LatticeMicroBenchmarks
         // to recover the primary leaf id, so the key must be the leaf-id
         // round-trippable string.
         var ctx = new FakeGrainContext(GrainId.Create("leafcache", leafIdString));
-        var cache = new LeafCacheGrain(ctx, _grainFactory, _optionsMonitor, new DefaultLatticeOriginClusterIdResolver());
+        var cache = new LeafCacheGrain(ctx, _grainFactory, _optionsMonitor, _optionsResolver, new DefaultLatticeOriginClusterIdResolver());
         _leafCaches[leafIdString] = cache;
         return cache;
     }

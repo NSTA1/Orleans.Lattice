@@ -154,6 +154,27 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task SetMaintainProjectionDigestAsync(string treeId, bool? enabled);
 
     /// <summary>
+    /// Sets or clears the per-tree runtime
+    /// <see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/> override for
+    /// <paramref name="treeId"/>. Pass a positive byte count to pin the
+    /// read-through-cache payload cap for this tree, or <c>null</c> to remove
+    /// the override and fall back to the silo-wide
+    /// <see cref="LatticeOptions.MaxCacheValueBytes"/>. The value, when
+    /// supplied, must be greater than or equal to 1 (mirroring the silo-wide
+    /// option's validation); a value below 1 throws
+    /// <see cref="ArgumentOutOfRangeException"/>. Upserts the registry entry if
+    /// the tree is not yet registered. Propagation to other activations is
+    /// best-effort: each <see cref="Grains.LeafCacheGrain"/> re-resolves the cap
+    /// on its next cache refresh.
+    /// </summary>
+    /// <param name="treeId">The tree whose cache-value cap override is being set.</param>
+    /// <param name="maxCacheValueBytes">
+    /// The per-tree payload-byte cap to pin (must be &gt;= 1), or <c>null</c> to
+    /// clear the override.
+    /// </param>
+    Task SetMaxCacheValueBytesAsync(string treeId, long? maxCacheValueBytes);
+
+    /// <summary>
     /// Stamps the
     /// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
     /// latch to <c>true</c> for <paramref name="treeId"/>. Idempotent

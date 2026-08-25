@@ -37,6 +37,16 @@ namespace Orleans.Lattice.BPlusTree;
 /// digest API - the resolver enforces the one-way semantics rather than
 /// pushing the check to every leaf grain.
 /// </para>
+/// <para>
+/// The per-tree
+/// <see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/> override, when
+/// present, likewise takes priority over the silo-wide configured value; it
+/// is folded into the resolved
+/// <see cref="LatticeOptions.MaxCacheValueBytes"/> and also exposed through
+/// the lightweight <see cref="GetMaxCacheValueBytesAsync(string)"/> fast path
+/// the read-through cache drives. Absent on the registry entry, the resolved
+/// cap equals the static option exactly.
+/// </para>
 /// </summary>
 internal sealed class LatticeOptionsResolver(
     IGrainFactory grainFactory,
@@ -143,6 +153,51 @@ internal sealed class LatticeOptionsResolver(
         // ResolveAsync that may have run the lazy-register seam.
         _walPartitionsCache.TryAdd(treeId, partitions);
         return _walPartitionsCache.TryGetValue(treeId, out var afterRace) ? afterRace : partitions;
+    }
+
+    /// <summary>
+    /// Fast-path resolver for the effective
+    /// <see cref="LatticeOptions.MaxCacheValueBytes"/> read-through-cache
+    /// payload cap only. Returns the per-tree runtime override
+    /// (<see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/>) when one is
+    /// pinned, otherwise the silo-wide static
+    /// <c>IOptionsMonitor&lt;LatticeOptions&gt;</c> value. A <c>null</c> result
+    /// means the mirror is unbounded (the default).
+    /// <para>
+    /// Intended for <see cref="Grains.LeafCacheGrain"/>, which re-resolves the
+    /// cap on each cache refresh so a runtime override change is honoured on a
+    /// warm activation. Unlike <see cref="ResolveAsync"/> this does <em>not</em>
+    /// allocate a full <see cref="ResolvedLatticeOptions"/> record and does
+    /// <em>not</em> seed a missing registry row (it is a pure read), so the cap
+    /// lookup stays allocation-light and side-effect free. The override is
+    /// runtime-mutable, so - unlike the tree-immutable WAL partition pin - the
+    /// value is never memoised: each call reads the registry fresh.
+    /// </para>
+    /// <para>
+    /// System trees (IDs beginning with
+    /// <see cref="LatticeConstants.SystemTreePrefix"/>) resolve synchronously to
+    /// the static option without touching the registry, matching the
+    /// <see cref="ResolveAsync"/> branch and avoiding the registry-tree
+    /// bootstrap cycle.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose effective cache-value cap to resolve.</param>
+    public ValueTask<long?> GetMaxCacheValueBytesAsync(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return new ValueTask<long?>(optionsMonitor.Get(treeId).MaxCacheValueBytes);
+        }
+        return new ValueTask<long?>(LoadMaxCacheValueBytesSlowAsync(treeId));
+    }
+
+    private async Task<long?> LoadMaxCacheValueBytesSlowAsync(string treeId)
+    {
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var baseOptions = optionsMonitor.Get(treeId);
+        return entry?.MaxCacheValueBytes ?? baseOptions.MaxCacheValueBytes;
     }
 
     /// <summary>
@@ -285,6 +340,7 @@ internal sealed class LatticeOptionsResolver(
         int mlk, mic, sc;
         int walPartitions;
         bool maintainDigest;
+        long? maxCacheValueBytes;
         if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             mlk = LatticeConstants.DefaultMaxLeafKeys;
@@ -307,6 +363,12 @@ internal sealed class LatticeOptionsResolver(
             // avoid paying maintenance cost for a feature that does
             // not apply.
             maintainDigest = false;
+            // System trees carry no registry entry (they bypass the
+            // registry entirely to avoid the bootstrap cycle), so no
+            // per-tree override can exist; the cache-value cap resolves
+            // to the silo-wide static option, exactly matching the
+            // pre-override behaviour for system-tree caches.
+            maxCacheValueBytes = baseOptions.MaxCacheValueBytes;
         }
         else
         {
@@ -393,6 +455,14 @@ internal sealed class LatticeOptionsResolver(
                 }
             }
             maintainDigest = !latched && configured;
+
+            // Effective MaxCacheValueBytes precedence:
+            //   1. Per-tree runtime override (entry.MaxCacheValueBytes) wins.
+            //   2. Silo-wide LatticeOptions.MaxCacheValueBytes is the fallback.
+            // Absent on the registry entry (null) => fall back to the static
+            // IOptionsMonitor value, so the no-override path is byte-for-byte
+            // identical to the pre-override behaviour.
+            maxCacheValueBytes = entry?.MaxCacheValueBytes ?? baseOptions.MaxCacheValueBytes;
         }
 
         // Compaction shard-tick interval: clamp configured values below
@@ -508,6 +578,12 @@ internal sealed class LatticeOptionsResolver(
             // partition fan-out shape regardless of what the silo's
             // live IOptionsMonitor<LatticeOptions> value is.
             WalPartitions = walPartitions,
+            // MaxCacheValueBytes sourced from the per-tree runtime override
+            // (registry entry) when present, else the silo-wide static option.
+            // This surfaces the resolved per-tree read-through-cache payload cap
+            // as the seam a tenant-memory-budget consumer drives; when no
+            // override is pinned it equals the static option exactly.
+            MaxCacheValueBytes = maxCacheValueBytes,
         };
     }
 
