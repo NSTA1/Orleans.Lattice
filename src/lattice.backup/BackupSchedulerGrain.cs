@@ -178,7 +178,9 @@ internal sealed class BackupSchedulerGrain(
     public async Task<bool> HasScheduleAsync(bool incremental)
     {
         var name = incremental ? IncrementalScheduleReminderName : FullScheduleReminderName;
-        var reminder = await reminderRegistry.GetReminder(context.GrainId, name);
+        var reminder = await BackupReminderResilience.RunWithRetryAsync(
+            () => reminderRegistry.GetReminder(context.GrainId, name),
+            logger, nameof(reminderRegistry.GetReminder), name, ScopeKey);
         return reminder is not null;
     }
 
@@ -445,11 +447,13 @@ internal sealed class BackupSchedulerGrain(
         if (enabled)
         {
             var period = ClampInterval(interval);
-            await reminderRegistry.RegisterOrUpdateReminder(
-                callingGrainId: context.GrainId,
-                reminderName: reminderName,
-                dueTime: period,
-                period: period);
+            await BackupReminderResilience.RunWithRetryAsync(
+                () => reminderRegistry.RegisterOrUpdateReminder(
+                    callingGrainId: context.GrainId,
+                    reminderName: reminderName,
+                    dueTime: period,
+                    period: period),
+                logger, nameof(reminderRegistry.RegisterOrUpdateReminder), reminderName, ScopeKey);
         }
         else
         {
@@ -461,10 +465,14 @@ internal sealed class BackupSchedulerGrain(
     {
         try
         {
-            var reminder = await reminderRegistry.GetReminder(context.GrainId, reminderName);
+            var reminder = await BackupReminderResilience.RunWithRetryAsync(
+                () => reminderRegistry.GetReminder(context.GrainId, reminderName),
+                logger, nameof(reminderRegistry.GetReminder), reminderName, ScopeKey);
             if (reminder is not null)
             {
-                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
+                await BackupReminderResilience.RunWithRetryAsync(
+                    () => reminderRegistry.UnregisterReminder(context.GrainId, reminder),
+                    logger, nameof(reminderRegistry.UnregisterReminder), reminderName, ScopeKey);
             }
         }
         catch (Exception ex)

@@ -172,6 +172,8 @@ public sealed class LatticeBackupGrpcServiceUnitTests
         yield return new TestCaseData(new LatticeRestoreValidationException("bad"), StatusCode.FailedPrecondition).SetName("RestoreValidation_maps_to_FailedPrecondition");
         yield return new TestCaseData(new ArgumentException("arg"), StatusCode.InvalidArgument).SetName("Argument_maps_to_InvalidArgument");
         yield return new TestCaseData(new LatticeAuthorizationDeniedException("denied"), StatusCode.PermissionDenied).SetName("AuthorizationDenied_maps_to_PermissionDenied");
+        yield return new TestCaseData(new TimeoutException("The operation has timed out."), StatusCode.Unavailable).SetName("TransientReminderTimeout_maps_to_Unavailable");
+        yield return new TestCaseData(new InvalidOperationException("Reminder Service is still initializing and it is taking a long time. Please retry again later."), StatusCode.Unavailable).SetName("ReminderStillInitializing_maps_to_Unavailable");
         yield return new TestCaseData(new InvalidTimeZoneException("boom"), StatusCode.Internal).SetName("Unexpected_maps_to_Internal");
     }
 
@@ -187,6 +189,47 @@ public sealed class LatticeBackupGrpcServiceUnitTests
             Context()));
 
         Assert.That(ex!.StatusCode, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void InvokeAsync_attaches_a_correlation_ref_to_the_opaque_internal_detail()
+    {
+        var control = Substitute.For<ILatticeBackupControl>();
+        control.CheckBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidTimeZoneException("secret internal detail"));
+        var service = CreateService(control);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckBackupHealth(
+            new BackupHealthCheckRequestMessage { BackupId = "b" },
+            Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Internal));
+            Assert.That(ex.Status.Detail, Does.Contain("ref:"),
+                "The opaque Internal detail must carry a correlation id an operator can tie to the logged exception.");
+            Assert.That(ex.Status.Detail, Does.Not.Contain("secret internal detail"),
+                "The surfaced message must not leak the internal exception detail.");
+        });
+    }
+
+    [Test]
+    public void InvokeAsync_surfaces_a_transient_reminder_failure_as_retryable_unavailable()
+    {
+        var control = Substitute.For<ILatticeBackupControl>();
+        control.CheckBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new TimeoutException("The operation has timed out."));
+        var service = CreateService(control);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckBackupHealth(
+            new BackupHealthCheckRequestMessage { BackupId = "b" },
+            Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(ex.Status.Detail, Does.Contain("ref:"));
+        });
     }
 
     [Test]
