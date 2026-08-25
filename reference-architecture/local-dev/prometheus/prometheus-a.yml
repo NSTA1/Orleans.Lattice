@@ -1,0 +1,14 @@
+# Local-dev Prometheus config - REGION A.
+# Scrapes region A's silo OpenTelemetry /metrics endpoint. prometheus-a is attached
+# only to net-a, so it can reach silo-a but NOT silo-b (region isolation): each
+# region observes only itself, exactly as two independently-operated regions would.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: orleans-lattice-silo-a
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - silo-a:8080

@@ -1,0 +1,79 @@
+{
+  "//": "Local-dev identity model for the dual-cluster harness. This file is the SINGLE source of truth for who exists, what groups they are in, and what each group may do. It is mounted read-only into BOTH regional silos (identical in each cluster) and read at startup by LocalDevIdentitySeeder, which (1) seeds the durable membership directory (sys-membership-* trees) with these groups and memberships so the Explorer Access tab is load-bearing and introspectable, and (2) authors the deny-by-default authorization grants below. The DevIdentityCredentialAuthenticator additionally attaches each identity's groups to its principal as asserted groups, so group grants resolve even before the directory seed lands. Edit this file and `docker compose restart silo-a silo-b` to change the identity model with no rebuild.",
+  "//issuer": "Any bearer token whose value equals an identity id below authenticates AS that identity (set `Authorization: Bearer <id>` on an MCP/gRPC call, or sign in to the Explorer with the id as the username). An id NOT listed here still authenticates as itself but carries no groups, so deny-by-default leaves it with no access - which is the point.",
+  "identities": [
+    {
+      "id": "platform-admin",
+      "description": "Bootstrap administrator. Also listed in Auth:BootstrapAdministrators, so it is unconditionally Admin on every tree and is seeded a cluster-wide full-access grant (state/data/backup/schema/auth/telemetry/replication/tree-lifecycle). Use this identity to create trees and author further grants.",
+      "groups": ["platform-admins"]
+    },
+    {
+      "id": "region-operator",
+      "description": "Day-to-day data-plane operator. Can read and write every tree (including range and atomic/cross-tree writes, CRDT apply, bulk load, and routine tree admin) but CANNOT back up/restore, change schema, read telemetry, configure replication, or drop/reshard a tree.",
+      "groups": ["operators"]
+    },
+    {
+      "id": "data-reader",
+      "description": "Read-only consumer. Can read single keys and ranges on every tree and nothing else - every write, delete, admin, backup, schema, telemetry, or replication call is denied.",
+      "groups": ["readers"]
+    },
+    {
+      "id": "auditor",
+      "description": "Observability-only role. Holds ONLY the scopeless Telemetry capability (read cluster telemetry via the MCP telemetry tools); it can read no tree data and mutate nothing, demonstrating that Telemetry is granted in isolation and never confers data access.",
+      "groups": ["auditors"]
+    }
+  ],
+  "groups": [
+    {
+      "id": "platform-admins",
+      "displayName": "Platform administrators",
+      "grants": []
+    },
+    {
+      "id": "operators",
+      "displayName": "Data-plane operators",
+      "grants": [
+        {
+          "scope": "cluster",
+          "effect": "Allow",
+          "operations": ["Read", "Write", "Delete", "RangeRead", "RangeDelete", "CrdtApply", "AtomicWrite", "BulkLoad", "Admin"]
+        }
+      ]
+    },
+    {
+      "id": "readers",
+      "displayName": "Read-only consumers",
+      "grants": [
+        {
+          "scope": "cluster",
+          "effect": "Allow",
+          "operations": ["Read", "RangeRead"]
+        }
+      ]
+    },
+    {
+      "id": "auditors",
+      "displayName": "Telemetry auditors",
+      "grants": [
+        {
+          "scope": "cluster",
+          "effect": "Allow",
+          "operations": ["Telemetry"]
+        }
+      ]
+    }
+  ],
+  "//tenants": "Demo tenants for the OPTIONAL multi-tenancy feature (Tenancy__Enabled=true; off by default). Seeded into the durable tenant registry at startup by TenantSeeder. A subject 'belongs to' a tenant by being one of its adminSubjects (a subject id above), which is exactly what the tenant self-service surface resolves from the caller's credential: signed in as an identity, `lattice_tenant_list` returns that identity's tenants and `lattice_tenant_get <id>` succeeds only for those - every other tenant fails closed as not-found. platform-admin administers both tenants (sees both); region-operator sees only acme; data-reader sees only globex; auditor administers none (empty list). NOTE: on the split MCP head `lattice_tenant_current` reports the reserved 'default' tenant because no active tenant is asserted across the head->silo hop; discovery and list/get are driven by the credential and need no such assertion. Tenant ids must match ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$.",
+  "tenants": [
+    {
+      "id": "acme",
+      "displayName": "Acme Corporation",
+      "adminSubjects": ["platform-admin", "region-operator"]
+    },
+    {
+      "id": "globex",
+      "displayName": "Globex Corporation",
+      "adminSubjects": ["platform-admin", "data-reader"]
+    }
+  ]
+}

@@ -19,6 +19,7 @@ not duplicate the design; it tells you how to run the kit.
 | [`hosts/`](hosts/) | The three container host projects - Silo, MCP, and Explorer - each with a chiselled, non-root Dockerfile. They reference the published `Orleans.Lattice` NuGet packages. See [`hosts/README.md`](hosts/README.md) for the full host configuration surface. |
 | [`deploy/`](deploy/) | `Deploy-ReferenceArchitecture.ps1`, the single idempotent orchestrator, and [`deploy/README.md`](deploy/README.md) documenting its internals. |
 | [`local/`](local/) | A Docker Compose harness that stands the whole estate up on one machine for development. See [`local/README.md`](local/README.md). |
+| [`local-dev/`](local-dev/) | A two-region variant of the local harness that builds every head straight from `src/**` by project reference (no NuGet), runs two network-isolated clusters with per-region storage, and swaps Entra for per-request dev identities under real deny-by-default. See [`local-dev/README.md`](local-dev/README.md). |
 
 ## Prerequisites
 
@@ -490,6 +491,17 @@ Compose harness under [`local/`](local/). It runs the three heads against Azurit
 and a local Prometheus/Grafana, with the security bypass toggles (Entra off,
 plaintext h2c) documented and defaulted for development only. See
 [`local/README.md`](local/README.md).
+
+For a **two-region** topology - to exercise cross-cluster replication and
+differentiated per-identity authorization on one machine - use the
+[`local-dev/`](local-dev/) harness instead. It mirrors `local/` but differs in four
+deliberate ways: every head builds directly from `src/**` by project reference, so the
+stack always reflects your working tree with no NuGet restore or pack step; it stands
+up two network-isolated regions bridged only by the silo-to-silo replication seam;
+each region gets its own isolated Azurite (primary plus a dedicated backup sink); and
+it replaces Entra with hand-crafted per-request dev identities enforced under real
+deny-by-default, so an agent can act as any of several differentiated identities by
+setting a bearer token. See [`local-dev/README.md`](local-dev/README.md).
 
 ## Real-Azure validation runbook
 
