@@ -458,6 +458,11 @@ internal static class TypeAliases
     internal const string WalSaturationState = "ol.wss";
     internal const string WalSaturationStateChange = "ol.wsc";
 
+    // Tree-alias control-plane surface: the change payload the registry
+    // fires on an effective physical-identity swap (see ITreeAliasObserver),
+    // driving the replication shipper's event-driven rebind.
+    internal const string TreeAliasChange = "ol.tac";
+
     // WAL grain & wire-record surface (ship-time envelope and per-shard
     // sequenced storage shape). Originally declared with the legacy
     // <c>olr.</c> prefix from the replication package; preserved

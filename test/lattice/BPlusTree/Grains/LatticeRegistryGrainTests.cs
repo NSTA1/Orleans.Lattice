@@ -22,6 +22,35 @@ public partial class LatticeRegistryGrainTests
         return (grain, registryTree);
     }
 
+    private static (LatticeRegistryGrain grain, ISystemLattice registryTree, RecordingTreeAliasObserver observer) CreateGrainWithAliasObserver(
+        LatticeOptions? options = null)
+    {
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var registryTree = Substitute.For<ISystemLattice>();
+        grainFactory.GetGrain<ISystemLattice>(LatticeConstants.RegistryTreeId).Returns(registryTree);
+
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(options ?? new LatticeOptions());
+
+        var observer = new RecordingTreeAliasObserver();
+        var dispatcher = new TreeAliasObserverDispatcher(
+            [observer], Microsoft.Extensions.Logging.Abstractions.NullLogger<TreeAliasObserverDispatcher>.Instance);
+
+        var grain = new LatticeRegistryGrain(grainFactory, optionsMonitor, placementResolver: null, aliasObservers: dispatcher);
+        return (grain, registryTree, observer);
+    }
+
+    private sealed class RecordingTreeAliasObserver : ITreeAliasObserver
+    {
+        public List<TreeAliasChange> Changes { get; } = [];
+
+        public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+        {
+            Changes.Add(change);
+            return Task.CompletedTask;
+        }
+    }
+
     [Test]
     public async Task RegisterAsync_sets_key_in_registry_tree()
     {
