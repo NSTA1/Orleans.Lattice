@@ -1,0 +1,501 @@
+# ---------------------------------------------------------------------------
+# Local-dev DUAL-CLUSTER harness for the Orleans.Lattice reference architecture.
+#
+# Brings up TWO independent regions (A and B) entirely on your machine, WITHOUT
+# Azure and WITHOUT NuGet - every head builds straight from src/** by project
+# reference (see hosts/*/Dockerfile), so the whole stack always reflects your
+# working tree. It mirrors reference-architecture/local as closely as possible, but
+# adds three things that single-region harness cannot show:
+#
+#   1. TWO isolated regions. Region A and region B are byte-for-byte symmetric:
+#      each has its own silo, its own network-isolated Azurite primary storage, its
+#      own MCP head, its own Explorer console, and its own Prometheus + Grafana.
+#      Docker networking enforces the isolation: net-a and net-b are private
+#      per-region networks, and the only things that bridge them are two dedicated
+#      single-purpose seams - net-replication (the silos' cross-region replication
+#      link) and net-backup (the silos' link to the ONE shared backup sink, below).
+#      Region A's primary storage, telemetry, and heads are unreachable from region B
+#      and vice versa - exactly as two independently-operated regions would be - yet a
+#      write in one region still converges into the other over the replication link.
+#
+#      The backup sink is the deliberate exception to per-region isolation: a
+#      coordinated restore of a replicated tree needs every cluster to read the same
+#      backup, so both regions share a single sink (azurite-backup-shared) over
+#      net-backup, with region A the designated backup-primary (scheduler on) and
+#      region B DR standby (scheduler off). This mirrors the reference architecture's
+#      single shared Azure Blob backup sink.
+#
+#   2. REAL deny-by-default enforcement. Unlike the fully-open local harness, this
+#      one runs the authorization core deny-by-default (Auth__DefaultEffect=Deny):
+#      a caller may do ONLY what an authored grant allows. The differentiated
+#      grants come from identities.json (mounted into both silos and seeded by
+#      LocalDevIdentitySeeder), so the four identities below have genuinely
+#      different power and the Explorer Access tab is load-bearing.
+#
+#   3. PER-REQUEST identity switching without Entra. With Entra off there is no
+#      identity provider, so the harness supplies its own: an agent acts as any
+#      identity simply by setting `Authorization: Bearer <id>` on an MCP/gRPC call
+#      (DevBypassAuthenticationHandler on the MCP head resolves the bearer per
+#      request and forwards it), or by signing in to the Explorer with the identity
+#      as the username. The silo's DevIdentityCredentialAuthenticator maps the
+#      forwarded id to a subject and the groups identities.json declares for it.
+#
+# THE FOUR IDENTITIES (act as any of them with `Authorization: Bearer <id>`):
+#   platform-admin  - bootstrap administrator; full access to everything.
+#   region-operator - data-plane read/write on every tree; no backup/schema/
+#                     telemetry/replication/lifecycle.
+#   data-reader     - read-only (single key + range) on every tree; nothing else.
+#   auditor         - telemetry only; can read no tree data and mutate nothing.
+#   (any other bearer id authenticates as itself but, carrying no groups, is
+#   denied everything - deny-by-default in action.)
+#
+# SECURITY / DEV BYPASS: this is a local dev convenience, NOT a secure deployment
+# template. Entra is disabled; the coarse gRPC transport gate is open
+# (StateApi__RequireAuthorization=false) with the REAL enforcement being the
+# deny-by-default per-subject access gate (exactly the Entra-deployment model);
+# cross-region replication permits plaintext h2c. Every value has a baked-in local
+# dev default, so `docker compose up --build` runs with no .env file. The only
+# "secret", the shared replication key, is a documented dev placeholder and must be
+# identical in both regions (it authenticates inbound replication RPCs). No real
+# secret is ever baked into an image, this file, or source.
+#
+# Quick start:
+#   docker compose up --build
+# Then, per region:
+#   Region A  Explorer http://localhost:9080   MCP http://localhost:9090   Grafana http://localhost:9300
+#   Region B  Explorer http://localhost:9081   MCP http://localhost:9091   Grafana http://localhost:9301
+# Only the Explorer, MCP, and Grafana surfaces are published to the host (fixed
+# ports >= 9000); every other container (silos, Azurite, Prometheus) is internal to
+# its region's Docker network.
+# See README.md for the per-identity access demo and the cross-region replication
+# demo.
+# ---------------------------------------------------------------------------
+
+name: lattice-reference-local-dev
+
+# Dev enforcement toggles that are IDENTICAL in both regions. Anchored here so the
+# two silos cannot drift apart (a mismatched enforcement posture across regions
+# would make the harness lie about isolation).
+x-silo-dev-toggles: &silo-dev-toggles
+  # No identity provider in the harness.
+  Entra__Enabled: "false"
+  # REAL enforcement: deny-by-default. A subject may do ONLY what an authored grant
+  # allows; identities.json (seeded by LocalDevIdentitySeeder) supplies those
+  # grants. This is the single toggle that makes the four identities differ.
+  Auth__DefaultEffect: "Deny"
+  # Coarse gRPC transport gate OPEN; the real enforcement is the deny-by-default
+  # per-subject access gate on the gated ILattice surface (the same model an Entra
+  # deployment uses). Turning this ON would instead demand shared Basic creds at
+  # the transport and defeat per-request bearer identity switching.
+  StateApi__RequireAuthorization: "false"
+  # With Entra off, resolve a forwarded bearer token to its named subject and
+  # attach the groups identities.json declares for it (DevIdentityCredentialAuthenticator),
+  # and seed the identity model into the membership directory + policy store
+  # (LocalDevIdentitySeeder). This is what makes per-request identity switching work.
+  Auth__DevAuthenticateForwardedSubject: "true"
+  # The mounted identity model (see the volume mount and identities.json).
+  Auth__IdentitiesFile: "/config/identities.json"
+  # The bootstrap administrator identity (unconditionally Admin + seeded a
+  # cluster-wide full grant by AdministratorAccessSeeder). Matches an identity in
+  # identities.json.
+  Auth__BootstrapAdministrators: "platform-admin"
+  # Cross-region replication over plaintext h2c (dev only).
+  Replication__AllowPlaintext: "true"
+  # Runtime per-tree replication control plane (enrols sys-replication-config and
+  # co-hosts ILatticeReplicationControl) so the MCP lattice_replication_* tools work.
+  Replication__EnableRuntimeConfig: "true"
+  # The demo replicated tree and its wire merge mode. MUST match on both regions or
+  # cross-region traffic dead-letters. Writes to `orders` in either region converge
+  # into the other over net-replication.
+  Replication__Trees: "orders=LwwRegister"
+  # The shared replication key authenticates inbound replication RPCs; it MUST be
+  # identical in both regions. Documented dev placeholder, override via .env.
+  LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET:-local-dev-only-not-a-real-secret}"
+  # Each region reads and writes the SAME shared backup sink (azurite-backup-shared,
+  # on net-backup), mirroring the reference architecture's single shared Azure Blob
+  # sink. Exactly one region is the designated backup-primary and owns the scheduler
+  # (Backup__Primary is set per-silo below, NOT here); the other is DR standby with
+  # the scheduler off, so there are no competing chains writing the shared sink. A
+  # coordinated restore of a replicated tree (e.g. `orders`) needs this: every
+  # cluster must be able to read the one backup, or the cross-cluster restore aborts.
+  Scaling__MinReplicas: "1"
+  # OPTIONAL multi-tenancy (off by default). When "true", the silo registers the
+  # tenant isolation gate, the tenant registry, and the tenant-admin control API
+  # (co-hosted on the silo gRPC endpoint), and TenantSeeder seeds the demo tenants
+  # declared in identities.json. Leaving it "false" is byte-for-byte the
+  # single-tenant cluster. Flip BOTH this and the MCP head's Mcp__EnableTenancy to
+  # exercise the tenancy tools. Override per run: `Tenancy__Enabled=true docker compose up`.
+  Tenancy__Enabled: "${TENANCY_ENABLED:-false}"
+
+x-mcp-dev-toggles: &mcp-dev-toggles
+  Entra__Enabled: "false"
+  Mcp__RequireAuthorization: "false"
+  # Authenticate each request as the subject named in its OWN Authorization: Bearer
+  # <id> header and forward that id to the silo. This is per-request identity
+  # switching; there is no fixed subject.
+  Mcp__DevPerRequestIdentity: "true"
+  # Service credential the discovery core uses for its trusted, read-only permission
+  # introspection of each caller. In this split topology the MCP head reaches the silo
+  # over gRPC, and the in-silo system-origin admin bypass does NOT cross the wire: the
+  # silo re-runs its own administrator gate on the introspection call. Without an
+  # administrator service credential only an administrator caller could enumerate tools
+  # remotely (every non-admin identity would fail the remote admin gate and see just the
+  # two ungated baseline tools). platform-admin is a bootstrap administrator (see
+  # Auth__BootstrapAdministrators), so forwarding it for the introspection lets every
+  # caller's own grants light up their tools; the caller's own credential still
+  # authorizes their actual tool calls (fail-closed, per-identity enforcement).
+  Mcp__AdministratorToken: "platform-admin"
+  # Advertise the write / replication / backup tool groups; whether a given caller
+  # SEES them still depends on that caller's authored grants (fail-closed discovery).
+  Mcp__EnableDataWrites: "true"
+  Mcp__EnableReplicationControl: "true"
+  Mcp__EnableBackupControl: "true"
+  # OPTIONAL multi-tenancy tool groups (off by default), paired with the silo's
+  # Tenancy__Enabled. When "true", the head dials the silo's tenant-admin gRPC
+  # facade and contributes the tenant self-awareness tools (lattice_tenant_current
+  # / _list / _get); Mcp__EnableTenantControl additionally advertises the mutating
+  # tenant administration tools. Keep both in step with the silo flag - the tools
+  # target a facade the silo only maps when its Tenancy__Enabled is also "true".
+  Mcp__EnableTenancy: "${TENANCY_ENABLED:-false}"
+  Mcp__EnableTenantControl: "${TENANCY_CONTROL:-false}"
+
+# Shared build config per head, anchored so both regions build byte-for-byte
+# identically. Each head also carries a fixed `image:` name (below), so the image is
+# built once and the sibling region reuses it. The optional 'nugetcfg' BuildKit
+# secret lets a private or offline NuGet feed be supplied for the restore step
+# without editing any tracked file (see nuget.config); when it is not provided the
+# tracked public-nuget.org config is used. The secret is never baked into a layer.
+x-silo-build: &silo-build
+  context: ../..
+  dockerfile: reference-architecture/local-dev/hosts/Silo/Dockerfile
+  secrets: [nugetcfg]
+x-mcp-build: &mcp-build
+  context: ../..
+  dockerfile: reference-architecture/local-dev/hosts/Mcp/Dockerfile
+  secrets: [nugetcfg]
+x-explorer-build: &explorer-build
+  context: ../..
+  dockerfile: reference-architecture/local-dev/hosts/Explorer/Dockerfile
+  secrets: [nugetcfg]
+
+# Cap per-container log retention. Docker's default json-file driver keeps every
+# log line forever, so a long-running harness (continuous health probes, /metrics
+# scrapes, and cross-region replication chatter) can silently grow the container
+# logs until they fill the disk. Anchored once and applied to every service below:
+# each container keeps at most 3 rotated files of 10 MB, a 30 MB ceiling, after
+# which the oldest lines roll off.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ======================= REGION A =======================================
+
+  azurite-a:
+    logging: *default-logging
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    networks: [net-a]
+    volumes:
+      - azurite-a-data:/data
+    # Internal to net-a; no host port. Region A storage is reachable only from
+    # region A containers.
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # The single SHARED backup sink, reachable from BOTH regions over net-backup. This
+  # mirrors the reference architecture: one shared Azure Blob sink is the single
+  # source of truth for restore, so a coordinated restore of a replicated tree can
+  # be prepared by every cluster. It keeps region A's original backup volume so any
+  # backup already captured here is preserved across this topology change.
+  azurite-backup-shared:
+    logging: *default-logging
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    networks: [net-backup]
+    volumes:
+      - azurite-backup-a-data:/data
+    # On net-backup only; no host port. The backup seam is the one storage resource
+    # deliberately shared across regions (like a single shared blob account).
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  silo-a:
+    logging: *default-logging
+    image: lattice-local-dev/silo:latest
+    build: *silo-build
+    depends_on:
+      azurite-a:
+        condition: service_healthy
+      azurite-backup-shared:
+        condition: service_healthy
+    # On net-a (its region), net-replication (the cross-region replication seam),
+    # and net-backup (the cross-region shared-backup seam).
+    networks: [net-a, net-replication, net-backup]
+    volumes:
+      # The single source of truth for identities, groups, and grants, read-only.
+      # DevIdentityCredentialAuthenticator and LocalDevIdentitySeeder both load it
+      # from Auth__IdentitiesFile (/config/identities.json).
+      - ./identities.json:/config/identities.json:ro
+    environment:
+      <<: *silo-dev-toggles
+      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING_A:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-a:10000/devstoreaccount1;QueueEndpoint=http://azurite-a:10001/devstoreaccount1;TableEndpoint=http://azurite-a:10002/devstoreaccount1;}"
+      # The SHARED backup sink (azurite-backup-shared), identical in both regions.
+      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-shared:10000/devstoreaccount1;}"
+      # Region A is the designated backup-primary: it owns the backup scheduler.
+      Backup__Primary: "true"
+      Cluster__Id: "lattice-local-a"
+      Cluster__ServiceId: "lattice-local-a"
+      # Replication identity for region A and the reciprocal peer (region B's silo
+      # gRPC endpoint, reachable only over net-replication).
+      Replication__ClusterId: "region-a"
+      Replication__Peers: "region-b=http://silo-b:8081"
+    ports:
+      # ONLY the Region A Explorer console is published to the host. The silo's own
+      # HTTP (8080) and gRPC (8081) endpoints stay internal to net-a. The explorer
+      # shares this silo's namespace (explorer-a: network_mode service:silo-a), so
+      # its published UI port is declared here on the silo.
+      - "9080:8082"
+
+  mcp-a:
+    logging: *default-logging
+    image: lattice-local-dev/mcp:latest
+    build: *mcp-build
+    depends_on:
+      - silo-a
+    networks: [net-a]
+    environment:
+      <<: *mcp-dev-toggles
+      Mcp__StateEndpoint: "http://silo-a:8081"
+      Mcp__AuthEndpoint: "http://silo-a:8081"
+      Mcp__DataEndpoint: "http://silo-a:8081"
+      Mcp__ReplicationEndpoint: "http://silo-a:8081"
+      Mcp__BackupEndpoint: "http://silo-a:8081"
+      Mcp__Telemetry__BackendAddress: "http://prometheus-a:9090"
+    ports:
+      - "9090:8080"
+
+  explorer-a:
+    logging: *default-logging
+    image: lattice-local-dev/explorer:latest
+    build: *explorer-build
+    depends_on:
+      - silo-a
+    # Share silo-a's namespace so the console reaches the state API over loopback
+    # (the explorer's transport policy only permits the anonymous-plaintext dev path
+    # to a LOOPBACK endpoint). The published UI port (8080 -> 8082) is on silo-a.
+    network_mode: "service:silo-a"
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8082"
+      LATTICE_EXPLORER_ENDPOINT: "http://localhost:8081"
+      LATTICE_EXPLORER_INSECURE_DEV: "true"
+      Entra__Enabled: "false"
+      # Auto-sign-in as the platform administrator on first load. Sign out and sign
+      # back in with any identity id as the username to see that identity's view
+      # (a data-reader sees only readable trees; an auditor sees none).
+      LATTICE_EXPLORER_USERNAME: "platform-admin"
+      LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
+
+  prometheus-a:
+    logging: *default-logging
+    image: prom/prometheus:latest
+    depends_on:
+      - silo-a
+    # The `prometheus` alias makes this reachable under the hostname the shared
+    # dashboards datasource template (src/lattice.dashboards/Provisioning/
+    # datasources.yaml) hardcodes (http://prometheus:9090), so grafana-a resolves
+    # its datasource without editing that published, shared file.
+    networks:
+      net-a:
+        aliases: [prometheus]
+    volumes:
+      - ./prometheus/prometheus-a.yml:/etc/prometheus/prometheus.yml:ro
+    # Internal to net-a; scraped by grafana-a in-network, no host port.
+
+  grafana-a:
+    logging: *default-logging
+    image: grafana/grafana-oss:latest
+    depends_on:
+      - prometheus-a
+    networks: [net-a]
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - ../../src/lattice.dashboards/Provisioning/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ../../src/lattice.dashboards/Provisioning/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ../../src/lattice.dashboards/Grafana:/var/lib/grafana/dashboards/orleans-lattice:ro
+    ports:
+      - "9300:3000"
+
+  # ======================= REGION B =======================================
+
+  azurite-b:
+    logging: *default-logging
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
+    networks: [net-b]
+    volumes:
+      - azurite-b-data:/data
+    # Internal to net-b; no host port. Region B storage is reachable only from
+    # region B containers.
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10002"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # Region B has NO backup sink of its own: it reads and writes the single shared
+  # sink (azurite-backup-shared, declared in region A's block) over net-backup, as a
+  # DR standby (scheduler off). A per-region backup sink is exactly what made a
+  # replicated-tree restore impossible.
+
+  silo-b:
+    logging: *default-logging
+    image: lattice-local-dev/silo:latest
+    build: *silo-build
+    depends_on:
+      azurite-b:
+        condition: service_healthy
+      azurite-backup-shared:
+        condition: service_healthy
+    # On net-b (its region), net-replication (the cross-region replication seam),
+    # and net-backup (the cross-region shared-backup seam).
+    networks: [net-b, net-replication, net-backup]
+    volumes:
+      - ./identities.json:/config/identities.json:ro
+    environment:
+      <<: *silo-dev-toggles
+      Storage__ConnectionString: "${STORAGE_CONNECTION_STRING_B:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-b:10000/devstoreaccount1;QueueEndpoint=http://azurite-b:10001/devstoreaccount1;TableEndpoint=http://azurite-b:10002/devstoreaccount1;}"
+      # The SHARED backup sink (azurite-backup-shared), identical in both regions.
+      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-shared:10000/devstoreaccount1;}"
+      # Region B is DR standby: the backup scheduler is OFF here, so only region A
+      # writes the shared sink (no competing backup chains). It still reads the sink
+      # for a coordinated restore.
+      Backup__Primary: "false"
+      Cluster__Id: "lattice-local-b"
+      Cluster__ServiceId: "lattice-local-b"
+      Replication__ClusterId: "region-b"
+      Replication__Peers: "region-a=http://silo-a:8081"
+    ports:
+      # ONLY the Region B Explorer console is published to the host; the silo's own
+      # HTTP (8080) and gRPC (8081) endpoints stay internal to net-b. explorer-b
+      # shares this silo's namespace, so its UI port is declared here on the silo.
+      - "9081:8082"
+
+  mcp-b:
+    logging: *default-logging
+    image: lattice-local-dev/mcp:latest
+    build: *mcp-build
+    depends_on:
+      - silo-b
+    networks: [net-b]
+    environment:
+      <<: *mcp-dev-toggles
+      Mcp__StateEndpoint: "http://silo-b:8081"
+      Mcp__AuthEndpoint: "http://silo-b:8081"
+      Mcp__DataEndpoint: "http://silo-b:8081"
+      Mcp__ReplicationEndpoint: "http://silo-b:8081"
+      Mcp__BackupEndpoint: "http://silo-b:8081"
+      Mcp__Telemetry__BackendAddress: "http://prometheus-b:9090"
+    ports:
+      - "9091:8080"
+
+  explorer-b:
+    logging: *default-logging
+    image: lattice-local-dev/explorer:latest
+    build: *explorer-build
+    depends_on:
+      - silo-b
+    network_mode: "service:silo-b"
+    environment:
+      ASPNETCORE_HTTP_PORTS: "8082"
+      LATTICE_EXPLORER_ENDPOINT: "http://localhost:8081"
+      LATTICE_EXPLORER_INSECURE_DEV: "true"
+      Entra__Enabled: "false"
+      LATTICE_EXPLORER_USERNAME: "platform-admin"
+      LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
+
+  prometheus-b:
+    logging: *default-logging
+    image: prom/prometheus:latest
+    depends_on:
+      - silo-b
+    # Symmetric to prometheus-a: the `prometheus` alias satisfies the shared
+    # datasource template's hardcoded http://prometheus:9090 host inside net-b.
+    networks:
+      net-b:
+        aliases: [prometheus]
+    volumes:
+      - ./prometheus/prometheus-b.yml:/etc/prometheus/prometheus.yml:ro
+    # Internal to net-b; scraped by grafana-b in-network, no host port.
+
+  grafana-b:
+    logging: *default-logging
+    image: grafana/grafana-oss:latest
+    depends_on:
+      - prometheus-b
+    networks: [net-b]
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - ../../src/lattice.dashboards/Provisioning/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ../../src/lattice.dashboards/Provisioning/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ../../src/lattice.dashboards/Grafana:/var/lib/grafana/dashboards/orleans-lattice:ro
+    ports:
+      - "9301:3000"
+
+networks:
+  # Region A private network: azurite-a, silo-a, mcp-a, prometheus-a, grafana-a
+  # (and explorer-a via silo-a's namespace). Not reachable from region B.
+  net-a:
+    driver: bridge
+  # Region B private network, symmetric to net-a and isolated from it.
+  net-b:
+    driver: bridge
+  # A cross-region link carrying ONLY the replication seam. Both silos join it so
+  # their replication shippers can dial each other's gRPC endpoint; nothing else is
+  # attached, so no storage, telemetry, or head in one region can reach the other.
+  net-replication:
+    driver: bridge
+  # A cross-region link carrying ONLY the shared-backup seam. The two silos and the
+  # single shared backup sink (azurite-backup-shared) are the only members, so every
+  # cluster can read/write the one sink - the prerequisite for a coordinated restore
+  # of a replicated tree. No storage, telemetry, or head in either region is attached,
+  # so this seam exposes nothing across regions beyond the two silos (already mutually
+  # reachable over net-replication) and the shared sink they both need.
+  net-backup:
+    driver: bridge
+
+volumes:
+  azurite-a-data:
+  # Reused as the single shared backup sink's volume (azurite-backup-shared), so any
+  # backup already captured under the old per-region-A sink is preserved.
+  azurite-backup-a-data:
+  azurite-b-data:
+
+# Build-time secret for the image restore step. Defaults to the tracked public
+# nuget.config; point NUGET_CONFIG_FILE at your own NuGet.Config (for a private or
+# offline feed) to override it without changing anything tracked, e.g. on this repo's
+# internal builds:
+#   $env:NUGET_CONFIG_FILE = "$env:APPDATA\NuGet\NuGet.Config"; docker compose build
+secrets:
+  nugetcfg:
+    file: ${NUGET_CONFIG_FILE:-./nuget.config}

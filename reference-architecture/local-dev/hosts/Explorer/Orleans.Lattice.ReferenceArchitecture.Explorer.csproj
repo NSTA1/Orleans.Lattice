@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.ReferenceArchitecture.Explorer</RootNamespace>
+    <AssemblyName>Orleans.Lattice.ReferenceArchitecture.Explorer</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!--
+      InvariantGlobalization is enabled after the ordinal-only audit recorded in
+      reference-architecture/hosts/README.md. For this Blazor Server head the
+      only culture-sensitive residue is display-side formatting (numbers, dates)
+      and UI-list ordering; tree keys and access decisions are compared
+      ordinally by the underlying explorer. Dropping ICU is therefore
+      correctness-safe here and only alters cosmetic display formatting to the
+      invariant culture, which is acceptable for an operator console.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Published Orleans.Lattice NuGet packages (nuget.org), NOT project references
+    into src/. Orleans.Lattice.Explorer.Web brings the shared UI, Core, Access,
+    Backup, and Schema explorer libraries transitively; the Entra.Web package adds
+    the hosted-web (OpenID Connect, auth-code + PKCE) Entra sign-in provider that
+    replaces the desktop/device-code flow - the console is a multi-replica Blazor
+    Server web head, so the browser signs in via a server-side confidential client
+    rather than an interactive desktop broker.
+
+    The four shared libraries carrying the transport-header origin-lock fix
+    (Core / Access / Backup / Schema) are referenced explicitly so the
+    fixed versions win over the versions Explorer.Web pulls transitively.
+
+    Orleans.Lattice.Caching.AzureBlob backs the Microsoft.Identity.Web distributed
+    token cache with the per-region storage account, so a signed-in operator's
+    token survives replica scale/restart and is shared across warm replicas.
+  -->
+  <!--
+    LOCAL-DEV VARIANT: PROJECT references into src/**, NOT the published
+    Orleans.Lattice NuGet packages. Orleans.Lattice.Explorer.Web brings the
+    shared UI, Core, Access, Backup, and Schema explorer libraries transitively;
+    Entra.Web adds the hosted-web OpenID Connect sign-in provider, and
+    Caching.AzureBlob backs the distributed token cache. This mirrors the package
+    set in reference-architecture/hosts/Explorer one-for-one.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\UI\Orleans.Lattice.Explorer.UI.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer.entra.web\Orleans.Lattice.Explorer.Entra.Web.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.caching.azureblob\Orleans.Lattice.Caching.AzureBlob.csproj" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+  </ItemGroup>
+
+  <!-- Shared reference-architecture hosting helpers (Front Door origin lock). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\hosts\Common\Orleans.Lattice.ReferenceArchitecture.Hosting.csproj" />
+  </ItemGroup>
+
+</Project>
