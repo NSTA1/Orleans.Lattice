@@ -13,14 +13,30 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>What this pins.</b> Each shipper pump tick re-resolves the logical
-/// source tree to its current physical id via the registry, and when that
-/// id changes it clears its per-partition cursors and re-ships from the new
-/// physical WAL log start. Peers merge every shipped entry by HLC (LWW), so
-/// the re-ship is idempotent. After the workload quiesces every peer site
-/// converges on the POST-swap source key set: no peer is left tailing the
-/// orphaned pre-swap physical WAL, and the keys written only to the
-/// abandoned identity while the edge was partitioned never reach a receiver.
+/// <b>What this pins.</b> When a logical source tree's effective physical
+/// id changes under its registry alias, the registry fires an
+/// alias-change notification that the replication observer fans to the
+/// affected per-peer shipper grains; each shipper rebinds by clearing its
+/// per-partition cursors and re-shipping from the new physical WAL log
+/// start. Peers merge every shipped entry by HLC (LWW), so the re-ship is
+/// idempotent. After the workload quiesces every peer site converges on
+/// the POST-swap source key set: no peer is left tailing the orphaned
+/// pre-swap physical WAL, and the keys written only to the abandoned
+/// identity while the edge was partitioned never reach a receiver.
+/// </para>
+/// <para>
+/// <b>Deterministic rebind, not polling.</b> Detection is event-driven:
+/// the rebind is driven by the alias-change notification, which fires on
+/// the source silo as a local grain call and therefore reaches the
+/// shipper even while the inter-site delivery edge is partitioned. A
+/// bounded backstop re-resolve
+/// (<see cref="LatticeReplicationOptions.ShipSourceIdentityBackstopInterval"/>)
+/// exists only as a safety net against a missed notification. These tests
+/// deliberately configure that backstop far outside the convergence
+/// window (see the fixture construction), so the backstop timer cannot
+/// fire during the test: convergence is therefore a genuine assertion
+/// about the event-driven notify/rebind seam, not a race the poll would
+/// eventually win regardless of whether the notification path works.
 /// </para>
 /// <para>
 /// <b>Scenario shape.</b> The "doomed" keys are authored into the OLD
@@ -49,6 +65,15 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
 {
     private static readonly TimeSpan ConvergenceTimeout = TimeSpan.FromSeconds(45);
 
+    /// <summary>
+    /// Backstop interval used by every test here: far larger than
+    /// <see cref="ConvergenceTimeout"/> so the backstop re-resolve timer
+    /// can never fire inside the test window. The only path left to
+    /// re-resolve a swapped source identity is the event-driven
+    /// alias-change notification, so convergence pins that seam.
+    /// </summary>
+    private static readonly TimeSpan NotifyOnlyBackstop = TimeSpan.FromMinutes(10);
+
     private static byte[] V(string s) => Encoding.UTF8.GetBytes(s);
 
     private static TreeRegistryEntry ShadowEntry() => new() { MaxLeafKeys = 16, ShardCount = 1 };
@@ -57,7 +82,8 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
     public async Task Peer_converges_on_new_identity_and_abandoned_keys_never_survive_after_single_swap()
     {
         const string treeName = "chaos-idswap-single";
-        await using var fixture = new ProductionShipperFixture(treeName, siteCount: 2);
+        await using var fixture = new ProductionShipperFixture(
+            treeName, siteCount: 2, sourceIdentityBackstopInterval: NotifyOnlyBackstop);
         await fixture.InitializeAsync();
 
         var peerId = fixture.ClusterIds[1];
@@ -89,9 +115,10 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
         await shadow.SetAsync("revert-marker", V("only-in-new-identity"));
         await registry.SetAliasAsync(treeName, shadowId);
 
-        // Give the shipper a few ticks to observe the swap while still
-        // partitioned, then heal.
-        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        // The alias cutover already fired the event-driven rebind on the
+        // source silo (a local grain call, unaffected by the partition), so
+        // the shipper is bound to the new identity while still isolated.
+        // Heal the edge so the re-ship can now be delivered.
         fixture.TransportOf(0).HealSite(peerId);
 
         // The peer must converge on the new identity's set...
@@ -115,7 +142,8 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
     public async Task Peer_converges_on_final_identity_after_repeated_swaps_under_partition_cycling()
     {
         const string treeName = "chaos-idswap-repeated";
-        await using var fixture = new ProductionShipperFixture(treeName, siteCount: 2);
+        await using var fixture = new ProductionShipperFixture(
+            treeName, siteCount: 2, sourceIdentityBackstopInterval: NotifyOnlyBackstop);
         await fixture.InitializeAsync();
 
         var peerId = fixture.ClusterIds[1];
@@ -148,7 +176,10 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
             await shadow.SetAsync($"gen-marker", V($"gen{gen}"));
             await registry.SetAliasAsync(treeName, shadowId);
 
-            await Task.Delay(TimeSpan.FromMilliseconds(250));
+            // The alias cutover already fired the event-driven rebind on the
+            // source silo while the peer was isolated. Heal so this
+            // generation's re-ship can be delivered, then let it settle
+            // before the next generation re-isolates the edge.
             fixture.TransportOf(0).HealSite(peerId);
             await Task.Delay(TimeSpan.FromMilliseconds(250));
 
@@ -173,7 +204,8 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
     public async Task Both_live_and_partitioned_peers_converge_on_new_identity_after_swap()
     {
         const string treeName = "chaos-idswap-multipeer";
-        await using var fixture = new ProductionShipperFixture(treeName, siteCount: 3);
+        await using var fixture = new ProductionShipperFixture(
+            treeName, siteCount: 3, sourceIdentityBackstopInterval: NotifyOnlyBackstop);
         await fixture.InitializeAsync();
 
         var partitionedPeerId = fixture.ClusterIds[1];
@@ -199,7 +231,9 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
         await shadow.SetAsync("revert-marker", V("new-identity"));
         await registry.SetAliasAsync(treeName, shadowId);
 
-        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        // The event-driven rebind already fired on the source silo at the
+        // alias cutover (unaffected by the partition); heal the isolated
+        // peer's edge so its re-ship can be delivered.
         fixture.TransportOf(0).HealSite(partitionedPeerId);
 
         var expected = baseline.Append("revert-marker").ToArray();

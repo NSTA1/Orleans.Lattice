@@ -297,6 +297,59 @@ which is the dominant per-pump cost on a multi-partition tree whose WAL
 shards are activated on a different silo, and is enough on its own to
 collapse steady-state throughput under a write burst.
 
+### Source-identity rebind
+
+A shipper tails the **physical** WAL of its logical source tree, and the
+persisted per-partition resume cursors are absolute offsets into *that*
+physical log. When a shadow-cutover restore, a resize, or a reshard repoints
+the logical tree's registry alias to a freshly minted physical tree, the
+shipper must reset those cursors and re-ship from the new physical log start,
+or it would keep tailing the retired identity's orphaned WAL.
+
+Detection is **event-driven, not polled**. The alias swap is performed by an
+identifiable producer that writes the repoint into the tree registry; the
+registry fires the core `ITreeAliasObserver` hook from inside its single
+alias-mutation choke point (`SetAliasAsync` / `RemoveAliasAsync`), after the
+new alias is durably persisted and **only** when the effective physical id
+actually changed. The replication package registers an observer that fans the
+`TreeAliasChange` to the affected per-`(tree, peer)` shipper grains via
+`IReplicationShipperGrain.NotifySourceIdentityChangedAsync`, which rebinds
+immediately - the new physical id travels in the notification itself, so the
+rebind reads the registry **zero** times. Because the observer runs on the
+source silo as an ordinary grain call, it reaches the shipper even while the
+inter-site delivery edge is partitioned, so the rebind is applied the moment
+the swap commits rather than after the edge heals.
+
+A coarse backstop resolve
+(`LatticeReplicationOptions.ShipSourceIdentityBackstopInterval`, default 30 s)
+is the only path that still reads the registry, and it runs solely as a
+safety net: it re-resolves when the binding has never been established for the
+activation, or when the interval has elapsed since the last resolve or rebind.
+A lost notification (observer fault, or a shipper deactivated across the swap)
+therefore degrades to poll-driven detection bounded by that interval rather
+than a permanent mis-binding - it never reintroduces a per-tick registry read
+on an idle tree.
+
+This event-driven inversion closes two problems the former per-tick registry
+resolve had at once: the idle-only registry read load (an otherwise-quiet link
+performed a steady stream of `_lattice_trees` reads purely to notice a swap
+that rarely happens), and a correctness sharp edge - the detection window in
+which a still-live shipper kept tailing the retired physical WAL and could
+ship keys confined to the retired identity (for example the keys a
+restore-to-drop-keys cutover meant to discard, which plain last-writer-wins
+cross-cluster shipping never retracts). Pushing the rebind synchronously with
+the swap shrinks that window to the notification latency.
+
+Two further per-tick metadata resolutions are memoised on the same principle -
+recompute only when an input changed, not every tick. Peer wire-version
+negotiation and shared-dictionary negotiation both key off the receiver's
+advertised capability on `ReplicationAck`, so their results are cached and
+recomputed only when a new ack changes the peer's advertised capability (or
+the shipper's options instance or effective dictionary id changes), not on
+every pump tick. Together with the source-identity rebind this removes all
+three steady-state idle registry/metadata resolutions, so an idle shipper's
+only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
+
 ### Doorbell
 
 The shipper grain is the log-first replication producer: it tails the

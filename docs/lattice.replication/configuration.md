@@ -85,6 +85,7 @@ Startup options validation rejects empty cluster ids, invalid replicated-tree de
 | [`ShipMaxInFlight`](#shipmaxinflight) | `int` | 1 |
 | [`ShipBackoffInitial`](#shipbackoffinitial) | `TimeSpan` | 100 ms |
 | [`ShipPhaseTimerPeriod`](#shipphasetimerperiod) | `TimeSpan` | 100 ms |
+| [`ShipSourceIdentityBackstopInterval`](#shipsourceidentitybackstopinterval) | `TimeSpan` | 30 seconds |
 | [`LivenessProbeInterval`](#livenessprobeinterval) | `TimeSpan` | 30 seconds |
 | [`ShipBackoffMax`](#shipbackoffmax) | `TimeSpan` | 30 seconds |
 | [`ShipBackoffJitter`](#shipbackoffjitter) | `double` | 0.2 |
@@ -283,6 +284,10 @@ Initial retry delay after a failed send.
 ### `ShipPhaseTimerPeriod`
 
 Cadence for the shipping phase timer. Shorter periods reduce idle latency and increase timer churn.
+
+### `ShipSourceIdentityBackstopInterval`
+
+Safety-net cadence for re-resolving the source tree's physical identity from the registry. The shipper binds to the logical source tree's current physical WAL at activation and normally rebinds **reactively** - the tree registry pushes an alias-change notification on a shadow-cutover restore, resize, or reshard (see [Source-identity rebind](replication-drivers.md#source-identity-rebind)), so the steady-state pump performs **no** per-tick registry read on an idle tree. This interval bounds how long a *missed* notification (a transient observer fault, or a shipper that was deactivated across the swap) can leave the shipper bound to a retired physical identity before a coarse backstop resolve heals it. It is deliberately coarse: lowering it trades idle registry-read load for a tighter worst-case heal time, and it is never the primary detection path. Must be greater than zero.
 
 ### `LivenessProbeInterval`
 
