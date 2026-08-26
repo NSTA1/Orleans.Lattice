@@ -92,6 +92,83 @@ public class GraphEntraDirectoryClientTests
         Assert.That(request.Headers.GetValues("ConsistencyLevel"), Does.Contain("eventual"));
     }
 
+    /// <summary>
+    /// Regression: the KQL clause built for <c>$search</c> must not be escapable by
+    /// the caller-supplied term. Stripping only the double quote left a hole - a
+    /// trailing backslash escaped the clause's own closing quote, so the clause
+    /// stayed open and the rest of the interpolated template was parsed as
+    /// caller-supplied KQL rather than as literal search text. Both the quote and
+    /// the backslash must be removed.
+    /// </summary>
+    [Test]
+    public async Task SearchUsersAsync_term_cannot_escape_the_quoted_search_clause()
+    {
+        var handler = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, "{\"value\":[]}");
+        var client = CreateClient(handler);
+
+        // A trailing backslash previously escaped the closing quote of the clause.
+        await client.SearchUsersAsync("alice\\", 25, null, CancellationToken.None);
+
+        var search = SearchQueryOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(search, Does.Not.Contain("\\"), "a backslash must never reach the KQL clause");
+            Assert.That(search, Is.EqualTo("\"displayName:alice\" OR \"userPrincipalName:alice\" OR \"mail:alice\""));
+        });
+    }
+
+    [Test]
+    public async Task SearchUsersAsync_term_quotes_and_backslashes_are_stripped()
+    {
+        var handler = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, "{\"value\":[]}");
+        var client = CreateClient(handler);
+
+        await client.SearchUsersAsync("a\"b\\c", 25, null, CancellationToken.None);
+
+        var search = SearchQueryOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(search, Does.Not.Contain("\\"));
+            Assert.That(search, Is.EqualTo("\"displayName:abc\" OR \"userPrincipalName:abc\" OR \"mail:abc\""));
+        });
+    }
+
+    [Test]
+    public async Task SearchGroupsAsync_term_cannot_escape_the_quoted_search_clause()
+    {
+        var handler = new StubHttpMessageHandler().Enqueue(HttpStatusCode.OK, "{\"value\":[]}");
+        var client = CreateClient(handler);
+
+        await client.SearchGroupsAsync("eng\\", 25, null, CancellationToken.None);
+
+        var search = SearchQueryOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(search, Does.Not.Contain("\\"));
+            Assert.That(search, Is.EqualTo("\"displayName:eng\" OR \"mail:eng\""));
+        });
+    }
+
+    /// <summary>
+    /// Extracts the decoded <c>$search</c> query-string value from the last request
+    /// the stub handler observed.
+    /// </summary>
+    private static string SearchQueryOf(StubHttpMessageHandler handler)
+    {
+        var query = handler.LastRequest!.RequestUri!.Query;
+        foreach (var pair in query.TrimStart('?').Split('&'))
+        {
+            var separator = pair.IndexOf('=');
+            if (separator > 0 && Uri.UnescapeDataString(pair[..separator]) == "$search")
+            {
+                return Uri.UnescapeDataString(pair[(separator + 1)..]);
+            }
+        }
+
+        Assert.Fail($"No $search parameter in '{query}'.");
+        return string.Empty;
+    }
+
     [Test]
     public async Task SearchUsersAsync_null_response_value_returns_empty_page()
     {

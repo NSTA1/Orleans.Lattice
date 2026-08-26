@@ -2,9 +2,9 @@ namespace Orleans.Lattice.Explorer.Core.Catalog;
 
 /// <summary>
 /// Holds the currently selected tree or view and publishes selection changes so
-/// the navigation panel and the detail panel stay in sync. A single
-/// shared instance backs the whole explorer, matching the single-connection,
-/// single-user model.
+/// the navigation panel and the detail panel stay in sync. One instance backs a
+/// single user session - it is registered per Blazor circuit on the multi-user
+/// web head, so a selection is never shared between signed-in operators.
 /// </summary>
 public interface IExplorerSelection
 {

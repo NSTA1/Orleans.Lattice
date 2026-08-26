@@ -1083,6 +1083,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 nameof(sourceTreeId));
         }
 
+        // The reserved system namespace is off-limits as a projection source, as it
+        // is for every other mutating verb on this facade. The view maintainer
+        // deliberately supports a system-tree source (it short-circuits the registry
+        // alias for one), so without this guard an admin-scoped caller could stand a
+        // view over a '_lattice_' internal tree - the tree registry, a WAL, queue
+        // state - and have it continuously mirrored into an ordinary, readable
+        // 'view-' tree governed only by that view's own read policy.
+        ThrowIfReserved(sourceTreeId);
+
         var descriptor = new LatticeRuntimeViewProjectionDescriptor(providerKey, payload);
 
         // This ordering is security-critical: the caller-supplied source is the
