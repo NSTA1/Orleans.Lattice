@@ -19,6 +19,16 @@ public sealed class LatticeViewOptions
     /// <summary>Default <see cref="CoalesceWindow"/> (50 ms between idle poll passes).</summary>
     public static readonly TimeSpan DefaultCoalesceWindow = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// Default <see cref="SourceIdentityBackstopInterval"/> (30 s): a coarse
+    /// safety-net cadence for a missed source-tree alias-swap notification. The
+    /// maintainer rebinds to a swapped source physical identity reactively via the
+    /// <see cref="ITreeAliasObserver"/> push, so this backstop only heals the rare
+    /// lost notification; it is deliberately coarse so an idle view does not read
+    /// the tree registry on every drain tick.
+    /// </summary>
+    public static readonly TimeSpan DefaultSourceIdentityBackstopInterval = TimeSpan.FromSeconds(30);
+
     /// <summary>Default <see cref="AggregationFanout"/> (a single accumulator per group).</summary>
     public const int DefaultAggregationFanout = 1;
 
@@ -125,6 +135,22 @@ public sealed class LatticeViewOptions
     /// last-writer-wins coalescing. Must be greater than zero.
     /// </summary>
     public TimeSpan CoalesceWindow { get; set; } = DefaultCoalesceWindow;
+
+    /// <summary>
+    /// Coarse safety-net cadence at which the maintainer re-resolves its source
+    /// tree's physical identity from the tree registry to heal a missed alias-swap
+    /// notification. In steady state the maintainer does <b>not</b> read the
+    /// registry on a drain tick: it binds once per activation and rebinds
+    /// reactively when the core registry fires an
+    /// <see cref="ITreeAliasObserver"/> alias-change push
+    /// (<c>NotifySourceIdentityChangedAsync</c>). This interval only bounds how
+    /// long a <i>lost</i> notification (observer transiently unavailable, or a
+    /// producer predating this build) can leave the view bound to a retired
+    /// physical source before a poll re-resolve catches it. Must be greater than
+    /// zero; the registered validator rejects a non-positive value at first
+    /// resolve. The default is <see cref="DefaultSourceIdentityBackstopInterval"/>.
+    /// </summary>
+    public TimeSpan SourceIdentityBackstopInterval { get; set; } = DefaultSourceIdentityBackstopInterval;
 
     /// <summary>
     /// Number of sub-accumulators an aggregation view shards each group into,

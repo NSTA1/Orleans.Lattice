@@ -22,6 +22,21 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task EnsureActiveAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Event-driven rebind entry point. Invoked by the core tree-registry alias
+    /// observer (<see cref="ITreeAliasObserver"/>) when the maintainer's source
+    /// tree has its physical-identity alias swapped (shadow-cutover restore,
+    /// resize, reshard). The maintainer marks its source binding stale so its next
+    /// drain re-resolves the source physical id and heals (unpins the retired WAL,
+    /// resets offsets, rebuilds from the new source) instead of waiting out the
+    /// coarse <see cref="LatticeViewOptions.SourceIdentityBackstopInterval"/> poll.
+    /// Best-effort: a missed notification still heals via that backstop, so the
+    /// call never needs to block on the rebuild itself. <paramref name="newPhysicalTreeId"/>
+    /// is the registry's post-swap effective physical id, carried for diagnostics;
+    /// the authoritative re-resolve happens on the next drain.
+    /// </summary>
+    Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Runs a single drain pass synchronously: reads up to the configured batch
     /// size from each source partition, applies the coalesced view writes, and
     /// checkpoints. Returns the number of view writes applied. Exposed so callers
