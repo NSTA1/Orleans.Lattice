@@ -41,7 +41,7 @@ public class ViewMaintainerSourceIdentityTests
         new("orders-view", Source, Substitute.For<ILatticeViewProjection>());
 
     private static (ViewMaintainerGrain Grain, ILatticeRegistry Registry, FakePersistentState<ViewCheckpointState> State)
-        Create(TimeSpan backstop, string boundPhysical, string resolvesTo)
+        Create(TimeSpan backstop, string boundPhysical, string resolvesTo, IWalCursorRegistry? cursorRegistry = null)
     {
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(Arg.Any<string>()).Returns(resolvesTo);
@@ -66,7 +66,7 @@ public class ViewMaintainerSourceIdentityTests
             catalog: null!,
             commitLogReader: null!,
             subscriber: null!,
-            cursorRegistry: null!,
+            cursorRegistry: cursorRegistry!,
             optionsResolver: null!,
             viewOptions,
             latticeOptions: null!,
@@ -149,6 +149,37 @@ public class ViewMaintainerSourceIdentityTests
         await grain.NotifySourceIdentityChangedAsync("orders-v2", CancellationToken.None);
 
         await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task Failed_heal_does_not_suppress_the_retry_re_resolve_within_the_backstop()
+    {
+        // A swapped source whose heal throws (the unpin step faults here) must NOT
+        // stamp the steady-state gate: the very next drain, still well inside the
+        // backstop window, has to re-resolve and retry the heal rather than latch
+        // the view on its retired binding until the coarse backstop elapses. This
+        // is the unit-level guard for the regression the replication package's
+        // MaterialisedViewIdentitySwapHealTests caught end-to-end.
+        var cursorRegistry = Substitute.For<IWalCursorRegistry>();
+        cursorRegistry.UnregisterAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("unpin faulted")));
+        var (grain, registry, _) = Create(TimeSpan.FromSeconds(30), "orders-old", "orders-new", cursorRegistry);
+        var clock = new AdvanceableClock(DateTimeOffset.UnixEpoch);
+        grain.SetSourceIdentityClockForTesting(clock);
+        var reg = Reg();
+
+        Assert.That(
+            () => grain.EnsureBoundForTestingAsync(reg),
+            Throws.InstanceOf<InvalidOperationException>(),
+            "The injected heal failure must surface from the drain.");
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        Assert.That(
+            () => grain.EnsureBoundForTestingAsync(reg),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        // Two resolves prove the failed heal did not gate the retry inside the window.
+        await registry.Received(2).ResolveAsync(Source);
     }
 
     [TestCase("")]

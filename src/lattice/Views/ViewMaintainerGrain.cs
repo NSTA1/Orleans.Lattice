@@ -918,10 +918,21 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         var physical = await ResolveSourcePhysicalAsync(logical);
-        _lastSourceIdentityResolveUtc = _sourceIdentityClock.GetUtcNow().UtcDateTime;
-        _sourceIdentityResolved = true;
-        _sourceIdentityRebindRequested = false;
         var bound = state.State.BoundPhysicalTreeId;
+
+        // Stamp the steady-state gate as converged only once a drain has reached a
+        // fully-healed binding below. Stamping eagerly (before the awaited rebuild
+        // that can throw) would let the gate suppress the very retry drains a failed
+        // heal needs, stranding the view on its pre-swap binding until the coarse
+        // backstop elapsed. A thrown rebuild exits without stamping, so the next
+        // drain re-resolves and retries the heal immediately; a lingering rebind
+        // request likewise survives to force that retry.
+        void MarkConverged()
+        {
+            _lastSourceIdentityResolveUtc = _sourceIdentityClock.GetUtcNow().UtcDateTime;
+            _sourceIdentityResolved = true;
+            _sourceIdentityRebindRequested = false;
+        }
 
         if (string.IsNullOrEmpty(bound))
         {
@@ -937,6 +948,7 @@ internal sealed partial class ViewMaintainerGrain(
                 await RebuildAsync(cancellationToken);
                 state.State.BoundPhysicalTreeId = physical;
                 await state.WriteStateAsync();
+                MarkConverged();
                 return true;
             }
 
@@ -945,11 +957,13 @@ internal sealed partial class ViewMaintainerGrain(
             // same log this view has always tailed.
             state.State.BoundPhysicalTreeId = physical;
             await state.WriteStateAsync();
+            MarkConverged();
             return false;
         }
 
         if (string.Equals(bound, physical, StringComparison.Ordinal))
         {
+            MarkConverged();
             return false;
         }
 
@@ -976,6 +990,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         state.State.BoundPhysicalTreeId = physical;
         await state.WriteStateAsync();
+        MarkConverged();
         return true;
     }
 
