@@ -63,6 +63,22 @@ public sealed class LatticeApiMcpOptions
     public string CredentialScheme { get; set; } = "Bearer";
 
     /// <summary>
+    /// The inbound request-header name that carries the caller's asserted active
+    /// tenant id, lifted onto the ambient <see cref="LatticeActiveTenantContext"/>
+    /// for the duration of a tool invocation so the tenant-aware data plane
+    /// (per-tenant write admission / quota and tenant-scoped tree resolution) sees
+    /// the caller's tenant rather than the reserved default. Defaults to
+    /// <c>lattice-active-tenant</c>. In-silo the stamped tenant flows to the grain
+    /// on the Orleans request context; on a remote head it is re-emitted as an
+    /// outbound gRPC metadata header to the same-named silo-side seam. The asserted
+    /// tenant is validated against the caller's subject membership downstream; a
+    /// missing or syntactically invalid value leaves the call with no active tenant
+    /// asserted (fail-closed). Set to the empty string to disable active-tenant
+    /// lifting entirely.
+    /// </summary>
+    public string ActiveTenantHeaderName { get; set; } = "lattice-active-tenant";
+
+    /// <summary>
     /// Whether the read-only state facade contributes tools. Defaults to
     /// <see langword="false"/>. Set to <see langword="true"/> by
     /// <c>AddStateTools</c> when the host opts the state tool module in.

@@ -20,6 +20,7 @@ public sealed class LatticeDataApiGrpcServiceUnitTests
 {
     private ILatticeDataApi _api = null!;
     private ILatticeDataApiCredentialBridge _bridge = null!;
+    private ILatticeDataApiActiveTenantBridge _tenantBridge = null!;
     private LatticeDataApiGrpcService _service = null!;
 
     private static LatticeDataApiGrpcMethods Methods()
@@ -37,10 +38,13 @@ public sealed class LatticeDataApiGrpcServiceUnitTests
         _api = Substitute.For<ILatticeDataApi>();
         _bridge = Substitute.For<ILatticeDataApiCredentialBridge>();
         _bridge.Resolve(Arg.Any<ServerCallContext>()).Returns((LatticeCredential?)null);
+        _tenantBridge = Substitute.For<ILatticeDataApiActiveTenantBridge>();
+        _tenantBridge.Resolve(Arg.Any<ServerCallContext>()).Returns((TenantId?)null);
         _service = new LatticeDataApiGrpcService(
             Methods(),
             _api,
             _bridge,
+            _tenantBridge,
             NullLogger<LatticeDataApiGrpcService>.Instance);
     }
 
@@ -201,19 +205,80 @@ public sealed class LatticeDataApiGrpcServiceUnitTests
     }
 
     [Test]
+    public void Set_maps_tenant_access_denied_to_permission_denied()
+    {
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new LatticeTenantAccessDeniedException(
+                "Tenant 'acme' is not admitted to write to tree 't'.")));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(ex.Status.Detail, Does.Contain("acme"));
+        });
+    }
+
+    [Test]
+    public async Task Set_stamps_the_bridged_active_tenant_around_the_facade_call()
+    {
+        _tenantBridge.Resolve(Arg.Any<ServerCallContext>()).Returns(TenantId.Parse("acme"));
+
+        TenantId? observed = null;
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observed = LatticeActiveTenantContext.Current;
+                return Task.CompletedTask;
+            });
+
+        await _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.EqualTo(TenantId.Parse("acme")),
+                "the facade must observe the caller's asserted active tenant on the ambient scope");
+            Assert.That(LatticeActiveTenantContext.Current, Is.Null,
+                "the active-tenant scope must be restored once the call completes");
+        });
+    }
+
+    [Test]
+    public async Task Set_leaves_no_active_tenant_when_the_bridge_asserts_none()
+    {
+        // Cold path: the bridge default returns null, so the facade sees no active
+        // tenant (the resolver then applies its own fail-closed membership rules).
+        TenantId? observed = TenantId.Parse("stale");
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                observed = LatticeActiveTenantContext.Current;
+                return Task.CompletedTask;
+            });
+
+        await _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context());
+
+        Assert.That(observed, Is.Null);
+    }
+
+    [Test]
     public void Constructor_validates_its_dependencies()
     {
         var methods = Methods();
         Assert.Multiple(() =>
         {
             Assert.Throws<ArgumentNullException>(
-                () => new LatticeDataApiGrpcService(null!, _api, _bridge, NullLogger<LatticeDataApiGrpcService>.Instance));
+                () => new LatticeDataApiGrpcService(null!, _api, _bridge, _tenantBridge, NullLogger<LatticeDataApiGrpcService>.Instance));
             Assert.Throws<ArgumentNullException>(
-                () => new LatticeDataApiGrpcService(methods, null!, _bridge, NullLogger<LatticeDataApiGrpcService>.Instance));
+                () => new LatticeDataApiGrpcService(methods, null!, _bridge, _tenantBridge, NullLogger<LatticeDataApiGrpcService>.Instance));
             Assert.Throws<ArgumentNullException>(
-                () => new LatticeDataApiGrpcService(methods, _api, null!, NullLogger<LatticeDataApiGrpcService>.Instance));
+                () => new LatticeDataApiGrpcService(methods, _api, null!, _tenantBridge, NullLogger<LatticeDataApiGrpcService>.Instance));
             Assert.Throws<ArgumentNullException>(
-                () => new LatticeDataApiGrpcService(methods, _api, _bridge, null!));
+                () => new LatticeDataApiGrpcService(methods, _api, _bridge, null!, NullLogger<LatticeDataApiGrpcService>.Instance));
+            Assert.Throws<ArgumentNullException>(
+                () => new LatticeDataApiGrpcService(methods, _api, _bridge, _tenantBridge, null!));
         });
     }
 }

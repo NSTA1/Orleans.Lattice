@@ -62,6 +62,31 @@ public sealed class LatticeDataApiGrpcRegistrationTests
     }
 
     [Test]
+    public void AddLatticeDataApiGrpc_registers_the_active_tenant_bridge_by_default()
+    {
+        var services = SeedServices();
+        services.AddLatticeDataApiGrpc();
+
+        using var provider = services.BuildServiceProvider();
+        var bridge = provider.GetRequiredService<ILatticeDataApiActiveTenantBridge>();
+        Assert.That(bridge, Is.TypeOf<HeaderLatticeDataApiActiveTenantBridge>());
+    }
+
+    [Test]
+    public void AddLatticeDataApiGrpc_preserves_a_host_supplied_active_tenant_bridge()
+    {
+        var services = SeedServices();
+        var custom = Substitute.For<ILatticeDataApiActiveTenantBridge>();
+        services.AddSingleton(custom);
+
+        services.AddLatticeDataApiGrpc();
+
+        using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetRequiredService<ILatticeDataApiActiveTenantBridge>(), Is.SameAs(custom),
+            "TryAdd must not overwrite an active-tenant bridge the host registered first.");
+    }
+
+    [Test]
     public void AddLatticeDataApiGrpc_resolves_the_method_definitions()
     {
         var services = SeedServices();
@@ -91,6 +116,7 @@ public sealed class LatticeDataApiGrpcRegistrationTests
             o.RequireAuthorization = false;
             o.CredentialHeaderName = "x-cred";
             o.CredentialScheme = "custom";
+            o.ActiveTenantHeaderName = "x-tenant";
         });
 
         using var provider = services.BuildServiceProvider();
@@ -100,6 +126,7 @@ public sealed class LatticeDataApiGrpcRegistrationTests
             Assert.That(options.RequireAuthorization, Is.False);
             Assert.That(options.CredentialHeaderName, Is.EqualTo("x-cred"));
             Assert.That(options.CredentialScheme, Is.EqualTo("custom"));
+            Assert.That(options.ActiveTenantHeaderName, Is.EqualTo("x-tenant"));
         });
     }
 

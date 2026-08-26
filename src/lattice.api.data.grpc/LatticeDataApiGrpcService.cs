@@ -123,6 +123,7 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
 
     private readonly ILatticeDataApi _dataApi;
     private readonly ILatticeDataApiCredentialBridge _credentialBridge;
+    private readonly ILatticeDataApiActiveTenantBridge _activeTenantBridge;
     private readonly ILogger<LatticeDataApiGrpcService> _logger;
 
     /// <summary>
@@ -138,15 +139,18 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         LatticeDataApiGrpcMethods methods,
         ILatticeDataApi dataApi,
         ILatticeDataApiCredentialBridge credentialBridge,
+        ILatticeDataApiActiveTenantBridge activeTenantBridge,
         ILogger<LatticeDataApiGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(dataApi);
         ArgumentNullException.ThrowIfNull(credentialBridge);
+        ArgumentNullException.ThrowIfNull(activeTenantBridge);
         ArgumentNullException.ThrowIfNull(logger);
 
         _dataApi = dataApi;
         _credentialBridge = credentialBridge;
+        _activeTenantBridge = activeTenantBridge;
         _logger = logger;
     }
 
@@ -163,6 +167,25 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
     {
         var credential = _credentialBridge.Resolve(context);
         return credential is null ? null : LatticeCredentialContext.With(credential);
+    }
+
+    /// <summary>
+    /// Lifts the caller's asserted active tenant on <paramref name="context"/>
+    /// into the ambient <see cref="LatticeActiveTenantContext"/> for the duration
+    /// of the returned scope, so the tenant-aware data plane (the per-tenant write
+    /// admission / quota controller consulted inside the grain, and tenant-scoped
+    /// tree resolution) sees the caller's tenant rather than the reserved default.
+    /// The stamped tenant flows to the grain on the outgoing call's Orleans
+    /// <see cref="Orleans.Runtime.RequestContext"/>. Returns <see langword="null"/>
+    /// (no scope, no allocation) when the call asserts no tenant, so a call on a
+    /// tenancy-off cluster is byte-for-byte unchanged. The asserted tenant is
+    /// re-validated against the caller's subject membership downstream; this seam
+    /// only carries the assertion.
+    /// </summary>
+    private IDisposable? StampActiveTenant(ServerCallContext context)
+    {
+        var tenant = _activeTenantBridge.Resolve(context);
+        return tenant is null ? null : LatticeActiveTenantContext.With(tenant);
     }
 
     /// <inheritdoc />
@@ -325,6 +348,7 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -340,6 +364,16 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
             // Map to PermissionDenied carrying only the non-sensitive tree /
             // operation / subject / reason fields as trailers - never a value.
             throw ToPermissionDenied(ex);
+        }
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            // The caller's active tenant was refused: either no valid active tenant
+            // could be attributed to the caller (fail-closed resolution) or the
+            // tenant is not admitted to write to the target tree (its per-tenant
+            // quota would be exceeded). This is expected control flow on a
+            // tenant-governed surface, not a server fault - map to PermissionDenied
+            // carrying the self-contained caller-facing message.
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (OperationCanceledException)
         {

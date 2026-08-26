@@ -44,6 +44,21 @@ app.MapLatticeDataApiGrpc();
 
 The public client wraps a caller-supplied channel and exposes one method per RPC - `GetAsync`, `ReadRangeAsync`, `SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `CrdtWriteAsync`, and `CrdtReadAsync`. A mutating call the caller is not permitted to make surfaces as a `PermissionDenied` `RpcException` rather than an unhandled error.
 
+### Per-tenant selection
+
+On a cluster running the optional tenancy add-on, per-tenant capacity governance (write admission and quota enforcement) is scoped by the call's *active tenant*. The binding lifts the active tenant from a single request header - `lattice-active-tenant` by default, configurable through `LatticeDataApiGrpcOptions.ActiveTenantHeaderName` - and stamps it onto the call's ambient scope so it reaches the silo-side admission controller:
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+builder.Services.AddLatticeDataApiGrpc(o =>
+{
+    o.RequireAuthorization = true;
+    o.ActiveTenantHeaderName = "lattice-active-tenant";
+});
+```
+
+The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules. A call the asserted tenant is not admitted to make - for example a write that would breach the tenant's quota - surfaces as a `PermissionDenied` `RpcException`. Set the option to an empty string to disable header-based tenant selection entirely.
+
 See the [`Orleans.Lattice.Api.Data` overview](../lattice.api.data/README.md) for the full facade, its surfaces, and the shared authorization model.
 
 ## Reference
