@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 using Orleans.Lattice;
 using Orleans.Lattice.Tenancy;
 
@@ -82,8 +84,17 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetService<ILatticeMembershipContext>()));
 
         // The transport-agnostic control facade. Registered as a silo singleton
-        // that every transport binding (for example gRPC, MCP) adapts over.
-        builder.Services.TryAddSingleton<ILatticeTenantAdmin, LatticeTenantAdmin>();
+        // that every transport binding (for example gRPC, MCP) adapts over. The
+        // membership context is resolved optionally so create can seed the calling
+        // subject as the new tenant's admin subject; without it a create that
+        // supplies no subjects leaves the tenant subject-less.
+        builder.Services.TryAddSingleton<ILatticeTenantAdmin>(sp => new LatticeTenantAdmin(
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetRequiredService<TenantAdminAccessAuthorizer>(),
+            sp.GetRequiredService<ITenantAdminClock>(),
+            sp.GetRequiredService<ITenantTreeCascade>(),
+            sp.GetRequiredService<IOptions<ClusterOptions>>(),
+            sp.GetService<ILatticeMembershipContext>()));
 
         // T20 per-tenant region residency. The two-tier fail-closed authorizer
         // (operator authorizes the allowed set; tenant-admin sets residency within

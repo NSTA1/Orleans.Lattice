@@ -32,19 +32,47 @@ public interface ILatticeTenantAdmin
 {
     /// <summary>
     /// Creates a new tenant in the <see cref="TenantLifecycleStatus.Active"/>
-    /// status. Fails closed with a <see cref="TenantAlreadyExistsException"/> when
-    /// a tenant with the same id is already registered (create is not an
-    /// idempotent upsert), so it can never reset or reuse another tenant's
-    /// definition.
+    /// status, seeding its tenant-admin subjects. Fails closed with a
+    /// <see cref="TenantAlreadyExistsException"/> when a tenant with the same id is
+    /// already registered (create is not an idempotent upsert), so it can never
+    /// reset or reuse another tenant's definition.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Admin subjects decide visibility.</b> The read-only self-service surface
+    /// (<see cref="ILatticeTenantSelfService.ListAccessibleTenantsAsync"/> /
+    /// <see cref="ILatticeTenantSelfService.GetTenantAsync"/>) resolves what a
+    /// caller may see from admin-subject membership, so a tenant created with
+    /// <em>no</em> admin subjects is invisible to list and get for every caller -
+    /// including the identity that created it - even though a platform operator
+    /// can still mutate it.
+    /// </para>
+    /// <para>
+    /// <b>Caller-seeding default.</b> When <paramref name="adminSubjects"/> is
+    /// <c>null</c> or empty, the create seeds the <em>calling</em> subject as the
+    /// new tenant's sole admin subject, so a create followed by a read-back works
+    /// out of the box. Supplying an explicit collection overrides that default
+    /// entirely - the caller is <em>not</em> added on top - so an operator can
+    /// hand a tenant to another identity. A caller that cannot be resolved to a
+    /// subject (anonymous, or a system-origin call that bypasses the gate) seeds
+    /// nothing, leaving the tenant deliberately subject-less.
+    /// </para>
+    /// </remarks>
     /// <param name="tenantId">The tenant id to create. Must be a valid, non-empty tenant id.</param>
+    /// <param name="adminSubjects">
+    /// The tenant-admin subject ids to seed onto the new tenant, or <c>null</c> /
+    /// empty to seed the calling subject. Individual entries must not be
+    /// <c>null</c>, empty, or whitespace.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The creation result describing the new tenant.</returns>
-    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c>, empty, or not a valid tenant id.</exception>
+    /// <returns>The creation result describing the new tenant, including the admin subjects that were seeded.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c>, empty, or not a valid tenant id, or <paramref name="adminSubjects"/> contains a <c>null</c>, empty, or whitespace entry.</exception>
     /// <exception cref="TenantAlreadyExistsException">A tenant with the same id is already registered.</exception>
     /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is not authorized to administer tenants.</exception>
     Task<TenantCreationResult> CreateTenantAsync(
-        string tenantId, CancellationToken cancellationToken = default);
+        string tenantId,
+        IReadOnlyCollection<string>? adminSubjects = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Suspends a tenant: transitions it to

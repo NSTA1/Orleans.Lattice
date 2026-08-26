@@ -57,6 +57,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
+        Serializer<TenantAdminCreateRequest> createRequestSerializer,
         Serializer<TenantCreationResult> creationResultSerializer,
         Serializer<TenantStatusChangeResult> statusChangeResultSerializer,
         Serializer<TenantDeletionResult> deletionResultSerializer,
@@ -71,6 +72,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantStatusReport> tenantStatusReportSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
+        ArgumentNullException.ThrowIfNull(createRequestSerializer);
         ArgumentNullException.ThrowIfNull(creationResultSerializer);
         ArgumentNullException.ThrowIfNull(statusChangeResultSerializer);
         ArgumentNullException.ThrowIfNull(deletionResultSerializer);
@@ -84,11 +86,11 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(selfDescriptorListSerializer);
         ArgumentNullException.ThrowIfNull(tenantStatusReportSerializer);
 
-        CreateTenant = new Method<TenantAdminTenantRequest, TenantCreationResult>(
+        CreateTenant = new Method<TenantAdminCreateRequest, TenantCreationResult>(
             type: MethodType.Unary,
             serviceName: ServiceName,
             name: CreateTenantMethodName,
-            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(createRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(creationResultSerializer));
 
         SuspendTenant = new Method<TenantAdminTenantRequest, TenantStatusChangeResult>(
@@ -149,7 +151,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
     }
 
     /// <summary>The unary tenant-creation RPC.</summary>
-    public Method<TenantAdminTenantRequest, TenantCreationResult> CreateTenant { get; }
+    public Method<TenantAdminCreateRequest, TenantCreationResult> CreateTenant { get; }
 
     /// <summary>The unary tenant-suspend RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantStatusChangeResult> SuspendTenant { get; }
@@ -186,6 +188,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
 
         return new LatticeTenantAdminGrpcMethods(
             serializerProvider.GetRequiredService<Serializer<TenantAdminTenantRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminCreateRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantCreationResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantStatusChangeResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantDeletionResult>>(),

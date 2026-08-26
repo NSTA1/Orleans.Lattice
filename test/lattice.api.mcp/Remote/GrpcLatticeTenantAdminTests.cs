@@ -24,16 +24,35 @@ public sealed class GrpcLatticeTenantAdminTests
     public async Task CreateTenantAsync_forwards_request_and_unwraps_response()
     {
         var invoker = new FakeCallInvoker(
-            _ => new TenantCreationResult { TenantId = "acme", Status = TenantLifecycleStatus.Active });
+            _ => new TenantCreationResult
+            {
+                TenantId = "acme",
+                Status = TenantLifecycleStatus.Active,
+                AdminSubjects = ["ops@example.com"],
+            });
 
-        var result = await Adapter(invoker).CreateTenantAsync("acme");
+        var result = await Adapter(invoker).CreateTenantAsync("acme", ["ops@example.com"]);
 
         Assert.Multiple(() =>
         {
-            Assert.That(((TenantAdminTenantRequest)invoker.LastRequest!).TenantId, Is.EqualTo("acme"));
+            var request = (TenantAdminCreateRequest)invoker.LastRequest!;
+            Assert.That(request.TenantId, Is.EqualTo("acme"));
+            Assert.That(request.AdminSubjects, Is.EqualTo(new[] { "ops@example.com" }));
             Assert.That(result.TenantId, Is.EqualTo("acme"));
             Assert.That(result.Status, Is.EqualTo(TenantLifecycleStatus.Active));
+            Assert.That(result.AdminSubjects, Is.EqualTo(new[] { "ops@example.com" }));
         });
+    }
+
+    [Test]
+    public async Task CreateTenantAsync_with_no_subjects_sends_an_empty_set_for_the_server_to_seed()
+    {
+        var invoker = new FakeCallInvoker(
+            _ => new TenantCreationResult { TenantId = "acme", Status = TenantLifecycleStatus.Active });
+
+        _ = await Adapter(invoker).CreateTenantAsync("acme");
+
+        Assert.That(((TenantAdminCreateRequest)invoker.LastRequest!).AdminSubjects, Is.Empty);
     }
 
     [Test]

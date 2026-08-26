@@ -135,6 +135,7 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
         var targetId = request switch
         {
             TenantAdminTenantRequest t => t.TenantId,
+            TenantAdminCreateRequest c => c.TenantId,
             TenantAdminSetQuotasRequest q => q.TenantId,
             _ => null,
         };

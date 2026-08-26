@@ -12,7 +12,7 @@ expose tenant administration through a single seam that every transport binding
 
 | Operation | Description |
 |-----------|-------------|
-| `CreateTenantAsync` | Registers a new active tenant. Fails if the tenant already exists. |
+| `CreateTenantAsync` | Registers a new active tenant and seeds the admin subjects that may see it (the calling subject when none are supplied). Fails if the tenant already exists. |
 | `SuspendTenantAsync` | Transitions an existing tenant to the suspended status (idempotent). |
 | `ResumeTenantAsync` | Transitions a suspended tenant back to active (idempotent). |
 | `DeleteTenantAsync` | Removes a tenant, cascading the delete to the tenant's trees. |

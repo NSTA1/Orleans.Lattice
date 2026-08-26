@@ -51,6 +51,20 @@ Three facades are exposed:
   create is not an idempotent upsert (a duplicate id fails closed with
   `TenantAlreadyExistsException`), so it can never reset or reuse another tenant's
   definition.
+- **Create seeds admin subjects.** Tenant *visibility* on the read-only
+  `ILatticeTenantSelfService` surface resolves from the tenant
+  record's admin-subject set, so a tenant created with none is mutable but
+  invisible - even to the operator who just created it. `CreateTenantAsync`
+  therefore takes an optional `adminSubjects` set and seeds it onto the new
+  record. Omit it and the **calling subject** is seeded, so the creator can always
+  see what it created; supply one and it is used **verbatim** (the caller is not
+  added on top), which is how you hand a tenant to its delegated admins in a
+  single call. Every entry must be a non-blank subject id, a blank or `null`
+  entry fails closed with an `ArgumentException`, and duplicates collapse. A
+  caller that cannot be resolved to a subject (an anonymous or system-origin
+  create) seeds nothing rather than inventing an owner; grant access explicitly
+  in that case. The seeded set is echoed back on
+  `TenantCreationResult.AdminSubjects`.
 - **Cascading delete.** Deleting a tenant cascades the delete to every tree the
   tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry record
   is removed.
@@ -83,7 +97,7 @@ in the [binding](../lattice.api.tenantadmin.grpc/README.md).
 
 | Method | Signature |
 |---|---|
-| `CreateTenantAsync` | `Task<TenantCreationResult> CreateTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `CreateTenantAsync` | `Task<TenantCreationResult> CreateTenantAsync(string tenantId, IReadOnlyCollection<string>? adminSubjects = null, CancellationToken cancellationToken = default)` |
 | `SuspendTenantAsync` | `Task<TenantStatusChangeResult> SuspendTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `ResumeTenantAsync` | `Task<TenantStatusChangeResult> ResumeTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `DeleteTenantAsync` | `Task<TenantDeletionResult> DeleteTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
@@ -128,7 +142,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 
 | Type | Kind | Purpose |
 |---|---|---|
-| `TenantCreationResult` | result | The newly created tenant. |
+| `TenantCreationResult` | result | The newly created tenant, with the admin subjects seeded onto it. |
 | `TenantStatusChangeResult` | result | Suspend/resume outcome; `Changed` reports whether state moved. |
 | `TenantDeletionResult` | result | Deletion outcome, including the count of trees cascaded. |
 | `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate. |

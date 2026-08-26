@@ -18,14 +18,25 @@ internal sealed class FakeTenantAdmin : ILatticeTenantAdmin
 
     public string? LastTenantId { get; private set; }
 
+    public IReadOnlyCollection<string>? LastAdminSubjects { get; private set; }
+
     public TenantQuotasDescriptor? LastQuotas { get; private set; }
 
-    public Task<TenantCreationResult> CreateTenantAsync(string tenantId, CancellationToken cancellationToken = default)
+    public Task<TenantCreationResult> CreateTenantAsync(
+        string tenantId,
+        IReadOnlyCollection<string>? adminSubjects = null,
+        CancellationToken cancellationToken = default)
     {
         LastTenantId = tenantId;
+        LastAdminSubjects = adminSubjects;
         return Throw is not null
             ? Task.FromException<TenantCreationResult>(Throw)
-            : Task.FromResult(new TenantCreationResult { TenantId = tenantId, Status = TenantLifecycleStatus.Active });
+            : Task.FromResult(new TenantCreationResult
+            {
+                TenantId = tenantId,
+                Status = TenantLifecycleStatus.Active,
+                AdminSubjects = adminSubjects is null ? [] : [.. adminSubjects],
+            });
     }
 
     public Task<TenantStatusChangeResult> SuspendTenantAsync(string tenantId, CancellationToken cancellationToken = default)
@@ -169,7 +180,7 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
 
         object response = method.Name switch
         {
-            "CreateTenant" => await service.CreateTenant((TenantAdminTenantRequest)(object)wireRequest, context),
+            "CreateTenant" => await service.CreateTenant((TenantAdminCreateRequest)(object)wireRequest, context),
             "SuspendTenant" => await service.SuspendTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             "ResumeTenant" => await service.ResumeTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             "DeleteTenant" => await service.DeleteTenant((TenantAdminTenantRequest)(object)wireRequest, context),

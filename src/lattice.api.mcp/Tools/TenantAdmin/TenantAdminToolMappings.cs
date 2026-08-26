@@ -20,6 +20,7 @@ internal static class TenantAdminToolMappings
         {
             TenantId = result.TenantId,
             Status = result.Status.ToString(),
+            AdminSubjects = result.AdminSubjects,
         };
     }
 

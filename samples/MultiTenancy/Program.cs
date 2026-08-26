@@ -96,12 +96,14 @@ TenantCreationResult acmeCreated;
 TenantCreationResult globexCreated;
 using (LatticeCredentialContext.Use("platform-operator", scheme: Scheme))
 {
-    acmeCreated = await admin.CreateTenantAsync("acme");
+    // Hand 'acme' to its delegated admins explicitly; let 'globex' default, which
+    // seeds the calling operator so the creator can still see what it created.
+    acmeCreated = await admin.CreateTenantAsync("acme", ["acme-admin"]);
     globexCreated = await admin.CreateTenantAsync("globex");
 }
 
-Console.WriteLine($"  created '{acmeCreated.TenantId}'   -> {acmeCreated.Status}");
-Console.WriteLine($"  created '{globexCreated.TenantId}' -> {globexCreated.Status}\n");
+Console.WriteLine($"  created '{acmeCreated.TenantId}'   -> {acmeCreated.Status}, admins: {string.Join(", ", acmeCreated.AdminSubjects)}");
+Console.WriteLine($"  created '{globexCreated.TenantId}' -> {globexCreated.Status}, admins: {string.Join(", ", globexCreated.AdminSubjects)}\n");
 
 // -- Act 3: lifecycle transitions and guards --------------------------------
 Console.WriteLine("== Act 3: lifecycle transitions and guards ==");
