@@ -59,6 +59,22 @@ internal sealed class TreeMergeGrain(
         if (sourceTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             throw new ArgumentException($"Source tree ID must not start with the reserved prefix '{LatticeConstants.SystemTreePrefix}'.", nameof(sourceTreeId));
 
+        // Defence in depth behind the LatticeGrain.MergeAsync source guard and
+        // access-gate check. The coordinator drains the source through the
+        // internal shard/leaf tiers, which sit *below* the access-gate seam, so
+        // nothing here re-authorizes the read; a source in the dogfooded sys-
+        // system-data namespace or the structural t/ tenant namespace is
+        // therefore refused outright unless the merge was initiated by
+        // first-party machinery under a system-origin scope.
+        if (!LatticeAccessGateContext.IsSystemOrigin
+            && (sourceTreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+                || LatticeTenantTrees.IsTenantScoped(sourceTreeId)))
+            throw new ArgumentException(
+                $"Source tree ID '{sourceTreeId}' is reserved: a merge source may not name a tree in the " +
+                $"'{LatticeConstants.SystemDataTreePrefix}' system-data namespace or the " +
+                $"'{LatticeTenantTrees.SegmentPrefix}' tenant namespace.",
+                nameof(sourceTreeId));
+
         if (state.State.InProgress)
         {
             // Idempotent if same source.

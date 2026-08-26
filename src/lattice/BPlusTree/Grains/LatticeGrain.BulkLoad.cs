@@ -334,14 +334,64 @@ internal sealed partial class LatticeGrain
 
     public async Task MergeAsync(string sourceTreeId, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(sourceTreeId);
         ThrowIfSystemTree();
         ThrowIfProtectedView();
+        ThrowIfReservedMergeSource(sourceTreeId);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
+
+        // The caller-supplied source is a second, independent authorization
+        // boundary. A merge drains every entry of `sourceTreeId` into this tree,
+        // where it is then readable under *this* tree's own read policy, so
+        // authorizing only the destination would let a caller holding Admin on a
+        // tree it owns siphon any other tree in the cluster - the dogfooded
+        // control-plane trees, or another tenant's data - into one it can read.
+        // The source must be uniformly readable by the caller: a filtered
+        // (partial-coverage) allow is refused rather than narrowed, because a
+        // merge that silently copied only an authorized key subset would diverge
+        // from the source without telling anyone. Mirrors the source-side guard
+        // LatticeTreeAdmin.CreateViewAsync applies to a view's source tree.
+        await EnforceSourceTreeReadAsync(sourceTreeId, cancellationToken);
+
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         await ShardActivationRetry.RunAsync(
             () => merge.MergeAsync(sourceTreeId),
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Rejects a user-origin merge whose <paramref name="sourceTreeId"/> names a
+    /// tree in a reserved namespace: the internal <c>_lattice_</c> system
+    /// namespace, the dogfooded <c>sys-</c> system-data namespace (authorization
+    /// policy, membership, backup catalogs), or the structural <c>t/</c> tenant
+    /// namespace. Those trees hold control-plane or cross-tenant state that a
+    /// user-origin caller must never be able to bulk-copy into an ordinary tree
+    /// governed by that tree's own read policy, and - unlike a plain read - a
+    /// merge launders the contents past the namespace's protection. Suppressed
+    /// under <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> so
+    /// first-party machinery that legitimately composes these ids is unaffected,
+    /// exactly as <see cref="ThrowIfUserOriginSystemDataTree"/> is on the
+    /// mutation surface.
+    /// </summary>
+    /// <param name="sourceTreeId">The caller-supplied merge source.</param>
+    private static void ThrowIfReservedMergeSource(string sourceTreeId)
+    {
+        if (LatticeAccessGateContext.IsSystemOrigin)
+        {
+            return;
+        }
+
+        if (sourceTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            || sourceTreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+            || LatticeTenantTrees.IsTenantScoped(sourceTreeId))
+        {
+            throw new InvalidOperationException(
+                $"Merge source tree ID '{sourceTreeId}' is reserved: a merge source may not name a tree in the " +
+                $"internal '{LatticeConstants.SystemTreePrefix}' namespace, the '{LatticeConstants.SystemDataTreePrefix}' " +
+                $"system-data namespace, or the '{LatticeTenantTrees.SegmentPrefix}' tenant namespace. Merging such a " +
+                "tree would copy control-plane or cross-tenant state into a tree governed only by its own read policy.");
+        }
     }
 
     public async Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default)

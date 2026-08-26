@@ -88,8 +88,17 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_mixed_crdt_modes_single_origin_batch_together()
+    public async Task ApplyBatchAsync_mode_mismatched_entry_never_folds_into_a_conforming_run()
     {
+        // Security regression: the tree is enrolled locally as OrSet, so a
+        // peer-supplied PnCounter entry is a merge-mode mismatch and the
+        // per-entry ApplyAsync path dead-letters it. The batch path used to
+        // disagree: it segmented runs on (treeId, originClusterId) only and
+        // classified the run from its first entry, so a conforming OrSet head
+        // admitted the whole run and the mismatched entry was then folded and
+        // applied under the algebra the *peer* chose. Mode is part of the run
+        // key now, so the mismatched entry forms its own run and is gated on
+        // its own merits.
         var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
@@ -104,11 +113,12 @@ public partial class ReplicationApplierTests
 
         await applier.ApplyBatchAsync(entries);
 
+        // Only the conforming entry is folded; the smuggled one is not applied.
         await apply.Received(1).ApplyCrdtDeltaManyAsync(
             Arg.Is<IReadOnlyList<ApplyCrdtDeltaItem>>(items =>
-                items.Count == 2
-                && items[0].Mode == LatticeMergeMode.OrSet
-                && items[1].Mode == LatticeMergeMode.PnCounter));
+                items.Count == 1
+                && items[0].Key == "a"
+                && items[0].Mode == LatticeMergeMode.OrSet));
     }
 
     [Test]
@@ -181,6 +191,28 @@ public partial class ReplicationApplierTests
     [Test]
     public async Task ApplyBatchAsync_or_map_entry_stays_off_batch_path()
     {
+        var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrMap);
+        var entries = new[]
+        {
+            SetEntry("m", Hlc(10)) with { Mode = LatticeMergeMode.OrMap, Value = null, Delta = new byte[] { 9 } },
+            SetEntry("n", Hlc(20)) with { Mode = LatticeMergeMode.OrMap, Value = null, Delta = new byte[] { 9 } },
+        };
+
+        // OrMap is excluded from the closed-shape batch fold; it routes to the
+        // generic-shaped per-entry ApplyOrMapDeltaAsync seam, which faults here
+        // because no (TKey,TValue) shape is registered with this test applier.
+        Assert.ThrowsAsync<InvalidOperationException>(() => applier.ApplyBatchAsync(entries));
+        await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaManyAsync(default!);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_or_map_entry_behind_a_conforming_head_is_gated_not_dispatched()
+    {
+        // Security regression: an OrMap entry whose mode disagrees with the
+        // tree's locally resolved OrSet mode must be gated, not dispatched to
+        // the OrMap seam because the peer said so. Previously the conforming
+        // OrSet head admitted the whole run and the OrMap entry reached the
+        // generic per-entry seam (observable as an InvalidOperationException).
         var (applier, _, apply, _) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         var entries = new[]
         {
@@ -188,13 +220,8 @@ public partial class ReplicationApplierTests
             SetEntry("m", Hlc(20)) with { Mode = LatticeMergeMode.OrMap, Value = null, Delta = new byte[] { 9 } },
         };
 
-        // The OrMap entry is excluded from the closed-shape batch fold; it
-        // flushes the pending OrSet batch then routes to the generic-shaped
-        // per-entry ApplyOrMapDeltaAsync seam, which faults here because no
-        // (TKey,TValue) shape is registered with this test applier.
-        Assert.That(
-            async () => await applier.ApplyBatchAsync(entries),
-            Throws.InstanceOf<InvalidOperationException>());
+        await applier.ApplyBatchAsync(entries);
+
         await apply.Received(1).ApplyCrdtDeltaManyAsync(
             Arg.Is<IReadOnlyList<ApplyCrdtDeltaItem>>(items =>
                 items.Count == 1 && items[0].Key == "a" && items[0].Mode == LatticeMergeMode.OrSet));

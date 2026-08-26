@@ -153,6 +153,7 @@ public sealed class TenantGateEnforcerTests
     public void Enforce_active_tenant_does_not_own_tree_denies_without_a_grant()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
         engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
             .Returns(TenantAccessDecision.Deny("no grant from 'beta' to 'acme'"));
         var enforcer = CreateEnforcer(engine);
@@ -166,13 +167,63 @@ public sealed class TenantGateEnforcerTests
             Assert.That(decision.Allowed, Is.False);
             Assert.That(decision.Reason, Does.Contain("no grant"));
         });
-        engine.DidNotReceive().ValidateActiveTenant(Arg.Any<string>(), Arg.Any<TenantId>());
+        engine.Received().ValidateActiveTenant("alice", Acme);
+    }
+
+    [Test]
+    public void Enforce_cross_tenant_denies_a_subject_that_may_not_act_as_the_active_tenant()
+    {
+        // Security regression: the active tenant arrives as a caller-supplied
+        // assertion (the `lattice-active-tenant` header), so the subject's right
+        // to act as it must be validated on the cross-tenant branch too. When it
+        // was validated only on the owned-tree branch, any authenticated subject
+        // could assert a tenant it has no membership of and consume that
+        // tenant's inbound cross-tenant grants - reading (or, with a write
+        // grant, writing) the granting tenant's data. The grant itself resolves
+        // fine here; only the subject's right to wear the tenant is missing.
+        var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("mallory", Acme)
+            .Returns(TenantAccessDecision.Deny("subject is not a member of 'acme'"));
+        engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
+            .Returns(TenantAccessDecision.Allow());
+        var enforcer = CreateEnforcer(engine);
+        LatticeActiveTenantContext.Current = Acme;
+        var request = Request(BetaTree, subjectId: "mallory");
+
+        var decision = enforcer.Enforce(in request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Allowed, Is.False,
+                "an unvalidated active tenant can never consume another tenant's cross-tenant grant");
+            Assert.That(decision.Reason, Does.Contain("not a member"));
+        });
+    }
+
+    [Test]
+    public void Enforce_cross_tenant_validates_the_active_tenant_before_resolving_a_grant()
+    {
+        // Fail-closed ordering: a subject that may not act as the asserted
+        // active tenant is refused before any grant is resolved, so a grant
+        // lookup can never admit an identity that was never validated.
+        var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("mallory", Acme)
+            .Returns(TenantAccessDecision.Deny("subject is not a member of 'acme'"));
+        var enforcer = CreateEnforcer(engine);
+        LatticeActiveTenantContext.Current = Acme;
+        var request = Request(BetaTree, subjectId: "mallory");
+
+        enforcer.Enforce(in request);
+
+        engine.DidNotReceive().ResolveCrossTenantGrant(
+            Arg.Any<TenantId>(), Arg.Any<TenantId>(), Arg.Any<string>(), Arg.Any<TenantGrantOperations>());
     }
 
     [Test]
     public void Enforce_cross_tenant_grant_allows_crossing()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
         engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
             .Returns(TenantAccessDecision.Allow());
         var enforcer = CreateEnforcer(engine);
@@ -190,6 +241,7 @@ public sealed class TenantGateEnforcerTests
     public void Enforce_read_only_operation_requests_a_read_grant()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
         engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
             .Returns(TenantAccessDecision.Allow());
         var enforcer = CreateEnforcer(engine);
@@ -205,6 +257,7 @@ public sealed class TenantGateEnforcerTests
     public void Enforce_write_operation_requests_a_write_grant()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
         engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
             .Returns(TenantAccessDecision.Allow());
         var enforcer = CreateEnforcer(engine);
@@ -220,6 +273,7 @@ public sealed class TenantGateEnforcerTests
     public void Enforce_empty_operation_mask_requests_a_write_grant_fail_closed()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
         engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
             .Returns(TenantAccessDecision.Deny("no grant"));
         var enforcer = CreateEnforcer(engine);
@@ -290,6 +344,7 @@ public sealed class TenantGateEnforcerTests
     public void Enforce_residency_gates_the_cross_tenant_path_too()
     {
         var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
         engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, Arg.Any<TenantGrantOperations>())
             .Returns(TenantAccessDecision.Allow());
         var residency = Substitute.For<ITenantResidencyResolver>();

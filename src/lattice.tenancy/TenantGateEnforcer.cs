@@ -32,13 +32,16 @@ namespace Orleans.Lattice.Tenancy;
 /// <item>Multi-membership / active-tenant switch: the engine's
 /// <see cref="ITenantPolicyEngine.ValidateActiveTenant"/> decides whether the
 /// subject may act as the selected active tenant (and fails closed when none is
-/// selected).</item>
+/// selected). The active tenant is a caller-supplied assertion, so this check
+/// gates <b>every</b> branch that consumes it - the owned-tree branch and the
+/// cross-tenant crossing alike - not just the owned-tree one.</item>
 /// <item>Cross-tenant crossing: a cross-tenant grant from the owning tenant to
 /// the active tenant, resolved via
 /// <see cref="ITenantPolicyEngine.ResolveCrossTenantGrant"/>, admits a crossing
-/// of the ownership boundary. The platform-operator crossing is realised earlier
-/// by the auth gate's bootstrap-administrator bypass, so a platform operator
-/// never reaches this enforcer.</item>
+/// of the ownership boundary, <em>after</em> the subject's right to act as the
+/// active tenant has been validated. The platform-operator crossing is realised
+/// earlier by the auth gate's bootstrap-administrator bypass, so a platform
+/// operator never reaches this enforcer.</item>
 /// <item>Residency / online: the active tenant must be online in this serving
 /// region, per the nested residency seam (allow when the seam is absent).</item>
 /// </list>
@@ -92,14 +95,27 @@ internal sealed class TenantGateEnforcer(
         // unless a rule admits the request.
         if (active is { Value: not null } activeTenant)
         {
+            // (2) Validate that the subject may act as the asserted active tenant
+            // BEFORE branching on ownership. The active tenant is a
+            // caller-supplied assertion (the `lattice-active-tenant` header),
+            // never a fact, so it must be re-validated against the subject's own
+            // membership on *every* branch that consumes it. Validating it only
+            // on the owned-tree branch left the cross-tenant branch strictly
+            // weaker than the owned one: any authenticated subject could assert a
+            // tenant it has no membership of and consume that tenant's inbound
+            // cross-tenant grants, reading (or, with a write grant, writing) the
+            // granting tenant's data. Residency is still gated per branch below.
+            var validation = engine.ValidateActiveTenant(subjectId, activeTenant);
+            if (!validation.Allowed)
+            {
+                return Deny(validation.Reason);
+            }
+
             if (activeTenant.Equals(owner.Tenant))
             {
-                // (1)+(2) The active tenant owns the tree. Validate that the
-                // subject may act as this active tenant, then gate on residency.
-                var validation = engine.ValidateActiveTenant(subjectId, activeTenant);
-                return validation.Allowed
-                    ? EnforceResidency(activeTenant)
-                    : Deny(validation.Reason);
+                // (1) The active tenant owns the tree and its selection is
+                // validated; gate on residency.
+                return EnforceResidency(activeTenant);
             }
 
             // (3) Cross-tenant: the active tenant does not own the tree. A grant

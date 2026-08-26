@@ -1,6 +1,7 @@
 using System.Text;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -14,6 +15,11 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// admit only the authorized keys, prune unauthorized keys/values server-side,
 /// keep the null (allow-all) path unchanged, and bypass filtering entirely under
 /// a system-origin scope.
+/// <para>
+/// The same fixture also pins the <b>cross-tree source authorization</b> of
+/// <c>MergeAsync</c>: a merge reads the whole of a caller-supplied source tree,
+/// so the gate is consulted for that source and not only for the destination.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -223,5 +229,102 @@ public class AccessGateKeyFilterIntegrationTests
             Assert.That(keys, Is.EquivalentTo(new[] { "user/alice", "user/amy", "user/bob", "user/carol" }));
             Assert.That(count, Is.EqualTo(4));
         });
+    }
+
+    // ---- Cross-tree source authorization (MergeAsync) --------------------
+    // A merge copies the whole of a caller-supplied *source* tree into the
+    // calling tree, where it becomes readable under the calling tree's own read
+    // policy. Authorizing only the destination would let a caller holding Admin
+    // on a tree it owns siphon any other tree in the cluster into one it can
+    // read, so the gate must govern the source as well - and, because a merge
+    // copies the source in its entirety, a partial-coverage (filtered) allow on
+    // the source must be refused rather than silently narrowed.
+
+    private static async Task PollUntilAsync(Func<Task<bool>> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await predicate())
+                return;
+            await Task.Delay(100);
+        }
+
+        Assert.Fail($"Condition was not met within {timeout}.");
+    }
+
+    [Test]
+    public async Task MergeAsync_denies_when_the_caller_cannot_read_the_source_tree()
+    {
+        const string sourceId = "agf-merge-denied-src";
+        const string targetId = "agf-merge-denied-dst";
+        var source = _cluster.GrainFactory.GetGrain<ILattice>(sourceId);
+        var target = _cluster.GrainFactory.GetGrain<ILattice>(targetId);
+        await SeedAsync(source, "secret/one", "secret/two");
+
+        // The attacker shape: Admin on the destination it owns, no read on the
+        // source it covets.
+        ConfigurableAccessGate.Decide = req =>
+            req.TreeId == sourceId
+                ? LatticeAccessDecision.Deny("caller may not read the merge source")
+                : LatticeAccessDecision.Allow();
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(() => target.MergeAsync(sourceId));
+
+        // Nothing was copied: the refusal happens before the merge coordinator
+        // is engaged, so no source entry ever reaches the destination.
+        ConfigurableAccessGate.Reset();
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await target.GetAsync("secret/one"), Is.Null);
+            Assert.That(await target.GetAsync("secret/two"), Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task MergeAsync_denies_a_partial_coverage_allow_on_the_source_tree()
+    {
+        const string sourceId = "agf-merge-filtered-src";
+        const string targetId = "agf-merge-filtered-dst";
+        var source = _cluster.GrainFactory.GetGrain<ILattice>(sourceId);
+        var target = _cluster.GrainFactory.GetGrain<ILattice>(targetId);
+        await SeedAsync(source, "user/alice", "user/bob");
+
+        // A filtered allow authorizes only part of the source. A merge cannot
+        // copy a key subset without silently diverging from the source, so this
+        // is refused rather than narrowed (fail-closed).
+        ConfigurableAccessGate.Decide = req =>
+            req.TreeId == sourceId
+                ? LatticeAccessDecision.Filtered(static k => k.StartsWith("user/a", StringComparison.Ordinal))
+                : LatticeAccessDecision.Allow();
+
+        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(() => target.MergeAsync(sourceId));
+
+        ConfigurableAccessGate.Reset();
+        Assert.That(await target.GetAsync("user/alice"), Is.Null,
+            "a partial-coverage allow copies nothing at all");
+    }
+
+    [Test]
+    public async Task MergeAsync_succeeds_when_the_caller_may_read_the_whole_source_tree()
+    {
+        const string sourceId = "agf-merge-allowed-src";
+        const string targetId = "agf-merge-allowed-dst";
+        var source = _cluster.GrainFactory.GetGrain<ILattice>(sourceId);
+        var target = _cluster.GrainFactory.GetGrain<ILattice>(targetId);
+        await SeedAsync(source, "shared/one");
+
+        // A uniform allow over the source is the authorized shape: the merge
+        // proceeds exactly as before the source-side gate was added.
+        ConfigurableAccessGate.Decide = static _ => LatticeAccessDecision.Allow();
+
+        await target.MergeAsync(sourceId);
+        // Drive the drain deterministically rather than waiting on the
+        // coordinator's reminder, which does not tick inside the test cluster.
+        await _cluster.GrainFactory.GetGrain<ITreeMergeGrain>(targetId).RunMergePassAsync();
+        await PollUntilAsync(async () => await target.IsMergeCompleteAsync(), TimeSpan.FromSeconds(20));
+
+        Assert.That(await target.GetAsync("shared/one"), Is.Not.Null,
+            "an authorized merge still copies the source");
     }
 }
