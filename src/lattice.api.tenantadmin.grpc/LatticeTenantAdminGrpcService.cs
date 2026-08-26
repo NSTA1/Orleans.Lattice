@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 internal abstract class LatticeTenantAdminGrpcServiceBase
 {
     /// <summary>Creates a new active tenant. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.</summary>
-    public abstract Task<TenantCreationResult> CreateTenant(TenantAdminTenantRequest request, ServerCallContext context);
+    public abstract Task<TenantCreationResult> CreateTenant(TenantAdminCreateRequest request, ServerCallContext context);
 
     /// <summary>Suspends an existing tenant. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.</summary>
     public abstract Task<TenantStatusChangeResult> SuspendTenant(TenantAdminTenantRequest request, ServerCallContext context);
@@ -89,7 +89,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
 
         if (serviceImpl is null)
         {
-            binder.AddMethod(methods.CreateTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantCreationResult>?)null);
+            binder.AddMethod(methods.CreateTenant, (UnaryServerMethod<TenantAdminCreateRequest, TenantCreationResult>?)null);
             binder.AddMethod(methods.SuspendTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>?)null);
             binder.AddMethod(methods.ResumeTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>?)null);
             binder.AddMethod(methods.DeleteTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantDeletionResult>?)null);
@@ -101,7 +101,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             return;
         }
 
-        binder.AddMethod(methods.CreateTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantCreationResult>(serviceImpl.CreateTenant));
+        binder.AddMethod(methods.CreateTenant, new UnaryServerMethod<TenantAdminCreateRequest, TenantCreationResult>(serviceImpl.CreateTenant));
         binder.AddMethod(methods.SuspendTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>(serviceImpl.SuspendTenant));
         binder.AddMethod(methods.ResumeTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>(serviceImpl.ResumeTenant));
         binder.AddMethod(methods.DeleteTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantDeletionResult>(serviceImpl.DeleteTenant));
@@ -176,8 +176,8 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     }
 
     /// <inheritdoc />
-    public override Task<TenantCreationResult> CreateTenant(TenantAdminTenantRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (control, req, ct) => control.CreateTenantAsync(req.TenantId, ct));
+    public override Task<TenantCreationResult> CreateTenant(TenantAdminCreateRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.CreateTenantAsync(req.TenantId, req.AdminSubjects, ct));
 
     /// <inheritdoc />
     public override Task<TenantStatusChangeResult> SuspendTenant(TenantAdminTenantRequest request, ServerCallContext context)

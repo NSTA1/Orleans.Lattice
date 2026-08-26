@@ -60,6 +60,20 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             Assert.That(result.TenantId, Is.EqualTo("acme"));
             Assert.That(result.Status, Is.EqualTo(TenantLifecycleStatus.Active));
             Assert.That(_facade.LastTenantId, Is.EqualTo("acme"));
+            Assert.That(_facade.LastAdminSubjects, Is.Empty,
+                "An omitted set must reach the server empty so it seeds the caller there.");
+        });
+    }
+
+    [Test]
+    public async Task CreateTenant_round_trips_the_requested_admin_subjects()
+    {
+        var result = await _client.CreateTenantAsync("acme", ["ops@example.com", "sre@example.com"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_facade.LastAdminSubjects, Is.EqualTo(new[] { "ops@example.com", "sre@example.com" }));
+            Assert.That(result.AdminSubjects, Is.EqualTo(new[] { "ops@example.com", "sre@example.com" }));
         });
     }
 

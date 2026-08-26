@@ -301,7 +301,7 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `lattice_tenant_create` | manage | Register a new tenant in the active status. Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
+| `lattice_tenant_create` | manage | Register a new tenant in the active status, seeding the admin subjects that may see it. Omit `adminSubjects` and the calling subject is seeded so the creator can see what it created; supply it and that set is used verbatim (the caller is not added on top). Fails closed if a tenant with the same id already exists (it is not an idempotent upsert). |
 | `lattice_tenant_suspend` | manage | Move a tenant to the suspended status. Idempotent; the reserved default tenant cannot be suspended. |
 | `lattice_tenant_resume` | manage | Return a suspended tenant to the active status. Idempotent; fails closed if the tenant does not exist. |
 | `lattice_tenant_delete` | manage | Delete a tenant, cascading a soft-delete to every tree the tenant owns before removing its registry record. The reserved default tenant cannot be deleted. |

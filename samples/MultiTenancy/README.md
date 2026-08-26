@@ -23,7 +23,10 @@ The program walks four acts:
    `TryGetTenant` reverses it. This structural prefix is what the isolation gate
    checks - a caller in tenant `acme` can only ever name `t/acme/*`.
 2. **Tenant lifecycle as a platform operator.** A bootstrap administrator
-   creates two tenants and reads back their lifecycle status.
+   creates two tenants and reads back their lifecycle status and the admin
+   subjects each was seeded with - `acme` is handed to an explicit delegated
+   admin, while `globex` defaults to the creating operator, so a newly created
+   tenant is always visible to someone.
 3. **Lifecycle transitions and guards.** Suspend / resume a tenant, delete a
    tenant (cascading its trees), and prove create is not upsert - a second
    create of the same id is refused with `TenantAlreadyExistsException`.

@@ -74,17 +74,37 @@ public sealed class LatticeTenantAdminApiGrpcClient
     }
 
     /// <summary>
-    /// Creates a new active tenant with the given id. Requires the caller to be
-    /// authorized to administer tenants; fails closed otherwise.
+    /// Creates a new active tenant with the given id, seeding its tenant-admin
+    /// subjects. Requires the caller to be authorized to administer tenants; fails
+    /// closed otherwise.
     /// </summary>
+    /// <remarks>
+    /// Tenant visibility on the read-only self-service surface resolves from
+    /// admin-subject membership, so a tenant created with no admin subjects is
+    /// invisible to list and get. Passing <c>null</c> or an empty
+    /// <paramref name="adminSubjects"/> asks the server to seed the calling
+    /// subject, so a create followed by a read-back works out of the box; a
+    /// non-empty collection overrides that default outright.
+    /// </remarks>
     /// <param name="tenantId">The tenant id to create. Must not be <c>null</c> or empty.</param>
+    /// <param name="adminSubjects">The tenant-admin subject ids to seed, or <c>null</c> / empty to seed the calling subject.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The result of the creation, carrying the created tenant's id and status.</returns>
+    /// <returns>The result of the creation, carrying the created tenant's id, status, and seeded admin subjects.</returns>
     /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
-    public Task<TenantCreationResult> CreateTenantAsync(string tenantId, CancellationToken cancellationToken = default)
+    public Task<TenantCreationResult> CreateTenantAsync(
+        string tenantId,
+        IReadOnlyCollection<string>? adminSubjects = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        return UnaryAsync(_methods.CreateTenant, new TenantAdminTenantRequest { TenantId = tenantId }, cancellationToken);
+        return UnaryAsync(
+            _methods.CreateTenant,
+            new TenantAdminCreateRequest
+            {
+                TenantId = tenantId,
+                AdminSubjects = adminSubjects is null ? [] : [.. adminSubjects],
+            },
+            cancellationToken);
     }
 
     /// <summary>

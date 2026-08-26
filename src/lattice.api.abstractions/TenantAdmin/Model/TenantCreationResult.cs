@@ -18,4 +18,15 @@ public sealed record TenantCreationResult
 
     /// <summary>The lifecycle status the tenant was created in (always <see cref="TenantLifecycleStatus.Active"/>).</summary>
     [Id(1)] public TenantLifecycleStatus Status { get; init; }
+
+    /// <summary>
+    /// The tenant-admin subjects the create seeded onto the new tenant, in
+    /// ordinal order. These are the subjects that can immediately see the tenant
+    /// through the read-only self-service surface (list / get), which resolves
+    /// visibility from admin-subject membership. Empty only when the create
+    /// supplied no subjects <em>and</em> the calling subject could not be
+    /// resolved (an anonymous or system-origin caller), in which case the new
+    /// tenant is invisible to every caller until subjects are added.
+    /// </summary>
+    [Id(2)] public IReadOnlyList<string> AdminSubjects { get; init; } = [];
 }

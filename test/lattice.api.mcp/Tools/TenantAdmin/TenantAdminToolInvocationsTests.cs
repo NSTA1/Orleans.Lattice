@@ -19,17 +19,42 @@ public sealed class TenantAdminToolInvocationsTests
     public async Task Create_delegates_to_the_facade_and_shapes_the_result()
     {
         var admin = Substitute.For<ILatticeTenantAdmin>();
-        admin.CreateTenantAsync("acme", Arg.Any<CancellationToken>())
-            .Returns(new TenantCreationResult { TenantId = "acme", Status = TenantLifecycleStatus.Active });
+        admin.CreateTenantAsync("acme", Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<CancellationToken>())
+            .Returns(new TenantCreationResult
+            {
+                TenantId = "acme",
+                Status = TenantLifecycleStatus.Active,
+                AdminSubjects = ["ops@example.com"],
+            });
 
-        var result = await TenantAdminToolInvocations.CreateTenantAsync(admin, "acme", CancellationToken.None);
+        var result = await TenantAdminToolInvocations.CreateTenantAsync(admin, "acme", null, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
             Assert.That(result.TenantId, Is.EqualTo("acme"));
             Assert.That(result.Status, Is.EqualTo(nameof(TenantLifecycleStatus.Active)));
+            Assert.That(result.AdminSubjects, Is.EqualTo(new[] { "ops@example.com" }));
         });
-        await admin.Received(1).CreateTenantAsync("acme", Arg.Any<CancellationToken>());
+        await admin.Received(1).CreateTenantAsync("acme", null, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Create_passes_the_requested_admin_subjects_through_to_the_facade()
+    {
+        var admin = Substitute.For<ILatticeTenantAdmin>();
+        string[] subjects = ["ops@example.com", "sre@example.com"];
+        admin.CreateTenantAsync("acme", Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<CancellationToken>())
+            .Returns(new TenantCreationResult
+            {
+                TenantId = "acme",
+                Status = TenantLifecycleStatus.Active,
+                AdminSubjects = subjects,
+            });
+
+        var result = await TenantAdminToolInvocations.CreateTenantAsync(admin, "acme", subjects, CancellationToken.None);
+
+        Assert.That(result.AdminSubjects, Is.EqualTo(subjects));
+        await admin.Received(1).CreateTenantAsync("acme", subjects, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -145,7 +170,7 @@ public sealed class TenantAdminToolInvocationsTests
     public void Unauthorized_caller_is_denied_fail_closed_on_every_operation()
     {
         var admin = Substitute.For<ILatticeTenantAdmin>();
-        admin.CreateTenantAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        admin.CreateTenantAsync(Arg.Any<string>(), Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<CancellationToken>())
             .Returns<Task<TenantCreationResult>>(_ => throw new LatticeAuthorizationDeniedException());
         admin.SuspendTenantAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<TenantStatusChangeResult>>(_ => throw new LatticeAuthorizationDeniedException());
@@ -159,7 +184,7 @@ public sealed class TenantAdminToolInvocationsTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                async () => await TenantAdminToolInvocations.CreateTenantAsync(admin, "acme", CancellationToken.None),
+                async () => await TenantAdminToolInvocations.CreateTenantAsync(admin, "acme", null, CancellationToken.None),
                 Throws.TypeOf<LatticeAuthorizationDeniedException>());
             Assert.That(
                 async () => await TenantAdminToolInvocations.SuspendTenantAsync(admin, "acme", CancellationToken.None),
@@ -182,7 +207,7 @@ public sealed class TenantAdminToolInvocationsTests
         Assert.Multiple(() =>
         {
             Assert.That(
-                async () => await TenantAdminToolInvocations.CreateTenantAsync(null!, "acme", CancellationToken.None),
+                async () => await TenantAdminToolInvocations.CreateTenantAsync(null!, "acme", null, CancellationToken.None),
                 Throws.ArgumentNullException);
             Assert.That(
                 async () => await TenantAdminToolInvocations.SuspendTenantAsync(null!, "acme", CancellationToken.None),

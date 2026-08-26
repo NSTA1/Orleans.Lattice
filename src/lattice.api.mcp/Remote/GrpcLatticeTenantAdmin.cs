@@ -33,8 +33,10 @@ internal sealed class GrpcLatticeTenantAdmin : ILatticeTenantAdmin
 
     /// <inheritdoc />
     public Task<TenantCreationResult> CreateTenantAsync(
-        string tenantId, CancellationToken cancellationToken = default)
-        => _client.CreateTenantAsync(tenantId, cancellationToken);
+        string tenantId,
+        IReadOnlyCollection<string>? adminSubjects = null,
+        CancellationToken cancellationToken = default)
+        => _client.CreateTenantAsync(tenantId, adminSubjects, cancellationToken);
 
     /// <inheritdoc />
     public Task<TenantStatusChangeResult> SuspendTenantAsync(

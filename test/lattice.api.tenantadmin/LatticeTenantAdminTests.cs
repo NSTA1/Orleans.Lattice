@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 /// assumptions.
 /// </summary>
 [TestFixture]
-public sealed class LatticeTenantAdminTests
+public sealed partial class LatticeTenantAdminTests
 {
     private const string Tenant = "acme";
 
@@ -29,13 +29,15 @@ public sealed class LatticeTenantAdminTests
         FakeTenantRegistry registry,
         bool allow = true,
         ITenantAdminClock? clock = null,
-        ITenantTreeCascade? cascade = null)
+        ITenantTreeCascade? cascade = null,
+        ILatticeMembershipContext? membership = null)
         => new(
             registry,
-            new TenantAdminAccessAuthorizer(new FixedGate(allow)),
+            new TenantAdminAccessAuthorizer(new FixedGate(allow), membership),
             clock ?? new IncrementingClock(),
             cascade ?? new StubCascade(0),
-            Options.Create(new ClusterOptions()));
+            Options.Create(new ClusterOptions()),
+            membership);
 
     private static TenantRecord ActiveRecord(string id) => TenantRecord.Create(
         Parse(id), TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared,

@@ -38,7 +38,7 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
         {
             Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
                 Method(LatticeTenantAdminGrpcMethods.CreateTenantMethodName),
-                new TenantAdminTenantRequest { TenantId = "acme" }),
+                new TenantAdminCreateRequest { TenantId = "acme", AdminSubjects = ["ops@example.com"] }),
                 Is.EqualTo((LatticeTenantAdminApiOperation.CreateTenant, "acme")));
 
             Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(

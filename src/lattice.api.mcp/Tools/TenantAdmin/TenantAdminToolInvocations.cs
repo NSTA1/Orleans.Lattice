@@ -16,18 +16,25 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </summary>
 internal static class TenantAdminToolInvocations
 {
-    /// <summary>Creates a new tenant in the active status.</summary>
+    /// <summary>Creates a new tenant in the active status, seeding its admin subjects.</summary>
     /// <param name="admin">The tenant-admin facade. Must not be <c>null</c>.</param>
     /// <param name="tenantId">The tenant id to create.</param>
+    /// <param name="adminSubjects">
+    /// The tenant-admin subject ids to seed onto the new tenant, or <c>null</c> /
+    /// empty to seed the calling subject.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The MCP create-result DTO.</returns>
     public static async Task<McpTenantCreateResult> CreateTenantAsync(
         ILatticeTenantAdmin admin,
         string tenantId,
+        IReadOnlyCollection<string>? adminSubjects,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(admin);
-        var result = await admin.CreateTenantAsync(tenantId, cancellationToken).ConfigureAwait(false);
+        var result = await admin
+            .CreateTenantAsync(tenantId, adminSubjects, cancellationToken)
+            .ConfigureAwait(false);
         return TenantAdminToolMappings.ToMcp(result);
     }
 

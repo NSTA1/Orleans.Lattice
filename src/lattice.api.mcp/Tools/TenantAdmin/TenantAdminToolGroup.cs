@@ -84,11 +84,12 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
             (
                 RequestContext<CallToolRequestParams> context,
                 [Description("The tenant id to create. Must be a valid, non-empty tenant id that is not already registered.")] string tenantId,
+                [Description("The tenant-admin subject ids to seed onto the new tenant, deciding who can subsequently see it. Omit or leave empty to seed the calling subject.")] string[]? adminSubjects,
                 CancellationToken cancellationToken) =>
             {
                 using var scope = StampCredential(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
-                return TenantAdminToolInvocations.CreateTenantAsync(admin, tenantId, cancellationToken);
+                return TenantAdminToolInvocations.CreateTenantAsync(admin, tenantId, adminSubjects, cancellationToken);
             },
             new McpServerToolCreateOptions
             {
@@ -98,8 +99,15 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 Description =
                     "Registers a new tenant in the active status. Fails closed if a tenant with the same id "
                     + "already exists (create is not an idempotent upsert, so it never resets or reuses another "
-                    + "tenant). Subject to the fail-closed tenant-admin access gate. Requires tenant-admin control "
-                    + "to be enabled on the server.",
+                    + "tenant). Tenant visibility on the read-only surface resolves from tenant-admin subject "
+                    + "membership, so adminSubjects decides who can subsequently see the tenant through "
+                    + "lattice_tenant_list / lattice_tenant_get: omit it (or pass an empty list) to seed the "
+                    + "calling subject, so a create followed by a read-back works; pass an explicit list to hand "
+                    + "the tenant to other identities instead - the caller is then not added. A tenant left with "
+                    + "no admin subjects at all is mutable by a platform operator but invisible to list and get "
+                    + "for every caller. The result reports the subjects that were seeded. Subject to the "
+                    + "fail-closed tenant-admin access gate. Requires tenant-admin control to be enabled on the "
+                    + "server.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

@@ -39,6 +39,26 @@ public sealed class TenantAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TenantAdminCreateRequest_round_trips_its_admin_subjects()
+    {
+        var copy = RoundTrip(new TenantAdminCreateRequest
+        {
+            TenantId = "acme",
+            AdminSubjects = ["ops@example.com", "sre@example.com"],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.AdminSubjects, Is.EqualTo(new[] { "ops@example.com", "sre@example.com" }));
+        });
+    }
+
+    [Test]
+    public void TenantAdminCreateRequest_defaults_to_an_empty_subject_set() =>
+        Assert.That(new TenantAdminCreateRequest { TenantId = "acme" }.AdminSubjects, Is.Empty);
+
+    [Test]
     public void AuthSchemeAdvertisementRequest_round_trips() =>
         Assert.That(RoundTrip(new AuthSchemeAdvertisementRequest()), Is.Not.Null);
 
@@ -88,11 +108,17 @@ public sealed class TenantAdminGrpcDtoSerializationTests
     [Test]
     public void TenantCreationResult_response_round_trips()
     {
-        var copy = RoundTrip(new TenantCreationResult { TenantId = "acme", Status = TenantLifecycleStatus.Active });
+        var copy = RoundTrip(new TenantCreationResult
+        {
+            TenantId = "acme",
+            Status = TenantLifecycleStatus.Active,
+            AdminSubjects = ["ops@example.com"],
+        });
         Assert.Multiple(() =>
         {
             Assert.That(copy.TenantId, Is.EqualTo("acme"));
             Assert.That(copy.Status, Is.EqualTo(TenantLifecycleStatus.Active));
+            Assert.That(copy.AdminSubjects, Is.EqualTo(new[] { "ops@example.com" }));
         });
     }
 

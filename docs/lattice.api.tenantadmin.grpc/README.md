@@ -41,7 +41,7 @@ read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 
 | RPC | Facade method |
 |---|---|
-| `CreateTenant` | `CreateTenantAsync` |
+| `CreateTenant` | `CreateTenantAsync` (carries the optional admin-subject set) |
 | `SuspendTenant` | `SuspendTenantAsync` |
 | `ResumeTenant` | `ResumeTenantAsync` |
 | `DeleteTenant` | `DeleteTenantAsync` |
@@ -57,7 +57,7 @@ read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 
 | Method | Signature |
 |---|---|
-| `CreateTenantAsync` | `Task<TenantCreationResult> CreateTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `CreateTenantAsync` | `Task<TenantCreationResult> CreateTenantAsync(string tenantId, IReadOnlyCollection<string>? adminSubjects = null, CancellationToken cancellationToken = default)` |
 | `SuspendTenantAsync` | `Task<TenantStatusChangeResult> SuspendTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `ResumeTenantAsync` | `Task<TenantStatusChangeResult> ResumeTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `DeleteTenantAsync` | `Task<TenantDeletionResult> DeleteTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
