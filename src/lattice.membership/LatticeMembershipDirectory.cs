@@ -246,30 +246,12 @@ internal sealed class LatticeMembershipDirectory(
     /// The exclusive upper bound of every key sharing <paramref name="prefix"/>,
     /// or <see langword="null"/> when the prefix has no finite upper bound
     /// (every code unit is <see cref="char.MaxValue"/>), meaning the edge scan
-    /// is open-ended above.
+    /// is open-ended above. Delegates to the shared
+    /// <see cref="LatticeKeyRange.PrefixUpperBound(string)"/> so the rollover-safe
+    /// algorithm has a single definition.
     /// </summary>
-    internal static string? PrefixUpperBound(string prefix)
-    {
-        // Scan back to the last code unit that can be incremented without
-        // overflow, increment it, and drop the trailing max units. Advancing
-        // the final unit unconditionally (as `(char)(chars[^1] + 1)`) wraps a
-        // trailing U+FFFF to U+0000, producing an upper bound that sorts below
-        // the prefix and inverts the [prefix, bound) range so the membership
-        // edge scan silently drops edges. Mirrors the canonical
-        // BackupConstants.PrefixUpperBound.
-        for (var i = prefix.Length - 1; i >= 0; i--)
-        {
-            if (prefix[i] < char.MaxValue)
-            {
-                var bound = new char[i + 1];
-                prefix.AsSpan(0, i + 1).CopyTo(bound);
-                bound[i]++;
-                return new string(bound);
-            }
-        }
-
-        return null;
-    }
+    internal static string? PrefixUpperBound(string prefix) =>
+        LatticeKeyRange.PrefixUpperBound(prefix);
 
     /// <summary>Extracts the third separator-delimited field (the group id in a forward key, the member id in a reverse key).</summary>
     private static string ThirdField(string key)

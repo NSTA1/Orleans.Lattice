@@ -732,34 +732,15 @@ internal sealed class LatticeAuthAdmin(
     }
 
     /// <summary>
-    /// The exclusive upper bound of every key sharing <paramref name="prefix"/>:
-    /// the prefix with its last code unit below <see cref="char.MaxValue"/>
-    /// incremented and any trailing <see cref="char.MaxValue"/> units dropped.
-    /// Returns <see langword="null"/> when no finite upper bound exists - an
-    /// empty prefix, or one consisting solely of <see cref="char.MaxValue"/>
-    /// units - meaning the range is unbounded above.
+    /// The exclusive upper bound of every key sharing <paramref name="prefix"/>,
+    /// used to translate a prefix scope into the half-open <c>[prefix, bound)</c>
+    /// range handed to the access gate. Delegates to the shared
+    /// <see cref="LatticeKeyRange.PrefixUpperBound(string)"/> so the rollover-safe
+    /// algorithm has a single definition; returns <see langword="null"/> when the
+    /// range is unbounded above.
     /// </summary>
-    internal static string? PrefixUpperBound(string prefix)
-    {
-        // Scan back to the last code unit that can be incremented without
-        // overflow, increment it, and drop the trailing max units. Advancing
-        // the final unit unconditionally (as `(char)(chars[^1] + 1)`) wraps a
-        // trailing U+FFFF to U+0000, producing an upper bound that sorts below
-        // the prefix and inverts the [prefix, bound) range so the scan silently
-        // captures nothing. Mirrors the canonical BackupConstants.PrefixUpperBound.
-        for (var i = prefix.Length - 1; i >= 0; i--)
-        {
-            if (prefix[i] < char.MaxValue)
-            {
-                var bound = new char[i + 1];
-                prefix.AsSpan(0, i + 1).CopyTo(bound);
-                bound[i]++;
-                return new string(bound);
-            }
-        }
-
-        return null;
-    }
+    internal static string? PrefixUpperBound(string prefix) =>
+        LatticeKeyRange.PrefixUpperBound(prefix);
 
     private static IReadOnlyList<string> Sorted(IReadOnlyCollection<string> values)
     {
