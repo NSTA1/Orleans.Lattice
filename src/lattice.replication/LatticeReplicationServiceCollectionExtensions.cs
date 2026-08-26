@@ -92,6 +92,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<IReplogSink, ShardedReplogSink>();
         builder.Services.TryAddSingleton<IChangeFeed, ChangeFeed>();
 
+        // Event-driven source-identity rebind: the core tree registry fires
+        // ITreeAliasObserver on an effective physical-identity swap, and this
+        // observer fans the new physical id out to the per-peer shipper grains
+        // so they rebind reactively instead of polling the registry each tick.
+        // Registered additively (a host may layer its own observers) rather than
+        // TryAdd, mirroring the IMutationObserver registration convention.
+        builder.Services.AddSingleton<ITreeAliasObserver, ReplicationTreeAliasObserver>();
+
         builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
         // Receiver-side bootstrap source. The bootstrap state machine
         // drains from this seam; the seam is split from
