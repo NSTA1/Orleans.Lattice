@@ -50,4 +50,9 @@ internal sealed class GrpcLatticeTenantAdmin : ILatticeTenantAdmin
     public Task<TenantDeletionResult> DeleteTenantAsync(
         string tenantId, CancellationToken cancellationToken = default)
         => _client.DeleteTenantAsync(tenantId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(
+        string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)
+        => _client.SetTenantQuotasAsync(tenantId, quotas, cancellationToken);
 }

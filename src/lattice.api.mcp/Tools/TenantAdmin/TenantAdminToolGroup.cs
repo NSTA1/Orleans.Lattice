@@ -13,9 +13,10 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <see cref="LatticeApiMcpGroup.TenantAdmin"/> whose tools are thin adapters over
 /// the <see cref="ILatticeTenantAdmin"/> control facade. The tenant lifecycle is
 /// all-mutating - there is no read-only inspect operation - so the group
-/// contributes its four control tools (<c>lattice_tenant_create</c>,
+/// contributes its control tools (<c>lattice_tenant_create</c>,
 /// <c>lattice_tenant_suspend</c>, <c>lattice_tenant_resume</c>,
-/// <c>lattice_tenant_delete</c>) only when tenant-admin control is opted in via
+/// <c>lattice_tenant_delete</c>, <c>lattice_tenant_set_quotas</c>) only when
+/// tenant-admin control is opted in via
 /// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> or
 /// <c>AddTenantAdminTools(enableControl: true)</c>. Every tool is annotated
 /// destructive and non-read-only.
@@ -32,7 +33,8 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </para>
 /// <para>
 /// Every tenant lifecycle operation mutates cluster state (delete cascades the
-/// tenant's trees), so all four tools carry <c>destructiveHint</c>. The group
+/// tenant's trees; set-quotas rewrites the tenant's capacity allocation), so all
+/// tools carry <c>destructiveHint</c>. The group
 /// itself is advertised only to a caller whose effective permissions grant
 /// <see cref="LatticeOperation.Admin"/> - an agent without the grant is offered no
 /// tenant-admin tools at all - and only when the host has opted the group in, so a
@@ -73,6 +75,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
             CreateSuspendTool(),
             CreateResumeTool(),
             CreateDeleteTool(),
+            CreateSetQuotasTool(),
         ];
     }
 
@@ -176,6 +179,50 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                     + "number of trees cascaded. The reserved default tenant can never be deleted. Fails closed if "
                     + "the tenant is not registered. Subject to the fail-closed tenant-admin access gate. Requires "
                     + "tenant-admin control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetQuotasTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id whose quotas to author. Must be a valid, non-empty tenant id that is registered and is not the reserved default tenant.")] string tenantId,
+                [Description("The maximum total stored value bytes, or null for unbounded on this dimension.")] long? maxBytes,
+                [Description("The maximum total live key count, or null for unbounded on this dimension.")] long? maxKeys,
+                [Description("The maximum resident memory in bytes, or null for unbounded on this dimension.")] long? maxMemoryBytes,
+                [Description("The maximum number of trees the tenant may own, or null for unbounded on this dimension.")] long? maxTreeCount,
+                [Description("The maximum sustained operations per second, or null for unbounded on this dimension.")] long? maxOpsPerSecond,
+                [Description("The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative.")] int burstPercent,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
+                var quotas = new TenantQuotasDescriptor
+                {
+                    MaxBytes = maxBytes,
+                    MaxKeys = maxKeys,
+                    MaxMemoryBytes = maxMemoryBytes,
+                    MaxTreeCount = maxTreeCount,
+                    MaxOpsPerSecond = maxOpsPerSecond,
+                    BurstPercent = burstPercent,
+                };
+                return TenantAdminToolInvocations.SetTenantQuotasAsync(admin, tenantId, quotas, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_set_quotas",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Set tenant quotas",
+                Description =
+                    "Authors a tenant's resource quotas and burst allowance, replacing whatever quotas the tenant "
+                    + "currently carries. Each resource ceiling (maxBytes, maxKeys, maxMemoryBytes, maxTreeCount, "
+                    + "maxOpsPerSecond) is null for unbounded on that dimension; pass every dimension null to lift a "
+                    + "tenant's caps again. burstPercent is the transient headroom above the bounded ceilings and must "
+                    + "be non-negative. The reserved default tenant can never be given quotas and fails closed. Fails "
+                    + "closed if the tenant is not registered. Subject to the fail-closed tenant-admin access gate. "
+                    + "Requires tenant-admin control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,
                 UseStructuredContent = true,

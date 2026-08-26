@@ -19,7 +19,8 @@ Backup, and Replication facades rather than reimplementing them.
 
 Three facades are exposed:
 
-- **`ILatticeTenantAdmin`** - the tenant lifecycle: create, suspend, resume, delete.
+- **`ILatticeTenantAdmin`** - the tenant lifecycle: create, suspend, resume, delete,
+  and author per-tenant resource quotas.
 - **`ILatticeTenantRegionAdmin`** - per-tenant region residency: authorize the
   allowed region set, set the residency set within it, read per-region status.
 - **`ILatticeTenantScopedTreeAdmin`** - tree administration executed inside a single
@@ -53,6 +54,15 @@ Three facades are exposed:
 - **Cascading delete.** Deleting a tenant cascades the delete to every tree the
   tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry record
   is removed.
+- **Quota authoring.** `SetTenantQuotasAsync` replaces a tenant's resource quotas and
+  burst allowance in one platform-operator action. Each ceiling (`MaxBytes`,
+  `MaxKeys`, `MaxMemoryBytes`, `MaxTreeCount`, `MaxOpsPerSecond`) is `null` for
+  unbounded on that dimension; passing `TenantQuotasDescriptor.Unbounded` lifts every
+  cap again. `BurstPercent` is the transient headroom above the bounded ceilings and
+  must be non-negative (a negative value fails closed with an `ArgumentException`). The
+  reserved `default` tenant can never be given quotas. The authored allocation is
+  surfaced back on `ILatticeTenantSelfService.GetTenantAsync` (`TenantStatusReport.Quotas`),
+  so an operator can confirm it without a follow-up read.
 
 ## Registration
 
@@ -77,6 +87,7 @@ in the [binding](../lattice.api.tenantadmin.grpc/README.md).
 | `SuspendTenantAsync` | `Task<TenantStatusChangeResult> SuspendTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `ResumeTenantAsync` | `Task<TenantStatusChangeResult> ResumeTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `DeleteTenantAsync` | `Task<TenantDeletionResult> DeleteTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `SetTenantQuotasAsync` | `Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)` |
 
 ### `ILatticeTenantRegionAdmin`
 
@@ -120,6 +131,8 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantCreationResult` | result | The newly created tenant. |
 | `TenantStatusChangeResult` | result | Suspend/resume outcome; `Changed` reports whether state moved. |
 | `TenantDeletionResult` | result | Deletion outcome, including the count of trees cascaded. |
+| `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate. |
+| `TenantQuotasUpdateResult` | result | The tenant id and the quotas now in effect after authoring. |
 | `TenantLifecycleStatus` | enum | `Active` / `Suspended`. |
 | `TenantRegionAuthorizationResult` | result | The resulting allowed region set. |
 | `TenantResidencyChangeResult` | result | The added, removed, and resulting resident regions. |

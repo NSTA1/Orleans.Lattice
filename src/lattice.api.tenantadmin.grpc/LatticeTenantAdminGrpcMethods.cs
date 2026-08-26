@@ -39,6 +39,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary tenant-delete (with tree cascade) RPC method name.</summary>
     public const string DeleteTenantMethodName = "DeleteTenant";
 
+    /// <summary>The unary tenant-quota-authoring RPC method name.</summary>
+    public const string SetTenantQuotasMethodName = "SetTenantQuotas";
+
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
@@ -57,6 +60,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantCreationResult> creationResultSerializer,
         Serializer<TenantStatusChangeResult> statusChangeResultSerializer,
         Serializer<TenantDeletionResult> deletionResultSerializer,
+        Serializer<TenantAdminSetQuotasRequest> setQuotasRequestSerializer,
+        Serializer<TenantQuotasUpdateResult> quotasUpdateResultSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
         Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer,
         Serializer<TenantSelfCurrentRequest> selfCurrentRequestSerializer,
@@ -69,6 +74,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(creationResultSerializer);
         ArgumentNullException.ThrowIfNull(statusChangeResultSerializer);
         ArgumentNullException.ThrowIfNull(deletionResultSerializer);
+        ArgumentNullException.ThrowIfNull(setQuotasRequestSerializer);
+        ArgumentNullException.ThrowIfNull(quotasUpdateResultSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
         ArgumentNullException.ThrowIfNull(selfCurrentRequestSerializer);
@@ -104,6 +111,13 @@ internal sealed class LatticeTenantAdminGrpcMethods
             name: DeleteTenantMethodName,
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(deletionResultSerializer));
+
+        SetTenantQuotas = new Method<TenantAdminSetQuotasRequest, TenantQuotasUpdateResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SetTenantQuotasMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(setQuotasRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(quotasUpdateResultSerializer));
 
         GetAuthScheme = new Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(
             type: MethodType.Unary,
@@ -146,6 +160,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary tenant-delete (with tree cascade) RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantDeletionResult> DeleteTenant { get; }
 
+    /// <summary>The unary tenant-quota-authoring RPC.</summary>
+    public Method<TenantAdminSetQuotasRequest, TenantQuotasUpdateResult> SetTenantQuotas { get; }
+
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
 
@@ -172,6 +189,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantCreationResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantStatusChangeResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantDeletionResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminSetQuotasRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantQuotasUpdateResult>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>(),
             serializerProvider.GetRequiredService<Serializer<TenantSelfCurrentRequest>>(),

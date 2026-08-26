@@ -159,6 +159,17 @@ public sealed class LatticeApiMcpRemoteOptions
     public string CredentialScheme { get; set; } = "Bearer";
 
     /// <summary>
+    /// The request header the caller's ambient active tenant is re-emitted onto
+    /// for the outbound gRPC call, so a remote (split) head reaches the same
+    /// silo-side per-tenant enforcement an in-silo head reaches through the Orleans
+    /// request context. Defaults to <c>lattice-active-tenant</c>, matching the gRPC
+    /// bindings' default active-tenant header. When no active tenant is asserted on
+    /// the call, no header is added (the outbound call is byte-for-byte unchanged).
+    /// Set to the empty string to disable active-tenant forwarding entirely.
+    /// </summary>
+    public string ActiveTenantHeaderName { get; set; } = "lattice-active-tenant";
+
+    /// <summary>
     /// The administrator service credential used for the discovery core's trusted,
     /// read-only permission introspection of each caller's effective permissions.
     /// Required for a non-administrator caller's tools to be discovered against a

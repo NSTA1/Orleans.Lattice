@@ -289,13 +289,13 @@ Read-only tenant discovery over the tenant self-service facade, registered by `A
 |---|---|---|
 | `lattice_tenant_current` | inspect | Report the tenant the calling credential is operating as, with its lifecycle status and whether it is the reserved default tenant. |
 | `lattice_tenant_list` | inspect | List the tenants the caller is authorized to access, in ascending tenant-id order, scoped fail-closed to the caller. |
-| `lattice_tenant_get` | inspect | Read one authorized tenant's lifecycle status and per-region residency; fails closed with a not-found when the tenant does not exist or the caller may not see it. |
+| `lattice_tenant_get` | inspect | Read one authorized tenant's lifecycle status, per-region residency, and authored resource quotas; fails closed with a not-found when the tenant does not exist or the caller may not see it. |
 
 Every tool carries `readOnlyHint = true` and `destructiveHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's leak-free, fail-closed per-tenant scoping, so an unauthorized caller sees only its own default context, an empty accessible list, and a fail-closed not-found on inspect.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted self-service facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTenantSelfService` off the `RemoteOptions.TenantAdmin` endpoint (the self-service reads share the tenant-administration gRPC service address). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed per-tenant scoping.
 
-## Tenant-admin tools (`lattice_tenant_create`, `lattice_tenant_suspend`, `lattice_tenant_resume`, `lattice_tenant_delete`)
+## Tenant-admin tools (`lattice_tenant_create`, `lattice_tenant_suspend`, `lattice_tenant_resume`, `lattice_tenant_delete`, `lattice_tenant_set_quotas`)
 
 Tenant lifecycle control over the tenant-administration facade, registered by `AddTenantAdminTools(enableControl)`. The lifecycle verbs are all mutating, so the module contributes tools only when `enableControl: true`; called without it, the `tenantadmin` capability is advertised to an `Admin` caller but no tools are contributed, and a cluster that never calls `AddTenantAdminTools` exposes no tenant-admin capability at all. The group is discovered only by a caller granted `LatticeOperation.Admin`.
 
@@ -305,6 +305,7 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 | `lattice_tenant_suspend` | manage | Move a tenant to the suspended status. Idempotent; the reserved default tenant cannot be suspended. |
 | `lattice_tenant_resume` | manage | Return a suspended tenant to the active status. Idempotent; fails closed if the tenant does not exist. |
 | `lattice_tenant_delete` | manage | Delete a tenant, cascading a soft-delete to every tree the tenant owns before removing its registry record. The reserved default tenant cannot be deleted. |
+| `lattice_tenant_set_quotas` | manage | Author a tenant's resource quotas and burst allowance, replacing whatever quotas it currently carries. Each ceiling (`maxBytes`, `maxKeys`, `maxMemoryBytes`, `maxTreeCount`, `maxOpsPerSecond`) is null for unbounded on that dimension; pass every dimension null to lift the caps again. `burstPercent` must be non-negative. The reserved default tenant cannot be given quotas, and it fails closed if the tenant does not exist. |
 
 Every tool carries `destructiveHint = true` and `readOnlyHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's own fail-closed tenant-admin access gate, so an unauthorized caller is default-denied on every mutation.
 

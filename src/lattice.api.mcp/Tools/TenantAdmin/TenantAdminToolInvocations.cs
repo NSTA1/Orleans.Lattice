@@ -75,4 +75,21 @@ internal static class TenantAdminToolInvocations
         var result = await admin.DeleteTenantAsync(tenantId, cancellationToken).ConfigureAwait(false);
         return TenantAdminToolMappings.ToMcp(result);
     }
+
+    /// <summary>Authors a tenant's resource quotas and burst allowance.</summary>
+    /// <param name="admin">The tenant-admin facade. Must not be <c>null</c>.</param>
+    /// <param name="tenantId">The tenant id whose quotas to author.</param>
+    /// <param name="quotas">The quotas to apply.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The MCP set-quotas DTO.</returns>
+    public static async Task<McpTenantSetQuotasResult> SetTenantQuotasAsync(
+        ILatticeTenantAdmin admin,
+        string tenantId,
+        TenantQuotasDescriptor quotas,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(admin);
+        var result = await admin.SetTenantQuotasAsync(tenantId, quotas, cancellationToken).ConfigureAwait(false);
+        return TenantAdminToolMappings.ToMcp(result);
+    }
 }

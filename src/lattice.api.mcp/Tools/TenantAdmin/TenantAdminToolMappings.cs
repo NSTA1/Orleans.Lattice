@@ -50,4 +50,24 @@ internal static class TenantAdminToolMappings
             CascadedTreeCount = result.CascadedTreeCount,
         };
     }
+
+    /// <summary>Projects a tenant quotas-update result onto its MCP DTO.</summary>
+    /// <param name="result">The quotas-update result. Must not be <c>null</c>.</param>
+    /// <returns>The MCP set-quotas DTO.</returns>
+    public static McpTenantSetQuotasResult ToMcp(TenantQuotasUpdateResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        var quotas = result.Quotas;
+        return new McpTenantSetQuotasResult
+        {
+            TenantId = result.TenantId,
+            MaxBytes = quotas.MaxBytes,
+            MaxKeys = quotas.MaxKeys,
+            MaxMemoryBytes = quotas.MaxMemoryBytes,
+            MaxTreeCount = quotas.MaxTreeCount,
+            MaxOpsPerSecond = quotas.MaxOpsPerSecond,
+            BurstPercent = quotas.BurstPercent,
+            IsUnbounded = quotas.IsUnbounded,
+        };
+    }
 }

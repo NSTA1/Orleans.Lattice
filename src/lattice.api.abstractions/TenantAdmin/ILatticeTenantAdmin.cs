@@ -92,4 +92,27 @@ public interface ILatticeTenantAdmin
     /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is not authorized to administer tenants.</exception>
     Task<TenantDeletionResult> DeleteTenantAsync(
         string tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Authors a tenant's resource quotas and burst allowance, replacing whatever
+    /// quotas the tenant currently carries with <paramref name="quotas"/>. This is
+    /// the control-plane surface for per-tenant capacity governance: until a
+    /// tenant's quotas are authored it is created unbounded, so this is how an
+    /// operator gives a tenant caps (or lifts them again by passing
+    /// <see cref="TenantQuotasDescriptor.Unbounded"/>). Governed by the same
+    /// fail-closed tenant-admin access gate as the lifecycle mutations. The
+    /// reserved default tenant can never be given quotas - it names the cluster's
+    /// own legacy state and is permanently unbounded - so that target fails closed
+    /// with a <see cref="ReservedTenantOperationException"/>.
+    /// </summary>
+    /// <param name="tenantId">The tenant id whose quotas to author. Must be a valid, non-empty tenant id.</param>
+    /// <param name="quotas">The quotas to apply. <see cref="TenantQuotasDescriptor.BurstPercent"/> must be non-negative.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The update result, carrying the quotas now in effect.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c>, empty, or not a valid tenant id, or <paramref name="quotas"/> has a negative <see cref="TenantQuotasDescriptor.BurstPercent"/>.</exception>
+    /// <exception cref="TenantNotFoundException">No tenant with that id is registered.</exception>
+    /// <exception cref="ReservedTenantOperationException"><paramref name="tenantId"/> is the reserved default tenant.</exception>
+    /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is not authorized to administer tenants.</exception>
+    Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(
+        string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default);
 }

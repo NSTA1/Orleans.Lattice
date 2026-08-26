@@ -21,4 +21,7 @@ internal sealed record McpTenantStatusResult
 
     /// <summary>The tenant's per-region residency rows; empty when it has no per-region residency configured.</summary>
     public required IReadOnlyList<McpTenantRegionStatusRow> Regions { get; init; }
+
+    /// <summary>The tenant's resource quotas and burst allowance in effect.</summary>
+    public required McpTenantQuotasView Quotas { get; init; }
 }

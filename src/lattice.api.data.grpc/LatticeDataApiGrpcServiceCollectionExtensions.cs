@@ -68,6 +68,15 @@ public static class LatticeDataApiGrpcServiceCollectionExtensions
         // identity source such as a client certificate).
         services.TryAddSingleton<ILatticeDataApiCredentialBridge, HeaderLatticeDataApiCredentialBridge>();
 
+        // Active-tenant bridge: lifts the inbound gRPC active-tenant header onto
+        // the ambient LatticeActiveTenantContext so the tenant-aware data plane
+        // (per-tenant write admission / quota and tenant-scoped tree resolution)
+        // sees the caller's asserted tenant, which the tenancy add-on re-validates
+        // against the caller's membership downstream. TryAdd preserves a
+        // host-supplied bridge (for a bespoke tenant source such as a principal
+        // claim).
+        services.TryAddSingleton<ILatticeDataApiActiveTenantBridge, HeaderLatticeDataApiActiveTenantBridge>();
+
         // Register the auth interceptor globally; it scopes enforcement to the
         // data-API service by service-name prefix so unrelated gRPC services on
         // the same host are unaffected.

@@ -92,6 +92,41 @@ public sealed class LatticeTenantAdminGrpcServiceTests
     }
 
     [Test]
+    public async Task SetTenantQuotas_round_trips_the_quotas_through_the_wire()
+    {
+        var quotas = new TenantQuotasDescriptor
+        {
+            MaxBytes = 1_000_000,
+            MaxKeys = 5_000,
+            MaxOpsPerSecond = 250,
+            BurstPercent = 20,
+        };
+
+        var result = await _client.SetTenantQuotasAsync("acme", quotas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.Quotas.MaxBytes, Is.EqualTo(1_000_000));
+            Assert.That(result.Quotas.MaxKeys, Is.EqualTo(5_000));
+            Assert.That(result.Quotas.MaxOpsPerSecond, Is.EqualTo(250));
+            Assert.That(result.Quotas.BurstPercent, Is.EqualTo(20));
+            Assert.That(_facade.LastTenantId, Is.EqualTo("acme"));
+            Assert.That(_facade.LastQuotas, Is.EqualTo(quotas));
+        });
+    }
+
+    [Test]
+    public void SetTenantQuotas_facade_exceptions_map_to_the_expected_status_code()
+    {
+        _facade.Throw = new ReservedTenantOperationException("default", "set-quotas");
+
+        var rpc = Assert.ThrowsAsync<RpcException>(
+            async () => await _client.SetTenantQuotasAsync("default", TenantQuotasDescriptor.Unbounded));
+        Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.FailedPrecondition));
+    }
+
+    [Test]
     public async Task GetAuthScheme_round_trips_the_advertisement()
     {
         var schemes = await _client.GetAuthSchemeAsync();
@@ -278,6 +313,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             Assert.That(async () => await _client.SuspendTenantAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
             Assert.That(async () => await _client.ResumeTenantAsync(null!), Throws.InstanceOf<ArgumentException>());
             Assert.That(async () => await _client.DeleteTenantAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.SetTenantQuotasAsync(null!, TenantQuotasDescriptor.Unbounded), Throws.InstanceOf<ArgumentException>());
         });
     }
 }

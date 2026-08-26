@@ -32,10 +32,12 @@ public sealed class LatticeDataApiGrpcServiceBaseBindTests
     {
         var api = Substitute.For<ILatticeDataApi>();
         var bridge = Substitute.For<ILatticeDataApiCredentialBridge>();
+        var tenantBridge = Substitute.For<ILatticeDataApiActiveTenantBridge>();
         return new LatticeDataApiGrpcService(
             Methods(),
             api,
             bridge,
+            tenantBridge,
             NullLogger<LatticeDataApiGrpcService>.Instance);
     }
 

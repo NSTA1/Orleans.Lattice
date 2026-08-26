@@ -18,6 +18,8 @@ internal sealed class FakeTenantAdmin : ILatticeTenantAdmin
 
     public string? LastTenantId { get; private set; }
 
+    public TenantQuotasDescriptor? LastQuotas { get; private set; }
+
     public Task<TenantCreationResult> CreateTenantAsync(string tenantId, CancellationToken cancellationToken = default)
     {
         LastTenantId = tenantId;
@@ -60,6 +62,16 @@ internal sealed class FakeTenantAdmin : ILatticeTenantAdmin
         return Throw is not null
             ? Task.FromException<TenantDeletionResult>(Throw)
             : Task.FromResult(new TenantDeletionResult { TenantId = tenantId, CascadedTreeCount = 2 });
+    }
+
+    public Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(
+        string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        LastQuotas = quotas;
+        return Throw is not null
+            ? Task.FromException<TenantQuotasUpdateResult>(Throw)
+            : Task.FromResult(new TenantQuotasUpdateResult { TenantId = tenantId, Quotas = quotas });
     }
 }
 
@@ -107,6 +119,7 @@ internal sealed class FakeTenantSelfService : ILatticeTenantSelfService
                 Status = TenantLifecycleStatus.Active,
                 IsDefault = false,
                 Regions = Array.Empty<TenantRegionStatusDescriptor>(),
+                Quotas = TenantQuotasDescriptor.Unbounded,
             });
     }
 }
@@ -160,6 +173,7 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "SuspendTenant" => await service.SuspendTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             "ResumeTenant" => await service.ResumeTenant((TenantAdminTenantRequest)(object)wireRequest, context),
             "DeleteTenant" => await service.DeleteTenant((TenantAdminTenantRequest)(object)wireRequest, context),
+            "SetTenantQuotas" => await service.SetTenantQuotas((TenantAdminSetQuotasRequest)(object)wireRequest, context),
             "GetAuthScheme" => await service.GetAuthScheme((AuthSchemeAdvertisementRequest)(object)wireRequest, context),
             "GetCurrentTenant" => await service.GetCurrentTenant((TenantSelfCurrentRequest)(object)wireRequest, context),
             "ListAccessibleTenants" => await service.ListAccessibleTenants((TenantSelfListRequest)(object)wireRequest, context),

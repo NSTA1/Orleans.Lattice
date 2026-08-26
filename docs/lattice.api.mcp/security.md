@@ -38,6 +38,12 @@ The `CredentialHeaderName` and `CredentialScheme` options control which inbound 
 
 The bridge resolves the caller's principal id from the durable object-id (`oid`) claim first, falling back to `sub` and then the identity name. For an Entra delegated (user) token `sub` is a pairwise (user, client-app) identifier that differs from the stable `oid` the silo auth model keys subjects on, so keying discovery on `oid` ensures the subject the tool list is filtered for is the same subject the access gate enforces on - grants authored once by `oid` apply consistently across every client app.
 
+## 3a. The active-tenant bridge
+
+On a cluster running the optional tenancy add-on, per-tenant capacity governance (write admission and quota enforcement) is scoped by the call's *active tenant*, a channel distinct from caller identity. A parallel bridge lifts the caller's asserted active tenant from a single inbound header - `lattice-active-tenant` by default, set by `ActiveTenantHeaderName` - and stamps it onto the ambient `LatticeActiveTenantContext` at each tool invocation, right beside the credential stamp and through the same single narrowest seam every facade tool funnels through. In-silo the stamped tenant flows to the grain on the Orleans request context; on a remote (split) head the credential-forwarding interceptor re-emits it as a gRPC metadata header, so both topologies reach the same silo-side enforcement.
+
+Like the credential, the header carries only an *assertion*: the tenancy add-on's resolver and admission controller re-validate it against the caller's subject membership downstream, so a caller cannot escalate by asserting a tenant it is not a member of. The bridge performs no authorization of its own and is fail-closed - an absent, blank, or syntactically invalid header asserts no tenant. It is the public `ILatticeApiMcpActiveTenantBridge` seam, `TryAdd`-registered, so a host can substitute its own; setting `ActiveTenantHeaderName` empty disables header-based tenant selection. On a non-tenancy cluster the whole path is inert and allocation-free.
+
 ## Permission-scoped discovery
 
 Because the bridge resolves the caller's subject, the per-session discovery configurator can filter the advertised tool list to the caller's **effective permissions** before it is returned. A caller sees and can invoke only the tools its grants allow; an ungranted tool is never listed, so there is no "list then deny" gap. The `lattice_capabilities` meta-tool reports the same permission-scoped view.

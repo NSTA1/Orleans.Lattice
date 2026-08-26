@@ -99,6 +99,7 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         if (requestedRegion is null)
         {
             using var scope = McpToolCredentialScope.Stamp(services);
+            using var tenantScope = McpToolActiveTenantScope.Stamp(services);
             return await InvokeInnerAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
@@ -110,6 +111,7 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
         }
 
         using var credentialScope = McpToolCredentialScope.Stamp(services);
+        using var activeTenantScope = McpToolActiveTenantScope.Stamp(services);
 
         // A peer region is verified before it serves the call (when verification is
         // configured): its identity is proven to reach the expected cluster, so a

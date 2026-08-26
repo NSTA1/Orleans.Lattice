@@ -122,6 +122,86 @@ public sealed class LatticeApiMcpCredentialForwardingInterceptorTests
         Assert.That(invoker.LastHeaders, Is.Null.Or.Empty);
     }
 
+    [Test]
+    public async Task Active_tenant_header_is_forwarded_when_ambient_tenant_is_set()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeCatalogPage());
+        var intercepted = invoker.Intercept(Interceptor(new LatticeCredential("tok-123")));
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("acme")))
+        {
+            await LatticeStateApiGrpcClient.Create(intercepted, RemoteTestSupport.Serializer)
+                .ListTreesAsync(new CatalogRequest());
+        }
+
+        Assert.That(HeaderValue(invoker, "lattice-active-tenant"), Is.EqualTo("acme"));
+    }
+
+    [Test]
+    public async Task Active_tenant_header_is_forwarded_for_an_anonymous_call()
+    {
+        // The tenant assertion is independent of caller identity: even with no
+        // credential, a stamped active tenant is forwarded so the remote bridge
+        // sees it (the tenancy add-on then re-validates it against membership).
+        var invoker = new FakeCallInvoker(_ => new TreeCatalogPage());
+        var intercepted = invoker.Intercept(Interceptor(credential: null));
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("acme")))
+        {
+            await LatticeStateApiGrpcClient.Create(intercepted, RemoteTestSupport.Serializer)
+                .ListTreesAsync(new CatalogRequest());
+        }
+
+        Assert.That(HeaderValue(invoker, "lattice-active-tenant"), Is.EqualTo("acme"));
+    }
+
+    [Test]
+    public async Task Active_tenant_header_honours_a_custom_header_name()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeCatalogPage());
+        var interceptor = Interceptor(
+            new LatticeCredential("tok"),
+            o => o.ActiveTenantHeaderName = "x-tenant");
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("acme")))
+        {
+            await LatticeStateApiGrpcClient.Create(invoker.Intercept(interceptor), RemoteTestSupport.Serializer)
+                .ListTreesAsync(new CatalogRequest());
+        }
+
+        Assert.That(HeaderValue(invoker, "x-tenant"), Is.EqualTo("acme"));
+    }
+
+    [Test]
+    public async Task No_active_tenant_header_when_none_asserted()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeCatalogPage());
+        var intercepted = invoker.Intercept(Interceptor(new LatticeCredential("tok-123")));
+
+        // No LatticeActiveTenantContext scope: the cold path must add no tenant header.
+        await LatticeStateApiGrpcClient.Create(intercepted, RemoteTestSupport.Serializer)
+            .ListTreesAsync(new CatalogRequest());
+
+        Assert.That(HeaderValue(invoker, "lattice-active-tenant"), Is.Null);
+    }
+
+    [Test]
+    public async Task No_active_tenant_header_when_header_name_disabled()
+    {
+        var invoker = new FakeCallInvoker(_ => new TreeCatalogPage());
+        var interceptor = Interceptor(
+            new LatticeCredential("tok"),
+            o => o.ActiveTenantHeaderName = string.Empty);
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("acme")))
+        {
+            await LatticeStateApiGrpcClient.Create(invoker.Intercept(interceptor), RemoteTestSupport.Serializer)
+                .ListTreesAsync(new CatalogRequest());
+        }
+
+        Assert.That(HeaderValue(invoker, "lattice-active-tenant"), Is.Null);
+    }
+
     private sealed class StubCredentialSource(LatticeCredential? credential) : ILatticeApiMcpRemoteCredentialSource
     {
         public LatticeCredential? ResolveOutbound() => credential;

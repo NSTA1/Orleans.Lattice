@@ -150,6 +150,7 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
             Status = Map(record.Status),
             IsDefault = tenant.IsDefault,
             Regions = BuildDescriptors(record),
+            Quotas = TenantQuotasMapping.ToDescriptor(record.Quotas),
         };
     }
 
