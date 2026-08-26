@@ -12,8 +12,11 @@ four deliberate ways:
 - **Two network-isolated regions.** Region A and region B are symmetric. Docker
   networking enforces the isolation: each region has a private network, and the
   only bridge between them carries nothing but the silo-to-silo replication seam.
-- **Network-isolated storage per region.** Each region has its own Azurite
-  (primary + a dedicated backup sink), reachable only from within that region.
+- **Network-isolated primary storage per region.** Each region has its own Azurite
+  primary storage, reachable only from within that region. The one deliberate
+  exception is the backup sink: both regions share a single sink over a dedicated
+  backup seam, because a coordinated restore of a replicated tree needs every cluster
+  to read the same backup.
 - **Real deny-by-default enforcement with per-request identities.** The
   authorization core runs deny-by-default, and a hand-crafted dev identity story
   (no Entra) lets an agent act as any of four differentiated identities by setting
@@ -31,7 +34,7 @@ four deliberate ways:
 flowchart LR
   subgraph RegionA["Region A (net-a)"]
     siloA["silo-a"]
-    azA["azurite-a<br/>+ backup sink"]
+    azA["azurite-a<br/>(primary)"]
     mcpA["mcp-a"]
     expA["explorer-a"]
     promA["prometheus-a<br/>+ grafana-a"]
@@ -42,7 +45,7 @@ flowchart LR
   end
   subgraph RegionB["Region B (net-b)"]
     siloB["silo-b"]
-    azB["azurite-b<br/>+ backup sink"]
+    azB["azurite-b<br/>(primary)"]
     mcpB["mcp-b"]
     expB["explorer-b"]
     promB["prometheus-b<br/>+ grafana-b"]
@@ -51,13 +54,18 @@ flowchart LR
     expB --> siloB
     promB --> siloB
   end
-  siloA <-->|"net-replication<br/>(the only cross-region link)"| siloB
+  bkp["azurite-backup-shared<br/>(one shared backup sink)"]
+  siloA <-->|"net-replication<br/>(cross-region replication link)"| siloB
+  siloA <-->|"net-backup"| bkp
+  siloB <-->|"net-backup"| bkp
 ```
 
 Region A's storage, telemetry, and heads are unreachable from region B and vice
-versa. The single `net-replication` network attaches **only** the two silos, so the
-cross-region replication shipper can dial its peer while everything else stays
-region-local.
+versa. Two dedicated cross-region seams carry the only inter-region traffic:
+`net-replication` attaches **only** the two silos, so the replication shipper can dial
+its peer; `net-backup` attaches **only** the two silos and the one shared backup sink,
+so every cluster can read the same backup for a coordinated restore. Everything else
+stays region-local.
 
 ## Quickstart
 
@@ -74,7 +82,7 @@ explorer); the sibling region reuses them.
 | Reseed the identity model | `docker compose restart silo-a silo-b` | Applies edits to `identities.json` with no rebuild. |
 | Stop (keep data) | `docker compose stop` | Halts the containers; volumes and networks remain. `docker compose start` resumes. |
 | Tear down (keep data) | `docker compose down` | Removes containers and networks; the per-region Azurite volumes survive, so grain state, clustering, reminders, and the WAL persist to the next standup. |
-| Tear down and wipe data | `docker compose down -v` | Also deletes the four Azurite volumes (primary + backup per region) for a clean slate. |
+| Tear down and wipe data | `docker compose down -v` | Also deletes the Azurite volumes (each region's primary plus the one shared backup sink) for a clean slate. |
 | Wipe data only, then restart | `docker compose down -v; docker compose up --build -d` | Clean-slate restart: drops the storage volumes, then rebuilds and starts both regions. |
 | Stand up with multi-tenancy enabled | PowerShell: `$env:TENANCY_ENABLED = "true"; docker compose up --build -d` <br> bash: `TENANCY_ENABLED=true docker compose up --build -d` | Turns on the opt-in multi-tenancy feature in **both** silos and MCP heads together. The silos register the tenant registry + admin API and seed the demo tenants from [`identities.json`](identities.json)'s `tenants` section; the heads dial the silo's tenant-admin facade and advertise the tenant self-awareness tools (`lattice_tenant_current` / `_list` / `_get`). Add `$env:TENANCY_CONTROL = "true"` (bash `TENANCY_CONTROL=true`) to also advertise the mutating tenant-administration tools. Off by default - with `TENANCY_ENABLED` unset the stack is byte-for-byte the single-tenant cluster. |
 
@@ -91,7 +99,8 @@ to its region's Docker network and has no host port.
 | Grafana | http://localhost:9300 | http://localhost:9301 |
 | Silo HTTP / gRPC | internal to net-a | internal to net-b |
 | Prometheus | internal to net-a | internal to net-b |
-| Azurite (primary + backup) | internal to net-a | internal to net-b |
+| Azurite primary | internal to net-a | internal to net-b |
+| Azurite backup | one shared sink on net-backup, reachable from both silos | (shared) |
 
 ## The identity model
 
@@ -213,7 +222,7 @@ environment or a `.env` file next to this compose file:
 | --- | --- | --- |
 | `LATTICE_REPLICATION_SECRET` | `local-dev-only-not-a-real-secret` | Shared key that authenticates inbound replication RPCs. **Must be identical in both regions.** |
 | `STORAGE_CONNECTION_STRING_A` / `_B` | Azurite emulator string | Per-region primary storage. |
-| `BACKUP_BLOB_CONNECTION_STRING_A` / `_B` | Azurite emulator string | Per-region backup Blob sink. |
+| `BACKUP_BLOB_CONNECTION_STRING` | Azurite emulator string | The one shared backup Blob sink, identical in both regions (region A is backup-primary and owns the scheduler; region B is DR standby). |
 | `TENANCY_ENABLED` | `false` | Opt-in multi-tenancy. When `true`, both silos register the tenant registry + tenant-admin API and seed the demo tenants from `identities.json`, and both MCP heads dial the tenant-admin facade and advertise the tenant self-awareness tools. Off leaves the stack byte-for-byte single-tenant. |
 | `TENANCY_CONTROL` | `false` | When `true` (and `TENANCY_ENABLED=true`), the MCP heads also advertise the mutating tenant-administration tools. Ignored when tenancy is off. |
 

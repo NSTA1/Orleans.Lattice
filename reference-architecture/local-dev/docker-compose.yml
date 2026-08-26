@@ -8,15 +8,22 @@
 # adds three things that single-region harness cannot show:
 #
 #   1. TWO isolated regions. Region A and region B are byte-for-byte symmetric:
-#      each has its own silo, its own network-isolated Azurite (primary + backup
-#      sink), its own MCP head, its own Explorer console, and its own Prometheus +
-#      Grafana. Docker networking enforces the isolation: net-a and net-b are
-#      private per-region networks, and the ONLY thing that bridges them is
-#      net-replication, which carries nothing but the two silos' cross-region
-#      replication seam. Region A's storage, telemetry, and heads are unreachable
-#      from region B and vice versa - exactly as two independently-operated regions
-#      would be - yet a write in one region still converges into the other over the
-#      replication link.
+#      each has its own silo, its own network-isolated Azurite primary storage, its
+#      own MCP head, its own Explorer console, and its own Prometheus + Grafana.
+#      Docker networking enforces the isolation: net-a and net-b are private
+#      per-region networks, and the only things that bridge them are two dedicated
+#      single-purpose seams - net-replication (the silos' cross-region replication
+#      link) and net-backup (the silos' link to the ONE shared backup sink, below).
+#      Region A's primary storage, telemetry, and heads are unreachable from region B
+#      and vice versa - exactly as two independently-operated regions would be - yet a
+#      write in one region still converges into the other over the replication link.
+#
+#      The backup sink is the deliberate exception to per-region isolation: a
+#      coordinated restore of a replicated tree needs every cluster to read the same
+#      backup, so both regions share a single sink (azurite-backup-shared) over
+#      net-backup, with region A the designated backup-primary (scheduler on) and
+#      region B DR standby (scheduler off). This mirrors the reference architecture's
+#      single shared Azure Blob backup sink.
 #
 #   2. REAL deny-by-default enforcement. Unlike the fully-open local harness, this
 #      one runs the authorization core deny-by-default (Auth__DefaultEffect=Deny):
@@ -104,8 +111,13 @@ x-silo-dev-toggles: &silo-dev-toggles
   # The shared replication key authenticates inbound replication RPCs; it MUST be
   # identical in both regions. Documented dev placeholder, override via .env.
   LATTICE_REPLICATION_SECRET: "${LATTICE_REPLICATION_SECRET:-local-dev-only-not-a-real-secret}"
-  # Each region owns its own backup schedule (isolated storage per region).
-  Backup__Primary: "true"
+  # Each region reads and writes the SAME shared backup sink (azurite-backup-shared,
+  # on net-backup), mirroring the reference architecture's single shared Azure Blob
+  # sink. Exactly one region is the designated backup-primary and owns the scheduler
+  # (Backup__Primary is set per-silo below, NOT here); the other is DR standby with
+  # the scheduler off, so there are no competing chains writing the shared sink. A
+  # coordinated restore of a replicated tree (e.g. `orders`) needs this: every
+  # cluster must be able to read the one backup, or the cross-cluster restore aborts.
   Scaling__MinReplicas: "1"
   # OPTIONAL multi-tenancy (off by default). When "true", the silo registers the
   # tenant isolation gate, the tenant registry, and the tenant-admin control API
@@ -198,14 +210,20 @@ services:
       retries: 20
       start_period: 5s
 
-  azurite-backup-a:
+  # The single SHARED backup sink, reachable from BOTH regions over net-backup. This
+  # mirrors the reference architecture: one shared Azure Blob sink is the single
+  # source of truth for restore, so a coordinated restore of a replicated tree can
+  # be prepared by every cluster. It keeps region A's original backup volume so any
+  # backup already captured here is preserved across this topology change.
+  azurite-backup-shared:
     logging: *default-logging
     image: mcr.microsoft.com/azure-storage/azurite:latest
     command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
-    networks: [net-a]
+    networks: [net-backup]
     volumes:
       - azurite-backup-a-data:/data
-    # Internal to net-a; no host port.
+    # On net-backup only; no host port. The backup seam is the one storage resource
+    # deliberately shared across regions (like a single shared blob account).
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
       interval: 5s
@@ -220,10 +238,11 @@ services:
     depends_on:
       azurite-a:
         condition: service_healthy
-      azurite-backup-a:
+      azurite-backup-shared:
         condition: service_healthy
-    # On net-a (its region) AND net-replication (the only cross-region link).
-    networks: [net-a, net-replication]
+    # On net-a (its region), net-replication (the cross-region replication seam),
+    # and net-backup (the cross-region shared-backup seam).
+    networks: [net-a, net-replication, net-backup]
     volumes:
       # The single source of truth for identities, groups, and grants, read-only.
       # DevIdentityCredentialAuthenticator and LocalDevIdentitySeeder both load it
@@ -232,7 +251,10 @@ services:
     environment:
       <<: *silo-dev-toggles
       Storage__ConnectionString: "${STORAGE_CONNECTION_STRING_A:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-a:10000/devstoreaccount1;QueueEndpoint=http://azurite-a:10001/devstoreaccount1;TableEndpoint=http://azurite-a:10002/devstoreaccount1;}"
-      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING_A:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-a:10000/devstoreaccount1;}"
+      # The SHARED backup sink (azurite-backup-shared), identical in both regions.
+      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-shared:10000/devstoreaccount1;}"
+      # Region A is the designated backup-primary: it owns the backup scheduler.
+      Backup__Primary: "true"
       Cluster__Id: "lattice-local-a"
       Cluster__ServiceId: "lattice-local-a"
       # Replication identity for region A and the reciprocal peer (region B's silo
@@ -337,20 +359,10 @@ services:
       retries: 20
       start_period: 5s
 
-  azurite-backup-b:
-    logging: *default-logging
-    image: mcr.microsoft.com/azure-storage/azurite:latest
-    command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
-    networks: [net-b]
-    volumes:
-      - azurite-backup-b-data:/data
-    # Internal to net-b; no host port.
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
+  # Region B has NO backup sink of its own: it reads and writes the single shared
+  # sink (azurite-backup-shared, declared in region A's block) over net-backup, as a
+  # DR standby (scheduler off). A per-region backup sink is exactly what made a
+  # replicated-tree restore impossible.
 
   silo-b:
     logging: *default-logging
@@ -359,15 +371,22 @@ services:
     depends_on:
       azurite-b:
         condition: service_healthy
-      azurite-backup-b:
+      azurite-backup-shared:
         condition: service_healthy
-    networks: [net-b, net-replication]
+    # On net-b (its region), net-replication (the cross-region replication seam),
+    # and net-backup (the cross-region shared-backup seam).
+    networks: [net-b, net-replication, net-backup]
     volumes:
       - ./identities.json:/config/identities.json:ro
     environment:
       <<: *silo-dev-toggles
       Storage__ConnectionString: "${STORAGE_CONNECTION_STRING_B:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-b:10000/devstoreaccount1;QueueEndpoint=http://azurite-b:10001/devstoreaccount1;TableEndpoint=http://azurite-b:10002/devstoreaccount1;}"
-      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING_B:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-b:10000/devstoreaccount1;}"
+      # The SHARED backup sink (azurite-backup-shared), identical in both regions.
+      Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-shared:10000/devstoreaccount1;}"
+      # Region B is DR standby: the backup scheduler is OFF here, so only region A
+      # writes the shared sink (no competing backup chains). It still reads the sink
+      # for a coordinated restore.
+      Backup__Primary: "false"
       Cluster__Id: "lattice-local-b"
       Cluster__ServiceId: "lattice-local-b"
       Replication__ClusterId: "region-b"
@@ -444,25 +463,33 @@ services:
       - "9301:3000"
 
 networks:
-  # Region A private network: azurite-a, azurite-backup-a, silo-a, mcp-a,
-  # prometheus-a, grafana-a (and explorer-a via silo-a's namespace). Not reachable
-  # from region B.
+  # Region A private network: azurite-a, silo-a, mcp-a, prometheus-a, grafana-a
+  # (and explorer-a via silo-a's namespace). Not reachable from region B.
   net-a:
     driver: bridge
   # Region B private network, symmetric to net-a and isolated from it.
   net-b:
     driver: bridge
-  # The ONLY cross-region link. Both silos join it so their replication shippers
-  # can dial each other's gRPC endpoint; nothing else is attached, so no storage,
-  # telemetry, or head in one region can reach the other region.
+  # A cross-region link carrying ONLY the replication seam. Both silos join it so
+  # their replication shippers can dial each other's gRPC endpoint; nothing else is
+  # attached, so no storage, telemetry, or head in one region can reach the other.
   net-replication:
+    driver: bridge
+  # A cross-region link carrying ONLY the shared-backup seam. The two silos and the
+  # single shared backup sink (azurite-backup-shared) are the only members, so every
+  # cluster can read/write the one sink - the prerequisite for a coordinated restore
+  # of a replicated tree. No storage, telemetry, or head in either region is attached,
+  # so this seam exposes nothing across regions beyond the two silos (already mutually
+  # reachable over net-replication) and the shared sink they both need.
+  net-backup:
     driver: bridge
 
 volumes:
   azurite-a-data:
+  # Reused as the single shared backup sink's volume (azurite-backup-shared), so any
+  # backup already captured under the old per-region-A sink is preserved.
   azurite-backup-a-data:
   azurite-b-data:
-  azurite-backup-b-data:
 
 # Build-time secret for the image restore step. Defaults to the tracked public
 # nuget.config; point NUGET_CONFIG_FILE at your own NuGet.Config (for a private or
