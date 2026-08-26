@@ -126,6 +126,17 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   spell `sys-`, so it cannot collide with or spoof the reserved namespaces. The id
   `default` is reserved for the legacy-adoption tenant and cannot be created,
   suspended, or deleted. Tenant ids are immutable once created.
+- **Registry-store read isolation.** The `sys-tenant-*` registry, usage, and
+  overage trees hold the cross-tenant registry itself - every tenant's admin
+  subjects, quotas, region residency, and cross-tenant grants. They live in the
+  `sys-` system-data namespace, so first-party access runs system-origin and
+  short-circuits the gate; every external request is governed with **control-plane
+  read isolation**, exactly like the reserved `sys-auth-*` policy store. A
+  data-plane read or scan is denied independently of `DefaultEffect`, and a
+  cluster-wide all-trees (`Tree:*`) wildcard grant never reaches them, so no broad
+  data-plane role can enumerate one tenant's metadata from another. Only a
+  bootstrap administrator, a system-origin caller, or an explicit rule an operator
+  deliberately scopes at a registry tree may read them.
 
 ## Resource governance
 
@@ -233,6 +244,30 @@ old one is fully drained.
   Tenant data isolation and tenant lifecycle administration are both independent of
   the data-plane `DefaultEffect`, so an unmatched request always resolves to deny
   even under `DefaultEffect = Allow`.
+- **Registry confidentiality.** The `sys-tenant-*` registry, usage, and overage
+  trees are control-plane read-isolated: a data-plane read or scan is denied
+  independently of `DefaultEffect`, and no cluster-wide all-trees (`Tree:*`) grant
+  can reach them, so the cross-tenant registry can never be enumerated through a
+  broad data-plane read role. See "Registry-store read isolation" above.
+- **A tenant admin cannot self-grant cross-tenant read.** The registry escape hatch -
+  "an explicit rule an operator deliberately scopes at a registry tree" - is an
+  *operator* act by construction, and here **operator** has a narrow, specific
+  meaning: a **bootstrap administrator** (the break-glass root of trust configured on
+  the silo) or a subject a bootstrap administrator has **explicitly promoted to
+  access-administrator** through the access-administration delegation. It does **not**
+  mean "any authenticated caller," "any caller with a broad data-plane grant," or "a
+  tenant admin." The reason a tenant admin cannot perform this act is structural, not a
+  matter of degree: authoring *any* authorization rule is a write to the reserved
+  `sys-auth-*` policy store, which requires whole-tree `Admin` on that store - a
+  control-plane capability held only by the operators just defined. A tenant-admin
+  capability is `Admin` on its own tenant-administration scope only, honoured for that
+  one tenant and never inherited for another's, so a tenant admin can neither reach the
+  policy store to author a registry-read rule (for itself or anyone else) nor match a
+  second tenant's scope. Direct writes to `sys-tenant-*` are likewise refused off the
+  system-origin path by the reserved-prefix write guard. Consequently, granting
+  cross-tenant registry visibility always requires a deliberate operator decision to
+  author (or delegate the authority to author) that rule; a caller acting purely as a
+  tenant admin has no path to it.
 - **Two-tier governance.** A platform-operator capability (cluster-wide) performs
   tenant lifecycle, quota/burst/scope/placement changes, allowed-region authorization,
   and cross-tenant grants. A delegated per-tenant admin capability (scoped to one

@@ -96,6 +96,31 @@ internal static class LatticeConstants
     public const string SystemDataTreePrefix = "sys-";
 
     /// <summary>
+    /// Reserved system-data tree-name sub-prefix owned by the tenant-registry
+    /// surface of the <c>Orleans.Lattice.Tenancy</c> add-on, whose backing trees
+    /// are named <c>sys-tenant-*</c> (the registry, usage, and overage stores).
+    /// <para>
+    /// Subsumed by <see cref="SystemDataTreePrefix"/> (every <c>sys-tenant-</c>
+    /// name also starts with <c>sys-</c>), so it inherits the same catalog-hiding
+    /// and user-origin-write guard as the other dogfooded system-data trees. It is
+    /// exposed as a named constant so the authorization package can apply
+    /// <b>control-plane read isolation</b> to the tenant registry: the registry
+    /// records every tenant's admin subjects, quotas, placement, and cross-tenant
+    /// grants, so a data-plane read grant (including a cluster-wide all-trees
+    /// wildcard) must not expose them. First-party access runs system-origin and
+    /// short-circuits before the access gate, so the isolation governs only
+    /// external data-plane requests.
+    /// </para>
+    /// <para>
+    /// The value is duplicated by <c>Orleans.Lattice.Tenancy</c>'s internal
+    /// <c>TenantTreeNames.TreePrefix</c> (that package cannot see this core
+    /// internal constant); a tenancy test-project drift guard keeps the two in
+    /// sync.
+    /// </para>
+    /// </summary>
+    public const string TenantRegistryTreePrefix = "sys-tenant-";
+
+    /// <summary>
     /// The tree ID of the internal registry tree that stores tree metadata
     /// (existence and per-tree <see cref="LatticeOptions"/> overrides).
     /// Each key is a user tree ID; each value is the serialized

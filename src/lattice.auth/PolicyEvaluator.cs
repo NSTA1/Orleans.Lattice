@@ -134,12 +134,15 @@ internal static class PolicyEvaluator
     /// <summary>
     /// Whether the all-trees (<c>Tree:*</c>) tier participates in this evaluation:
     /// the opt-in flag is set, a compiled <c>"*"</c> bucket exists, and the target
-    /// tree is a genuine application tree - neither the reserved authorization
-    /// namespace (<c>sys-auth-*</c>) nor the sentinel id <c>"*"</c> itself. The
-    /// reserved-namespace exclusion is the fail-closed guard that keeps a wildcard
-    /// data grant from ever reaching the control plane; the sentinel exclusion
-    /// keeps a literal telemetry request on <c>"*"</c> resolving against its own
-    /// bucket exactly as before, with no second all-trees fold.
+    /// tree is a genuine application tree - not a control-plane namespace (the
+    /// reserved authorization namespace <c>sys-auth-*</c> or the tenant-registry
+    /// system-data namespace <c>sys-tenant-*</c>) and not the sentinel id <c>"*"</c>
+    /// itself. The control-plane exclusion is the fail-closed guard that keeps a
+    /// wildcard data grant from ever reaching the control plane - membership,
+    /// policy, or the cross-tenant registry - so an all-trees read cannot exfiltrate
+    /// tenant metadata; the sentinel exclusion keeps a literal telemetry request on
+    /// <c>"*"</c> resolving against its own bucket exactly as before, with no second
+    /// all-trees fold.
     /// </summary>
     private static bool ShouldConsultAllTrees(CompiledPolicy policy, LatticeAuthOptions options, string treeId)
     {
@@ -153,7 +156,8 @@ internal static class PolicyEvaluator
             return false;
         }
 
-        return !LatticeAuthReservedTrees.IsReserved(treeId);
+        return !LatticeAuthReservedTrees.IsReserved(treeId)
+            && !AuthConstants.IsTenantRegistryTree(treeId);
     }
 
     /// <summary>
@@ -263,10 +267,11 @@ internal static class PolicyEvaluator
     /// <paramref name="treeId"/> - a whole-tree allow on the <c>"*"</c> bucket -
     /// so a tree reachable only through a wildcard grant is not hidden from
     /// listings while being readable. Gated exactly as enforcement: skipped when
-    /// the flag is off, no <c>"*"</c> bucket exists, or the tree is the reserved
-    /// namespace / sentinel. A wildcard <b>deny</b> is deliberately not consulted
-    /// here: existence-hiding is a pure "any resolved allow" signal, so a wildcard
-    /// deny never hides a tree the subject can otherwise read.
+    /// the flag is off, no <c>"*"</c> bucket exists, or the tree is a control-plane
+    /// namespace (reserved authorization or tenant registry) / the sentinel. A
+    /// wildcard <b>deny</b> is deliberately not consulted here: existence-hiding is
+    /// a pure "any resolved allow" signal, so a wildcard deny never hides a tree the
+    /// subject can otherwise read.
     /// </summary>
     private static bool HasAllTreesAllow(
         CompiledPolicy policy,
