@@ -273,6 +273,23 @@ durable mutation when restart-faithful reconstruction cannot be proven. Views
 declared at startup with `AddLatticeViews(...)` are always re-registered from the
 declaration and carry no runtime-provider constraint.
 
+## Source-identity rebind
+
+A view tails its source by the source's logical id, but the maintainer binds to
+the source's current *physical* tree id - the effective id its registry alias
+resolves to. A restore or failover can repoint that alias at a new physical tree
+underneath a live view. When it does, the maintainer rebuilds the view from the
+new physical source and rebinds its tail: a WAL tail alone can never retract a key
+the restored source never had, so a rebuild is required for correctness.
+
+The rebind is **event-driven**. The tree registry pushes the alias change to every
+view maintainer sourcing that tree the moment the swap commits, and the next drain
+re-resolves and heals. A missed push is caught by a coarse backstop
+(`SourceIdentityBackstopInterval`, default 30 s) that re-resolves the source
+identity even with no notification. Because the steady-state binding is cached and
+re-resolved only on a push or the backstop, an idle view maintainer does not read
+the tree registry on every drain.
+
 ## Changing a projection
 
 `PredicateLatticeViewProjection.ProjectionVersion` is a structural hash of the
@@ -853,6 +870,7 @@ apply lag, and do not infer rollback from a create-time timeout.
 |--------|---------|---------|
 | `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. |
 | `CoalesceWindow` | 50 ms | Period of the background drain timer. |
+| `SourceIdentityBackstopInterval` | 30 s | Safety-net interval after which the maintainer re-resolves its source tree's physical identity from the registry when no alias-change notification has arrived. In steady state the source binding is event-driven (rebound the moment an alias swap commits), so this backstop only covers a missed push. See [Source-identity rebind](#source-identity-rebind). Must be greater than zero. |
 | `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. 1 is a single accumulator. |
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. |
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. |

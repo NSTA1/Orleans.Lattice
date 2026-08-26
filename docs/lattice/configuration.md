@@ -975,6 +975,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 |--------|---------|---------|
 | `BatchSize` | 256 | Maximum WAL entries read from each source partition per drain pass. |
 | `CoalesceWindow` | 50 ms | Period of the background drain timer. |
+| `SourceIdentityBackstopInterval` | 30 s | Safety-net interval after which the maintainer re-resolves its source tree's physical identity from the registry when no alias-change notification has arrived. In steady state the source binding is event-driven, so this backstop only covers a missed push. Must be greater than zero. |
 | `AggregationFanout` | 1 | Aggregation views only: shards each group's accumulator into this many sub-accumulators hashed on the source key, merged at read. |
 | `AggregationMaxGroupEntries` | 0 | Aggregation views only: when greater than zero, bounds each `Min` / `Max` / `SetUnion` group shard (approximate mode). 0 keeps every group exact. |
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. |
