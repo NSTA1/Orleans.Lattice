@@ -790,7 +790,7 @@ internal sealed class RepoContextBootstrapService
         CancellationToken cancellationToken)
     {
         var prefix = RepoContextKeys.FilesPrefix(repoId);
-        var endExclusive = PrefixUpperBound(prefix);
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
         var meta = new Dictionary<string, StoredFileMeta>(StringComparer.Ordinal);
 
         // Resilient streaming scan: ScanEntriesAsync reopens a fresh cursor over
@@ -1180,12 +1180,4 @@ internal sealed class RepoContextBootstrapService
         return "rcb-" + Convert.ToHexStringLower(hash.AsSpan(0, 16));
     }
 
-    private static string PrefixUpperBound(string prefix)
-    {
-        // The exclusive upper bound of a prefix range is the prefix with its last
-        // character incremented, which sorts immediately after every key the
-        // prefix covers.
-        var last = prefix[^1];
-        return string.Concat(prefix.AsSpan(0, prefix.Length - 1), ((char)(last + 1)).ToString());
-    }
 }
