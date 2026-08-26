@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree;
+
 namespace Orleans.Lattice.Auth;
 
 /// <summary>
@@ -40,6 +42,27 @@ internal static class AuthConstants
 
     /// <summary>Enumerates the reserved backing tree names.</summary>
     internal static IReadOnlyList<string> AllTrees { get; } = new[] { PolicyTree };
+
+    /// <summary>
+    /// Whether <paramref name="treeId"/> names a tree in the tenant-registry
+    /// system-data namespace (<c>sys-tenant-*</c>, per
+    /// <see cref="LatticeConstants.TenantRegistryTreePrefix"/>). Such a tree holds
+    /// the cross-tenant registry - every tenant's admin subjects, quotas,
+    /// placement, and grants - so the enforcement gate governs it with
+    /// control-plane read isolation rather than the data-plane default effect,
+    /// keeping a broad data-plane Read grant (including a cluster-wide all-trees
+    /// wildcard) from scanning it. Allocation-free: a single ordinal
+    /// <see cref="string.StartsWith(string, StringComparison)"/> on the request's
+    /// tree id, so it is safe to evaluate on the gate's synchronous fast path.
+    /// </summary>
+    /// <param name="treeId">The candidate tree id. Must not be <c>null</c>.</param>
+    /// <returns><c>true</c> if the id is in the tenant-registry namespace; otherwise <c>false</c>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
+    internal static bool IsTenantRegistryTree(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return treeId.StartsWith(LatticeConstants.TenantRegistryTreePrefix, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Rejects a tree id that collides with the reserved <c>sys-auth-*</c>

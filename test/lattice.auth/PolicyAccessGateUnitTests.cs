@@ -152,4 +152,175 @@ public sealed class PolicyAccessGateUnitTests
 
         Assert.That(granted, Is.False, "no grant and a deny default hides the tree");
     }
+
+    // ---- Control-plane isolation: tenant registry (issue #1671) ----------
+    //
+    // The tenant-registry system-data namespace (sys-tenant-*) holds the
+    // cross-tenant registry - every tenant's admin subjects, quotas, placement,
+    // and grants. It must be governed with control-plane read isolation, so a
+    // broad data-plane read grant (including a cluster-wide all-trees wildcard)
+    // can never scan it and exfiltrate one tenant's metadata to another.
+
+    private const string RegistryTree = "sys-tenant-registry";
+    private const string UsageTree = "sys-tenant-usage";
+    private const string OverageTree = "sys-tenant-overage";
+
+    [Test]
+    public async Task AuthorizeAsync_tenant_registry_read_unmatched_non_bootstrap_is_denied_even_under_default_allow()
+    {
+        // The core leak: a data-plane default effect of Allow (or any broad grant)
+        // must NOT let an ordinary caller read the tenant registry.
+        var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow });
+        var request = new LatticeAccessRequest(RegistryTree, LatticeOperation.Read, new LatticeSubject("mallory"), "acme");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False, "control-plane isolation denies an unmatched tenant-registry read");
+        Assert.That(decision.Reason, Does.Contain("Control-plane isolation"));
+    }
+
+    [Test]
+    public async Task AuthorizeAsync_tenant_registry_scan_unmatched_non_bootstrap_is_denied_even_under_default_allow()
+    {
+        // A whole-tree scan (RangeRead, key == null) is the exact shape the fuzz
+        // test used to exfiltrate the registry; it must fail closed too.
+        var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow });
+        var request = new LatticeAccessRequest(RegistryTree, LatticeOperation.RangeRead, new LatticeSubject("mallory"));
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False, "control-plane isolation denies an unmatched tenant-registry scan");
+        Assert.That(decision.Reason, Does.Contain("Control-plane isolation"));
+    }
+
+    [TestCase(RegistryTree)]
+    [TestCase(UsageTree)]
+    [TestCase(OverageTree)]
+    public async Task AuthorizeAsync_every_tenant_registry_tree_read_is_denied_under_default_allow(string treeId)
+    {
+        // The whole sys-tenant-* prefix is isolated, not just the registry tree:
+        // the usage and overage stores carry per-tenant accounting that is equally
+        // confidential.
+        var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow });
+        var request = new LatticeAccessRequest(treeId, LatticeOperation.Read, new LatticeSubject("mallory"), "acme");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False, $"'{treeId}' is in the isolated tenant-registry namespace");
+    }
+
+    [Test]
+    public async Task AuthorizeAsync_tenant_registry_read_denied_despite_cluster_wide_wildcard_read_grant()
+    {
+        // The critical wildcard-defeat test: an all-trees (Tree:*) Read grant to the
+        // subject must NOT reach the tenant registry, because the evaluator excludes
+        // the namespace from the all-trees tier. Without that exclusion the gate's
+        // "matched Allow" escape hatch would honour the wildcard and the fix would be
+        // defeated.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeOperation.Read, LatticeEffect.Allow, "mallory");
+        var harness = await AuthGateHarness.CreateAsync(options, wildcard);
+        var request = new LatticeAccessRequest(RegistryTree, LatticeOperation.Read, new LatticeSubject("mallory"), "acme");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.False, "a cluster-wide wildcard read grant never reaches the tenant registry");
+    }
+
+    [Test]
+    public async Task AuthorizeAsync_ordinary_tree_still_readable_via_cluster_wide_wildcard_read_grant()
+    {
+        // Regression guard against over-exclusion: the all-trees tier must keep
+        // working for genuine application trees. Same options and wildcard grant as
+        // the test above, but a normal tree - here the wildcard MUST allow.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeOperation.Read, LatticeEffect.Allow, "mallory");
+        var harness = await AuthGateHarness.CreateAsync(options, wildcard);
+        var request = new LatticeAccessRequest("app", LatticeOperation.Read, new LatticeSubject("mallory"), "k");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.True, "an application tree is still reachable through the all-trees tier");
+    }
+
+    [Test]
+    public async Task AuthorizeAsync_tenant_registry_read_honours_an_explicit_matched_allow()
+    {
+        // The deliberate escape hatch, consistent with the control-plane model: an
+        // operator can author an explicit rule scoped exactly at the registry tree,
+        // and a matched Allow is honoured even though the default effect is Deny.
+        var explicitAllow = Rule(LatticeScope.Tree(RegistryTree), LatticeOperation.Read, LatticeEffect.Allow, "alice");
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny }, explicitAllow);
+        var request = new LatticeAccessRequest(RegistryTree, LatticeOperation.Read, new LatticeSubject("alice"), "acme");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.True, "an explicit matched allow on the registry tree is honoured");
+    }
+
+    [Test]
+    public async Task AuthorizeAsync_bootstrap_administrator_may_read_the_tenant_registry()
+    {
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            BootstrapAdministrators = new HashSet<string>(StringComparer.Ordinal) { "root" },
+        };
+        var harness = await AuthGateHarness.CreateAsync(options);
+        var request = new LatticeAccessRequest(RegistryTree, LatticeOperation.Read, new LatticeSubject("root"), "acme");
+
+        var decision = await harness.Gate.AuthorizeAsync(request);
+
+        Assert.That(decision.Allowed, Is.True, "the bootstrap root-of-trust can read the registry");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_tenant_registry_unmatched_is_false_even_under_default_allow()
+    {
+        // Existence-hiding: an ordinary caller cannot even learn the registry exists.
+        var harness = await AuthGateHarness.CreateAsync(new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow });
+
+        var granted = await harness.Gate.HasAnyGrantAsync(RegistryTree, new LatticeSubject("mallory"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.False, "the tenant registry is hidden from a caller without an explicit grant");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_tenant_registry_not_surfaced_by_cluster_wide_wildcard_grant()
+    {
+        // The existence-hiding mirror of the wildcard-defeat test: a wildcard grant
+        // must not surface the registry in listings either.
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeOperation.Read, LatticeEffect.Allow, "mallory");
+        var harness = await AuthGateHarness.CreateAsync(options, wildcard);
+
+        var granted = await harness.Gate.HasAnyGrantAsync(RegistryTree, new LatticeSubject("mallory"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.False, "a cluster-wide wildcard grant never surfaces the tenant registry");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_tenant_registry_matched_allow_is_true()
+    {
+        var explicitAllow = Rule(LatticeScope.Tree(RegistryTree), LatticeOperation.Read, LatticeEffect.Allow, "alice");
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny }, explicitAllow);
+
+        var granted = await harness.Gate.HasAnyGrantAsync(RegistryTree, new LatticeSubject("alice"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.True, "an explicit registry grant surfaces the tree to its holder");
+    }
 }

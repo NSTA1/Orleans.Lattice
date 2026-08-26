@@ -126,6 +126,17 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   spell `sys-`, so it cannot collide with or spoof the reserved namespaces. The id
   `default` is reserved for the legacy-adoption tenant and cannot be created,
   suspended, or deleted. Tenant ids are immutable once created.
+- **Registry-store read isolation.** The `sys-tenant-*` registry, usage, and
+  overage trees hold the cross-tenant registry itself - every tenant's admin
+  subjects, quotas, region residency, and cross-tenant grants. They live in the
+  `sys-` system-data namespace, so first-party access runs system-origin and
+  short-circuits the gate; every external request is governed with **control-plane
+  read isolation**, exactly like the reserved `sys-auth-*` policy store. A
+  data-plane read or scan is denied independently of `DefaultEffect`, and a
+  cluster-wide all-trees (`Tree:*`) wildcard grant never reaches them, so no broad
+  data-plane role can enumerate one tenant's metadata from another. Only a
+  bootstrap administrator, a system-origin caller, or an explicit rule an operator
+  deliberately scopes at a registry tree may read them.
 
 ## Resource governance
 
@@ -233,6 +244,11 @@ old one is fully drained.
   Tenant data isolation and tenant lifecycle administration are both independent of
   the data-plane `DefaultEffect`, so an unmatched request always resolves to deny
   even under `DefaultEffect = Allow`.
+- **Registry confidentiality.** The `sys-tenant-*` registry, usage, and overage
+  trees are control-plane read-isolated: a data-plane read or scan is denied
+  independently of `DefaultEffect`, and no cluster-wide all-trees (`Tree:*`) grant
+  can reach them, so the cross-tenant registry can never be enumerated through a
+  broad data-plane read role. See "Registry-store read isolation" above.
 - **Two-tier governance.** A platform-operator capability (cluster-wide) performs
   tenant lifecycle, quota/burst/scope/placement changes, allowed-region authorization,
   and cross-tenant grants. A delegated per-tenant admin capability (scoped to one
