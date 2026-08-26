@@ -197,6 +197,22 @@ builder.Host.UseOrleans(silo =>
     silo.UseAzureStorageClustering(options =>
         storage.ConfigureTable(options, config["Clustering:TableName"] ?? "OrleansLatticeClustering"));
 
+    // Each region here is a SINGLE-silo cluster. Orleans' default
+    // NumVotesForDeathDeclaration=2 needs two live silos to agree before a silo
+    // that stopped ungracefully (e.g. a Docker SIGKILL after the stop-grace window,
+    // before the silo could leave the cluster) can be evicted from the membership
+    // table. With only one silo per region that quorum can never form, so a stale
+    // Active row from the previous container generation would wedge the replacement
+    // silo in Joining forever. Requiring a single vote lets the lone silo evict its
+    // own dead predecessor and reach Active. Default 1 for this single-silo harness;
+    // override via Clustering:NumVotesForDeathDeclaration if a region ever runs more
+    // than one silo.
+    silo.Configure<ClusterMembershipOptions>(options =>
+    {
+        options.NumVotesForDeathDeclaration =
+            int.TryParse(config["Clustering:NumVotesForDeathDeclaration"], out var votes) ? votes : 1;
+    });
+
     // Azure Table reminders (used by replication maintenance and backup sweeps).
     silo.UseAzureTableReminderService(options =>
         storage.ConfigureTable(options, config["Reminders:TableName"] ?? "OrleansLatticeReminders"));
