@@ -71,6 +71,14 @@ public static partial class LatticeMcpServiceCollectionExtensions
         // identity source such as a client certificate).
         services.TryAddSingleton<ILatticeApiMcpCredentialBridge, HttpContextLatticeApiMcpCredentialBridge>();
 
+        // Active-tenant bridge: lifts the inbound MCP active-tenant header onto the
+        // ambient LatticeActiveTenantContext for a tool invocation so the
+        // tenant-aware data plane sees the caller's asserted tenant, which the
+        // tenancy add-on re-validates against the caller's membership downstream.
+        // TryAdd preserves a host-supplied bridge (for a bespoke tenant source such
+        // as a principal claim).
+        services.TryAddSingleton<ILatticeApiMcpActiveTenantBridge, HttpContextLatticeApiMcpActiveTenantBridge>();
+
         // The credential bridge and tool modules read the ambient HTTP context.
         services.AddHttpContextAccessor();
 

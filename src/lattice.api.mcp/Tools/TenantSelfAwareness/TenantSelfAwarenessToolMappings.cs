@@ -63,6 +63,16 @@ internal static class TenantSelfAwarenessToolMappings
             Status = report.Status.ToString(),
             IsDefault = report.IsDefault,
             Regions = regions,
+            Quotas = new McpTenantQuotasView
+            {
+                MaxBytes = report.Quotas.MaxBytes,
+                MaxKeys = report.Quotas.MaxKeys,
+                MaxMemoryBytes = report.Quotas.MaxMemoryBytes,
+                MaxTreeCount = report.Quotas.MaxTreeCount,
+                MaxOpsPerSecond = report.Quotas.MaxOpsPerSecond,
+                BurstPercent = report.Quotas.BurstPercent,
+                IsUnbounded = report.Quotas.IsUnbounded,
+            },
         };
     }
 }

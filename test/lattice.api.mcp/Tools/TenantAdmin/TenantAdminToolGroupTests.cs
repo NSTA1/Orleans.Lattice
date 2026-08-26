@@ -24,6 +24,7 @@ public sealed class TenantAdminToolGroupTests
         "lattice_tenant_suspend",
         "lattice_tenant_resume",
         "lattice_tenant_delete",
+        "lattice_tenant_set_quotas",
     };
 
     private static TenantAdminToolGroup CreateGroup(bool enableControl)
@@ -51,7 +52,7 @@ public sealed class TenantAdminToolGroupTests
     }
 
     [Test]
-    public void Control_enabled_offers_exactly_the_four_lifecycle_tools()
+    public void Control_enabled_offers_exactly_the_five_lifecycle_tools()
     {
         var group = CreateGroup(enableControl: true);
 
@@ -106,7 +107,7 @@ public sealed class TenantAdminToolGroupTests
     }
 
     [Test]
-    public void AddTenantAdminTools_with_control_registers_a_group_with_all_four_tools()
+    public void AddTenantAdminTools_with_control_registers_a_group_with_all_five_tools()
     {
         var provider = new ServiceCollection().AddTenantAdminTools(enableControl: true).BuildServiceProvider();
 

@@ -55,4 +55,10 @@ public static class ApiTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantStatusReport"/>.</summary>
     public const string TenantStatusReport = "oitn.ts";
+
+    /// <summary>Alias for <see cref="TenantQuotasDescriptor"/>.</summary>
+    public const string TenantQuotasDescriptor = "oitn.qd";
+
+    /// <summary>Alias for <see cref="TenantQuotasUpdateResult"/>.</summary>
+    public const string TenantQuotasUpdateResult = "oitn.qu";
 }

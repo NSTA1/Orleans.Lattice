@@ -34,4 +34,18 @@ public sealed class LatticeDataApiGrpcOptions
     /// token is used as the credential.
     /// </summary>
     public string CredentialScheme { get; set; } = "Bearer";
+
+    /// <summary>
+    /// The inbound request-header (gRPC metadata) name that carries the caller's
+    /// asserted active tenant id, lifted onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for the duration of the call so
+    /// the tenant-aware data plane (per-tenant write admission / quota, and
+    /// tenant-scoped tree resolution) sees the caller's tenant rather than the
+    /// reserved default. Defaults to <c>lattice-active-tenant</c>. The asserted
+    /// tenant is validated against the caller's subject membership downstream; a
+    /// missing or syntactically invalid value leaves the call with no active
+    /// tenant asserted (fail-closed). Set to the empty string to disable
+    /// active-tenant lifting entirely.
+    /// </summary>
+    public string ActiveTenantHeaderName { get; set; } = "lattice-active-tenant";
 }

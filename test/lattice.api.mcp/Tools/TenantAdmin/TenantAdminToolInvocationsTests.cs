@@ -114,6 +114,34 @@ public sealed class TenantAdminToolInvocationsTests
     }
 
     [Test]
+    public async Task SetQuotas_delegates_to_the_facade_and_shapes_the_result()
+    {
+        var quotas = new TenantQuotasDescriptor
+        {
+            MaxBytes = 2_000_000,
+            MaxKeys = 10_000,
+            MaxOpsPerSecond = 500,
+            BurstPercent = 15,
+        };
+        var admin = Substitute.For<ILatticeTenantAdmin>();
+        admin.SetTenantQuotasAsync("acme", quotas, Arg.Any<CancellationToken>())
+            .Returns(new TenantQuotasUpdateResult { TenantId = "acme", Quotas = quotas });
+
+        var result = await TenantAdminToolInvocations.SetTenantQuotasAsync(admin, "acme", quotas, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.MaxBytes, Is.EqualTo(2_000_000));
+            Assert.That(result.MaxKeys, Is.EqualTo(10_000));
+            Assert.That(result.MaxOpsPerSecond, Is.EqualTo(500));
+            Assert.That(result.BurstPercent, Is.EqualTo(15));
+            Assert.That(result.IsUnbounded, Is.False);
+        });
+        await admin.Received(1).SetTenantQuotasAsync("acme", quotas, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void Unauthorized_caller_is_denied_fail_closed_on_every_operation()
     {
         var admin = Substitute.For<ILatticeTenantAdmin>();
@@ -125,6 +153,8 @@ public sealed class TenantAdminToolInvocationsTests
             .Returns<Task<TenantStatusChangeResult>>(_ => throw new LatticeAuthorizationDeniedException());
         admin.DeleteTenantAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<TenantDeletionResult>>(_ => throw new LatticeAuthorizationDeniedException());
+        admin.SetTenantQuotasAsync(Arg.Any<string>(), Arg.Any<TenantQuotasDescriptor>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TenantQuotasUpdateResult>>(_ => throw new LatticeAuthorizationDeniedException());
 
         Assert.Multiple(() =>
         {
@@ -139,6 +169,9 @@ public sealed class TenantAdminToolInvocationsTests
                 Throws.TypeOf<LatticeAuthorizationDeniedException>());
             Assert.That(
                 async () => await TenantAdminToolInvocations.DeleteTenantAsync(admin, "acme", CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await TenantAdminToolInvocations.SetTenantQuotasAsync(admin, "acme", TenantQuotasDescriptor.Unbounded, CancellationToken.None),
                 Throws.TypeOf<LatticeAuthorizationDeniedException>());
         });
     }
@@ -159,6 +192,9 @@ public sealed class TenantAdminToolInvocationsTests
                 Throws.ArgumentNullException);
             Assert.That(
                 async () => await TenantAdminToolInvocations.DeleteTenantAsync(null!, "acme", CancellationToken.None),
+                Throws.ArgumentNullException);
+            Assert.That(
+                async () => await TenantAdminToolInvocations.SetTenantQuotasAsync(null!, "acme", TenantQuotasDescriptor.Unbounded, CancellationToken.None),
                 Throws.ArgumentNullException);
         });
     }

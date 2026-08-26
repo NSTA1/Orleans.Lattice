@@ -33,4 +33,11 @@ public sealed record TenantStatusReport
     /// configured.
     /// </summary>
     [Id(3)] public required IReadOnlyList<TenantRegionStatusDescriptor> Regions { get; init; }
+
+    /// <summary>
+    /// The tenant's resource quotas and burst allowance in effect. The reserved
+    /// default tenant, and any tenant whose quotas have never been authored,
+    /// reports <see cref="TenantQuotasDescriptor.Unbounded"/>.
+    /// </summary>
+    [Id(4)] public TenantQuotasDescriptor Quotas { get; init; }
 }

@@ -23,13 +23,16 @@ public enum LatticeTenantAdminApiOperation
     /// <summary>The mutating, destructive <c>DeleteTenant</c> lifecycle RPC (cascades the tenant's trees).</summary>
     DeleteTenant = 3,
 
+    /// <summary>The mutating <c>SetTenantQuotas</c> RPC that authors a tenant's resource quotas.</summary>
+    SetTenantQuotas = 4,
+
     /// <summary>
     /// A tenant-administration control-API method the interceptor does not
     /// recognise (for example a future RPC added without updating the operation
     /// map). Presented to the authorizer so a deny-by-default policy can refuse an
     /// unmapped call rather than have it silently masquerade as a benign call.
     /// </summary>
-    Unknown = 4,
+    Unknown = 5,
 }
 
 /// <summary>

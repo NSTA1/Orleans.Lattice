@@ -75,6 +75,31 @@ public sealed class LatticeMcpRegistrationTests
     }
 
     [Test]
+    public void AddLatticeMcp_registers_the_http_context_active_tenant_bridge_by_default()
+    {
+        var services = SeedServices();
+        services.AddLatticeMcp();
+
+        using var provider = services.BuildServiceProvider();
+        var bridge = provider.GetRequiredService<ILatticeApiMcpActiveTenantBridge>();
+        Assert.That(bridge, Is.TypeOf<HttpContextLatticeApiMcpActiveTenantBridge>());
+    }
+
+    [Test]
+    public void AddLatticeMcp_preserves_a_host_supplied_active_tenant_bridge()
+    {
+        var services = SeedServices();
+        services.AddSingleton<ILatticeApiMcpActiveTenantBridge, StubActiveTenantBridge>();
+
+        services.AddLatticeMcp();
+
+        using var provider = services.BuildServiceProvider();
+        var bridge = provider.GetRequiredService<ILatticeApiMcpActiveTenantBridge>();
+        Assert.That(bridge, Is.TypeOf<StubActiveTenantBridge>(),
+            "TryAdd must not overwrite an active-tenant bridge the host registered first.");
+    }
+
+    [Test]
     public void AddLatticeMcp_registers_the_http_context_accessor()
     {
         var services = SeedServices();
@@ -95,6 +120,7 @@ public sealed class LatticeMcpRegistrationTests
             o.Stateless = true;
             o.CredentialHeaderName = "x-cred";
             o.CredentialScheme = "custom";
+            o.ActiveTenantHeaderName = "x-tenant";
             o.EnableStateTools = true;
             o.EnableDataTools = true;
             o.EnableBackupTools = true;
@@ -110,6 +136,7 @@ public sealed class LatticeMcpRegistrationTests
             Assert.That(options.Stateless, Is.True);
             Assert.That(options.CredentialHeaderName, Is.EqualTo("x-cred"));
             Assert.That(options.CredentialScheme, Is.EqualTo("custom"));
+            Assert.That(options.ActiveTenantHeaderName, Is.EqualTo("x-tenant"));
             Assert.That(options.EnableStateTools, Is.True);
             Assert.That(options.EnableDataTools, Is.True);
             Assert.That(options.EnableBackupTools, Is.True);
@@ -202,5 +229,10 @@ public sealed class LatticeMcpRegistrationTests
     private sealed class StubBridge : ILatticeApiMcpCredentialBridge
     {
         public LatticeCredential? Resolve(HttpContext context) => null;
+    }
+
+    private sealed class StubActiveTenantBridge : ILatticeApiMcpActiveTenantBridge
+    {
+        public TenantId? Resolve(HttpContext context) => null;
     }
 }

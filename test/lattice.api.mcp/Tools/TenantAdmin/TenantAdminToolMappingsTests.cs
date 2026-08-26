@@ -71,8 +71,64 @@ public sealed class TenantAdminToolMappingsTests
     }
 
     [Test]
+    public void ToMcp_quotas_update_result_copies_every_field()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantQuotasUpdateResult
+        {
+            TenantId = "acme",
+            Quotas = new TenantQuotasDescriptor
+            {
+                MaxBytes = 1_000,
+                MaxKeys = 2_000,
+                MaxMemoryBytes = 3_000,
+                MaxTreeCount = 4,
+                MaxOpsPerSecond = 5_000,
+                BurstPercent = 25,
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.MaxBytes, Is.EqualTo(1_000));
+            Assert.That(result.MaxKeys, Is.EqualTo(2_000));
+            Assert.That(result.MaxMemoryBytes, Is.EqualTo(3_000));
+            Assert.That(result.MaxTreeCount, Is.EqualTo(4));
+            Assert.That(result.MaxOpsPerSecond, Is.EqualTo(5_000));
+            Assert.That(result.BurstPercent, Is.EqualTo(25));
+            Assert.That(result.IsUnbounded, Is.False);
+        });
+    }
+
+    [Test]
+    public void ToMcp_quotas_update_result_flags_unbounded_when_every_dimension_is_lifted()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantQuotasUpdateResult
+        {
+            TenantId = "acme",
+            Quotas = TenantQuotasDescriptor.Unbounded,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsUnbounded, Is.True);
+            Assert.That(result.MaxBytes, Is.Null);
+            Assert.That(result.MaxKeys, Is.Null);
+            Assert.That(result.MaxMemoryBytes, Is.Null);
+            Assert.That(result.MaxTreeCount, Is.Null);
+            Assert.That(result.MaxOpsPerSecond, Is.Null);
+        });
+    }
+
+    [Test]
     public void ToMcp_rejects_a_null_deletion_result()
     {
         Assert.That(() => TenantAdminToolMappings.ToMcp((TenantDeletionResult)null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ToMcp_rejects_a_null_quotas_update_result()
+    {
+        Assert.That(() => TenantAdminToolMappings.ToMcp((TenantQuotasUpdateResult)null!), Throws.ArgumentNullException);
     }
 }
