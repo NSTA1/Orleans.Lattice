@@ -166,11 +166,24 @@ x-explorer-build: &explorer-build
   dockerfile: reference-architecture/local-dev/hosts/Explorer/Dockerfile
   secrets: [nugetcfg]
 
+# Cap per-container log retention. Docker's default json-file driver keeps every
+# log line forever, so a long-running harness (continuous health probes, /metrics
+# scrapes, and cross-region replication chatter) can silently grow the container
+# logs until they fill the disk. Anchored once and applied to every service below:
+# each container keeps at most 3 rotated files of 10 MB, a 30 MB ceiling, after
+# which the oldest lines roll off.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
   # ======================= REGION A =======================================
 
   azurite-a:
+    logging: *default-logging
     image: mcr.microsoft.com/azure-storage/azurite:latest
     command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
     networks: [net-a]
@@ -186,6 +199,7 @@ services:
       start_period: 5s
 
   azurite-backup-a:
+    logging: *default-logging
     image: mcr.microsoft.com/azure-storage/azurite:latest
     command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
     networks: [net-a]
@@ -200,6 +214,7 @@ services:
       start_period: 5s
 
   silo-a:
+    logging: *default-logging
     image: lattice-local-dev/silo:latest
     build: *silo-build
     depends_on:
@@ -232,6 +247,7 @@ services:
       - "9080:8082"
 
   mcp-a:
+    logging: *default-logging
     image: lattice-local-dev/mcp:latest
     build: *mcp-build
     depends_on:
@@ -249,6 +265,7 @@ services:
       - "9090:8080"
 
   explorer-a:
+    logging: *default-logging
     image: lattice-local-dev/explorer:latest
     build: *explorer-build
     depends_on:
@@ -269,6 +286,7 @@ services:
       LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
 
   prometheus-a:
+    logging: *default-logging
     image: prom/prometheus:latest
     depends_on:
       - silo-a
@@ -284,6 +302,7 @@ services:
     # Internal to net-a; scraped by grafana-a in-network, no host port.
 
   grafana-a:
+    logging: *default-logging
     image: grafana/grafana-oss:latest
     depends_on:
       - prometheus-a
@@ -303,6 +322,7 @@ services:
   # ======================= REGION B =======================================
 
   azurite-b:
+    logging: *default-logging
     image: mcr.microsoft.com/azure-storage/azurite:latest
     command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
     networks: [net-b]
@@ -318,6 +338,7 @@ services:
       start_period: 5s
 
   azurite-backup-b:
+    logging: *default-logging
     image: mcr.microsoft.com/azure-storage/azurite:latest
     command: azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck
     networks: [net-b]
@@ -332,6 +353,7 @@ services:
       start_period: 5s
 
   silo-b:
+    logging: *default-logging
     image: lattice-local-dev/silo:latest
     build: *silo-build
     depends_on:
@@ -357,6 +379,7 @@ services:
       - "9081:8082"
 
   mcp-b:
+    logging: *default-logging
     image: lattice-local-dev/mcp:latest
     build: *mcp-build
     depends_on:
@@ -374,6 +397,7 @@ services:
       - "9091:8080"
 
   explorer-b:
+    logging: *default-logging
     image: lattice-local-dev/explorer:latest
     build: *explorer-build
     depends_on:
@@ -388,6 +412,7 @@ services:
       LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
 
   prometheus-b:
+    logging: *default-logging
     image: prom/prometheus:latest
     depends_on:
       - silo-b
@@ -401,6 +426,7 @@ services:
     # Internal to net-b; scraped by grafana-b in-network, no host port.
 
   grafana-b:
+    logging: *default-logging
     image: grafana/grafana-oss:latest
     depends_on:
       - prometheus-b
