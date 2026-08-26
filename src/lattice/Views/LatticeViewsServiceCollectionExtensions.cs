@@ -82,6 +82,15 @@ public static class LatticeViewsServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, ViewActivationService>());
 
+        // Event-driven source rebind: when the core tree registry swaps a logical
+        // tree's physical-identity alias, push the change to every view maintainer
+        // sourcing from that tree so it rebinds without polling the registry on
+        // each idle drain. Registered as an ITreeAliasObserver (additive to the
+        // replication shipper's own observer) only when views are enabled, so the
+        // registry's fan-out stays zero-cost on a host with no views.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ITreeAliasObserver, ViewTreeAliasObserver>());
+
         return builder;
     }
 

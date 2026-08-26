@@ -19,7 +19,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal sealed class LatticeRegistryGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
-    ITreePlacementResolver? placementResolver = null) : ILatticeRegistry
+    ITreePlacementResolver? placementResolver = null,
+    TreeAliasObserverDispatcher? aliasObservers = null) : ILatticeRegistry
 {
     private static readonly byte[] EmptyEntry = SerializeEntry(new TreeRegistryEntry());
 
@@ -229,6 +230,23 @@ internal sealed class LatticeRegistryGrain(
         var existing = await GetEntryAsync(treeId) ?? new TreeRegistryEntry();
         var updated = existing with { PhysicalTreeId = physicalTreeId };
         await UpdateAsync(treeId, updated);
+
+        // Fire the alias-change observer only on an effective physical-identity
+        // change so a live shipper can rebind reactively (event-driven) instead
+        // of polling the registry every pump tick. An unaliased tree resolves to
+        // its own id, so the old effective physical is the prior alias or the
+        // logical id itself; a no-op re-set of the same alias is suppressed.
+        var oldPhysical = existing.PhysicalTreeId ?? treeId;
+        if (aliasObservers is { HasObservers: true }
+            && !string.Equals(oldPhysical, physicalTreeId, StringComparison.Ordinal))
+        {
+            await aliasObservers.PublishAsync(new TreeAliasChange
+            {
+                TreeId = treeId,
+                OldPhysicalTreeId = oldPhysical,
+                NewPhysicalTreeId = physicalTreeId,
+            });
+        }
     }
 
     public async Task RemoveAliasAsync(string treeId)
@@ -238,8 +256,23 @@ internal sealed class LatticeRegistryGrain(
         var existing = await GetEntryAsync(treeId);
         if (existing?.PhysicalTreeId is null) return;
 
+        var oldPhysical = existing.PhysicalTreeId;
         var updated = existing with { PhysicalTreeId = null };
         await UpdateAsync(treeId, updated);
+
+        // Removing an alias repoints the logical tree back to itself; the new
+        // effective physical id is the logical id. The early-return above
+        // guarantees an actual change (a stored alias always differs from the
+        // logical id), so this always fires when observers are present.
+        if (aliasObservers is { HasObservers: true })
+        {
+            await aliasObservers.PublishAsync(new TreeAliasChange
+            {
+                TreeId = treeId,
+                OldPhysicalTreeId = oldPhysical,
+                NewPhysicalTreeId = treeId,
+            });
+        }
     }
 
     public async Task<string> ResolveAsync(string treeId)

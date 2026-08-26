@@ -772,6 +772,55 @@ The slots are independent of `OriginClusterId`, `VectorClock`, and
 `Category`. Wire-compatible: missing slots on legacy persisted state
 decode to `0`.
 
+## Tree alias observers
+
+`ITreeAliasObserver` is a control-plane extensibility hook invoked once
+per logical-tree **physical-identity alias change**, fired from inside
+the tree registry's single alias-mutation choke point (`SetAliasAsync` /
+`RemoveAliasAsync`) after the new alias is durably persisted and **only**
+when the effective physical id actually changed. It is the seam a consumer
+that binds to a logical tree's physical WAL uses to rebind when a
+shadow-cutover restore, resize, or reshard swaps that binding underneath
+it - most notably the cross-cluster replication shipper, which uses it to
+rebind reactively instead of re-reading the registry on every pump tick
+(see [Source-identity rebind](../lattice.replication/replication-drivers.md#source-identity-rebind)).
+
+The hook receives a `TreeAliasChange` carrying the logical `TreeId` and
+both the old and new **effective** physical ids (an unaliased tree resolves
+to its own logical id, so a removed alias reports the logical id as the new
+physical), so a consumer can rebind directly without re-reading the registry.
+
+```csharp verify
+public sealed class MyRebindObserver : ITreeAliasObserver
+{
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken ct)
+    {
+        // change.TreeId is the logical tree; change.OldPhysicalTreeId and
+        // change.NewPhysicalTreeId are the effective physical ids before and
+        // after the swap. Dispatch a rebind and return - do not block the
+        // registry grain with slow synchronous I/O.
+        return Task.CompletedTask;
+    }
+}
+```
+
+```csharp verify
+siloBuilder.ConfigureServices(services =>
+    services.AddSingleton<ITreeAliasObserver, MyRebindObserver>());
+```
+
+Observers are resolved as `IEnumerable<ITreeAliasObserver>`, so multiple can
+coexist; the hook is zero-cost when none is registered. `OnTreeAliasChangedAsync`
+runs on the registry grain's single-threaded scheduler and is awaited inline
+before the alias-mutation grain method returns, so an implementation should
+dispatch its work and return rather than issue slow synchronous I/O. Exceptions
+thrown by one observer are logged as a warning and suppressed (the alias is
+already persisted and cannot be rolled back), and do not short-circuit the
+others; a consumer that misses a notification is expected to heal out-of-band
+(the replication shipper's coarse backstop re-resolve covers exactly this case).
+The registry raises the hook only on a genuine effective-physical-id change, so
+a no-op re-set of the current alias never produces a spurious rebind.
+
 ## Caller-credential propagation (`LatticeCredentialContext`)
 
 `LatticeCredentialContext` is a transport-only ambient seam that carries

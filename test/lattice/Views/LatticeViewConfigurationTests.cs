@@ -96,6 +96,30 @@ public class LatticeViewConfigurationTests
         Assert.That(result.Failed, Is.True);
     }
 
+    [Test]
+    public void Options_default_source_identity_backstop_is_30_seconds()
+    {
+        Assert.That(
+            new LatticeViewOptions().SourceIdentityBackstopInterval,
+            Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void Validator_rejects_non_positive_source_identity_backstop()
+    {
+        var validator = new Orleans.Lattice.Views.LatticeViewOptionsValidator();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                validator.Validate(null, new LatticeViewOptions { SourceIdentityBackstopInterval = TimeSpan.Zero }).Failed,
+                Is.True);
+            Assert.That(
+                validator.Validate(null, new LatticeViewOptions { SourceIdentityBackstopInterval = TimeSpan.FromSeconds(-1) }).Failed,
+                Is.True);
+        });
+    }
+
     [TestCase("")]
     [TestCase(" ")]
     public void Validator_rejects_blank_ship_view_producer(string producerClusterId)

@@ -63,6 +63,7 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
     private readonly ReplicationPeerStats[] _peerStats;
     private readonly LoopbackTransportRegistry _registry;
     private readonly TimeSpan _livenessProbeInterval;
+    private readonly TimeSpan? _sourceIdentityBackstopInterval;
 
     public static string ClusterIdFor(int siteIndex) => $"shipper-site-{siteIndex}";
 
@@ -78,7 +79,22 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
     /// probe firing inside the test window. Set to
     /// <see cref="Timeout.InfiniteTimeSpan"/> to disable.
     /// </param>
-    public ProductionShipperFixture(string treeName, int siteCount = 2, TimeSpan? livenessProbeInterval = null)
+    /// <param name="sourceIdentityBackstopInterval">
+    /// Per-silo <see cref="LatticeReplicationOptions.ShipSourceIdentityBackstopInterval"/>.
+    /// Defaults to <see langword="null"/>, which leaves the production
+    /// default (30 s) in place. Identity-swap chaos tests set this to a
+    /// value far larger than their convergence window so the ONLY path
+    /// that can re-resolve a swapped source identity within the test is
+    /// the event-driven alias-change notification - never the slow
+    /// backstop poll. That makes convergence a genuine assertion about
+    /// the deterministic notify/rebind seam rather than a race the
+    /// backstop timer would eventually win regardless.
+    /// </param>
+    public ProductionShipperFixture(
+        string treeName,
+        int siteCount = 2,
+        TimeSpan? livenessProbeInterval = null,
+        TimeSpan? sourceIdentityBackstopInterval = null)
     {
         ArgumentNullException.ThrowIfNull(treeName);
         if (siteCount < 2)
@@ -93,6 +109,7 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
         _peerStats = new ReplicationPeerStats[siteCount];
         _registry = new LoopbackTransportRegistry();
         _livenessProbeInterval = livenessProbeInterval ?? TimeSpan.FromMilliseconds(200);
+        _sourceIdentityBackstopInterval = sourceIdentityBackstopInterval;
     }
 
     public TestCluster ClusterOf(int siteIndex) => _clusters[siteIndex];
@@ -103,6 +120,12 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
 
     /// <summary>Per-silo liveness-probe interval used at silo configure time.</summary>
     internal TimeSpan LivenessProbeInterval => _livenessProbeInterval;
+
+    /// <summary>
+    /// Optional per-silo source-identity backstop interval used at silo
+    /// configure time; <see langword="null"/> leaves the production default.
+    /// </summary>
+    internal TimeSpan? SourceIdentityBackstopInterval => _sourceIdentityBackstopInterval;
 
     public async Task InitializeAsync()
     {
@@ -232,6 +255,10 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
             options.ShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(50);
             options.MaintenanceGcInterval = TimeSpan.FromSeconds(1);
             options.LivenessProbeInterval = fixture._livenessProbeInterval;
+            if (fixture._sourceIdentityBackstopInterval is { } backstop)
+            {
+                options.ShipSourceIdentityBackstopInterval = backstop;
+            }
         }
     }
 

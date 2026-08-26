@@ -293,6 +293,12 @@ public abstract class DocsSnippetCompilationTestsBase
                     => Task.CompletedTask;
             }
 
+            public sealed class MyRebindObserver : ITreeAliasObserver
+            {
+                public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken ct)
+                    => Task.CompletedTask;
+            }
+
             """;
 
         return header + ambientObserver + $$"""

@@ -61,6 +61,7 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<IValidateOptions<LatticeTagIndexReconciliationOptions>, LatticeTagIndexReconciliationOptionsValidator>();
         builder.Services.AddSingleton<LatticeOptionsResolver>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
+        builder.Services.AddSingleton<TreeAliasObserverDispatcher>();
         builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
 
         // Storage-usage observable-gauge sink. Constructing the singleton

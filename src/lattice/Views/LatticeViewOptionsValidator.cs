@@ -25,6 +25,11 @@ internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeView
             failures.Add($"{nameof(LatticeViewOptions.CoalesceWindow)} must be greater than zero (was {options.CoalesceWindow}).");
         }
 
+        if (options.SourceIdentityBackstopInterval <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeViewOptions.SourceIdentityBackstopInterval)} must be greater than zero (was {options.SourceIdentityBackstopInterval}).");
+        }
+
         if (options.AggregationFanout < 1)
         {
             failures.Add($"{nameof(LatticeViewOptions.AggregationFanout)} must be at least 1 (was {options.AggregationFanout}).");

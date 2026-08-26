@@ -88,6 +88,23 @@ internal sealed partial class ViewMaintainerGrain(
     // (WaitForApplyAsync) drains ignore this gate. Min value = no deferral active.
     private DateTime _backpressureResumeUtc = DateTime.MinValue;
 
+    // Source physical-identity binding cache (event-driven rebind). The maintainer
+    // resolves the source tree's physical id from the tree registry only on the
+    // first drain of an activation, when the coarse backstop interval has elapsed,
+    // or when an alias-swap push (NotifySourceIdentityChangedAsync) requests it -
+    // never on every idle drain tick. Between those points the durable
+    // ViewCheckpointState.BoundPhysicalTreeId is authoritative, so the steady-state
+    // drain reads no registry. Mirrors the cross-cluster shipper's gated backstop.
+    private bool _sourceIdentityResolved;
+    private DateTime _lastSourceIdentityResolveUtc;
+    private bool _sourceIdentityRebindRequested;
+
+    // Wall clock backing the source-identity backstop. Aliased to
+    // TimeProvider.System in production; a test overrides it via
+    // SetSourceIdentityClockForTesting so the elapsed-since-last-resolve gate is
+    // deterministic without a real wall-clock wait.
+    private TimeProvider _sourceIdentityClock = TimeProvider.System;
+
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
 
@@ -308,7 +325,16 @@ internal sealed partial class ViewMaintainerGrain(
         var options = Options;
         var batchSize = options.BatchSize > 0 ? options.BatchSize : LatticeViewOptions.DefaultBatchSize;
         var sourceTreeId = registration.SourceTreeId;
-        var walTreeId = await ResolveSourcePhysicalAsync(sourceTreeId);
+        // Reuse the identity EnsureBoundToCurrentSourceIdentityAsync just bound
+        // rather than re-resolving the registry: on any path that reaches here it
+        // returned false without healing, so BoundPhysicalTreeId holds the current
+        // source physical id. The fallback resolve is unreachable in steady state
+        // (bound is always set once a drain proceeds past the heal), so it adds no
+        // idle registry read; it only guards a future refactor that could reach
+        // here unbound.
+        var walTreeId = string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
+            ? await ResolveSourcePhysicalAsync(sourceTreeId)
+            : state.State.BoundPhysicalTreeId;
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
@@ -790,6 +816,52 @@ internal sealed partial class ViewMaintainerGrain(
         }
     }
 
+    /// <inheritdoc />
+    public Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(newPhysicalTreeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Event-driven rebind: mark the source binding stale so the next drain's
+        // EnsureBoundToCurrentSourceIdentityAsync re-resolves the registry and heals
+        // (unpin retired WAL, reset offsets, rebuild from the new source). The
+        // already-armed drain timer (<= CoalesceWindow) picks this up promptly, so
+        // the control-plane push does not run the heavy heal inline on the observer
+        // fan-out. A lost push still heals via the coarse backstop re-resolve.
+        _sourceIdentityRebindRequested = true;
+
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            logger.LogDebug(
+                "View '{ViewName}' received source-identity change push (new physical '{NewPhysical}'); will rebind on next drain.",
+                ViewName, newPhysicalTreeId);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Test hook: overrides the wall clock backing the source-identity backstop
+    /// gate so a test can advance time deterministically and assert the poll
+    /// re-resolve fires (or does not) without a real wall-clock wait. Mirrors the
+    /// cross-cluster shipper's <c>SetCursorFlushClockForTesting</c>.
+    /// </summary>
+    internal void SetSourceIdentityClockForTesting(TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _sourceIdentityClock = timeProvider;
+    }
+
+    /// <summary>
+    /// Test hook: drives one pass of the source-identity bind/backstop gate in
+    /// isolation (the same call <see cref="DrainAsync"/> makes at the top of every
+    /// drain) so a test can assert the registry-read gating without standing up
+    /// the full WAL-tailing drain path. Returns whether a heal ran this pass.
+    /// </summary>
+    internal Task<bool> EnsureBoundForTestingAsync(
+        ViewRegistration registration, CancellationToken cancellationToken = default) =>
+        EnsureBoundToCurrentSourceIdentityAsync(registration, cancellationToken);
+
     /// <summary>
     /// Resolves the current physical tree id for a logical source tree through the
     /// registry alias. The write-ahead log, cursor pins, and source-state scans are
@@ -828,8 +900,39 @@ internal sealed partial class ViewMaintainerGrain(
         CancellationToken cancellationToken)
     {
         var logical = registration.SourceTreeId;
+
+        // Steady-state gate: skip the registry resolve entirely once the binding
+        // has been established for this activation, unless an alias-swap push has
+        // asked for a rebind or the coarse backstop interval has elapsed. The
+        // durable BoundPhysicalTreeId remains authoritative in between, so an idle
+        // view issues no per-tick registry read. A real alias swap either arrives
+        // as a push (NotifySourceIdentityChangedAsync sets the rebind flag) or is
+        // caught by the backstop re-resolve below.
+        if (_sourceIdentityResolved
+            && !_sourceIdentityRebindRequested
+            && !string.IsNullOrEmpty(state.State.BoundPhysicalTreeId)
+            && _sourceIdentityClock.GetUtcNow().UtcDateTime - _lastSourceIdentityResolveUtc
+                < Options.SourceIdentityBackstopInterval)
+        {
+            return false;
+        }
+
         var physical = await ResolveSourcePhysicalAsync(logical);
         var bound = state.State.BoundPhysicalTreeId;
+
+        // Stamp the steady-state gate as converged only once a drain has reached a
+        // fully-healed binding below. Stamping eagerly (before the awaited rebuild
+        // that can throw) would let the gate suppress the very retry drains a failed
+        // heal needs, stranding the view on its pre-swap binding until the coarse
+        // backstop elapsed. A thrown rebuild exits without stamping, so the next
+        // drain re-resolves and retries the heal immediately; a lingering rebind
+        // request likewise survives to force that retry.
+        void MarkConverged()
+        {
+            _lastSourceIdentityResolveUtc = _sourceIdentityClock.GetUtcNow().UtcDateTime;
+            _sourceIdentityResolved = true;
+            _sourceIdentityRebindRequested = false;
+        }
 
         if (string.IsNullOrEmpty(bound))
         {
@@ -845,6 +948,7 @@ internal sealed partial class ViewMaintainerGrain(
                 await RebuildAsync(cancellationToken);
                 state.State.BoundPhysicalTreeId = physical;
                 await state.WriteStateAsync();
+                MarkConverged();
                 return true;
             }
 
@@ -853,11 +957,13 @@ internal sealed partial class ViewMaintainerGrain(
             // same log this view has always tailed.
             state.State.BoundPhysicalTreeId = physical;
             await state.WriteStateAsync();
+            MarkConverged();
             return false;
         }
 
         if (string.Equals(bound, physical, StringComparison.Ordinal))
         {
+            MarkConverged();
             return false;
         }
 
@@ -884,6 +990,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         state.State.BoundPhysicalTreeId = physical;
         await state.WriteStateAsync();
+        MarkConverged();
         return true;
     }
 

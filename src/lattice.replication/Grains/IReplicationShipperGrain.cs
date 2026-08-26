@@ -63,4 +63,21 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
     /// saga cutover. Exposed for diagnostics and tests.
     /// </summary>
     Task<bool> IsShippingPausedAsync();
+
+    /// <summary>
+    /// Event-driven notification that the tree registry has swapped the source
+    /// tree's logical alias to a new physical identity
+    /// <paramref name="newPhysicalTreeId"/> (shadow-cutover restore, resize,
+    /// reshard). The shipper rebinds to the new physical WAL immediately - resets
+    /// its per-partition resume cursors and drops cached shard-grain references so
+    /// its next pump tick tails the new source log from its start - without
+    /// reading the registry. This is the primary rebind path; the shipper's
+    /// backstop re-resolve
+    /// (<see cref="LatticeReplicationOptions.ShipSourceIdentityBackstopInterval"/>)
+    /// only heals a lost notification. Idempotent: a notification whose physical
+    /// id equals the current binding is a no-op.
+    /// </summary>
+    /// <param name="newPhysicalTreeId">The source tree's new physical identity.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken);
 }
