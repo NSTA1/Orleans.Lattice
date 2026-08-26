@@ -45,8 +45,8 @@ internal static class SchemaDeadLetterKey
     {
         ArgumentNullException.ThrowIfNull(treeId);
         var prefix = PrefixStart(treeId);
-        var chars = prefix.ToCharArray();
-        chars[^1] = (char)(chars[^1] + 1);
-        return new string(chars);
+        return LatticeKeyRange.PrefixUpperBound(prefix)
+            ?? throw new InvalidOperationException(
+                "A separator-terminated schema prefix always has a finite exclusive upper bound.");
     }
 }

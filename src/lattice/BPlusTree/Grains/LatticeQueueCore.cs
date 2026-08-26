@@ -377,9 +377,9 @@ internal sealed class LatticeQueueCore(
     internal static string PrefixEnd(string prefix)
     {
         ArgumentException.ThrowIfNullOrEmpty(prefix);
-        var chars = prefix.ToCharArray();
-        chars[^1] = (char)(chars[^1] + 1);
-        return new string(chars);
+        return LatticeKeyRange.PrefixUpperBound(prefix)
+            ?? throw new InvalidOperationException(
+                "A non-empty queue key prefix that is not solely U+FFFF always has a finite exclusive upper bound.");
     }
 
     private static bool TryParseEntryId(string prefix, string? storedKey, out long entryId)

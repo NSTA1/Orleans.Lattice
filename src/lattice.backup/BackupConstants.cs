@@ -96,27 +96,8 @@ internal static class BackupConstants
     /// The exclusive upper bound of the prefix range, or <see langword="null"/>
     /// when the range has no finite upper bound.
     /// </returns>
-    internal static string? PrefixUpperBound(string prefix)
-    {
-        // Scan back to the last code unit that can be incremented without
-        // overflow, increment it, and drop the trailing max units. Advancing
-        // the final unit unconditionally (as `(char)(chars[^1] + 1)`) wraps a
-        // trailing U+FFFF to U+0000, producing an upper bound that sorts below
-        // the prefix and inverts the [prefix, bound) range so the scan silently
-        // captures nothing. Mirrors the canonical DataReader.PrefixUpperBound.
-        for (var i = prefix.Length - 1; i >= 0; i--)
-        {
-            if (prefix[i] < char.MaxValue)
-            {
-                var bound = new char[i + 1];
-                prefix.AsSpan(0, i + 1).CopyTo(bound);
-                bound[i]++;
-                return new string(bound);
-            }
-        }
-
-        return null;
-    }
+    internal static string? PrefixUpperBound(string prefix) =>
+        LatticeKeyRange.PrefixUpperBound(prefix);
 
     /// <summary>
     /// Rejects a tree id that collides with the reserved <c>sys-backup-*</c>

@@ -245,15 +245,6 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     private static string KeyMajorPrefixFor(string treeId, string key) =>
         string.Concat(KeyMajorPrefix, treeId, SepStr, key, SepStr);
 
-    private static string PrefixEnd(string prefix)
-    {
-        // prefix ends with Sep ('\0'); the smallest string greater than every
-        // string with this prefix increments that trailing separator.
-        var chars = prefix.ToCharArray();
-        chars[^1] = (char)(chars[^1] + 1);
-        return new string(chars);
-    }
-
     private static bool TryParseRow(string rowKey, out string tag, out string treeId, out string key)
     {
         tag = treeId = key = string.Empty;
@@ -354,7 +345,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
     internal async IAsyncEnumerable<string> PostingListAsync(string treeId, string tag, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var prefix = PostingPrefix(tag, treeId);
-        var end = PrefixEnd(prefix);
+        var end = LatticeKeyRange.PrefixUpperBound(prefix);
         await foreach (var rowKey in ScanLiveKeysAsync(prefix, end, cancellationToken).ConfigureAwait(false))
         {
             yield return rowKey[prefix.Length..];
@@ -417,7 +408,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         // key itself contains NUL), so each row's full key is compared exactly.
         var prefix = KeyMajorPrefixFor(treeId, key);
         var headLen = KeyMajorPrefix.Length + treeId.Length + 1; // up to and incl. the treeId separator
-        var end = PrefixEnd(prefix);
+        var end = LatticeKeyRange.PrefixUpperBound(prefix);
         var result = new List<string>();
         await foreach (var rowKey in ScanLiveKeysAsync(prefix, end, cancellationToken).ConfigureAwait(false))
         {
@@ -826,7 +817,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         // different subjects never clobber each other (unlike a single joined
         // blob), and a long-lived index object can never serve a stale set.
         var set = new SortedSet<string>(StringComparer.Ordinal);
-        var end = PrefixEnd(CoveredMarkerPrefix);
+        var end = LatticeKeyRange.PrefixUpperBound(CoveredMarkerPrefix);
         await foreach (var rowKey in _indexTree.ScanKeysAsync(CoveredMarkerPrefix, end, cancellationToken: cancellationToken).ConfigureAwait(false))
         {
             set.Add(rowKey[CoveredMarkerPrefix.Length..]);
