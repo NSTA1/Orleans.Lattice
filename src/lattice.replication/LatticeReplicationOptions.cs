@@ -742,6 +742,25 @@ public class LatticeReplicationOptions
     public TimeSpan ShipPhaseTimerPeriod { get; set; } = DefaultShipPhaseTimerPeriod;
 
     /// <summary>
+    /// Backstop cadence at which the per-<c>(tree, peer)</c> shipper re-resolves
+    /// the source tree's logical -&gt; physical identity from the tree registry as
+    /// a safety net for a missed alias-swap notification. The primary rebind
+    /// mechanism is event-driven: an alias swap (shadow-cutover restore, resize,
+    /// reshard) pushes a source-identity-change notification to the shipper, which
+    /// rebinds immediately without a registry read. This backstop only covers the
+    /// rare case where that push is missed (for example a shipper activated after
+    /// the swap, or a transient notification failure); it does not replace the
+    /// push and cannot disable it. On an idle tree the shipper therefore performs
+    /// at most one registry resolve per this interval, instead of one on every
+    /// <see cref="ShipPhaseTimerPeriod"/> tick.
+    /// <para>
+    /// Defaults to <see cref="DefaultShipSourceIdentityBackstopInterval"/>. Must
+    /// be strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// </para>
+    /// </summary>
+    public TimeSpan ShipSourceIdentityBackstopInterval { get; set; } = DefaultShipSourceIdentityBackstopInterval;
+
+    /// <summary>
     /// Maximum interval between successful outbound contacts with a
     /// peer. When the per-<c>(tree, peer)</c> shipper grain's pump
     /// tick finds the drain buffer empty AND the wall-clock interval
@@ -1757,6 +1776,15 @@ public class LatticeReplicationOptions
     /// timer so the option is a strict superset of prior behaviour.
     /// </summary>
     public static readonly TimeSpan DefaultShipPhaseTimerPeriod = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Default value for <see cref="ShipSourceIdentityBackstopInterval"/>: 30 s.
+    /// A coarse safety-net cadence for a missed alias-swap notification; the
+    /// event-driven push is the primary rebind path, so this only bounds the
+    /// worst-case rebind latency when a notification is lost, not the
+    /// steady-state detection latency.
+    /// </summary>
+    public static readonly TimeSpan DefaultShipSourceIdentityBackstopInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Default value for <see cref="LivenessProbeInterval"/>: 30 s.

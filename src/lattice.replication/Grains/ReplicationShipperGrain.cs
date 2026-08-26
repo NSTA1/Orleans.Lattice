@@ -510,6 +510,26 @@ internal sealed class ReplicationShipperGrain(
     private TimeProvider _cursorFlushClock = TimeProvider.System;
 
     /// <summary>
+    /// Whether the shipper has resolved and bound to the source tree's physical
+    /// identity at least once for this activation. Until it has, the next pump
+    /// tick performs the authoritative registry resolve regardless of the
+    /// backstop clock, so a freshly activated shipper always binds before it
+    /// ships. Set by <see cref="ApplyResolvedIdentityAsync(string, int)"/>.
+    /// </summary>
+    private bool _sourceIdentityResolved;
+
+    /// <summary>
+    /// Wall-clock time of the last source-identity resolve or event-driven
+    /// rebind, measured on <see cref="_cursorFlushClock"/>. The gated per-tick
+    /// refresh (<see cref="MaybeRefreshSourceIdentityAsync"/>) reads the registry
+    /// again only once the
+    /// <see cref="LatticeReplicationOptions.ShipSourceIdentityBackstopInterval"/>
+    /// has elapsed since this instant, so an idle tree performs at most one
+    /// registry read per backstop interval rather than one per pump tick.
+    /// </summary>
+    private DateTime _lastSourceIdentityResolveUtc;
+
+    /// <summary>
     /// Highest HLC reported to the registry (i.e. successfully
     /// persisted in a previous flush). Used to suppress redundant
     /// <see cref="IWalCursorRegistry.ReportCursorAsync"/>
@@ -2210,7 +2230,11 @@ internal sealed class ReplicationShipperGrain(
         // underneath a live shipper; the persisted per-partition cursors are
         // absolute offsets into the retired log, so on an identity change they
         // are reset and the shipper re-ships from the new source's log start.
-        await EnsureBoundToCurrentSourceIdentityAsync(partitions);
+        // The rebind is driven primarily by an event-driven push
+        // (NotifySourceIdentityChangedAsync); this per-tick call only reads the
+        // registry on the first bind or once the backstop interval has elapsed,
+        // so an idle tree does not pay a registry read every tick.
+        await MaybeRefreshSourceIdentityAsync(options, partitions);
 
 
         // and _partitionPageIndex always reset (they're tick-scoped);
@@ -3702,21 +3726,82 @@ internal sealed class ReplicationShipperGrain(
     }
 
     /// <summary>
-    /// Re-resolves the logical source tree to its current physical identity and,
-    /// when that identity has changed since the cursors were last bound, resets
-    /// the per-partition resume cursors and rebinds so the shipper tails the new
-    /// physical WAL from its log start. A registry alias swap (shadow-cutover
-    /// restore, resize, reshard) repoints a logical tree to a freshly minted
-    /// physical tree; the persisted <see cref="ReplicationShipperState.PartitionCursors"/>
-    /// are absolute sequence offsets into the retired log and are meaningless
-    /// against the new one. Re-shipping from the new log start is safe because
-    /// the peer merges every entry by <see cref="HybridLogicalClock"/> (LWW),
-    /// making the replay idempotent.
+    /// Gated per-tick source-identity refresh. The shipper's binding to the
+    /// source tree's physical WAL is maintained primarily by an event-driven
+    /// push (<see cref="NotifySourceIdentityChangedAsync"/>) that the tree
+    /// registry fires on an alias swap, so the steady-state pump does not read
+    /// the registry on every tick. This method performs the authoritative
+    /// registry resolve only when the binding has never been established for this
+    /// activation, or when the backstop interval
+    /// (<see cref="LatticeReplicationOptions.ShipSourceIdentityBackstopInterval"/>)
+    /// has elapsed since the last resolve or rebind - a safety net that heals a
+    /// missed notification without reintroducing a per-tick registry read on an
+    /// idle tree.
     /// </summary>
-    private async Task EnsureBoundToCurrentSourceIdentityAsync(int partitions)
+    private async Task MaybeRefreshSourceIdentityAsync(LatticeReplicationOptions options, int partitions)
     {
+        if (_sourceIdentityResolved)
+        {
+            var elapsed = _cursorFlushClock.GetUtcNow().UtcDateTime - _lastSourceIdentityResolveUtc;
+            if (elapsed < options.ShipSourceIdentityBackstopInterval)
+            {
+                return;
+            }
+        }
+
         var physical = await ResolveSourcePhysicalAsync();
+        await ApplyResolvedIdentityAsync(physical, partitions);
+    }
+
+    /// <summary>
+    /// Event-driven rebind entry point. Invoked by the replication tree-alias
+    /// observer when the tree registry swaps the logical source tree's alias to a
+    /// new physical identity (shadow-cutover restore, resize, reshard), so the
+    /// shipper rebinds immediately rather than waiting for the backstop poll to
+    /// notice. The new physical id is supplied by the registry alias change
+    /// itself, so no registry read is needed here; the backstop
+    /// (<see cref="MaybeRefreshSourceIdentityAsync"/>) still covers the rare case
+    /// where this notification is lost.
+    /// </summary>
+    public async Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(newPhysicalTreeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        ParseGrainKey();
+
+        var options = _optionsMonitor.Get(_treeName);
+        var partitions = Math.Max(1, options.ReplogPartitions);
+        EnsureScratchSized(partitions);
+
+        await ApplyResolvedIdentityAsync(newPhysicalTreeId, partitions);
+
+        // No pump re-arm is needed here: the steady-state phase timer is armed on
+        // every activation (OnActivateCoreAsync), so an already-active shipper
+        // picks the rebind up on its next tick (<= ShipPhaseTimerPeriod), and a
+        // notification that reactivates a deactivated shipper has just re-armed
+        // the timer as part of that activation.
+    }
+
+    /// <summary>
+    /// Applies a resolved source physical identity to the shipper: updates the
+    /// address the ship reads target and stamps the backstop clock, and, when the
+    /// identity has changed since the cursors were last bound, resets the
+    /// per-partition resume cursors and drops the cached shard-grain references so
+    /// the shipper tails the new physical WAL from its log start. Shared by the
+    /// gated per-tick backstop (<see cref="MaybeRefreshSourceIdentityAsync"/>) and
+    /// the event-driven push (<see cref="NotifySourceIdentityChangedAsync"/>). A
+    /// registry alias swap repoints a logical tree to a freshly minted physical
+    /// tree; the persisted <see cref="ReplicationShipperState.PartitionCursors"/>
+    /// are absolute sequence offsets into the retired log and are meaningless
+    /// against the new one. Re-shipping from the new log start is safe because the
+    /// peer merges every entry by <see cref="HybridLogicalClock"/> (LWW), making
+    /// the replay idempotent.
+    /// </summary>
+    private async Task ApplyResolvedIdentityAsync(string physical, int partitions)
+    {
         _walTreeId = physical;
+        _sourceIdentityResolved = true;
+        _lastSourceIdentityResolveUtc = _cursorFlushClock.GetUtcNow().UtcDateTime;
 
         var bound = state.State.BoundPhysicalTreeId;
         if (string.IsNullOrEmpty(bound))

@@ -260,6 +260,16 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "fire the polling fallback when the doorbell signal is unavailable.");
         }
 
+        if (options.ShipSourceIdentityBackstopInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.ShipSourceIdentityBackstopInterval)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "A zero or negative backstop interval would either re-resolve the source identity from "
+                + "the registry on every pump tick (the idle-read regression this backstop exists to avoid) "
+                + "or never heal a missed alias-swap notification.");
+        }
+
         if (options.LivenessProbeInterval != System.Threading.Timeout.InfiniteTimeSpan
             && options.LivenessProbeInterval <= TimeSpan.Zero)
         {
