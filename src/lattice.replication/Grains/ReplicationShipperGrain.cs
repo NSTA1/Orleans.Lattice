@@ -188,6 +188,71 @@ internal sealed class ReplicationShipperGrain(
     private AdvertisedCompressionDictionary[]? _peerAdvertisedDictionaries;
 
     /// <summary>
+    /// Monotonic epoch bumped whenever a capability-negotiation <em>input</em>
+    /// changes: the peer's advertised capability (captured from an ack by
+    /// <see cref="CapturePeerCapabilities"/>), the tree-level options instance,
+    /// or the effective configured/active shared-dictionary id. The per-tick
+    /// negotiation methods (<see cref="TryNegotiateWireVersion"/> and
+    /// <see cref="TryNegotiateSharedDictionary"/>) memoise their result against
+    /// this epoch so an idle stream that keeps liveness-probing a stable peer
+    /// stops re-running the negotiation - and re-writing the process-wide
+    /// negotiation-state entries and per-tick metrics - on every tick. Any
+    /// genuine input change bumps the epoch and forces exactly one recompute,
+    /// so runtime options flips and auto-dictionary rotations are still honoured
+    /// on the next tick. Activation-scoped.
+    /// </summary>
+    private long _negotiationInputEpoch;
+
+    /// <summary>
+    /// The <see cref="LatticeReplicationOptions"/> instance last observed by
+    /// <see cref="SyncNegotiationInputEpoch"/>. <see cref="IOptionsMonitor{T}"/>
+    /// hands back a cached instance that is only replaced when configuration
+    /// reloads, so a reference change is a cheap, allocation-free signal that
+    /// any option influencing negotiation may have changed - bumping
+    /// <see cref="_negotiationInputEpoch"/> without enumerating individual
+    /// fields. Activation-scoped.
+    /// </summary>
+    private LatticeReplicationOptions? _negotiationOptionsSeen;
+
+    /// <summary>
+    /// The effective configured/active shared-dictionary id last observed by
+    /// <see cref="SyncNegotiationInputEpoch"/>. Tracked separately from the
+    /// options reference because the auto-distributing dictionary provider can
+    /// rotate its active id without an options reload; a change here must still
+    /// bump <see cref="_negotiationInputEpoch"/> so the memoised dictionary and
+    /// wire-version negotiations recompute. Activation-scoped.
+    /// </summary>
+    private uint _negotiationConfiguredIdSeen;
+
+    /// <summary>
+    /// The <see cref="_negotiationInputEpoch"/> value at which
+    /// <see cref="TryNegotiateWireVersion"/> last computed a <em>successful</em>
+    /// negotiation. When it equals the current epoch and
+    /// <see cref="_wireVersionNegotiationSucceeded"/> is set, the method returns
+    /// the cached success without recomputing. A failed negotiation is never
+    /// memoised, so a peer below the supported floor keeps failing fast (and
+    /// re-applying backoff) every tick exactly as before. Activation-scoped.
+    /// </summary>
+    private long _wireVersionNegotiatedEpoch = -1;
+
+    /// <summary>
+    /// Whether the last <see cref="TryNegotiateWireVersion"/> compute succeeded.
+    /// Guards the <see cref="_wireVersionNegotiatedEpoch"/> memo so only a
+    /// success short-circuits. Activation-scoped.
+    /// </summary>
+    private bool _wireVersionNegotiationSucceeded;
+
+    /// <summary>
+    /// The <see cref="_negotiationInputEpoch"/> value at which
+    /// <see cref="TryNegotiateSharedDictionary"/> last computed
+    /// <see cref="_negotiatedDictionaryId"/>. When it equals the current epoch
+    /// the method returns without re-running negotiation, re-recording the
+    /// process-wide dictionary-negotiation state, or re-emitting the per-tick
+    /// negotiation metric. Activation-scoped.
+    /// </summary>
+    private long _dictionaryNegotiatedEpoch = -1;
+
+    /// <summary>
     /// One-shot latch so the same-id/different-fingerprint misconfiguration is
     /// logged at most once per activation (the distinct telemetry counter still
     /// increments every tick). Reset implicitly on deactivation.
@@ -1249,15 +1314,11 @@ internal sealed class ReplicationShipperGrain(
         // state success path, and to "max(...)" only when a late
         // pause races a still-in-flight backoff.
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
-        // Capture the peer's advertised wire-version capability for the
-        // next tick's negotiation. Harmless when negotiation is off
-        // (the value is simply never read).
-        _peerWireVersion = ack.SupportedWireVersion;
-        // Capture the peer's advertised shared-dictionary capability for
-        // the next tick's dictionary negotiation. Harmless when
-        // dictionary negotiation is off (the value is never read).
-        _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
-        _peerAdvertisedDictionaries = ack.AdvertisedDictionaries;
+        // Capture the peer's advertised wire-version and shared-dictionary
+        // capability for the next tick's negotiation, bumping the negotiation
+        // epoch only when the capability actually changed. Harmless when
+        // negotiation is off (the captured values are simply never read).
+        CapturePeerCapabilities(ack);
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -3194,9 +3255,7 @@ internal sealed class ReplicationShipperGrain(
         state.State.ConsecutiveFailures = 0;
         _nextRetryAtUtc = DateTime.MinValue;
         _receiverSuggestedBatchSize = ack.SuggestedBatchSize;
-        _peerWireVersion = ack.SupportedWireVersion;
-        _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
-        _peerAdvertisedDictionaries = ack.AdvertisedDictionaries;
+        CapturePeerCapabilities(ack);
         if (ack.PauseForMs is { } pauseMs && pauseMs > 0)
         {
             var requested = DateTime.UtcNow.AddMilliseconds(pauseMs);
@@ -3240,8 +3299,85 @@ internal sealed class ReplicationShipperGrain(
     /// verbatim pre-encoded entry hot path and the bytes on the wire are
     /// byte-identical to a build that never negotiated.
     /// </summary>
+    /// <summary>
+    /// Captures the peer's advertised wire-version and shared-dictionary
+    /// capability from <paramref name="ack"/> into the activation-scoped
+    /// negotiation-input fields, bumping <see cref="_negotiationInputEpoch"/>
+    /// exactly once when any of the three inputs actually changed. Centralises
+    /// the two ack-handling capture sites (the batch-ship success path and the
+    /// liveness-probe success path) so the change detection - and therefore the
+    /// per-tick negotiation memoisation - is identical on both. Zero-allocation:
+    /// the array comparisons run over spans.
+    /// </summary>
+    private void CapturePeerCapabilities(ReplicationAck ack)
+    {
+        var changed =
+            _peerWireVersion != ack.SupportedWireVersion
+            || !ArraysEqual(_peerAdvertisedDictionaryIds, ack.AdvertisedDictionaryIds)
+            || !ArraysEqual(_peerAdvertisedDictionaries, ack.AdvertisedDictionaries);
+
+        _peerWireVersion = ack.SupportedWireVersion;
+        _peerAdvertisedDictionaryIds = ack.AdvertisedDictionaryIds;
+        _peerAdvertisedDictionaries = ack.AdvertisedDictionaries;
+
+        if (changed)
+        {
+            _negotiationInputEpoch++;
+        }
+    }
+
+    /// <summary>
+    /// Bumps <see cref="_negotiationInputEpoch"/> when a non-peer negotiation
+    /// input has changed since the last observation: the tree-level options
+    /// instance (a cheap reference compare - <see cref="IOptionsMonitor{T}"/>
+    /// only swaps the instance on a configuration reload) or the effective
+    /// configured/active shared-dictionary id (which the auto-distributing
+    /// provider can rotate without an options reload). Called at the top of the
+    /// memoised negotiation methods so an options flip or dictionary rotation is
+    /// honoured on the very next tick; idempotent within a tick, so a second
+    /// call with the same inputs does not bump again.
+    /// </summary>
+    private void SyncNegotiationInputEpoch(LatticeReplicationOptions options)
+    {
+        var configuredId = EffectiveConfiguredDictionaryId(options);
+        if (!ReferenceEquals(options, _negotiationOptionsSeen)
+            || configuredId != _negotiationConfiguredIdSeen)
+        {
+            _negotiationOptionsSeen = options;
+            _negotiationConfiguredIdSeen = configuredId;
+            _negotiationInputEpoch++;
+        }
+    }
+
+    /// <summary>
+    /// Allocation-free value equality for two nullable arrays, treating two
+    /// nulls as equal and a null versus a non-null as unequal. Used to detect
+    /// whether a peer's advertised capability arrays changed between acks.
+    /// </summary>
+    private static bool ArraysEqual<T>(T[]? left, T[]? right)
+        where T : IEquatable<T>
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        return left.AsSpan().SequenceEqual(right);
+    }
+
     private bool TryNegotiateWireVersion(LatticeReplicationOptions options)
     {
+        SyncNegotiationInputEpoch(options);
+        if (_wireVersionNegotiatedEpoch == _negotiationInputEpoch && _wireVersionNegotiationSucceeded)
+        {
+            // Inputs unchanged since the last successful negotiation: reuse the
+            // cached _negotiatedWireVersion / _downStampDropsCompression plan and
+            // skip re-recording the process-wide negotiation state. A failed
+            // negotiation is never memoised (see below), so a peer below the
+            // floor still fails fast every tick.
+            return true;
+        }
+
         WireVersionNegotiationResult negotiation;
         try
         {
@@ -3258,6 +3394,7 @@ internal sealed class ReplicationShipperGrain(
                 + "minimum supported floor {Floor}; cannot ship until the peer upgrades.",
                 _peerClusterId, _treeName, options.MinimumSupportedWireVersion);
             ApplyBackoff(options, exception: null, reason: "wire-version-unsupported");
+            _wireVersionNegotiationSucceeded = false;
             return false;
         }
 
@@ -3311,6 +3448,7 @@ internal sealed class ReplicationShipperGrain(
                     + "sub-floor targets cannot be down-encoded.",
                     _treeName, target, _peerClusterId, reason);
                 ApplyBackoff(options, exception: null, reason: "wire-version-unsupported");
+                _wireVersionNegotiationSucceeded = false;
                 return false;
             }
 
@@ -3322,6 +3460,8 @@ internal sealed class ReplicationShipperGrain(
         }
 
         _negotiatedWireVersion = negotiation.EffectiveWireVersion;
+        _wireVersionNegotiationSucceeded = true;
+        _wireVersionNegotiatedEpoch = _negotiationInputEpoch;
         return true;
     }
 
@@ -3365,6 +3505,17 @@ internal sealed class ReplicationShipperGrain(
     /// </summary>
     private void TryNegotiateSharedDictionary(LatticeReplicationOptions options)
     {
+        SyncNegotiationInputEpoch(options);
+        if (_dictionaryNegotiatedEpoch == _negotiationInputEpoch)
+        {
+            // Inputs unchanged since the last negotiation: reuse the cached
+            // _negotiatedDictionaryId and skip re-recording the process-wide
+            // dictionary-negotiation state and re-emitting the per-tick metric.
+            return;
+        }
+
+        _dictionaryNegotiatedEpoch = _negotiationInputEpoch;
+
         var autoActive = AutoDictionaryActive(options);
         var configuredId = EffectiveConfiguredDictionaryId(options);
         var dictionaryFraming = autoActive || options.FramingCompression == LatticeCompression.ZstdDictionary;
