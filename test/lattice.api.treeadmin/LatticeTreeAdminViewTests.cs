@@ -281,6 +281,34 @@ public sealed class LatticeTreeAdminViewTests
             Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// Regression: <c>CreateViewAsync</c> was the only mutating verb on this facade
+    /// that omitted the reserved-namespace guard every sibling applies. The view
+    /// maintainer deliberately supports a system-tree source (it short-circuits the
+    /// registry alias for one), so an admin-scoped caller could stand a view over a
+    /// '_lattice_' internal tree - the tree registry, a WAL, queue state - and have
+    /// it continuously mirrored into an ordinary readable 'view-' tree. The
+    /// rejection must fire even when authorization would have allowed the source.
+    /// </summary>
+    [TestCase("_lattice_trees")]
+    [TestCase("_lattice_wal_orders")]
+    [TestCase("_lattice_queue_jobs")]
+    public void CreateViewAsync_reserved_source_does_not_invoke_factory(string reservedSource)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        var facade = Create(factory, allow: true, viewFactory: viewFactory);
+
+        Assert.That(
+            async () => await facade.CreateViewAsync(ViewName, reservedSource, "provider-a", []),
+            Throws.TypeOf<ArgumentException>());
+        viewFactory.DidNotReceive().CreateAsync(
+            Arg.Any<ILattice>(),
+            Arg.Any<string>(),
+            Arg.Any<LatticeRuntimeViewProjectionDescriptor>(),
+            Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public void CreateViewAsync_oversized_payload_does_not_invoke_factory()
     {

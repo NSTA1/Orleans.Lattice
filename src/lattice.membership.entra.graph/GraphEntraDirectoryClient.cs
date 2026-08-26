@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
@@ -188,11 +189,45 @@ internal sealed class GraphEntraDirectoryClient : IEntraGraphDirectoryClient
             return null;
         }
 
-        // Strip embedded quotes so the term cannot break out of the quoted search clause.
-        var sanitized = term.Replace("\"", string.Empty, StringComparison.Ordinal);
+        // Strip both embedded quotes and backslashes so the term cannot break out
+        // of the quoted KQL clause. Stripping the quote alone is not sufficient: a
+        // trailing backslash escapes the clause's own closing quote, so the clause
+        // stays open and the remainder of the interpolated template (" OR ...") is
+        // parsed as caller-supplied KQL rather than as literal search text.
+        var sanitized = StripSearchBreakout(term);
         return includeUpn
             ? $"\"displayName:{sanitized}\" OR \"userPrincipalName:{sanitized}\" OR \"mail:{sanitized}\""
             : $"\"displayName:{sanitized}\" OR \"mail:{sanitized}\"";
+    }
+
+    /// <summary>
+    /// Removes every character that could terminate or escape the quoted KQL
+    /// clause <see cref="BuildSearch"/> interpolates the term into: the double
+    /// quote that closes the clause, and the backslash that would escape that
+    /// closing quote. Removing rather than escaping keeps the result a literal
+    /// search term under every KQL escaping dialect, so the clause can never be
+    /// re-opened by caller-supplied text. Allocates only when the term actually
+    /// contains one of those characters.
+    /// </summary>
+    /// <param name="term">The caller-supplied search term.</param>
+    /// <returns>The term with any quote and backslash characters removed.</returns>
+    private static string StripSearchBreakout(string term)
+    {
+        if (term.AsSpan().IndexOfAny('"', '\\') < 0)
+        {
+            return term;
+        }
+
+        var buffer = new StringBuilder(term.Length);
+        foreach (var ch in term)
+        {
+            if (ch is not ('"' or '\\'))
+            {
+                buffer.Append(ch);
+            }
+        }
+
+        return buffer.ToString();
     }
 
     private static EntraDirectoryPage MapUsers(UserCollectionResponse? response)
