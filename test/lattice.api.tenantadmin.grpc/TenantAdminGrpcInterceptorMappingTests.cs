@@ -26,7 +26,8 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
             Assert.That((int)LatticeTenantAdminApiOperation.SuspendTenant, Is.EqualTo(1));
             Assert.That((int)LatticeTenantAdminApiOperation.ResumeTenant, Is.EqualTo(2));
             Assert.That((int)LatticeTenantAdminApiOperation.DeleteTenant, Is.EqualTo(3));
-            Assert.That((int)LatticeTenantAdminApiOperation.Unknown, Is.EqualTo(4));
+            Assert.That((int)LatticeTenantAdminApiOperation.SetTenantQuotas, Is.EqualTo(4));
+            Assert.That((int)LatticeTenantAdminApiOperation.Unknown, Is.EqualTo(5));
         });
     }
 
@@ -54,6 +55,11 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
                 Method(LatticeTenantAdminGrpcMethods.DeleteTenantMethodName),
                 new TenantAdminTenantRequest { TenantId = "acme" }),
                 Is.EqualTo((LatticeTenantAdminApiOperation.DeleteTenant, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.SetTenantQuotasMethodName),
+                new TenantAdminSetQuotasRequest { TenantId = "acme", Quotas = TenantQuotasDescriptor.Unbounded }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.SetTenantQuotas, "acme")));
         });
     }
 
@@ -103,6 +109,8 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
                 Method(LatticeTenantAdminGrpcMethods.CreateTenantMethodName)), Is.False);
             Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
                 Method(LatticeTenantAdminGrpcMethods.DeleteTenantMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.SetTenantQuotasMethodName)), Is.False);
             Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
                 Method(LatticeTenantAdminGrpcMethods.GetAuthSchemeMethodName)), Is.False);
         });

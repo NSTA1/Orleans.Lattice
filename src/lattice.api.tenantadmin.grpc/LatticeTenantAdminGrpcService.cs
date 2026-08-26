@@ -34,6 +34,9 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
     /// <summary>Deletes a tenant, cascading its trees. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.</summary>
     public abstract Task<TenantDeletionResult> DeleteTenant(TenantAdminTenantRequest request, ServerCallContext context);
 
+    /// <summary>Authors a tenant's resource quotas. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.</summary>
+    public abstract Task<TenantQuotasUpdateResult> SetTenantQuotas(TenantAdminSetQuotasRequest request, ServerCallContext context);
+
     /// <summary>
     /// Returns the endpoint's advertised auth schemes. Unauthenticated: this RPC
     /// is exempt from the authorization interceptor so a client can learn how to
@@ -90,6 +93,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.SuspendTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>?)null);
             binder.AddMethod(methods.ResumeTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>?)null);
             binder.AddMethod(methods.DeleteTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantDeletionResult>?)null);
+            binder.AddMethod(methods.SetTenantQuotas, (UnaryServerMethod<TenantAdminSetQuotasRequest, TenantQuotasUpdateResult>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             binder.AddMethod(methods.GetCurrentTenant, (UnaryServerMethod<TenantSelfCurrentRequest, TenantDescriptor>?)null);
             binder.AddMethod(methods.ListAccessibleTenants, (UnaryServerMethod<TenantSelfListRequest, TenantSelfDescriptorList>?)null);
@@ -101,6 +105,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.SuspendTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>(serviceImpl.SuspendTenant));
         binder.AddMethod(methods.ResumeTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusChangeResult>(serviceImpl.ResumeTenant));
         binder.AddMethod(methods.DeleteTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantDeletionResult>(serviceImpl.DeleteTenant));
+        binder.AddMethod(methods.SetTenantQuotas, new UnaryServerMethod<TenantAdminSetQuotasRequest, TenantQuotasUpdateResult>(serviceImpl.SetTenantQuotas));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
         binder.AddMethod(methods.GetCurrentTenant, new UnaryServerMethod<TenantSelfCurrentRequest, TenantDescriptor>(serviceImpl.GetCurrentTenant));
         binder.AddMethod(methods.ListAccessibleTenants, new UnaryServerMethod<TenantSelfListRequest, TenantSelfDescriptorList>(serviceImpl.ListAccessibleTenants));
@@ -185,6 +190,10 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// <inheritdoc />
     public override Task<TenantDeletionResult> DeleteTenant(TenantAdminTenantRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.DeleteTenantAsync(req.TenantId, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantQuotasUpdateResult> SetTenantQuotas(TenantAdminSetQuotasRequest request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => control.SetTenantQuotasAsync(req.TenantId, req.Quotas, ct));
 
     /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)

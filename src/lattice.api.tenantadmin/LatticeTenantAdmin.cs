@@ -149,6 +149,39 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         };
     }
 
+    /// <inheritdoc />
+    public async Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(
+        string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)
+    {
+        var tenant = ParseTenant(tenantId);
+        await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        // The reserved default tenant names the cluster's own legacy state and is
+        // permanently unbounded; it can never be given quotas. The reserved id is a
+        // constant, so rejecting it before any store read leaks nothing about
+        // registry contents.
+        if (tenant.IsDefault)
+        {
+            throw new ReservedTenantOperationException(tenant.Value, "set-quotas");
+        }
+
+        var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false)
+            ?? throw new TenantNotFoundException(tenant.Value);
+
+        // SetQuotas validates the burst percent (fail-closed on a negative value)
+        // and stamps the write through the registry's last-writer-wins merge, so a
+        // re-run of an interrupted author is a stamp-advancing idempotent write.
+        var applied = TenantQuotasMapping.ToQuotas(quotas);
+        record.SetQuotas(applied, _clock.Next(), _writerId);
+        await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+
+        return new TenantQuotasUpdateResult
+        {
+            TenantId = tenant.Value,
+            Quotas = TenantQuotasMapping.ToDescriptor(record.Quotas),
+        };
+    }
+
     private async Task<TenantStatusChangeResult> TransitionAsync(
         string tenantId, TenantStatus target, string operation, CancellationToken cancellationToken)
     {

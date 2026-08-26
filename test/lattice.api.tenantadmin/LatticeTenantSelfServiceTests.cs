@@ -246,6 +246,42 @@ public sealed class LatticeTenantSelfServiceTests
     }
 
     [Test]
+    public async Task GetTenantAsync_surfaces_the_tenants_quotas()
+    {
+        var registry = new FakeTenantRegistry();
+        var record = SeededRecord("acme");
+        record.SetQuotas(
+            new TenantQuotas { MaxBytes = 1_000_000, MaxKeys = 5_000, BurstPercent = 15 },
+            Stamp(99),
+            "seed");
+        registry.Seed(record);
+        var service = Service(registry, TenantId.Parse("acme"));
+
+        var report = await service.GetTenantAsync("acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Quotas.MaxBytes, Is.EqualTo(1_000_000));
+            Assert.That(report.Quotas.MaxKeys, Is.EqualTo(5_000));
+            Assert.That(report.Quotas.MaxMemoryBytes, Is.Null);
+            Assert.That(report.Quotas.BurstPercent, Is.EqualTo(15));
+            Assert.That(report.Quotas.IsUnbounded, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetTenantAsync_reports_unbounded_quotas_when_never_authored()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(SeededRecord("acme"));
+        var service = Service(registry, TenantId.Parse("acme"));
+
+        var report = await service.GetTenantAsync("acme");
+
+        Assert.That(report.Quotas.IsUnbounded, Is.True);
+    }
+
+    [Test]
     public void GetTenantAsync_inaccessible_existing_tenant_throws_not_found()
     {
         var registry = new FakeTenantRegistry();

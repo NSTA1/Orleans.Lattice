@@ -168,6 +168,7 @@ public sealed class TenantAdminGrpcDtoSerializationTests
             Status = TenantLifecycleStatus.Suspended,
             IsDefault = false,
             Regions = Array.Empty<TenantRegionStatusDescriptor>(),
+            Quotas = new TenantQuotasDescriptor { MaxBytes = 1_000, BurstPercent = 10 },
         });
 
         Assert.Multiple(() =>
@@ -175,7 +176,64 @@ public sealed class TenantAdminGrpcDtoSerializationTests
             Assert.That(copy.TenantId, Is.EqualTo("acme"));
             Assert.That(copy.Status, Is.EqualTo(TenantLifecycleStatus.Suspended));
             Assert.That(copy.Regions, Is.Empty);
+            Assert.That(copy.Quotas.MaxBytes, Is.EqualTo(1_000));
+            Assert.That(copy.Quotas.BurstPercent, Is.EqualTo(10));
         });
+    }
+
+    [Test]
+    public void TenantAdminSetQuotasRequest_round_trips()
+    {
+        var copy = RoundTrip(new TenantAdminSetQuotasRequest
+        {
+            TenantId = "acme",
+            Quotas = new TenantQuotasDescriptor
+            {
+                MaxBytes = 1_000_000,
+                MaxKeys = 5_000,
+                MaxMemoryBytes = 2_000_000,
+                MaxTreeCount = 10,
+                MaxOpsPerSecond = 250,
+                BurstPercent = 20,
+            },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Quotas.MaxBytes, Is.EqualTo(1_000_000));
+            Assert.That(copy.Quotas.MaxKeys, Is.EqualTo(5_000));
+            Assert.That(copy.Quotas.MaxMemoryBytes, Is.EqualTo(2_000_000));
+            Assert.That(copy.Quotas.MaxTreeCount, Is.EqualTo(10));
+            Assert.That(copy.Quotas.MaxOpsPerSecond, Is.EqualTo(250));
+            Assert.That(copy.Quotas.BurstPercent, Is.EqualTo(20));
+            Assert.That(copy.Quotas.IsUnbounded, Is.False);
+        });
+    }
+
+    [Test]
+    public void TenantQuotasUpdateResult_response_round_trips()
+    {
+        var copy = RoundTrip(new TenantQuotasUpdateResult
+        {
+            TenantId = "acme",
+            Quotas = new TenantQuotasDescriptor { MaxOpsPerSecond = 42 },
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Quotas.MaxOpsPerSecond, Is.EqualTo(42));
+            Assert.That(copy.Quotas.MaxBytes, Is.Null);
+        });
+    }
+
+    [Test]
+    public void TenantQuotasDescriptor_unbounded_round_trips()
+    {
+        var copy = RoundTrip(TenantQuotasDescriptor.Unbounded);
+
+        Assert.That(copy.IsUnbounded, Is.True);
     }
 
     [Test]

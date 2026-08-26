@@ -131,6 +131,27 @@ public sealed class LatticeTenantAdminApiGrpcClient
         return UnaryAsync(_methods.DeleteTenant, new TenantAdminTenantRequest { TenantId = tenantId }, cancellationToken);
     }
 
+    /// <summary>
+    /// Authors a tenant's resource quotas and burst allowance, replacing whatever
+    /// quotas the tenant currently carries. This is the control-plane surface for
+    /// per-tenant capacity governance. Requires the caller to be authorized to
+    /// administer tenants; fails closed otherwise.
+    /// </summary>
+    /// <param name="tenantId">The tenant id whose quotas to author. Must not be <c>null</c> or empty.</param>
+    /// <param name="quotas">The quotas to apply. <see cref="TenantQuotasDescriptor.BurstPercent"/> must be non-negative.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The update result, carrying the quotas now in effect for the tenant.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(
+        string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        return UnaryAsync(
+            _methods.SetTenantQuotas,
+            new TenantAdminSetQuotasRequest { TenantId = tenantId, Quotas = quotas },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

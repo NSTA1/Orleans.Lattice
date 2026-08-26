@@ -398,6 +398,128 @@ public sealed class LatticeTenantAdminTests
         });
     }
 
+    // ----- Set quotas -----
+
+    [Test]
+    public async Task SetTenantQuotasAsync_authors_the_tenants_quotas()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecord(Tenant));
+        var facade = Create(registry);
+
+        var quotas = new TenantQuotasDescriptor
+        {
+            MaxBytes = 1_000_000,
+            MaxKeys = 5_000,
+            MaxMemoryBytes = 2_000_000,
+            MaxTreeCount = 10,
+            MaxOpsPerSecond = 250,
+            BurstPercent = 20,
+        };
+
+        var result = await facade.SetTenantQuotasAsync(Tenant, quotas);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo(Tenant));
+            Assert.That(result.Quotas, Is.EqualTo(quotas));
+            Assert.That(result.Quotas.IsUnbounded, Is.False);
+            Assert.That(registry.Puts, Is.EqualTo(1));
+            var persisted = registry.Peek(Tenant)!.Quotas;
+            Assert.That(persisted.MaxBytes, Is.EqualTo(1_000_000));
+            Assert.That(persisted.MaxKeys, Is.EqualTo(5_000));
+            Assert.That(persisted.MaxMemoryBytes, Is.EqualTo(2_000_000));
+            Assert.That(persisted.MaxTreeCount, Is.EqualTo(10));
+            Assert.That(persisted.MaxOpsPerSecond, Is.EqualTo(250));
+            Assert.That(persisted.BurstPercent, Is.EqualTo(20));
+        });
+    }
+
+    [Test]
+    public async Task SetTenantQuotasAsync_can_lift_caps_back_to_unbounded()
+    {
+        var registry = new FakeTenantRegistry();
+        var seeded = ActiveRecord(Tenant);
+        seeded.SetQuotas(
+            new TenantQuotas { MaxBytes = 1 },
+            HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Tick(HybridLogicalClock.Zero))),
+            "seed");
+        registry.Seed(seeded);
+        var facade = Create(registry);
+
+        var result = await facade.SetTenantQuotasAsync(Tenant, TenantQuotasDescriptor.Unbounded);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Quotas.IsUnbounded, Is.True);
+            Assert.That(registry.Peek(Tenant)!.Quotas.IsUnbounded, Is.True);
+        });
+    }
+
+    [Test]
+    public void SetTenantQuotasAsync_of_an_unknown_tenant_fails_closed()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry);
+
+        Assert.That(async () => await facade.SetTenantQuotasAsync(Tenant, TenantQuotasDescriptor.Unbounded),
+            Throws.TypeOf<TenantNotFoundException>());
+        Assert.That(registry.Puts, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void SetTenantQuotasAsync_of_the_reserved_default_tenant_is_rejected()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecord(TenantId.DefaultId));
+        var facade = Create(registry);
+
+        Assert.That(async () => await facade.SetTenantQuotasAsync(TenantId.DefaultId, new TenantQuotasDescriptor { MaxBytes = 1 }),
+            Throws.TypeOf<ReservedTenantOperationException>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(registry.Puts, Is.EqualTo(0));
+            Assert.That(registry.Peek(TenantId.DefaultId)!.Quotas.IsUnbounded, Is.True);
+        });
+    }
+
+    [Test]
+    public void SetTenantQuotasAsync_when_unauthorized_is_denied_before_touching_the_registry()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecord(Tenant));
+        var facade = Create(registry, allow: false);
+
+        Assert.That(async () => await facade.SetTenantQuotasAsync(Tenant, TenantQuotasDescriptor.Unbounded),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        Assert.That(registry.Puts, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void SetTenantQuotasAsync_rejects_a_negative_burst_percent()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(ActiveRecord(Tenant));
+        var facade = Create(registry);
+
+        Assert.That(
+            async () => await facade.SetTenantQuotasAsync(Tenant, new TenantQuotasDescriptor { BurstPercent = -1 }),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(registry.Puts, Is.EqualTo(0), "A rejected quota author must not write.");
+    }
+
+    [Test]
+    public void SetTenantQuotasAsync_rejects_a_null_or_empty_tenant_id()
+    {
+        var facade = Create(new FakeTenantRegistry());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await facade.SetTenantQuotasAsync(null!, TenantQuotasDescriptor.Unbounded), Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await facade.SetTenantQuotasAsync(string.Empty, TenantQuotasDescriptor.Unbounded), Throws.InstanceOf<ArgumentException>());
+        });
+    }
+
     // ----- Constructor guards -----
 
     [Test]

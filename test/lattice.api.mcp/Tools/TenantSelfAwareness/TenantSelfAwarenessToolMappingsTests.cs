@@ -67,6 +67,12 @@ public sealed class TenantSelfAwarenessToolMappingsTests
             TenantId = "acme",
             Status = TenantLifecycleStatus.Active,
             IsDefault = false,
+            Quotas = new TenantQuotasDescriptor
+            {
+                MaxBytes = 9_000,
+                MaxOpsPerSecond = 42,
+                BurstPercent = 10,
+            },
             Regions =
             [
                 new TenantRegionStatusDescriptor
@@ -91,6 +97,10 @@ public sealed class TenantSelfAwarenessToolMappingsTests
             Assert.That(mapped.TenantId, Is.EqualTo("acme"));
             Assert.That(mapped.Status, Is.EqualTo(nameof(TenantLifecycleStatus.Active)));
             Assert.That(mapped.IsDefault, Is.False);
+            Assert.That(mapped.Quotas.MaxBytes, Is.EqualTo(9_000));
+            Assert.That(mapped.Quotas.MaxOpsPerSecond, Is.EqualTo(42));
+            Assert.That(mapped.Quotas.BurstPercent, Is.EqualTo(10));
+            Assert.That(mapped.Quotas.IsUnbounded, Is.False);
             Assert.That(mapped.Regions.Select(r => r.RegionId), Is.EqualTo(new[] { "region-a", "region-b" }));
             Assert.That(mapped.Regions[0].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.Online)));
             Assert.That(mapped.Regions[0].IsAllowed, Is.True);

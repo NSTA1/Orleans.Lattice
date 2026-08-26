@@ -128,12 +128,14 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTenantAdminGrpcMethods.SuspendTenantMethodName => LatticeTenantAdminApiOperation.SuspendTenant,
             LatticeTenantAdminGrpcMethods.ResumeTenantMethodName => LatticeTenantAdminApiOperation.ResumeTenant,
             LatticeTenantAdminGrpcMethods.DeleteTenantMethodName => LatticeTenantAdminApiOperation.DeleteTenant,
+            LatticeTenantAdminGrpcMethods.SetTenantQuotasMethodName => LatticeTenantAdminApiOperation.SetTenantQuotas,
             _ => LatticeTenantAdminApiOperation.Unknown,
         };
 
         var targetId = request switch
         {
             TenantAdminTenantRequest t => t.TenantId,
+            TenantAdminSetQuotasRequest q => q.TenantId,
             _ => null,
         };
 

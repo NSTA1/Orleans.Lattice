@@ -36,7 +36,7 @@ auth-scheme advertisement RPC so a client can discover how to authenticate.
 
 ## Service and RPCs
 
-The service surfaces the four `ILatticeTenantAdmin` lifecycle operations, three
+The service surfaces the five `ILatticeTenantAdmin` lifecycle operations, three
 read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 
 | RPC | Facade method |
@@ -45,6 +45,7 @@ read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 | `SuspendTenant` | `SuspendTenantAsync` |
 | `ResumeTenant` | `ResumeTenantAsync` |
 | `DeleteTenant` | `DeleteTenantAsync` |
+| `SetTenantQuotas` | `SetTenantQuotasAsync` |
 | `GetCurrentTenant` | `ILatticeTenantSelfService.GetCurrentTenantAsync` (self-service; exempt from default-deny) |
 | `ListAccessibleTenants` | `ILatticeTenantSelfService.ListAccessibleTenantsAsync` (self-service; exempt from default-deny) |
 | `GetTenant` | `ILatticeTenantSelfService.GetTenantAsync` (self-service; exempt from default-deny) |
@@ -60,6 +61,7 @@ read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 | `SuspendTenantAsync` | `Task<TenantStatusChangeResult> SuspendTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `ResumeTenantAsync` | `Task<TenantStatusChangeResult> ResumeTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `DeleteTenantAsync` | `Task<TenantDeletionResult> DeleteTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `SetTenantQuotasAsync` | `Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
 
 `LatticeTenantSelfServiceApiGrpcClient` (read-only; construct with

@@ -88,6 +88,25 @@ public sealed class GrpcLatticeTenantAdminTests
     }
 
     [Test]
+    public async Task SetTenantQuotasAsync_forwards_request_and_unwraps_response()
+    {
+        var quotas = new TenantQuotasDescriptor { MaxBytes = 1_000, MaxOpsPerSecond = 50, BurstPercent = 10 };
+        var invoker = new FakeCallInvoker(
+            _ => new TenantQuotasUpdateResult { TenantId = "acme", Quotas = quotas });
+
+        var result = await Adapter(invoker).SetTenantQuotasAsync("acme", quotas);
+
+        Assert.Multiple(() =>
+        {
+            var request = (TenantAdminSetQuotasRequest)invoker.LastRequest!;
+            Assert.That(request.TenantId, Is.EqualTo("acme"));
+            Assert.That(request.Quotas, Is.EqualTo(quotas));
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.Quotas, Is.EqualTo(quotas));
+        });
+    }
+
+    [Test]
     public void CreateTenantAsync_empty_tenant_throws()
         => Assert.ThrowsAsync<ArgumentException>(
             async () => await Adapter(new FakeCallInvoker(
