@@ -285,8 +285,20 @@ The reusable harness lives in the product-agnostic shared testing library
   runtime's controlled nondeterminism (e.g. `runtime.RandomBoolean()`), and
   asserts its safety property with `Specification.Assert(...)`. The harness does
   **not** apply `coyote rewrite`, so real `Task`/`await` interleavings are not
-  controlled - drive every scheduling choice through the runtime, and build all
-  model state inside `Run` (hold no mutable static state between iterations).
+  controlled - drive every scheduling choice through the runtime. **The engine
+  reuses the same model instance for every explored schedule**, calling `Run`
+  once per iteration, so build **all** per-iteration state as locals inside `Run`.
+  A model field may hold only **immutable configuration** (leaf/participant
+  counts, a scenario/mode enum, raw fault *counts*); it must never hold a
+  **mutable** object that `Run` mutates (static **or** instance) - in particular
+  a `FaultBudget` or `FaultDeliveryQueue<T>`. A mutable field leaks state between
+  schedules: because the leak is silent (no failure, just lost coverage), it does
+  not announce itself - a shared `FaultBudget` is drained by the first few
+  schedules, after which every later iteration injects zero faults, which
+  simultaneously makes a must-find guard miss the race *regardless of the
+  iteration count* and makes the companion safety sweep pass **vacuously** (issue
+  #1664). Symptom to recognise: a guard that misses no matter how high you raise
+  the iteration budget is leaking state between iterations, not under-exploring.
 - `CoyoteModelHarness` - `Explore` runs the engine and returns a
   `CoyoteExplorationResult` (iterations, bugs found, bug reports, replayable
   trace); `AssertNoInterleavingViolation` fails the test with the reproducible
@@ -320,7 +332,12 @@ The reusable harness lives in the product-agnostic shared testing library
    bounded progress (drive to the budget-exhausted point, apply the backstop, then
    assert the good terminal state), and add the mandatory companion guard test that
    removes the backstop and asserts `AssertInterleavingViolationFound(...)` finds
-   the stall. See `AtomicCommitLivenessModel` for the reference pattern.
+   the stall. **Construct the `FaultBudget` (and `FaultDeliveryQueue<T>`) fresh at
+   the top of `Run`, never in the constructor / a field** - store only the raw
+   drop / duplicate / restart *counts* as fields and rebuild the budget each
+   iteration, so every schedule gets the full fault allowance (see the mutable-state
+   rule above and issue #1664). See `AtomicCommitLivenessModel` for the reference
+   pattern.
 
 ### Verified-core coverage (level-C Phase 5, issue #1594)
 

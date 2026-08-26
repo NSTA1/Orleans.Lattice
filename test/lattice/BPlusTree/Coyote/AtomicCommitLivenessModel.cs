@@ -106,7 +106,9 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
     private readonly int _leafCount;
     private readonly AtomicCommitLivenessScenario _scenario;
     private readonly AtomicCommitLivenessMode _mode;
-    private readonly FaultBudget _budget;
+    private readonly int _drops;
+    private readonly int _duplicates;
+    private readonly int _restarts;
 
     /// <summary>
     /// Creates the liveness model for a <paramref name="leafCount"/>-leaf saga in
@@ -131,10 +133,15 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
         int restarts = 1)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(leafCount, 2);
+        ArgumentOutOfRangeException.ThrowIfNegative(drops);
+        ArgumentOutOfRangeException.ThrowIfNegative(duplicates);
+        ArgumentOutOfRangeException.ThrowIfNegative(restarts);
         _leafCount = leafCount;
         _scenario = scenario;
         _mode = mode;
-        _budget = new FaultBudget(drops, duplicates, restarts);
+        _drops = drops;
+        _duplicates = duplicates;
+        _restarts = restarts;
     }
 
     /// <inheritdoc />
@@ -145,6 +152,15 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
         // Cache the decision source once so the per-step fault choices do not
         // allocate a delegate each call.
         Func<bool> decide = runtime.RandomBoolean;
+
+        // Build a fresh fault budget for THIS iteration. Coyote invokes Run on the
+        // same model instance for every explored schedule, so - like every other
+        // piece of state below - the budget must be rebuilt per iteration. A single
+        // budget shared across iterations is drained by the first few schedules,
+        // after which every remaining iteration injects zero faults, collapsing
+        // exploration coverage (and making the must-find guard miss the modeled
+        // race regardless of the iteration count). See issue #1664.
+        var budget = new FaultBudget(_drops, _duplicates, _restarts);
 
         var core = new TxRegistryDecisionCore(new Dictionary<Guid, TxStatus>(), 0L);
         var txid = Guid.NewGuid();
@@ -175,13 +191,13 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
         Array.Fill(projected, Pre);
 
         // Broadcast a terminal to every leaf through the fault-injecting transport.
-        var queue = new FaultDeliveryQueue<int>(_budget);
+        var queue = new FaultDeliveryQueue<int>(budget);
         for (var leaf = 0; leaf < _leafCount; leaf++)
         {
             queue.Enqueue(leaf);
         }
 
-        DriveFaultInjectedBroadcast(queue, decide, committed, holdsPrepared, terminalApplied, projected);
+        DriveFaultInjectedBroadcast(queue, budget, decide, committed, holdsPrepared, terminalApplied, projected);
 
         if (_mode == AtomicCommitLivenessMode.DurableBackstop)
         {
@@ -204,6 +220,7 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
     /// </summary>
     private void DriveFaultInjectedBroadcast(
         FaultDeliveryQueue<int> queue,
+        FaultBudget budget,
         Func<bool> decide,
         bool committed,
         bool[] holdsPrepared,
@@ -212,7 +229,7 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
     {
         while (queue.HasPending)
         {
-            MaybeRestartParticipant(queue, decide);
+            MaybeRestartParticipant(queue, budget, decide);
 
             if (queue.TryDeliverNext(decide, out var leaf))
             {
@@ -229,17 +246,17 @@ public sealed class AtomicCommitLivenessModel : ICoyoteModel
     /// preserved. A leaf whose terminal is lost this way can only be recovered by
     /// the backstop.
     /// </summary>
-    private void MaybeRestartParticipant(FaultDeliveryQueue<int> queue, Func<bool> decide)
+    private void MaybeRestartParticipant(FaultDeliveryQueue<int> queue, FaultBudget budget, Func<bool> decide)
     {
         for (var leaf = 0; leaf < _leafCount; leaf++)
         {
             var target = leaf;
-            if (_budget.RestartsRemaining <= 0)
+            if (budget.RestartsRemaining <= 0)
             {
                 return;
             }
 
-            if (_budget.TryRestart(decide))
+            if (budget.TryRestart(decide))
             {
                 // Volatile in-flight terminals for this leaf are lost on restart;
                 // durable state is untouched.

@@ -14,9 +14,13 @@ namespace Orleans.Lattice.Testing.Coyote;
 /// property with <see cref="Microsoft.Coyote.Specifications.Specification.Assert(bool, string)"/>.
 /// </summary>
 /// <remarks>
-/// The model is re-run once per exploration iteration, so it must build all of
-/// its own state on each <see cref="Run(ICoyoteRuntime)"/> call and hold no
-/// mutable static state between runs. Because the harness does not apply
+/// The model is re-run once per exploration iteration <b>on the same instance</b>,
+/// so it must build all of its own per-iteration state as locals on each
+/// <see cref="Run(ICoyoteRuntime)"/> call and hold no mutable state - instance or
+/// static - between runs. A field may hold only immutable configuration; a mutable
+/// helper such as a <c>FaultBudget</c> must be constructed inside <see cref="Run"/>,
+/// never stored on the instance, or it leaks (drains) across schedules and silently
+/// destroys exploration coverage. Because the harness does not apply
 /// <c>coyote rewrite</c>, real <c>Task</c>/<c>await</c> interleavings are not
 /// controlled - drive every scheduling choice through the runtime instead.
 /// </remarks>

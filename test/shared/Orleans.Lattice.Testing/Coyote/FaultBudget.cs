@@ -28,6 +28,15 @@ namespace Orleans.Lattice.Testing.Coyote;
 /// Coyote runtime type), so it is reusable by every model and unit-testable
 /// without a Coyote engine. A model passes <c>runtime.RandomBoolean</c> as the
 /// decision source; a unit test passes a scripted delegate.
+/// <para>
+/// <b>Lifecycle:</b> a budget is mutable and drains as faults are consumed, so it
+/// is <b>per-iteration</b> state. A model must construct a fresh budget inside its
+/// <c>Run</c> method on every exploration iteration and must never store one in a
+/// field: the Coyote engine reuses the same model instance for every schedule, so
+/// a shared budget is drained by the first few iterations and every later
+/// iteration then injects no faults - silently collapsing exploration coverage
+/// (issue #1664).
+/// </para>
 /// </remarks>
 public sealed class FaultBudget
 {
