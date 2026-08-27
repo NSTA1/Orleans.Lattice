@@ -39,7 +39,7 @@ public class TenantTreeRoutingIntegrationTests
         var treeId = LatticeTenantTrees.Compose(TenantId.Parse("acme"), "orders-reject");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
-        Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => tree.SetAsync("k", Encoding.UTF8.GetBytes("v")));
     }
 

@@ -139,7 +139,7 @@ public class DigestIntegrationTests
         var grainFactory = _fixture.Cluster.GrainFactory;
         var systemTree = grainFactory.GetGrain<ILattice>("_lattice_replog_test");
 
-        Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             async () => await systemTree.GetLeafProjectionDigestAsync(0));
     }
 }

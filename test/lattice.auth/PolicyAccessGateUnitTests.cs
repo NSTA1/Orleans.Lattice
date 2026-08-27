@@ -323,4 +323,123 @@ public sealed class PolicyAccessGateUnitTests
 
         Assert.That(granted, Is.True, "an explicit registry grant surfaces the tree to its holder");
     }
+
+    // ---- Existence probe composes tenant isolation (issue #1678) ---------
+    //
+    // HasAnyGrantAsync is the existence-hiding mirror of the enforcement path, so
+    // it must never out-reach it. It previously delegated straight to the decision
+    // engine with no tenant-enforcer consultation, so a caller holding a broad
+    // cluster-wide grant (or running under DefaultEffect=Allow) satisfied the probe
+    // for ANOTHER tenant's t/{tenant}/... tree and learned it exists - the whole
+    // tenant roster and every tenant's tree names - while the very same subject was
+    // denied the moment it tried to read that tree.
+
+    private const string ForeignTenantTree = "t/victim/orders";
+
+    /// <summary>A tenant enforcer that denies exactly one tree and allows the rest.</summary>
+    private sealed class DenyingTenantEnforcer(string deniedTreeId) : ITenantGateEnforcer
+    {
+        public bool IsActive => true;
+
+        public LatticeAccessDecision Enforce(in LatticeAccessRequest request) =>
+            string.Equals(request.TreeId, deniedTreeId, StringComparison.Ordinal)
+                ? LatticeAccessDecision.Deny("tenant isolation denied the request")
+                : LatticeAccessDecision.Allow();
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_foreign_tenant_tree_is_hidden_despite_a_cluster_wide_grant()
+    {
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeOperation.RangeRead, LatticeEffect.Allow, "mallory");
+        var harness = await AuthGateHarness.CreateAsync(
+            options, new DenyingTenantEnforcer(ForeignTenantTree), wildcard);
+
+        var granted = await harness.Gate.HasAnyGrantAsync(
+            ForeignTenantTree, new LatticeSubject("mallory"), LatticeOperation.RangeRead);
+
+        Assert.That(granted, Is.False,
+            "a broad grant must not let an existence probe out-reach the enforcement decision");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_foreign_tenant_tree_is_hidden_under_default_allow()
+    {
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Allow },
+            new DenyingTenantEnforcer(ForeignTenantTree));
+
+        var granted = await harness.Gate.HasAnyGrantAsync(
+            ForeignTenantTree, new LatticeSubject("mallory"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.False,
+            "the data-plane default effect must never surface another tenant's tree");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_own_tenant_tree_is_still_visible()
+    {
+        var options = new LatticeAuthOptions
+        {
+            DefaultEffect = LatticeEffect.Deny,
+            AllTreesGrantsEnabled = true,
+        };
+        var wildcard = Rule(LatticeScope.ClusterWide(), LatticeOperation.Read, LatticeEffect.Allow, "alice");
+        var harness = await AuthGateHarness.CreateAsync(
+            options, new DenyingTenantEnforcer(ForeignTenantTree), wildcard);
+
+        var granted = await harness.Gate.HasAnyGrantAsync(
+            "t/alice-co/orders", new LatticeSubject("alice"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.True, "the caller's own tenant trees stay visible");
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_without_tenancy_is_unchanged()
+    {
+        // The no-tenancy path must be byte-for-byte identical: the null enforcer
+        // reports IsActive false and the probe short-circuits after one bool read.
+        var grant = Rule(LatticeScope.Tree("app"), LatticeOperation.Read, LatticeEffect.Allow, "alice");
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny }, tenantEnforcer: null, grant);
+
+        var granted = await harness.Gate.HasAnyGrantAsync("app", new LatticeSubject("alice"), LatticeOperation.Read);
+
+        Assert.That(granted, Is.True);
+    }
+
+    [Test]
+    public async Task HasAnyGrantAsync_denied_by_policy_never_consults_the_tenant_enforcer()
+    {
+        var enforcer = new CountingTenantEnforcer();
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny }, enforcer);
+
+        var granted = await harness.Gate.HasAnyGrantAsync(
+            ForeignTenantTree, new LatticeSubject("mallory"), LatticeOperation.Read);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(granted, Is.False);
+            Assert.That(enforcer.Calls, Is.Zero,
+                "the enforcer stays off the deny fast path, exactly as on the enforcement path");
+        });
+    }
+
+    private sealed class CountingTenantEnforcer : ITenantGateEnforcer
+    {
+        public int Calls { get; private set; }
+
+        public bool IsActive => true;
+
+        public LatticeAccessDecision Enforce(in LatticeAccessRequest request)
+        {
+            Calls++;
+            return LatticeAccessDecision.Allow();
+        }
+    }
 }

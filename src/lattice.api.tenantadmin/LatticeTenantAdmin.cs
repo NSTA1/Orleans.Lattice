@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice;
+using Orleans.Lattice.Membership;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin;
@@ -36,6 +37,8 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     private readonly ITenantAdminClock _clock;
     private readonly ITenantTreeCascade _cascade;
     private readonly ILatticeMembershipContext? _membership;
+    private readonly ILatticeIdentityDirectory? _identityDirectory;
+    private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
     private readonly string? _writerId;
 
     /// <summary>
@@ -52,14 +55,25 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     /// caller then resolves to <see cref="LatticeSubject.Anonymous"/> and no
     /// subject is seeded).
     /// </param>
-    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="membership"/> is <c>null</c>.</exception>
+    /// <param name="identityDirectory">
+    /// The upstream identity directory used to validate an explicitly supplied
+    /// admin-subject id, or <c>null</c> when none is registered (ids are then
+    /// accepted without directory validation, as on a cluster with no directory).
+    /// </param>
+    /// <param name="identityDirectoryOptions">
+    /// The identity-directory options deciding whether validation is required, or
+    /// <c>null</c> when none is registered.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="membership"/>, <paramref name="identityDirectory"/>, or <paramref name="identityDirectoryOptions"/> is <c>null</c>.</exception>
     public LatticeTenantAdmin(
         ITenantRegistry registry,
         TenantAdminAccessAuthorizer authorizer,
         ITenantAdminClock clock,
         ITenantTreeCascade cascade,
         IOptions<ClusterOptions> clusterOptions,
-        ILatticeMembershipContext? membership = null)
+        ILatticeMembershipContext? membership = null,
+        ILatticeIdentityDirectory? identityDirectory = null,
+        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -72,6 +86,8 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         _clock = clock;
         _cascade = cascade;
         _membership = membership;
+        _identityDirectory = identityDirectory;
+        _identityDirectoryOptions = identityDirectoryOptions;
         _writerId = clusterOptions.Value.ClusterId;
     }
 
@@ -82,8 +98,17 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         CancellationToken cancellationToken = default)
     {
         var tenant = ParseTenant(tenantId);
-        var requested = ValidateSubjects(adminSubjects);
+        ThrowIfReservedTenantId(tenant);
+
+        // Authorize first, then validate, then perform the system-origin write -
+        // the order the security instructions fix for every administrative
+        // create path. Validating ahead of the gate let an unauthorized caller
+        // distinguish a malformed subject list (ArgumentException) from a denial
+        // (LatticeAuthorizationDeniedException), a small but needless oracle.
         await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
+
+        var requested = ValidateSubjects(adminSubjects);
+        await ValidateDirectorySubjectsAsync(requested, cancellationToken).ConfigureAwait(false);
 
         if (await _registry.ExistsAsync(tenant, cancellationToken).ConfigureAwait(false))
         {
@@ -287,6 +312,57 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     }
 
     /// <summary>
+    /// Validates each explicitly supplied admin-subject id against the upstream
+    /// identity directory, so an administrative membership reference can never be
+    /// created against a principal that does not exist.
+    /// </summary>
+    /// <remarks>
+    /// Membership of a tenant's admin-subject set <em>is</em> the tenant-admin
+    /// capability, so this is an administrative membership-reference create path
+    /// and follows the same contract as its siblings on the authorization-admin
+    /// facade (<c>UpsertGroupAsync</c> / <c>AddMemberAsync</c>): validate only when
+    /// a real directory provider is active and
+    /// <see cref="LatticeIdentityDirectoryOptions.ValidationRequired"/> is set, and
+    /// deny an unresolvable id before any system-origin write. Without it a
+    /// typo'd, retired, or not-yet-provisioned id was silently accepted as a live
+    /// tenant-admin grant - a dangling reference that whoever later registers that
+    /// id would inherit. The caller-seeded default is not validated here: it comes
+    /// from the authenticated caller's own resolved subject, not from the wire.
+    /// </remarks>
+    private async Task ValidateDirectorySubjectsAsync(
+        IReadOnlyList<string> adminSubjects,
+        CancellationToken cancellationToken)
+    {
+        if (adminSubjects.Count == 0
+            || _identityDirectory is null
+            || _identityDirectoryOptions?.CurrentValue.ValidationRequired != true
+            || !DirectoryAvailable)
+        {
+            return;
+        }
+
+        foreach (var subjectId in adminSubjects)
+        {
+            var principal = await _identityDirectory
+                .ResolveAsync(subjectId, cancellationToken).ConfigureAwait(false);
+
+            if (principal is null)
+            {
+                throw LatticeDirectoryValidationException.Unresolved(
+                    subjectId, DirectoryPrincipalKind.User, nameof(adminSubjects));
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see langword="true"/> when a real upstream identity directory is
+    /// configured; <see langword="false"/> when the default no-op
+    /// <see cref="NullIdentityDirectory"/> is in force (ids are accepted without
+    /// validation).
+    /// </summary>
+    private bool DirectoryAvailable => _identityDirectory is not null and not NullIdentityDirectory;
+
+    /// <summary>
     /// Resolves the calling subject to the single-element admin-subject set the
     /// create seeds when none was supplied, or an empty set when the caller
     /// cannot be resolved (no membership context, an anonymous caller, or a
@@ -326,6 +402,44 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         }
 
         return tenant;
+    }
+
+    /// <summary>
+    /// Rejects a new tenant id that shadows a reserved namespace. A tenant id
+    /// appears in tree ids (<c>t/{tenant}/{name}</c>), metric labels, and log
+    /// messages alongside real tree ids, so one beginning with the reserved
+    /// <c>sys-</c> system-data prefix or the <c>_lattice_</c> system prefix is an
+    /// avoidable confusion trap. Applied only on the create path: an existing
+    /// tenant registered before this guard must still be readable and deletable,
+    /// so the shared <see cref="ParseTenant"/> grammar is deliberately unchanged.
+    /// </summary>
+    /// <summary>
+    /// The reserved system-data tree prefix (<c>sys-</c>) and system tree prefix
+    /// (<c>_lattice_</c>), kept as local literals because the core constants class
+    /// is internal - mirroring how the core keeps the all-trees sentinel local to
+    /// avoid a cross-package dependency for a single string.
+    /// </summary>
+    private const string ReservedSystemDataPrefix = "sys-";
+
+    private const string ReservedSystemPrefix = "_lattice_";
+
+    private static void ThrowIfReservedTenantId(TenantId tenant)
+    {
+        var value = tenant.Value;
+        if (value is null)
+        {
+            return;
+        }
+
+        if (value.StartsWith(ReservedSystemDataPrefix, StringComparison.Ordinal)
+            || value.StartsWith(ReservedSystemPrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Tenant id '{value}' is reserved: a tenant id must not begin with the "
+                + $"'{ReservedSystemDataPrefix}' or '{ReservedSystemPrefix}' "
+                + "namespace, which names internal Lattice trees.",
+                paramName: "tenantId");
+        }
     }
 
     private static TenantLifecycleStatus Map(TenantStatus status) => status switch

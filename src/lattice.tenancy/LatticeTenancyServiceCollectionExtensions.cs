@@ -170,6 +170,21 @@ public static class LatticeTenancyServiceCollectionExtensions
             ServiceDescriptor.Singleton<ITenantGateEnforcer>(
                 sp => sp.GetRequiredService<TenantGateEnforcer>()));
 
+        // Replace the core null tenant-context and enumeration seams with the
+        // active implementations. Both are declared in core with a no-op default
+        // so a non-tenancy cluster pays nothing, and both document that "the
+        // tenancy package replaces it" - registering them here is what makes that
+        // true. Without the context resolver, ComposeEffectiveTreeId always took
+        // the default-tenant branch and returned the caller's bare tree name
+        // unchanged, so GetLatticeAsync handed every tenant the SAME physical
+        // tree; without the enumeration filter, a tree-id enumeration was never
+        // pruned to the active tenant. Replace (not TryAdd) deterministically
+        // supersedes the core registrations regardless of registration order.
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantContextResolver, TenantContextResolver>());
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantEnumerationFilter, TenantEnumerationFilter>());
+
         // Per-tenant region residency (issue #1637, T20). Replace the null residency
         // seam with the active resolver, which reads its decision from an in-memory
         // per-region snapshot kept current off the core change-feed - NOT from a live

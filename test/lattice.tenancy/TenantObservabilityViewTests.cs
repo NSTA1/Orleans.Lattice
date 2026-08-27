@@ -1,3 +1,5 @@
+using NSubstitute;
+using Orleans.Lattice.Membership;
 using static Orleans.Lattice.Tenancy.Tests.ObservabilityTestData;
 using static Orleans.Lattice.Tenancy.Tests.OverageTestData;
 
@@ -28,8 +30,45 @@ public sealed class TenantObservabilityViewTests
         .With(Acme, View(Quotas(bytes: 1000), Usage(bytes: 100)))
         .With(Beta, View(Quotas(bytes: 2000), Usage(bytes: 200)));
 
-    private static TenantObservabilityView Create(FakeTenantUsageIndex usage, ILatticeAccessGate gate, FakeTenantOverageBilling? billing = null) =>
-        new(new TenantObservabilitySource(usage, billing ?? new FakeTenantOverageBilling()), gate);
+    /// <summary>
+    /// A membership context resolving every caller to <paramref name="subjectId"/>
+    /// synchronously, so the view's active-tenant validation has a subject to
+    /// validate against without a directory read.
+    /// </summary>
+    private static ILatticeMembershipContext MembershipFor(string subjectId = "op-1")
+    {
+        var membership = Substitute.For<ILatticeMembershipContext>();
+        membership.TryResolveCurrent(out Arg.Any<LatticeSubject>())
+            .Returns(call =>
+            {
+                call[0] = new LatticeSubject(subjectId);
+                return true;
+            });
+        membership.ResolveCurrentAsync(Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<LatticeSubject>(new LatticeSubject(subjectId)));
+        return membership;
+    }
+
+    /// <summary>A policy engine that admits the caller as any asserted tenant.</summary>
+    private static ITenantPolicyEngine ValidatingEngine()
+    {
+        var engine = Substitute.For<ITenantPolicyEngine>();
+        engine.ValidateActiveTenant(Arg.Any<string>(), Arg.Any<TenantId>())
+            .Returns(TenantAccessDecision.Allow());
+        return engine;
+    }
+
+    private static TenantObservabilityView Create(
+        FakeTenantUsageIndex usage,
+        ILatticeAccessGate gate,
+        FakeTenantOverageBilling? billing = null,
+        ITenantPolicyEngine? engine = null,
+        ILatticeMembershipContext? membership = null) =>
+        new(
+            new TenantObservabilitySource(usage, billing ?? new FakeTenantOverageBilling()),
+            gate,
+            engine ?? ValidatingEngine(),
+            membership ?? MembershipFor());
 
     private static async Task<List<TenantObservabilitySnapshot>> ListAsync(TenantObservabilityView view, TenantObservabilityScope scope)
     {

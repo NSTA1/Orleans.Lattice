@@ -151,7 +151,7 @@ public class LatticeRangeDigestIntegrationTests
         var grainFactory = _fixture.Cluster.GrainFactory;
         var systemTree = grainFactory.GetGrain<ILattice>("_lattice_replog_test");
 
-        Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             async () => await systemTree.GetLeafProjectionDigestForRangeAsync(0, null, null));
     }
 }

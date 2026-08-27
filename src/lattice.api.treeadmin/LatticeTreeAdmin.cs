@@ -1731,6 +1731,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// refused before any grain is dialed. The registry enforces the same guard, but
     /// asserting it here keeps the rejection unit-testable without a throwing registry.
     /// </summary>
+    /// <remarks>
+    /// Also rejects an id in the structural tenant namespace (<c>t/{tenant}/{name}</c>)
+    /// that the ambient active tenant does not own. That namespace is composed
+    /// internally - <see cref="LatticeTenantScopedTreeAdmin"/> composes it under the
+    /// tenant in scope, and the data plane refuses a direct user-origin write to a
+    /// <c>t/</c> id outright - so a caller-supplied id naming a namespace the caller
+    /// is not operating in has no legitimate source. Without this the two paths
+    /// disagreed: tree administration happily created <c>t/other/name</c> while every
+    /// subsequent read and write against it faulted on the data plane's reserved-namespace
+    /// guard, leaving a registered, catalogued, permanently unusable tree inside
+    /// another tenant's namespace. A composed id whose owner IS the active tenant is
+    /// allowed through unchanged, so the tenant-scoped facade is unaffected.
+    /// </remarks>
     private static void ThrowIfReserved(string treeId)
     {
         if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
@@ -1739,6 +1752,26 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 $"Tree id '{treeId}' is reserved: the '{LatticeConstants.SystemTreePrefix}' namespace is managed by the library.",
                 nameof(treeId));
         }
+
+        if (!LatticeTenantTrees.IsTenantScoped(treeId))
+        {
+            return;
+        }
+
+        var owner = LatticeTenantTrees.GetOwner(treeId);
+        var active = LatticeActiveTenantContext.Current;
+        if (active is { Value: not null } activeTenant
+            && owner.IsTenantOwned
+            && owner.Tenant.Equals(activeTenant))
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            $"Tree id '{treeId}' is reserved: the '{LatticeTenantTrees.SegmentPrefix}' namespace is the structural "
+            + "tenant namespace and is composed internally by the Lattice tenancy layer. Administer a tenant's tree "
+            + "through the tenant-scoped tree-administration surface, by its unqualified name.",
+            nameof(treeId));
     }
 
     /// <summary>

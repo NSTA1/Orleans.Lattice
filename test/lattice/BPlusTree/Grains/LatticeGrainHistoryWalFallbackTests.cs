@@ -242,7 +242,7 @@ public sealed class LatticeGrainHistoryWalFallbackTests
         var grain = CreateGrainForId(LatticeConstants.RegistryTreeId);
         Assert.That(
             async () => await grain.ScanEntryHistoryAsync("k", null, null, 10, null),
-            Throws.TypeOf<InvalidOperationException>());
+            Throws.TypeOf<LatticeReservedTreeNamespaceException>());
     }
 
     private static LatticeGrain CreateGrainForId(string treeId)

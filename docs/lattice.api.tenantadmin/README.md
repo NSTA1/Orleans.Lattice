@@ -64,7 +64,19 @@ Three facades are exposed:
   caller that cannot be resolved to a subject (an anonymous or system-origin
   create) seeds nothing rather than inventing an owner; grant access explicitly
   in that case. The seeded set is echoed back on
-  `TenantCreationResult.AdminSubjects`.
+  `TenantCreationResult.AdminSubjects`. Because membership of that set *is* the
+  tenant-admin capability, an explicitly supplied id is validated against the
+  upstream identity directory when one is configured and
+  `LatticeIdentityDirectoryOptions.ValidationRequired` is set, exactly as the
+  authorization-admin facade validates a group member: an unresolvable id is
+  refused with a `LatticeDirectoryValidationException` rather than being accepted
+  as a dangling grant that whoever later registers that id would inherit. The
+  caller-seeded default is not directory-validated - it comes from the
+  authenticated caller's own resolved subject, not from the wire.
+- **Authorize, then validate, then write.** Every mutating verb authorizes through
+  the fail-closed gate *before* it inspects its arguments or touches the registry,
+  so a denied caller is refused identically whether or not its arguments are
+  well-formed and cannot use argument validation as an oracle.
 - **Cascading delete.** Deleting a tenant cascades the delete to every tree the
   tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry record
   is removed.
