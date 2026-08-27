@@ -31,6 +31,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal sealed class LatticeApiMcpSessionConfigurator
 {
+    /// <summary>The advertised name of the region-discovery meta-tool.</summary>
+    private const string RegionDiscoveryToolName = "lattice_list_regions";
+
     private readonly ILatticeApiMcpCredentialBridge _credentialBridge;
     private readonly ILatticeApiMcpPermissionResolver _permissionResolver;
     private readonly IReadOnlyList<ILatticeApiMcpToolGroup> _toolGroups;
@@ -121,6 +124,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
         var clusterInfo = await ResolveClusterInfoAsync(httpContext, cancellationToken).ConfigureAwait(false);
         var capabilities = BuildCapabilities(credential, access, clusterInfo);
         var tools = new McpServerPrimitiveCollection<McpServerTool>();
+        var regionToolAdvertised = false;
         if (credential is not null)
         {
             // Only an authenticated caller is offered anything at all. The
@@ -128,12 +132,54 @@ internal sealed class LatticeApiMcpSessionConfigurator
             // agent can learn what it may (or may not) do; group tools are added
             // only for the groups the caller is granted.
             tools.Add(CreateCapabilitiesTool(capabilities));
-            tools.Add(CreateListRegionsTool());
+            regionToolAdvertised = await AddRegionDiscoveryToolAsync(
+                tools, access, httpContext, cancellationToken).ConfigureAwait(false);
             await AddPermittedGroupToolsAsync(tools, access, httpContext, cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        return new LatticeApiMcpSessionPlan(capabilities, tools, BuildInstructions(capabilities));
+        return new LatticeApiMcpSessionPlan(
+            capabilities, tools, BuildInstructions(capabilities, regionToolAdvertised));
+    }
+
+    /// <summary>
+    /// Adds the <c>lattice_list_regions</c> discovery tool when - and only when -
+    /// the caller may reach it, returning whether it was advertised.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <c>lattice_capabilities</c>, whose entire payload is derived from
+    /// the caller's own credential and grants, this tool reports cluster-internal
+    /// topology: the id and cluster id of every reachable <b>peer</b> region and
+    /// the per-group gRPC endpoint each is served from. That is only ever useful
+    /// to a caller who can actually route a tool call somewhere, so it is gated
+    /// exactly like a group tool rather than riding along with the meta-tool - a
+    /// caller holding no facade grant at all is told nothing, and the registered
+    /// authorizer (default-deny) must additionally permit it by name. The
+    /// advertised tool is wrapped in <see cref="AuthorizedMetaTool"/> so the same
+    /// gate runs again per invocation, keeping the two enforcement points in
+    /// lock-step.
+    /// </remarks>
+    private async Task<bool> AddRegionDiscoveryToolAsync(
+        McpServerPrimitiveCollection<McpServerTool> tools,
+        LatticeApiMcpAccessSet access,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (access.IsEmpty)
+        {
+            return false;
+        }
+
+        var authorized = await McpToolAuthorizationGate
+            .IsAuthorizedAsync(_services, httpContext, RegionDiscoveryToolName, cancellationToken)
+            .ConfigureAwait(false);
+        if (!authorized)
+        {
+            return false;
+        }
+
+        tools.Add(new AuthorizedMetaTool(CreateListRegionsTool()));
+        return true;
     }
 
     private async Task<ClusterInfo?> ResolveClusterInfoAsync(
@@ -273,7 +319,7 @@ internal sealed class LatticeApiMcpSessionConfigurator
             RegionDiscoveryToolHandlers.ListRegionsAsync,
             new McpServerToolCreateOptions
             {
-                Name = "lattice_list_regions",
+                Name = RegionDiscoveryToolName,
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Lattice regions",
                 Description =
@@ -289,7 +335,9 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 UseStructuredContent = true,
             });
 
-    private static string BuildInstructions(LatticeApiMcpCapabilities capabilities)
+    private static string BuildInstructions(
+        LatticeApiMcpCapabilities capabilities,
+        bool regionToolAdvertised)
     {
         var builder = new StringBuilder();
         if (!capabilities.Authenticated)
@@ -341,9 +389,13 @@ internal sealed class LatticeApiMcpSessionConfigurator
         }
 
         builder.Append("Call lattice_capabilities for the machine-readable capability report. ");
-        builder.Append(
-            "Call lattice_list_regions to discover which regions you can target; pass a region id as "
-            + "the optional 'region' argument of any tool to route it there (omit it for the current region).");
+        if (regionToolAdvertised)
+        {
+            builder.Append(
+                "Call lattice_list_regions to discover which regions you can target; pass a region id as "
+                + "the optional 'region' argument of any tool to route it there (omit it for the current region).");
+        }
+
         return builder.ToString();
     }
 }

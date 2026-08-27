@@ -307,11 +307,26 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     /// its UTF-8 byte), so distinct tree ids always map to distinct
     /// directories.
     /// </summary>
+    /// <remarks>
+    /// A tree id is an opaque, caller-supplied string, so the encoder is a
+    /// security boundary: the encoded segment must always name a directory
+    /// rather than a relative path token. <c>.</c> is in the unreserved set
+    /// (it is legitimate inside a tree name), which on its own would let the
+    /// ids <c>"."</c> and <c>".."</c> encode to themselves - and
+    /// <see cref="Path.Combine(string, string, string)"/> performs no
+    /// normalisation, so <c>".."</c> would resolve the shard directory
+    /// outside the operator-configured <see cref="FileWalStorageOptions.RootDirectory"/>
+    /// and write a WAL beyond the ACLs, quotas, and retention policy scoped to
+    /// that root. An all-dot segment therefore has its dots escaped as well.
+    /// Injectivity is preserved because <c>%</c> is itself always escaped, so
+    /// no other tree id encodes to <c>%2E</c>.
+    /// </remarks>
     internal static string EncodePathSegment(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         var bytes = Encoding.UTF8.GetBytes(treeId);
         var builder = new StringBuilder(bytes.Length);
+        var allDots = true;
         foreach (var b in bytes)
         {
             var isUnreserved = b is (>= (byte)'A' and <= (byte)'Z')
@@ -320,10 +335,12 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
                 or (byte)'-' or (byte)'.' or (byte)'_';
             if (isUnreserved)
             {
+                allDots &= b == (byte)'.';
                 builder.Append((char)b);
             }
             else
             {
+                allDots = false;
                 builder.Append('%');
                 builder.Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
             }
@@ -331,7 +348,27 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 
         // Guard against an empty segment (an empty tree id) so Path.Combine
         // never collapses the directory.
-        return builder.Length == 0 ? "_" : builder.ToString();
+        if (builder.Length == 0)
+        {
+            return "_";
+        }
+
+        // Escape a segment made solely of dots ("." / ".." / ...): those are
+        // relative path tokens, not names, and Path.Combine would let them
+        // escape the configured WAL root. Only allocated on this cold path -
+        // an ordinary tree id leaves the fast path untouched.
+        if (allDots)
+        {
+            var escaped = new StringBuilder(builder.Length * 3);
+            for (var i = 0; i < builder.Length; i++)
+            {
+                escaped.Append("%2E");
+            }
+
+            return escaped.ToString();
+        }
+
+        return builder.ToString();
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);

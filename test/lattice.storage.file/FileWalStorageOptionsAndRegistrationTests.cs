@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Storage.File.Tests;
@@ -100,6 +101,101 @@ public sealed class FileWalStorageOptionsAndRegistrationTests
     public void EncodePathSegment_maps_an_empty_tree_id_to_a_stable_placeholder()
     {
         Assert.That(FileWalStorageProvider.EncodePathSegment(string.Empty), Is.EqualTo("_"));
+    }
+
+    [Test]
+    public void EncodePathSegment_escapes_a_dot_segment_so_it_cannot_traverse_out_of_the_root()
+    {
+        // A tree id is an opaque caller-supplied string and '.' is unreserved, so
+        // without this guard ".." encoded to itself and Path.Combine - which does
+        // no normalisation - resolved the shard directory outside the configured
+        // WAL root.
+        Assert.Multiple(() =>
+        {
+            Assert.That(FileWalStorageProvider.EncodePathSegment(".."), Is.EqualTo("%2E%2E"));
+            Assert.That(FileWalStorageProvider.EncodePathSegment("."), Is.EqualTo("%2E"));
+            Assert.That(FileWalStorageProvider.EncodePathSegment("..."), Is.EqualTo("%2E%2E%2E"));
+        });
+    }
+
+    [Test]
+    public void EncodePathSegment_leaves_dots_inside_an_ordinary_tree_id_alone()
+    {
+        // Only an all-dot segment is a path token; a dot inside a real name is
+        // legitimate and must stay on the allocation-free fast path.
+        Assert.Multiple(() =>
+        {
+            Assert.That(FileWalStorageProvider.EncodePathSegment("a.b"), Is.EqualTo("a.b"));
+            Assert.That(FileWalStorageProvider.EncodePathSegment("..a"), Is.EqualTo("..a"));
+            Assert.That(FileWalStorageProvider.EncodePathSegment("a.."), Is.EqualTo("a.."));
+        });
+    }
+
+    [Test]
+    public void EncodePathSegment_stays_injective_across_the_dot_escape()
+    {
+        // The escaped form cannot collide with a literal tree id, because '%' is
+        // itself always escaped.
+        Assert.That(
+            FileWalStorageProvider.EncodePathSegment(".."),
+            Is.Not.EqualTo(FileWalStorageProvider.EncodePathSegment("%2E%2E")));
+    }
+
+    [Test]
+    public async Task A_dot_dot_tree_id_writes_its_wal_inside_the_configured_root()
+    {
+        // End-to-end proof of the containment the encoder exists to guarantee: a
+        // caller-supplied tree id can never place a WAL file outside the root the
+        // operator's ACLs, quotas, and retention policy are scoped to.
+        var root = Path.Combine(
+            Path.GetTempPath(), "lattice-file-wal-tests", Guid.NewGuid().ToString("N"), "root");
+        System.IO.Directory.CreateDirectory(root);
+        var parent = System.IO.Directory.GetParent(root)!.FullName;
+        try
+        {
+            var options = Options.Create(new FileWalStorageOptions { RootDirectory = root });
+            using (var provider = new FileWalStorageProvider(options, _serializer))
+            {
+                var entry = new WalEntry
+                {
+                    Offset = 0L,
+                    Mutation = new LatticeMutation
+                    {
+                        TreeId = "..",
+                        Kind = MutationKind.Set,
+                        Key = "k",
+                        Value = new byte[] { 1 },
+                        Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                        OriginClusterId = "site-a",
+                    },
+                };
+                await provider.AppendBatchAsync("..", 0, new[] { entry }, CancellationToken.None);
+            }
+
+            var rootFull = Path.GetFullPath(root);
+            var escaped = System.IO.Directory
+                .GetFiles(parent, "*", SearchOption.AllDirectories)
+                .Where(f => !Path.GetFullPath(f).StartsWith(
+                    rootFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.That(escaped, Is.Empty,
+                "Every file the provider creates must live under the configured WAL root.");
+            Assert.That(
+                System.IO.Directory.GetFiles(rootFull, "*", SearchOption.AllDirectories),
+                Is.Not.Empty,
+                "The WAL must still be written - the id is escaped, not rejected.");
+        }
+        finally
+        {
+            try
+            {
+                System.IO.Directory.Delete(parent, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     // --- provider argument guards ----------------------------------------
