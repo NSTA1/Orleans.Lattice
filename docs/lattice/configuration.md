@@ -58,6 +58,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`ActivationReadyTimeout`](#activationreadytimeout) | `TimeSpan` | 15 seconds | Yes (on next seed) |
 | [`AdmissionAdvisoryBytes`](#admissionadvisorybytes) | `long?` | `null` (advisory dry-run off) | Yes |
 | [`AdmissionAdvisoryLiveKeys`](#admissionadvisorylivekeys) | `long?` | `null` (advisory dry-run off) | Yes |
+| [`AtomicActionRetention`](#atomicactionretention) | `TimeSpan` | 48 hours | Yes |
 | [`AtomicWriteRetention`](#atomicwriteretention) | `TimeSpan` | 48 hours | Yes |
 | [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
@@ -81,6 +82,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaintainProjectionDigest`](#maintainprojectiondigest) | `bool` | `true` | Yes |
 | [`MaterialiserCheckpointEntries`](#materialisercheckpointentries) | `int` | 5000 | Yes |
 | [`MaterialiserCheckpointInterval`](#materialisercheckpointinterval) | `TimeSpan` | 5 seconds | Yes |
+| [`MaxAtomicActionArgsBytes`](#maxatomicactionargsbytes) | `int` | 32 KiB (32 768) | Yes |
+| [`MaxAtomicActionSteps`](#maxatomicactionsteps) | `int` | 64 | Yes |
 | [`MaxCacheValueBytes`](#maxcachevaluebytes) | `long?` | `null` (unbounded mirror) | Yes |
 | [`MaxConcurrentAutoSplits`](#maxconcurrentautosplits) | `int` | 2 | Yes |
 | [`MaxClusterConcurrentAutoSplits`](#maxclusterconcurrentautosplits) | `int?` | `null` (gate disabled) | Yes |
@@ -178,6 +181,10 @@ Optional non-enforcing advisory ceiling on a tree's live (non-tombstone) key cou
 // Dry-run a 1,000,000 live-key ceiling before enforcing it.
 siloBuilder.ConfigureLattice("bulk-ingest", o => o.AdmissionAdvisoryLiveKeys = 1_000_000);
 ```
+
+### `AtomicActionRetention`
+
+Retention window for a terminal atomic-action saga's coordinator state (default: 48 hours). Once an `IAtomicActionGrain.ExecuteAsync` plan reaches a terminal outcome, the coordinator retains its persisted progress for this window so that re-issuing the same operation id returns the memoized outcome rather than re-running the plan. After the window expires the coordinator clears its state and a re-issue starts a fresh saga. Minimum effective interval is **1 minute** (Orleans reminder granularity). Set `Timeout.InfiniteTimeSpan` to retain saga state indefinitely. This is the atomic-*action* analogue of the atomic-*write* retention below and is configured independently of it. See [Atomic Actions](atomic-action.md).
 
 ### `AtomicWriteRetention`
 
@@ -349,6 +356,14 @@ siloBuilder.ConfigureLattice("strict-tree", o => o.MaterialiserCheckpointInterva
 ```
 
 This option can be changed freely at any time.
+
+### `MaxAtomicActionArgsBytes`
+
+The maximum size, in bytes, of a single custom step's argument payload within an atomic-action plan (default: 32 KiB). A step whose payload exceeds the bound is rejected before the saga starts, so a wire- or storage-supplied payload cannot bloat persisted saga state without bound. Must be positive. See [Atomic Actions](atomic-action.md).
+
+### `MaxAtomicActionSteps`
+
+The maximum number of steps an atomic-action plan submitted to `IAtomicActionGrain.ExecuteAsync` may contain (default: 64). A plan exceeding the bound is rejected before the saga starts, so a pathological plan cannot pin an activation for an unbounded time. Must be positive. See [Atomic Actions](atomic-action.md).
 
 ### `MaxCacheValueBytes`
 

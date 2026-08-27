@@ -17,12 +17,17 @@ convention exactly: the contracts live in `Orleans.Lattice.Api.Abstractions` (un
 an MCP `TenantAdmin` tool group. It **composes** the existing TreeAdmin, Schema,
 Backup, and Replication facades rather than reimplementing them.
 
-Three facades are exposed:
+Four facades are exposed:
 
 - **`ILatticeTenantAdmin`** - the tenant lifecycle: create, suspend, resume, delete,
   and author per-tenant resource quotas.
 - **`ILatticeTenantRegionAdmin`** - per-tenant region residency: authorize the
   allowed region set, set the residency set within it, read per-region status.
+- **`ILatticeTenantSelfService`** - the read-only self-awareness counterpart: which
+  tenant the caller is operating as, which tenants it may see, and one tenant's
+  lifecycle and per-region residency. It holds no lifecycle authority at all, so it
+  is safe to expose wherever tenancy is enabled without granting an administrative
+  capability.
 - **`ILatticeTenantScopedTreeAdmin`** - tree administration executed inside a single
   tenant's namespace (create/check/delete/recover/purge trees and manage per-tree
   schema policy), so a delegated tenant admin drives tree lifecycle without reaching
@@ -95,7 +100,8 @@ Three facades are exposed:
 Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` package):
 
 - `AddLatticeTenantAdminApi(this ISiloBuilder builder, Action<LatticeApiTenantAdminOptions>? configure = null)` -
-  registers `ILatticeTenantAdmin` and `ILatticeTenantRegionAdmin`.
+  registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`, and the read-only
+  `ILatticeTenantSelfService`.
 - `AddLatticeTenantScopedTreeAdminApi(this ISiloBuilder builder)` - registers
   `ILatticeTenantScopedTreeAdmin`.
 
@@ -129,6 +135,27 @@ set; the last resident region can never be removed.
 `AuthorizeAllowedRegionsAsync` is an **operator** action; `SetResidencyAsync` and
 `GetTenantRegionStatusAsync` are **tenant-admin** actions.
 
+### `ILatticeTenantSelfService`
+
+The read-only tenant self-awareness surface (published in
+`Orleans.Lattice.Api.Abstractions`, namespace `Orleans.Lattice.Api.TenantAdmin`). It
+never creates, suspends, resumes, or deletes a tenant.
+
+| Method | Signature |
+|---|---|
+| `GetCurrentTenantAsync` | `Task<TenantDescriptor> GetCurrentTenantAsync(CancellationToken cancellationToken = default)` |
+| `ListAccessibleTenantsAsync` | `Task<IReadOnlyList<TenantDescriptor>> ListAccessibleTenantsAsync(CancellationToken cancellationToken = default)` |
+| `GetTenantAsync` | `Task<TenantStatusReport> GetTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
+
+`GetCurrentTenantAsync` requires no special authorization because it reports only the
+caller's own context; a caller with no tenant in context resolves to the reserved
+`default` tenant. `ListAccessibleTenantsAsync` returns, in ascending tenant-id order,
+the tenants the caller is a registered administrator of plus its own current tenant
+when that is non-default, so an anonymous or non-privileged caller under the default
+tenant gets an empty list. `GetTenantAsync` deliberately unifies "no such tenant" and
+"you may not see this tenant" into a single `TenantNotFoundException`, so no caller
+can probe for the existence of a tenant outside its authority.
+
 ### `ILatticeTenantScopedTreeAdmin`
 
 Tree administration executed inside one tenant's namespace (namespace
@@ -155,6 +182,8 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | Type | Kind | Purpose |
 |---|---|---|
 | `TenantCreationResult` | result | The newly created tenant, with the admin subjects seeded onto it. |
+| `TenantDescriptor` | model | One tenant's identity and lifecycle status, as reported by the read-only self-service surface. |
+| `TenantStatusReport` | result | One tenant's read-only lifecycle status, authored `Quotas`, and per-region residency rows. |
 | `TenantStatusChangeResult` | result | Suspend/resume outcome; `Changed` reports whether state moved. |
 | `TenantDeletionResult` | result | Deletion outcome, including the count of trees cascaded. |
 | `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate. |

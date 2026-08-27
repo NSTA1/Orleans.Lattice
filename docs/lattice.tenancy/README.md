@@ -283,9 +283,20 @@ singleton limiter (not a grain) the data-plane entry path consults with a lock-f
 token decrement - so the per-op hot path takes zero grain hops. A low-frequency
 per-`(tenant, cluster)` budget coordinator divides the cluster rate across the live
 silos at lease cadence (`O(silos)`, never `O(ops)`). `LatticeTenantRateLimiterOptions`
-controls the lease interval and the apportionment strategy
-(`TenantRateApportionmentStrategy.Demand`, the default demand-proportional leasing,
-or `StaticEven` as the zero-coordination fallback).
+tunes that coordinator; none of its knobs touch the per-op hot path, so a
+misconfiguration changes only how the cluster rate is split, never whether
+enforcement stays lock-free:
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `LeaseInterval` | `TimeSpan` | `5s` | How often the coordinator re-apportions each tenant's cluster rate across the live silos. Must be strictly positive. A longer interval lowers coordination cost but widens the transient overshoot bound (lease interval times cluster rate). |
+| `Apportionment` | `TenantRateApportionmentStrategy` | `Demand` | `Demand` leases demand-proportionally and degrades to static-even when no cluster-wide demand aggregate is available; `StaticEven` is the zero-coordination fallback that splits the rate evenly. |
+| `DemandReserveFraction` | `double` | `0.2` | The fraction of the cluster rate that demand-proportional leasing reserves and splits evenly, guaranteeing an idle silo a non-zero floor so it can never be starved out of building demand. In `[0, 1]`; ignored under `StaticEven`. |
+
+A breach surfaces as a `LatticeQuotaExceededException` on the `ops-per-second`
+dimension. Unlike the footprint dimensions it is **transient**: the same call
+generally succeeds once the bucket refills, so a client should treat it as a
+back-pressure signal to retry rather than as a durable capacity failure.
 
 ## Region residency
 
@@ -315,11 +326,50 @@ facade.
 
 ## Observability
 
-`TenantObservabilityOptions` (default `PublishGauges = true`) publishes per-tenant
-gauges - current usage against each quota dimension and the metered overage tallies -
-on a fixed cadence, so an operator can see per-tenant consumption and headroom, and
-region-status change events surface exactly when a new region becomes `Online` or an
-old one is fully drained.
+`TenantObservabilityOptions` (default `PublishGauges = true`, `PublishInterval` 30
+seconds) publishes per-tenant gauges - current usage against each quota dimension and
+the metered overage tallies - on a fixed cadence, so an operator can see per-tenant
+consumption and headroom, and region-status change events surface exactly when a new
+region becomes `Online` or an old one is fully drained.
+
+Every instrument is an **observable gauge** on the `orleans.lattice.tenancy` meter
+(`LatticeTenantMetrics.MeterName`). Each series carries a single `tenant` tag
+(`LatticeTenantMetrics.TagTenant`) identifying the owning tenant; the one
+cluster-aggregate series is untagged. Set `PublishGauges = false` to publish none of
+them.
+
+| Instrument | Meaning |
+|---|---|
+| `orleans.lattice.tenancy.tenants` | Cluster-aggregate count of tenants in the warm usage index. The one series with no `tenant` tag. |
+| `orleans.lattice.tenancy.usage.bytes` | The tenant's current aggregate durable bytes. |
+| `orleans.lattice.tenancy.usage.keys` | The tenant's current aggregate live-key count. |
+| `orleans.lattice.tenancy.usage.memory_bytes` | The tenant's current aggregate resident memory. |
+| `orleans.lattice.tenancy.usage.trees` | The number of trees the tenant currently owns. |
+| `orleans.lattice.tenancy.quota.bytes` | The tenant's steady-state `MaxBytes` ceiling. |
+| `orleans.lattice.tenancy.quota.keys` | The tenant's steady-state `MaxKeys` ceiling. |
+| `orleans.lattice.tenancy.quota.memory_bytes` | The tenant's steady-state `MaxMemoryBytes` ceiling. |
+| `orleans.lattice.tenancy.quota.trees` | The tenant's steady-state `MaxTreeCount` ceiling. |
+| `orleans.lattice.tenancy.quota.burst_percent` | The tenant's `BurstPercent` headroom above its bounded ceilings. |
+| `orleans.lattice.tenancy.overage.bytes` | Converged, durable metered byte overage accrued above the byte ceiling. |
+| `orleans.lattice.tenancy.overage.keys` | Converged, durable metered key overage. |
+| `orleans.lattice.tenancy.overage.memory_bytes` | Converged, durable metered resident-memory overage. |
+| `orleans.lattice.tenancy.overage.trees` | Converged, durable metered owned-tree overage. |
+
+A `quota.*` gauge emits a measurement **only for a tenant whose corresponding
+dimension is bounded** - an unbounded (`null`) ceiling contributes no series at all,
+so "no series" reads as "unlimited on that dimension" rather than "zero". Usage
+gauges reflect the last landed metering sample (see `MeterInterval` above), so a
+tenant with no sample yet has no usage series. The `overage.*` gauges are the
+billing-ready tallies: they are grow-only converged sums, not instantaneous
+readings.
+
+`MaxOpsPerSecond` has no gauge: the rate budget is enforced from silo-local token
+buckets rather than from a published aggregate, so a breach is observed through the
+`ops-per-second` `LatticeQuotaExceededException` rather than a series.
+
+These instruments are not charted by the bundled Grafana dashboards, which cover the
+core and replication meters; subscribe to the `orleans.lattice.tenancy` meter
+directly from your OpenTelemetry exporter.
 
 ## Security
 

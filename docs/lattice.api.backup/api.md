@@ -25,6 +25,8 @@ The read-bounding knobs the control facade honours for its paged catalog listing
 
 ## Facade operations
 
+Every tree name these operations accept is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another. This covers a `BackupScopeSelector`'s tree, a catalog listing's `TreeId` filter, and a restore's `TargetTreeId`. A `BackupId` is **not** composed - it is already a recorded, effective id, so scoping it again would double-scope it or re-attribute another tenant's backup to the caller. With the tenancy add-on absent the bare name is returned unchanged, so behaviour is byte-for-byte as before; with it registered an unqualified name is scoped into the active tenant's `t/{tenant}/{name}` namespace, an already-qualified or reserved name is returned unchanged, and a caller with no valid active tenant fails closed with a `LatticeTenantAccessDeniedException`. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md).
+
 The control facade exposes these operations. The [gRPC binding](../lattice.api.backup.grpc/api.md) projects the remote-safe subset as RPCs; inventory, catalog rebuild / scrub, and cold restore are in-process-only today. Operations that touch backup data authorize their scope fail-closed before touching data; advisory capability and availability probes report state without mutating data.
 
 | Operation | Shape | Returns |

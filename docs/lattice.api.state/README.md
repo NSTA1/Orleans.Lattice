@@ -30,6 +30,7 @@ The package is **strictly read-only**: every surface observes state, none of the
 - **Transport-agnostic.** The facade is the contract; gRPC is one binding. The same records flow to an in-process consumer and a remote one, so the `Orleans.Lattice.Api.Mcp` MCP server reuses the facade with zero re-modelling.
 - **Fail-closed.** The gRPC surface authorizes every protected state read or observation call. Left unconfigured it denies protected traffic, while `GetAuthScheme` remains open only to advertise how to sign in.
 - **Low ambient cost.** Discovery, structure, and metrics sampling coalesce shared work: many concurrent subscribers to the same metric request share a single sampling loop, and a cluster with no readers does no sampling at all.
+- **Tenant-scoped tree names.** Every `TreeId` a request carries is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for both the authorization check and the read, so a call can never authorize one tree and observe another. With the tenancy add-on absent the bare name is returned unchanged, so behaviour is byte-for-byte as before; with it registered an unqualified name is scoped into the active tenant's `t/{tenant}/{name}` namespace, an already-qualified or reserved name is returned unchanged, and a caller with no valid active tenant fails closed with a `LatticeTenantAccessDeniedException`. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md).
 
 ## Features
 

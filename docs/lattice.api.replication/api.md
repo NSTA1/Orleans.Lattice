@@ -11,6 +11,7 @@ The package exposes one registration entry point, one public options type, and a
 ## Facade
 
 `ILatticeReplicationControl` (defined in `Orleans.Lattice.Api.Abstractions`) is the single control surface every transport binding adapts over.
+Every `treeId` these operations accept is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another. With the tenancy add-on absent the bare name is returned unchanged, so behaviour is byte-for-byte as before; with it registered an unqualified name is scoped into the active tenant's `t/{tenant}/{name}` namespace, an already-qualified or reserved name is returned unchanged, and a caller with no valid active tenant fails closed with a `LatticeTenantAccessDeniedException`. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md).
 
 | Operation | Signature | Notes |
 |---|---|---|
