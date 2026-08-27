@@ -144,6 +144,6 @@ public class LatticeGrainReshardRetryTests
         var services = Substitute.For<IServiceProvider>();
         var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, services, NullLogger<LatticeGrain>.Instance);
 
-        Assert.ThrowsAsync<InvalidOperationException>(async () => await grain.ReshardAsync(8));
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(async () => await grain.ReshardAsync(8));
     }
 }

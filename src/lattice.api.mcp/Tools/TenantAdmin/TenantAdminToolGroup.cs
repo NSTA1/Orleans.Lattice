@@ -84,8 +84,8 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
             (
                 RequestContext<CallToolRequestParams> context,
                 [Description("The tenant id to create. Must be a valid, non-empty tenant id that is not already registered.")] string tenantId,
-                [Description("The tenant-admin subject ids to seed onto the new tenant, deciding who can subsequently see it. Omit or leave empty to seed the calling subject.")] string[]? adminSubjects,
-                CancellationToken cancellationToken) =>
+                CancellationToken cancellationToken,
+                [Description("The tenant-admin subject ids to seed onto the new tenant, deciding who can subsequently see it. Omit or leave empty to seed the calling subject.")] string[]? adminSubjects = null) =>
             {
                 using var scope = StampCredential(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
@@ -197,13 +197,13 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
             (
                 RequestContext<CallToolRequestParams> context,
                 [Description("The tenant id whose quotas to author. Must be a valid, non-empty tenant id that is registered and is not the reserved default tenant.")] string tenantId,
-                [Description("The maximum total stored value bytes, or null for unbounded on this dimension.")] long? maxBytes,
-                [Description("The maximum total live key count, or null for unbounded on this dimension.")] long? maxKeys,
-                [Description("The maximum resident memory in bytes, or null for unbounded on this dimension.")] long? maxMemoryBytes,
-                [Description("The maximum number of trees the tenant may own, or null for unbounded on this dimension.")] long? maxTreeCount,
-                [Description("The maximum sustained operations per second, or null for unbounded on this dimension.")] long? maxOpsPerSecond,
-                [Description("The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative.")] int burstPercent,
-                CancellationToken cancellationToken) =>
+                CancellationToken cancellationToken,
+                [Description("The maximum total stored value bytes, or null for unbounded on this dimension.")] long? maxBytes = null,
+                [Description("The maximum total live key count, or null for unbounded on this dimension.")] long? maxKeys = null,
+                [Description("The maximum resident memory in bytes, or null for unbounded on this dimension.")] long? maxMemoryBytes = null,
+                [Description("The maximum number of trees the tenant may own, or null for unbounded on this dimension.")] long? maxTreeCount = null,
+                [Description("The maximum sustained operations per second, or null for unbounded on this dimension.")] long? maxOpsPerSecond = null,
+                [Description("The transient burst headroom above the bounded ceilings, as a percentage (0 for none). Must be non-negative.")] int burstPercent = 0) =>
             {
                 using var scope = StampCredential(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();

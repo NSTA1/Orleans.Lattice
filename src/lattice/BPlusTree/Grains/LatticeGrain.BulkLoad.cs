@@ -260,6 +260,16 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Enumerating every tree id in the cluster is a whole-tree read of the
+        // registry, so it is gated exactly as its siblings in this file are
+        // (SnapshotAsync, SetPublishEventsEnabledAsync, SetHistoryRetentionAsync).
+        // This call previously performed no gate call at all, so an in-cluster
+        // client could enumerate the whole catalog - including every other
+        // tenant's tree ids - with only the (tenant-conditional) filter below
+        // between it and the registry.
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var treeIds = await registry.GetAllTreeIdsAsync();
         return FilterTreeIdsByActiveTenant(treeIds);

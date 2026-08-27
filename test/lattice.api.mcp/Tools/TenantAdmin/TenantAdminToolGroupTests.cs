@@ -81,6 +81,69 @@ public sealed class TenantAdminToolGroupTests
         Assert.That(() => new TenantAdminToolGroup(null!), Throws.ArgumentNullException);
     }
 
+    /// <summary>
+    /// Regression: an optional tool parameter declared without an explicit C#
+    /// default is emitted into the JSON input schema as <c>required</c>, which
+    /// contradicts the tool's own description and makes the documented behaviour
+    /// unreachable for a schema-conforming agent. <c>lattice_tenant_create</c>
+    /// told the caller to "omit it (or pass an empty list) to seed the calling
+    /// subject" while rejecting exactly that, and every one of the six nullable
+    /// quota dimensions was mandatory despite each being documented "null for
+    /// unbounded".
+    /// </summary>
+    [TestCase("lattice_tenant_create", "tenantId")]
+    [TestCase("lattice_tenant_suspend", "tenantId")]
+    [TestCase("lattice_tenant_resume", "tenantId")]
+    [TestCase("lattice_tenant_delete", "tenantId")]
+    [TestCase("lattice_tenant_set_quotas", "tenantId")]
+    public void Control_tool_schemas_require_only_genuinely_mandatory_parameters(
+        string toolName, string expectedRequired)
+    {
+        var group = CreateGroup(enableControl: true);
+        var schema = Tool(group, toolName).ProtocolTool.InputSchema;
+
+        var required = schema.TryGetProperty("required", out var node)
+            ? node.EnumerateArray().Select(e => e.GetString()!).ToArray()
+            : [];
+
+        Assert.That(required, Is.EquivalentTo(new[] { expectedRequired }),
+            $"{toolName} must mark only genuinely mandatory parameters required; "
+            + $"got [{string.Join(", ", required)}].");
+    }
+
+    [Test]
+    public void Tenant_create_advertises_the_optional_admin_subjects_parameter()
+    {
+        var group = CreateGroup(enableControl: true);
+        var schema = Tool(group, "lattice_tenant_create").ProtocolTool.InputSchema;
+
+        Assert.That(
+            schema.GetProperty("properties").TryGetProperty("adminSubjects", out _),
+            Is.True,
+            "the parameter must still be offered - just not demanded.");
+    }
+
+    [Test]
+    public void Set_quotas_advertises_every_quota_dimension_as_optional()
+    {
+        var group = CreateGroup(enableControl: true);
+        var properties = Tool(group, "lattice_tenant_set_quotas")
+            .ProtocolTool.InputSchema.GetProperty("properties");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var dimension in new[]
+                     {
+                         "maxBytes", "maxKeys", "maxMemoryBytes",
+                         "maxTreeCount", "maxOpsPerSecond", "burstPercent",
+                     })
+            {
+                Assert.That(properties.TryGetProperty(dimension, out _), Is.True,
+                    $"{dimension} must be offered on the schema.");
+            }
+        });
+    }
+
     [Test]
     public void AddTenantAdminTools_rejects_null_services()
     {

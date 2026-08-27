@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// namespace (<see cref="LatticeTenantTrees.SegmentPrefix"/>, <c>t/</c>) as a
 /// third reserved namespace alongside <c>_lattice_</c> and <c>sys-</c>. A direct
 /// user write to a <c>t/</c>-prefixed id must throw
-/// <see cref="InvalidOperationException"/> on the public <see cref="ILattice"/>
+/// <see cref="LatticeReservedTreeNamespaceException"/> on the public <see cref="ILattice"/>
 /// surface, mirroring the <c>sys-</c> system-data guard. The guard sits only on
 /// the write surface (reads are never gated) and is suppressed under a
 /// <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> scope so the tenancy
@@ -53,52 +53,52 @@ public class LatticeGrainTenantTreeGuardTests
 
     [Test]
     public void SetAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetAsync("k", [1]));
 
     [Test]
     public void SetAsync_ttl_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetAsync("k", [1], TimeSpan.FromMinutes(1)));
 
     [Test]
     public void SetIfVersionAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetIfVersionAsync("k", [1], HybridLogicalClock.Zero));
 
     [Test]
     public void GetOrSetAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).GetOrSetAsync("k", [1]));
 
     [Test]
     public void SetManyAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetManyAsync([new("k", [1])]));
 
     [Test]
     public void SetManyAtomicAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetManyAtomicAsync([new("k", [1])]));
 
     [Test]
     public void SetManyAtomicAsync_with_operation_id_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetManyAtomicAsync([new("k", [1])], "op-1"));
 
     [Test]
     public void DeleteAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).DeleteAsync("k"));
 
     [Test]
     public void DeleteRangeAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).DeleteRangeAsync("a", "z"));
 
     [Test]
     public void BulkLoadAsync_rejects_a_tenant_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).BulkLoadAsync([new("k", [1])]));
 
     // ----- Message identifies the reserved tenant namespace -----
@@ -106,7 +106,7 @@ public class LatticeGrainTenantTreeGuardTests
     [Test]
     public void SetAsync_rejection_names_the_tenant_namespace()
     {
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(TenantTreeId).SetAsync("k", [1]));
 
         Assert.That(ex!.Message, Does.Contain("structural tenant namespace"));

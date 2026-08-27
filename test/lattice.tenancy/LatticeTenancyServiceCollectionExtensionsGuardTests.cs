@@ -126,6 +126,62 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
     }
 
     [Test]
+    public void AddLatticeTenancy_replaces_every_core_tenancy_seam_it_claims_to()
+    {
+        var builder = NewBuilderWithDependencies();
+
+        builder.AddLatticeTenancy();
+
+        // Each of these seams is declared in core with a no-op default whose own
+        // doc comment says "the tenancy package replaces it". Two of them were
+        // never actually replaced, and nothing caught it: the context resolver
+        // (so ComposeEffectiveTreeId always returned the caller's bare tree name
+        // and every tenant shared one physical tree) and the enumeration filter
+        // (so a tree-id enumeration was never pruned to the active tenant). This
+        // test is the missing guard - it fails if either regresses to its core
+        // no-op, whatever the registration order.
+        //
+        // Asserted on the registered descriptor rather than a resolved instance so
+        // the check needs only the registration, not a fully-activatable cluster.
+        var seams = new (Type Service, Type Expected)[]
+        {
+            (typeof(ITenantContextResolver), typeof(TenantContextResolver)),
+            (typeof(ITenantEnumerationFilter), typeof(TenantEnumerationFilter)),
+        };
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (service, expected) in seams)
+            {
+                var descriptors = builder.Services.Where(d => d.ServiceType == service).ToList();
+
+                Assert.That(descriptors, Has.Count.EqualTo(1),
+                    $"{service.Name} must resolve exactly one implementation.");
+                Assert.That(descriptors[0].ImplementationType, Is.EqualTo(expected),
+                    $"{service.Name} must be replaced by the tenancy implementation, not left as the core no-op.");
+                Assert.That(descriptors[0].Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            }
+
+            Assert.That(builder.Services.Count(d => d.ServiceType == typeof(ITenantGateEnforcer)),
+                Is.EqualTo(1), "the gate enforcer stays singly registered too");
+        });
+    }
+
+    [Test]
+    public void AddLatticeTenancy_registered_enumeration_filter_reports_itself_active()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+
+        // A seam that resolves but reports itself inactive is as good as absent:
+        // every choke point short-circuits on IsActive before calling it.
+        var descriptor = builder.Services.Single(d => d.ServiceType == typeof(ITenantEnumerationFilter));
+        var filter = (ITenantEnumerationFilter)Activator.CreateInstance(descriptor.ImplementationType!)!;
+
+        Assert.That(filter.IsActive, Is.True);
+    }
+
+    [Test]
     public void ConfigureLatticeTenancy_null_configure_throws()
     {
         var builder = new CovSiloBuilder();

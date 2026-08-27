@@ -34,7 +34,7 @@ public partial class LatticeGrainTests
     {
         var (grain, _) = CreateGrain(treeId: LatticeConstants.SystemTreePrefix + "registry");
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.WarmUpAsync());
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(() => grain.WarmUpAsync());
     }
 
     [Test]

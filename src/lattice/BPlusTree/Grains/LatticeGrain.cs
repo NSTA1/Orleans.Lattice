@@ -347,7 +347,8 @@ internal sealed partial class LatticeGrain(
     private void ThrowIfSystemTree()
     {
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-            throw new InvalidOperationException(
+            throw new LatticeReservedTreeNamespaceException(
+                TreeId,
                 $"Tree ID '{TreeId}' is reserved for internal Lattice system trees and cannot be addressed via the public ILattice surface. Choose a tree name that does not start with '{LatticeConstants.SystemTreePrefix}'.");
     }
 
@@ -380,7 +381,8 @@ internal sealed partial class LatticeGrain(
     {
         if (TreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
             && !LatticeAccessGateContext.IsSystemOrigin)
-            throw new InvalidOperationException(
+            throw new LatticeReservedTreeNamespaceException(
+                TreeId,
                 $"Tree ID '{TreeId}' is reserved: names starting with '{LatticeConstants.SystemDataTreePrefix}' " +
                 "are reserved for internal Lattice system-data trees (identity, authorization, backup, and " +
                 "membership add-ons) and cannot be created via the public ILattice surface. Choose a tree name " +
@@ -397,7 +399,8 @@ internal sealed partial class LatticeGrain(
         // uniformly.
         if (LatticeTenantTrees.IsTenantScoped(TreeId)
             && !LatticeAccessGateContext.IsSystemOrigin)
-            throw new InvalidOperationException(
+            throw new LatticeReservedTreeNamespaceException(
+                TreeId,
                 $"Tree ID '{TreeId}' is reserved: names starting with '{LatticeTenantTrees.SegmentPrefix}' " +
                 "are reserved for the structural tenant namespace and are composed internally by the Lattice " +
                 "tenancy layer; they cannot be created via the public ILattice surface. Address a tenant tree " +
@@ -414,7 +417,8 @@ internal sealed partial class LatticeGrain(
         // Orleans.Lattice.Auth LatticeScope.ClusterWideTreeId).
         if (string.Equals(TreeId, ClusterWideAuthSentinelTreeId, StringComparison.Ordinal)
             && !LatticeAccessGateContext.IsSystemOrigin)
-            throw new InvalidOperationException(
+            throw new LatticeReservedTreeNamespaceException(
+                TreeId,
                 $"Tree ID '{ClusterWideAuthSentinelTreeId}' is reserved as the all-trees authorization sentinel " +
                 "and cannot be created via the public ILattice surface. Choose a different tree name.");
     }

@@ -280,7 +280,30 @@ internal sealed class PolicyAccessGate(
             return new ValueTask<bool>(match.Matched && match.Effect == LatticeEffect.Allow && reserved.Allowed);
         }
 
-        return new ValueTask<bool>(engine.HasAnyGrant(subject, treeId, operation));
+        if (!engine.HasAnyGrant(subject, treeId, operation))
+        {
+            return new ValueTask<bool>(false);
+        }
+
+        // Tenant-isolation composition, mirroring EvaluateAndObserve. An existence
+        // probe must never out-reach the enforcement decision: without this, a
+        // caller holding a broad cluster-wide grant (or running under
+        // DefaultEffect=Allow) satisfied HasAnyGrant for ANOTHER tenant's
+        // t/{tenant}/... tree and learned it exists - the full tenant roster and
+        // every tenant's tree names - even though the very same subject is denied
+        // when it tries to read that tree. The enforcer is consulted only for an
+        // already-granted probe, so the deny fast path and the no-tenancy path
+        // (a single IsActive bool read) are unchanged.
+        if (tenantEnforcer.IsActive)
+        {
+            var probe = new LatticeAccessRequest(treeId, operation, subject);
+            if (!tenantEnforcer.Enforce(in probe).Allowed)
+            {
+                return new ValueTask<bool>(false);
+            }
+        }
+
+        return new ValueTask<bool>(true);
     }
 
     /// <summary>

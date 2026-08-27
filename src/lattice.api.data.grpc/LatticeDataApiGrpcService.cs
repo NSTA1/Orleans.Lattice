@@ -383,6 +383,17 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        catch (LatticeReservedTreeNamespaceException ex)
+        {
+            // The call named a tree inside a reserved, internally-composed namespace
+            // (_lattice_, sys-, or the structural tenant namespace t/). That id is not
+            // addressable through the public surface for any caller, so it is a
+            // deterministic caller-side precondition, not a server fault. Map to
+            // InvalidArgument carrying the self-contained message, ahead of the generic
+            // server-fault catch that would otherwise report a client error as Internal
+            // and misdirect the caller to the cluster logs.
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
         catch (LatticeCrdtShapeNotRegisteredException ex)
         {
             // A typed OR-Map verb targeted a tree whose host never registered the

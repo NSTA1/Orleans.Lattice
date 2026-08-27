@@ -507,11 +507,16 @@ internal sealed class LatticeStateQuery(
 
         // Enumerating the registry is infrastructure: run it under a system-origin
         // scope so the enumeration is not itself filtered or denied by the gate.
-        IEnumerable<string> allIds;
+        IReadOnlyList<string> allIds;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
         }
+
+        // Scope the tag-index catalog to the ambient active tenant's trees, exactly
+        // as ListTreesAsync does. This choke point previously skipped the seam
+        // entirely, so a tenant caller enumerating tag indexes saw every tenant's.
+        allIds = FilterTreeIdsByActiveTenant(allIds);
 
         var ordered = allIds
             .Where(IsTagIndexTree)

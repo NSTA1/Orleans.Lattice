@@ -122,10 +122,39 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   silently defaulted.
 - **Tenant id grammar.** A `TenantId` matches `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
   (lower-case alphanumeric and hyphen, 1-63 chars). This guarantees a tenant id can
-  never contain the `/` segment separator, never begins with `_`, and can never
-  spell `sys-`, so it cannot collide with or spoof the reserved namespaces. The id
-  `default` is reserved for the legacy-adoption tenant and cannot be created,
-  suspended, or deleted. Tenant ids are immutable once created.
+  never contain the `/` segment separator and never begins with `_`, so it cannot
+  collide with or spoof the `_lattice_` namespace or the `t/{tenant}/{name}`
+  segment structure. The grammar alone does *not* exclude a `sys-` prefix (those
+  are all legal characters), so tenant **creation** additionally rejects an id
+  beginning with `sys-` or `_lattice_`: a tenant id travels into tree ids, metric
+  labels, and log lines beside real tree ids, and one shadowing a reserved
+  namespace is an avoidable confusion trap. The check is applied at create only,
+  so a tenant registered before the guard existed stays readable and deletable.
+  The id `default` is reserved for the legacy-adoption tenant and cannot be
+  created, suspended, or deleted. Tenant ids are immutable once created.
+- **Tenant-scoped tree naming.** `AddLatticeTenancy` replaces the core's no-op
+  `ITenantContextResolver` with one that reads the caller's active tenant and
+  re-validates it against that caller's own membership before it is allowed to
+  scope a name. This is what makes
+  `services.GetLatticeAsync("orders")` address `t/acme/orders` for a caller acting
+  as `acme` and `t/globex/orders` for one acting as `globex`, rather than handing
+  both the same physical tree. A caller that asserts no tenant resolves the
+  reserved `default` tenant and keeps its bare tree ids (non-destructive adoption);
+  a caller asserting a tenant it may not act as resolves the uninitialised "no
+  tenant" value, which fails closed with a `LatticeTenantAccessDeniedException`
+  rather than silently defaulting. Because the effective id is tenant-owned, usage
+  metering and quota admission attribute the traffic to the acting tenant - the
+  two only line up once the name is actually scoped.
+- **Enumeration pruning.** `AddLatticeTenancy` likewise replaces the core's no-op
+  `ITenantEnumerationFilter`, so a tree-id enumeration (the cluster-state tree
+  catalog, the tag-index catalog, the in-cluster all-tree-ids read) is pruned to
+  the trees the active tenant owns. Pruning is defence in depth rather than the
+  boundary: a caller that asserts no tenant is not pruned, and is confined instead
+  by the per-entry authorization check, which composes the same tenant enforcer the
+  write path uses and denies a tenant-scoped tree outright when no active tenant is
+  selected. That check is the durable guarantee - an existence probe can never
+  out-reach the enforcement decision, so no broad grant or `DefaultEffect = Allow`
+  posture can surface another tenant's tree names.
 - **Registry-store read isolation.** The `sys-tenant-*` registry, usage, and
   overage trees hold the cross-tenant registry itself - every tenant's admin
   subjects, quotas, region residency, and cross-tenant grants. They live in the

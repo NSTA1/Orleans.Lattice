@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="ILattice"/> call whose primary key starts with
 /// <see cref="LatticeConstants.SystemTreePrefix"/>. Every read, write,
 /// scan, cursor, and tree-lifecycle method on the public surface must
-/// throw <see cref="InvalidOperationException"/> for both the registry
+/// throw <see cref="LatticeReservedTreeNamespaceException"/> for both the registry
 /// tree id (<see cref="LatticeConstants.RegistryTreeId"/>) and any
 /// id beginning with the replog prefix
 /// (<see cref="LatticeConstants.WalTreePrefix"/>). Internal callers
@@ -58,82 +58,82 @@ public class LatticeGrainSystemTreeGuardTests
 
     [TestCaseSource(nameof(ReservedIds))]
     public void GetAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).GetAsync("k"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void GetWithVersionAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).GetWithVersionAsync("k"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void ExistsAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).ExistsAsync("k"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void GetManyAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).GetManyAsync(["k"]));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetAsync("k", [1]));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetAsync_ttl_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetAsync("k", [1], TimeSpan.FromMinutes(1)));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetIfVersionAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetIfVersionAsync("k", [1], HybridLogicalClock.Zero));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void GetOrSetAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).GetOrSetAsync("k", [1]));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetManyAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetManyAsync([new("k", [1])]));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetManyAtomicAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetManyAtomicAsync([new("k", [1])]));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetManyAtomicAsync_with_operation_id_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetManyAtomicAsync([new("k", [1])], "op-1"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void DeleteAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).DeleteAsync("k"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void DeleteRangeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).DeleteRangeAsync("a", "z"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void CountAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).CountAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void CountPerShardAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).CountPerShardAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void DiagnoseAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).DiagnoseAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
@@ -142,7 +142,7 @@ public class LatticeGrainSystemTreeGuardTests
         // KeysAsync returns IAsyncEnumerable synchronously via the public
         // forwarder, so the guard throws on the call, not on first MoveNext.
         var grain = CreateGrainFor(treeId);
-        Assert.Throws<InvalidOperationException>(() => grain.KeysAsync());
+        Assert.Throws<LatticeReservedTreeNamespaceException>(() => grain.KeysAsync());
     }
 
     [TestCaseSource(nameof(ReservedIds))]
@@ -151,7 +151,7 @@ public class LatticeGrainSystemTreeGuardTests
         // EntriesAsync returns IAsyncEnumerable synchronously via the public
         // forwarder, so the guard throws on the call, not on first MoveNext.
         var grain = CreateGrainFor(treeId);
-        Assert.Throws<InvalidOperationException>(() => grain.EntriesAsync());
+        Assert.Throws<LatticeReservedTreeNamespaceException>(() => grain.EntriesAsync());
     }
 
     [TestCaseSource(nameof(ReservedIds))]
@@ -167,117 +167,117 @@ public class LatticeGrainSystemTreeGuardTests
 
     [TestCaseSource(nameof(ReservedIds))]
     public void OpenKeyCursorAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).OpenKeyCursorAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void OpenEntryCursorAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).OpenEntryCursorAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void OpenDeleteRangeCursorAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).OpenDeleteRangeCursorAsync("a", "z"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void NextKeysAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).NextKeysAsync("c", 10));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void NextEntriesAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).NextEntriesAsync("c", 10));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void DeleteRangeStepAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).DeleteRangeStepAsync("c", 10));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void CloseCursorAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).CloseCursorAsync("c"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void BulkLoadAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).BulkLoadAsync([new("k", [1])]));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void DeleteTreeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).DeleteTreeAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void RecoverTreeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).RecoverTreeAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void PurgeTreeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).PurgeTreeAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void ResizeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).ResizeAsync(64, 64));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void UndoResizeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).UndoResizeAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SnapshotAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SnapshotAsync("dest", SnapshotMode.Offline));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void TreeExistsAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).TreeExistsAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void GetAllTreeIdsAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).GetAllTreeIdsAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void SetPublishEventsEnabledAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).SetPublishEventsEnabledAsync(true));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void MergeAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).MergeAsync("other"));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void IsMergeCompleteAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).IsMergeCompleteAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void IsSnapshotCompleteAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).IsSnapshotCompleteAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void IsResizeCompleteAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).IsResizeCompleteAsync());
 
     [TestCaseSource(nameof(ReservedIds))]
     public void ReshardAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).ReshardAsync(8));
 
     [TestCaseSource(nameof(ReservedIds))]
     public void IsReshardCompleteAsync_rejects_reserved_id(string treeId)
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor(treeId).IsReshardCompleteAsync());
 
     [Test]
@@ -300,33 +300,33 @@ public class LatticeGrainSystemTreeGuardTests
 
     [Test]
     public void SetAsync_rejects_the_all_trees_sentinel_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor("*").SetAsync("k", [1]));
 
     [Test]
     public void SetManyAsync_rejects_the_all_trees_sentinel_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor("*").SetManyAsync([new("k", [1])]));
 
     [Test]
     public void SetManyAtomicAsync_rejects_the_all_trees_sentinel_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor("*").SetManyAtomicAsync([new("k", [1])]));
 
     [Test]
     public void DeleteAsync_rejects_the_all_trees_sentinel_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor("*").DeleteAsync("k"));
 
     [Test]
     public void BulkLoadAsync_rejects_the_all_trees_sentinel_id()
-        => Assert.ThrowsAsync<InvalidOperationException>(
+        => Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor("*").BulkLoadAsync([new("k", [1])]));
 
     [Test]
     public void SetAsync_sentinel_rejection_names_the_sentinel()
     {
-        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => CreateGrainFor("*").SetAsync("k", [1]));
 
         Assert.That(ex!.Message, Does.Contain("all-trees authorization sentinel"));

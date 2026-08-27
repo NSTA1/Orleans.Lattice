@@ -119,19 +119,46 @@ public sealed partial class LatticeTenantAdminTests
     }
 
     [Test]
-    public void CreateTenantAsync_validates_the_subject_set_before_authorizing()
+    public void CreateTenantAsync_authorizes_before_it_validates_the_subject_set()
     {
         var registry = new FakeTenantRegistry();
         var facade = Create(registry, allow: false, membership: Caller(CallerSubject));
 
-        // Argument validation is a pure, contents-free check, so running it first
-        // leaks nothing about the registry; the authorization denial still guards
-        // every path that reads or writes it.
-        Assert.That(async () => await facade.CreateTenantAsync(Tenant, [""]),
-            Throws.InstanceOf<ArgumentException>());
-        Assert.That(async () => await facade.CreateTenantAsync(Tenant, ["ops@example.com"]),
-            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        // Authorize, then validate, then write - the order the security
+        // instructions fix for every administrative create path. An unauthorized
+        // caller must be denied identically whether or not its arguments are
+        // well-formed, so a malformed subject list cannot be used as an oracle to
+        // distinguish "denied" from "denied and also malformed".
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await facade.CreateTenantAsync(Tenant, [""]),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>(),
+                "a denied caller is refused before its arguments are inspected");
+            Assert.That(async () => await facade.CreateTenantAsync(Tenant, ["ops@example.com"]),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        });
+
         Assert.That(registry.Puts, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void CreateTenantAsync_rejects_a_tenant_id_in_a_reserved_namespace()
+    {
+        var registry = new FakeTenantRegistry();
+        var facade = Create(registry, membership: Caller(CallerSubject));
+
+        // A tenant id travels into tree ids (t/{tenant}/{name}), metric labels and
+        // log lines beside real tree ids, so one shadowing a reserved namespace is
+        // an avoidable confusion trap even though it is structurally namespaced.
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await facade.CreateTenantAsync("sys-auth-policy"),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await facade.CreateTenantAsync("sys-tenant-registry"),
+                Throws.InstanceOf<ArgumentException>());
+        });
+
+        Assert.That(registry.Puts, Is.EqualTo(0), "a reserved tenant id must not be registered.");
     }
 
     [Test]

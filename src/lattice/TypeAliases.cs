@@ -165,6 +165,12 @@ internal static class TypeAliases
     // server-side fault - the API bindings map it to a client-error status.
     internal const string LatticeCrdtShapeNotRegistered = "ol.csn";
 
+    // A user-origin call named a tree inside a reserved, internally-composed
+    // namespace (_lattice_, sys-, or the structural tenant namespace t/) or the
+    // reserved all-trees sentinel. A deterministic caller-side precondition, not a
+    // server fault - the API bindings map it to a client-error status.
+    internal const string LatticeReservedTreeNamespace = "ol.rtn";
+
     // Per-tree admission-control quota surface. Thrown by the public ILattice
     // write guard when a locally-authored write is refused because the tree's
     // cached live-key count or estimated-byte footprint has reached the

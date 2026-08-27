@@ -756,4 +756,29 @@ public sealed class AuthGrpcDataTests
 
         Assert.That(await _fixture.ReadRawAsync(tree, "k1"), Is.Null);
     }
+
+    [TestCase("t/victim/orders")]
+    [TestCase("sys-auth-policy")]
+    public void reserved_namespace_write_is_invalid_argument_not_internal(string reservedTreeId)
+    {
+        // Naming a tree inside a reserved, internally-composed namespace is a
+        // deterministic caller-side precondition - that id is not addressable
+        // through the public surface for anyone - so it must surface as a typed
+        // client error. It previously threw a bare InvalidOperationException that
+        // fell through to the generic server-fault arm, reporting a client error
+        // as Internal and sending the caller to the cluster logs for something
+        // they could see and fix themselves.
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
+            _host.Methods.Set,
+            new DataSetRequest { TreeId = reservedTreeId, Key = "k1", Value = new byte[] { 1 } },
+            Writer));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.InvalidArgument));
+            Assert.That(ex!.Status.Detail, Does.Contain("reserved"));
+            Assert.That(ex!.Status.Detail, Does.Not.Contain("cluster logs"),
+                "a caller-fixable error must not be reported as an opaque server fault");
+        });
+    }
 }

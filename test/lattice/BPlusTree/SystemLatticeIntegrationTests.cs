@@ -38,9 +38,9 @@ public class SystemLatticeIntegrationTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("_lattice_replog_integration");
 
-        Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => tree.SetAsync("k", Encoding.UTF8.GetBytes("v")));
-        Assert.ThrowsAsync<InvalidOperationException>(() => tree.GetAsync("k"));
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(() => tree.GetAsync("k"));
     }
 
     [Test]
@@ -125,7 +125,7 @@ public class SystemLatticeIntegrationTests
         // membership), which the State API also hides from the default catalog.
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("sys-user-accidental");
 
-        Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
             () => tree.SetAsync("k", Encoding.UTF8.GetBytes("v")));
     }
 
