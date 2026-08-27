@@ -37,6 +37,12 @@ public sealed class LatticeApiReplicationServiceCollectionExtensionsTests
         builder.Services.AddSingleton(Substitute.For<ILatticeReplicationConfigAuthority>());
         builder.Services.AddSingleton<ILatticeAccessGate>(new AllowingAccessGate());
 
+        // The facade scopes a caller-supplied tree name through this seam before it
+        // authorizes and acts. AddLattice() registers the core no-op resolver in
+        // production; this harness stands up only the services it needs, so it
+        // supplies the same default-tenant behaviour directly.
+        builder.Services.AddSingleton<ITenantContextResolver>(new DefaultTenantContextResolver());
+
         builder.AddLatticeReplicationApi();
         builder.AddLatticeReplicationApi();
 
@@ -51,12 +57,17 @@ public sealed class LatticeApiReplicationServiceCollectionExtensionsTests
         builder.Services.AddSingleton(Substitute.For<ILatticeReplicationConfigAuthority>());
         builder.Services.AddSingleton<ILatticeAccessGate>(new AllowingAccessGate());
 
+        // The facade scopes a caller-supplied tree name through this seam before it
+        // authorizes and acts. AddLattice() registers the core no-op resolver in
+        // production; this harness stands up only the services it needs, so it
+        // supplies the same default-tenant behaviour directly.
+        builder.Services.AddSingleton<ITenantContextResolver>(new DefaultTenantContextResolver());
+
         builder.AddLatticeReplicationApi();
 
         var control = builder.Services.BuildServiceProvider().GetRequiredService<ILatticeReplicationControl>();
         Assert.That(control, Is.InstanceOf<LatticeReplicationControl>());
     }
-
     /// <summary>A minimal <see cref="ISiloBuilder"/> backed by a plain service collection.</summary>
     private sealed class FakeSiloBuilder : ISiloBuilder
     {

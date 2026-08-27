@@ -109,6 +109,7 @@ public sealed class LatticeTreeAdminViewTests
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
             Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver(),
             restoreService: null,
             viewCatalog: viewCatalog,
             viewFactory: viewsEnabled ? (viewFactory ?? Substitute.For<ILatticeViewFactory>()) : null);
@@ -215,6 +216,7 @@ public sealed class LatticeTreeAdminViewTests
             factory,
             new TreeAdminAccessAuthorizer(gate),
             Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver(),
             viewCatalog: catalog,
             viewFactory: viewFactory);
 

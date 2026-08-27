@@ -54,8 +54,13 @@ public sealed class ApiBackupClusterFixture
     /// <summary>
     /// Builds a control facade wired to the fixture's live engine seams but over
     /// the supplied authorizer, so a denying gate can drive the fail-closed path.
+    /// An optional <paramref name="tenantResolver"/> substitutes the silo's
+    /// registered resolver so tenant composition can be driven without hosting the
+    /// tenancy add-on.
     /// </summary>
-    internal ILatticeBackupControl CreateControlWith(BackupAccessAuthorizer authorizer) =>
+    internal ILatticeBackupControl CreateControlWith(
+        BackupAccessAuthorizer authorizer,
+        ITenantContextResolver? tenantResolver = null) =>
         new LatticeBackupControl(
             SiloServices.GetRequiredService<ILatticeBackupCaptureService>(),
             SiloServices.GetRequiredService<ILatticeBackupIncrementalCaptureService>(),
@@ -71,7 +76,17 @@ public sealed class ApiBackupClusterFixture
             SiloServices.GetRequiredService<IGrainFactory>(),
             SiloServices.GetRequiredService<BackupInventoryRegistry>(),
             Options.Create(new LatticeApiBackupOptions()),
+            tenantResolver ?? SiloServices.GetRequiredService<ITenantContextResolver>(),
             SiloServices);
+
+    /// <summary>
+    /// Builds a control facade wired to the fixture's live engine seams and its
+    /// live authorizer, but over the supplied tenant resolver, so tenant
+    /// composition can be observed end to end against the real engine.
+    /// </summary>
+    internal ILatticeBackupControl CreateControlForTenant(ITenantContextResolver tenantResolver) =>
+        CreateControlWith(
+            SiloServices.GetRequiredService<BackupAccessAuthorizer>(), tenantResolver);
 
     /// <summary>Stops and disposes the cluster.</summary>
     public async Task DisposeAsync()

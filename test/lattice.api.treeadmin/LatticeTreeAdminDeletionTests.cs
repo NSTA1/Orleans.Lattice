@@ -36,7 +36,8 @@ public sealed class LatticeTreeAdminDeletionTests
             Substitute.For<ILatticeSchemaControl>(),
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
     private static (ILattice Lattice, ITreeDeletionGrain Deletion) Wire(IGrainFactory factory)
     {

@@ -138,13 +138,22 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   scope a name. This is what makes
   `services.GetLatticeAsync("orders")` address `t/acme/orders` for a caller acting
   as `acme` and `t/globex/orders` for one acting as `globex`, rather than handing
-  both the same physical tree. A caller that asserts no tenant resolves the
-  reserved `default` tenant and keeps its bare tree ids (non-destructive adoption);
-  a caller asserting a tenant it may not act as resolves the uninitialised "no
-  tenant" value, which fails closed with a `LatticeTenantAccessDeniedException`
-  rather than silently defaulting. Because the effective id is tenant-owned, usage
-  metering and quota admission attribute the traffic to the acting tenant - the
-  two only line up once the name is actually scoped.
+  both the same physical tree. **Every external API facade does the same**: the
+  data, state, tree-administration, schema, replication, and backup facades resolve
+  the caller-supplied name through `ITenantContextResolver.ResolveEffectiveTreeIdAsync`
+  at their entry point and use that one effective id for **both** the authorization
+  check and the operation, so a verb can never authorize one tree and act on
+  another. Without that, an external caller had no route into its own namespace at
+  all: an unqualified name stayed a shared default-tenant tree, and a directly
+  supplied `t/{tenant}/...` id is (correctly) refused by the reserved-namespace
+  guard, because composition is internal. A caller that asserts no tenant resolves
+  the reserved `default` tenant and keeps its bare tree ids (non-destructive
+  adoption); a caller asserting a tenant it may not act as resolves the
+  uninitialised "no tenant" value, which fails closed with a
+  `LatticeTenantAccessDeniedException` rather than silently defaulting. Because the
+  effective id is tenant-owned, usage metering and quota admission attribute the
+  traffic to the acting tenant - the two only line up once the name is actually
+  scoped.
 - **Enumeration pruning.** `AddLatticeTenancy` likewise replaces the core's no-op
   `ITenantEnumerationFilter`, so a tree-id enumeration (the cluster-state tree
   catalog, the tag-index catalog, the in-cluster all-tree-ids read) is pruned to
@@ -208,6 +217,25 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   overage** - a first-class, billing-ready signal distinct from ordinary usage;
   usage above `cap x (1 + burst%)` is refused with `LatticeQuotaExceededException`
   carrying the tenant id and dimension. A tenant with burst `0` refuses at the cap.
+- **Metering drives enforcement, on a cadence.** A quota is admitted against the
+  tenant's *metered* usage, so nothing binds until a usage sample lands. Each silo
+  runs a background metering cycle every
+  `TenantUsageAccountingOptions.MeterInterval` (default 30 seconds) that walks each
+  tenant's own trees - a bounded range scan over the tenant's `t/{tenant}/` key
+  range, not a read of the whole catalog - samples their footprint, and rolls the
+  result up into that tenant's per-cluster usage slot. Admission deliberately
+  **fails open** for a tenant with no landed sample yet, so a cold silo never
+  spuriously refuses; that means enforcement arms one cycle after a tenant first
+  has usage. Setting `MeterInterval` to zero disables metering entirely and leaves
+  admission permanently open, which is only appropriate for a deployment running
+  tenancy without resource governance.
+- **Request rate is enforced with the footprint dimensions.** `MaxOpsPerSecond` is
+  applied by the same admission seam, ahead of the footprint checks, from the
+  tenant's silo-local token budget. A breach surfaces as
+  `LatticeQuotaExceededException` on the `ops-per-second` dimension and is
+  explicitly **transient**: the budget refills continuously, so an immediate retry
+  after a short backoff succeeds, unlike a footprint breach which persists until
+  the tenant's usage drops.
 - **Apply-path admission bypass, never isolation bypass.** As in core, the
   replication-apply and saga-apply paths bypass quota *admission* (they re-enter
   under a foreign/prepared scope) but never bypass the tenant *isolation* boundary.

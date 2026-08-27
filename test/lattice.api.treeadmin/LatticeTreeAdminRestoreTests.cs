@@ -40,6 +40,7 @@ public sealed class LatticeTreeAdminRestoreTests
             Substitute.For<IGrainFactory>(),
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
             Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver(),
             restore);
 
     private static LatticeRestoreResult Result(

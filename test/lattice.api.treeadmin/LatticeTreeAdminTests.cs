@@ -52,7 +52,8 @@ public sealed class LatticeTreeAdminTests
             schemaControl,
             grainFactory ?? Substitute.For<IGrainFactory>(),
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
     private static LatticeSchemaCapabilities SchemaCaps(string tree, bool granted) => new()
     {
@@ -190,7 +191,8 @@ public sealed class LatticeTreeAdminTests
             schemaControl,
             Substitute.For<IGrainFactory>(),
             new TreeAdminAccessAuthorizer(new OperationGate(LatticeOperation.Admin | LatticeOperation.Read)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
         var caps = await facade.ProbeCapabilitiesAsync(Tree);
 
@@ -213,7 +215,8 @@ public sealed class LatticeTreeAdminTests
             schemaControl,
             Substitute.For<IGrainFactory>(),
             new TreeAdminAccessAuthorizer(new OperationGate(LatticeOperation.TreeLifecycle)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
         var caps = await facade.ProbeCapabilitiesAsync(Tree);
 
@@ -236,7 +239,8 @@ public sealed class LatticeTreeAdminTests
             schemaControl,
             Substitute.For<IGrainFactory>(),
             new TreeAdminAccessAuthorizer(new OperationGate(LatticeOperation.BulkLoad)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
         var caps = await facade.ProbeCapabilitiesAsync(Tree);
 
@@ -561,13 +565,19 @@ public sealed class LatticeTreeAdminTests
         var factory = Substitute.For<IGrainFactory>();
         var authorizer = new TreeAdminAccessAuthorizer(new FixedGate(true));
         var options = Options.Create(new LatticeApiTreeAdminOptions());
+        var resolver = new NullTenantContextResolver();
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeTreeAdmin(null!, factory, authorizer, options), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTreeAdmin(schemaControl, null!, authorizer, options), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTreeAdmin(schemaControl, factory, null!, options), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTreeAdmin(schemaControl, factory, authorizer, null!), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTreeAdmin(null!, factory, authorizer, options, resolver), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTreeAdmin(schemaControl, null!, authorizer, options, resolver), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTreeAdmin(schemaControl, factory, null!, options, resolver), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTreeAdmin(schemaControl, factory, authorizer, null!, resolver), Throws.ArgumentNullException);
+
+            // The tenant resolver is the seam that binds a caller-supplied name to a
+            // tenant namespace, so a null one must fail construction rather than
+            // silently leaving every tree id unscoped.
+            Assert.That(() => new LatticeTreeAdmin(schemaControl, factory, authorizer, options, null!), Throws.ArgumentNullException);
         });
     }
 }

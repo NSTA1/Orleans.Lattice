@@ -65,7 +65,8 @@ public sealed class LatticeStateQueryEnumerationPushdownTests
             grainFactory,
             options,
             Options.Create(new LatticeApiStateOptions()),
-            services);
+            services,
+            new NullTenantContextResolver());
 
         return (query, recorder);
     }

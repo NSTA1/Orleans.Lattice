@@ -28,7 +28,8 @@ public sealed class LatticeSchemaControlCapabilityTests
             Substitute.For<ILatticeSchemaComplianceAdmin>(),
             new SchemaAccessAuthorizer(gate),
             Options.Create(new LatticeApiSchemaOptions()),
-            services);
+            services,
+            new DefaultTenantContextResolver());
     }
 
     [Test]

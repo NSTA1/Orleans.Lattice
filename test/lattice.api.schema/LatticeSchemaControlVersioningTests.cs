@@ -33,7 +33,8 @@ public sealed class LatticeSchemaControlVersioningTests
             Substitute.For<ILatticeSchemaComplianceAdmin>(),
             new SchemaAccessAuthorizer(RecordingAccessGate.Allow()),
             Options.Create(new LatticeApiSchemaOptions()),
-            services.BuildServiceProvider());
+            services.BuildServiceProvider(),
+            new DefaultTenantContextResolver());
     }
 
     [Test]
@@ -136,7 +137,8 @@ public sealed class LatticeSchemaControlVersioningTests
             Substitute.For<ILatticeSchemaComplianceAdmin>(),
             new SchemaAccessAuthorizer(RecordingAccessGate.Deny()),
             Options.Create(new LatticeApiSchemaOptions()),
-            new ServiceCollection().AddSingleton(admin).BuildServiceProvider());
+            new ServiceCollection().AddSingleton(admin).BuildServiceProvider(),
+            new DefaultTenantContextResolver());
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
             async () => await control.SetVersionConfigAsync(Tree, new LatticeSchemaVersionConfig(1, 2)));

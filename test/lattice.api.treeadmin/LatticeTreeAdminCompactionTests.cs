@@ -36,6 +36,7 @@ public sealed class LatticeTreeAdminCompactionTests
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
             Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver(),
             restoreService: null,
             viewCatalog: null,
             viewFactory: null,

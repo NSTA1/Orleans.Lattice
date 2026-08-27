@@ -37,7 +37,8 @@ public sealed class LatticeTreeAdminBulkLoadTests
             Substitute.For<ILatticeSchemaControl>(),
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
     private static ILattice Wire(IGrainFactory factory)
     {
