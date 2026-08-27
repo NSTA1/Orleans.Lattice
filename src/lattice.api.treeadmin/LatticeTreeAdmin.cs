@@ -1181,7 +1181,13 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        var allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+
+        // Push the tag-index prefix down: the registry is ordinally sorted, so
+        // this is a bounded range scan rather than a full catalog read that keeps
+        // only the tag- prefixed ids.
+        var allIds = await registry
+            .GetAllTreeIdsAsync(LatticeConstants.TagIndexTreePrefix)
+            .ConfigureAwait(false);
 
         var indexTreeIds = allIds
             .Where(id => id.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal))

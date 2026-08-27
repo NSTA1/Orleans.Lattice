@@ -29,6 +29,18 @@ public sealed class LatticeStateQueryTenantCatalogTests
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.GetAllTreeIdsAsync().Returns(Task.FromResult(allTreeIds));
+
+        // Model the prefix pushdown rather than ignoring the argument, so a wrong
+        // prefix shows up as a wrong result here instead of being masked.
+        registry.GetAllTreeIdsAsync(Arg.Any<string?>()).Returns(call =>
+        {
+            var prefix = call.Arg<string?>();
+            return Task.FromResult<IReadOnlyList<string>>(
+                string.IsNullOrEmpty(prefix)
+                    ? allTreeIds
+                    : allTreeIds.Where(id => id.StartsWith(prefix, StringComparison.Ordinal)).ToList());
+        });
+
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(null));
 
         var deletion = Substitute.For<ITreeDeletionGrain>();
@@ -101,8 +113,9 @@ public sealed class LatticeStateQueryTenantCatalogTests
     [Test]
     public async Task ListTreesAsync_with_active_tenant_lists_only_the_tenant_subset()
     {
-        IReadOnlyList<string> all = ["orders", "reports", "users"];
-        var filter = new RecordingEnumerationFilter(isActive: true, result: ["orders", "users"]);
+        IReadOnlyList<string> all = ["t/contoso/orders", "t/contoso/users", "t/other/secrets", "legacy"];
+        var filter = new RecordingEnumerationFilter(
+            isActive: true, result: ["t/contoso/orders", "t/contoso/users"]);
         var query = CreateQuery(all, filter);
         var tenant = TenantId.Parse("contoso");
 
@@ -114,10 +127,19 @@ public sealed class LatticeStateQueryTenantCatalogTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(page.Entries.Select(e => e.TreeId), Is.EqualTo(new[] { "orders", "users" }));
+            Assert.That(
+                page.Entries.Select(e => e.TreeId),
+                Is.EqualTo(new[] { "t/contoso/orders", "t/contoso/users" }));
             Assert.That(filter.FilterCallCount, Is.EqualTo(1));
             Assert.That(filter.LastTenant, Is.EqualTo(tenant));
-            Assert.That(filter.LastInput, Is.SameAs(all));
+
+            // The enumeration is pushed down to the tenant's own prefix, so the
+            // filter is handed the already-narrowed range rather than the whole
+            // catalog. It still runs (defence in depth), but another tenant's ids
+            // never reach it - or the wire - in the first place.
+            Assert.That(filter.LastInput, Does.Not.Contain("t/other/secrets"));
+            Assert.That(filter.LastInput, Does.Not.Contain("legacy"));
+            Assert.That(filter.LastInput, Is.EquivalentTo(new[] { "t/contoso/orders", "t/contoso/users" }));
         });
     }
 
