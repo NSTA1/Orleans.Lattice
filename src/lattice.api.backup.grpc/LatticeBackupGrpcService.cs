@@ -226,7 +226,8 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     /// </summary>
     private IDisposable? StampActiveTenant(ServerCallContext context)
         => LatticeActiveTenantAssertion.Stamp(
-            name => context.RequestHeaders?.GetValue(name),
+            context,
+            static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
             _options.Value.ActiveTenantHeaderName);
 
     private IDisposable? StampCallerCredential(ServerCallContext context)

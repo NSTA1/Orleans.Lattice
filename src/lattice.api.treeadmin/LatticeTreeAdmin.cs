@@ -1370,7 +1370,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .ConfigureAwait(false);
 
         var indexTreeIds = allIds
-            .Where(id => LatticeTenantTrees.LocalName(id)
+            .Where(id => LatticeTenantTrees.LocalName(id.AsSpan())
                 .StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal))
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToList();
@@ -1378,7 +1378,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var indexes = ImmutableArray.CreateBuilder<TreeTagIndexInfo>(indexTreeIds.Count);
         foreach (var treeId in indexTreeIds)
         {
-            var indexName = LatticeTenantTrees.LocalName(treeId)[LatticeConstants.TagIndexTreePrefix.Length..];
+            var indexName = new string(
+                LatticeTenantTrees.LocalName(treeId.AsSpan())[LatticeConstants.TagIndexTreePrefix.Length..]);
             var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
             var covered = await _tagIndexFactory!.CreateMultiTree(indexName)
                 .CoveredTreesAsync(cancellationToken)

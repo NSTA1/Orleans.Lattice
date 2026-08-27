@@ -88,11 +88,39 @@ internal static class LatticeViewTrees
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
 
-        return LatticeTenantTrees.TryGetTenant(viewName, out var tenant)
-            ? LatticeTenantTrees.Compose(
-                tenant,
-                string.Concat(SegmentPrefix, LatticeTenantTrees.LocalName(viewName)))
-            : string.Concat(SegmentPrefix, viewName);
+        if (!LatticeTenantTrees.TryGetTenant(viewName, out var tenant))
+        {
+            return string.Concat(SegmentPrefix, viewName);
+        }
+
+        // Written once into an exactly-sized buffer. Concatenating the pieces
+        // would materialise the intermediate local name and the intermediate
+        // "view-{local}" only to copy them again; this is the same result with a
+        // single allocation, which matters because a maintainer resolves its tree
+        // id on every drain.
+        var local = LatticeTenantTrees.LocalName(viewName.AsSpan());
+        var tenantValue = tenant.Value!;
+        var length = LatticeTenantTrees.SegmentPrefix.Length
+            + tenantValue.Length
+            + 1
+            + SegmentPrefix.Length
+            + local.Length;
+
+        return string.Create(length, (tenantValue, viewName), static (destination, state) =>
+        {
+            var (tenantId, name) = state;
+            var localName = LatticeTenantTrees.LocalName(name.AsSpan());
+
+            var at = 0;
+            LatticeTenantTrees.SegmentPrefix.CopyTo(destination[at..]);
+            at += LatticeTenantTrees.SegmentPrefix.Length;
+            tenantId.CopyTo(destination[at..]);
+            at += tenantId.Length;
+            destination[at++] = '/';
+            SegmentPrefix.CopyTo(destination[at..]);
+            at += SegmentPrefix.Length;
+            localName.CopyTo(destination[at..]);
+        });
     }
 
     /// <summary>
@@ -130,22 +158,36 @@ internal static class LatticeViewTrees
     /// is the classification every view guard and view-aware read path must use
     /// in place of a raw leading-prefix test.
     /// </summary>
+    /// <remarks>
+    /// Allocation-free: it classifies the tenant-local <em>slice</em> rather than
+    /// materialising it. The view write and read guards run this on every
+    /// mutation and every content read, so a copy here would be a per-operation
+    /// allocation on the data plane.
+    /// </remarks>
     /// <param name="treeId">The candidate tree id. Must not be <c>null</c>.</param>
     /// <returns><c>true</c> when the id names a view tree; otherwise <c>false</c>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
     public static bool IsViewTree(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        return IsViewTree(treeId.AsSpan());
+    }
 
+    /// <summary>
+    /// Span overload of <see cref="IsViewTree(string)"/>. Allocation-free.
+    /// </summary>
+    /// <param name="treeId">The candidate tree id.</param>
+    /// <returns><c>true</c> when the id names a view tree; otherwise <c>false</c>.</returns>
+    public static bool IsViewTree(ReadOnlySpan<char> treeId)
+    {
         // Fast path: an uncomposed view id (every id on a tenancy-off cluster)
-        // answers on the leading prefix alone, with no parse and no allocation.
+        // answers on the leading prefix alone, with no tenant parse at all.
         if (treeId.StartsWith(SegmentPrefix, StringComparison.Ordinal))
         {
             return true;
         }
 
-        return LatticeTenantTrees.IsTenantScoped(treeId)
-            && LatticeTenantTrees.LocalName(treeId).StartsWith(SegmentPrefix, StringComparison.Ordinal);
+        return LatticeTenantTrees.LocalName(treeId).StartsWith(SegmentPrefix, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -167,15 +209,18 @@ internal static class LatticeViewTrees
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        if (!IsViewTree(treeId))
+        var full = treeId.AsSpan();
+        if (!IsViewTree(full))
         {
             return string.Empty;
         }
 
+        // Sliced, not copied: the intermediate local name is never materialised,
+        // so the only allocation is the single result string.
         var tenantScoped = LatticeTenantTrees.TryGetTenant(treeId, out var tenant);
-        var local = tenantScoped ? LatticeTenantTrees.LocalName(treeId) : treeId;
+        var local = tenantScoped ? LatticeTenantTrees.LocalName(full) : full;
 
-        var name = local.AsSpan(SegmentPrefix.Length);
+        var name = local[SegmentPrefix.Length..];
 
         // Either separator terminates the name: a view that predates the
         // storage-safe separator still addresses its existing generations through
@@ -191,8 +236,10 @@ internal static class LatticeViewTrees
             return string.Empty;
         }
 
+        // One allocation either way: the composed form when the id is scoped, the
+        // bare name otherwise.
         return tenantScoped
-            ? LatticeTenantTrees.Compose(tenant, new string(name))
+            ? LatticeTenantTrees.Compose(tenant, name)
             : new string(name);
     }
 }

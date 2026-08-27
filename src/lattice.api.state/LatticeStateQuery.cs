@@ -2354,11 +2354,13 @@ internal sealed class LatticeStateQuery(
     /// (the <see cref="LatticeConstants.TagIndexTreePrefix"/>), whether or not
     /// the id has been tenant-composed. Like the view prefix this is a
     /// leading-prefix marker on the tenant-local name, so it is classified
-    /// through <see cref="LatticeTenantTrees.LocalName"/> rather than by testing
-    /// the raw id, which a <c>t/{tenant}/</c> segment would silently defeat.
+    /// through <see cref="LatticeTenantTrees.LocalName(ReadOnlySpan{char})"/>
+    /// rather than by testing the raw id, which a <c>t/{tenant}/</c> segment
+    /// would silently defeat. Allocation-free: the local name is sliced, never
+    /// materialised.
     /// </summary>
     private static bool IsTagIndexTree(string treeId) =>
-        LatticeTenantTrees.LocalName(treeId)
+        LatticeTenantTrees.LocalName(treeId.AsSpan())
             .StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
