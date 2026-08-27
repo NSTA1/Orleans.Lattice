@@ -27,11 +27,14 @@ namespace Orleans.Lattice.Tenancy;
 /// </remarks>
 internal sealed class LatticeTenantAdmissionController(
     ITenantUsageIndex index,
-    ITenantEnforcementScopeResolver scopeResolver) : ITenantAdmissionController
+    ITenantEnforcementScopeResolver scopeResolver,
+    ITenantRateLimiter rateLimiter) : ITenantAdmissionController
 {
     private readonly ITenantUsageIndex _index = index ?? throw new ArgumentNullException(nameof(index));
     private readonly ITenantEnforcementScopeResolver _scopeResolver =
         scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+    private readonly ITenantRateLimiter _rateLimiter =
+        rateLimiter ?? throw new ArgumentNullException(nameof(rateLimiter));
 
     /// <inheritdoc />
     /// <remarks>Always active: registering the tenancy package turns quota enforcement on.</remarks>
@@ -39,15 +42,42 @@ internal sealed class LatticeTenantAdmissionController(
 
     /// <inheritdoc />
     /// <remarks>
-    /// Admits against the usage aggregate selected by the tenant's enforcement
-    /// scope - the cross-cluster global fold under
+    /// <para>
+    /// Applies the tenant's sustained request-rate budget first, then admits against
+    /// the usage aggregate selected by the tenant's enforcement scope - the
+    /// cross-cluster global fold under
     /// <see cref="TenantEnforcementScope.GlobalConverged"/>, or this cluster's local
     /// sample under <see cref="TenantEnforcementScope.PerCluster"/> - and throws
     /// <see cref="LatticeQuotaExceededException"/> on the first breached dimension.
+    /// </para>
+    /// <para>
+    /// The rate limiter is consulted here rather than at the core write seam
+    /// because <see cref="ITenantRateLimiter"/> lives in this package: folding it
+    /// into the admission controller (which core already reaches through the
+    /// <c>ITenantAdmissionController</c> null seam, short-circuited on
+    /// <c>IsActive</c>) enforces <c>MaxOpsPerSecond</c> without core taking a new
+    /// dependency, and keeps a non-tenancy cluster byte-for-byte unchanged.
+    /// Previously nothing consulted the limiter at all, so the dimension was inert.
+    /// </para>
     /// </remarks>
     public ValueTask<bool> IsAdmittedAsync(TenantId tenant, string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+
+        // Sustained request rate. A tenant with no configured rate, and the
+        // uninitialised "no tenant" value, are inert and always admitted, so this
+        // is a lock-free no-op on the default path.
+        if (!_rateLimiter.TryAcquire(tenant))
+        {
+            throw new LatticeQuotaExceededException(
+                $"Tenant '{tenant}' exceeded its sustained request-rate budget writing to tree '{treeId}'. "
+                + "This is a transient back-off signal: the budget refills continuously, so retry after a short backoff.",
+                treeId,
+                LatticeQuotaExceededException.OpsPerSecondDimension,
+                current: 0,
+                limit: 0,
+                tenantId: tenant.Value ?? string.Empty);
+        }
 
         // Fail open until the tenant has a warm view: an unknown tenant (not yet
         // compiled) or one with no landed sample is admitted. This is the documented

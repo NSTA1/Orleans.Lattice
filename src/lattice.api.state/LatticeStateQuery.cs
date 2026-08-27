@@ -16,11 +16,23 @@ namespace Orleans.Lattice.Api.State;
 /// <see cref="ILattice"/> grain surface via the cluster grain factory and
 /// resolves effective options via the named-options monitor.
 /// </summary>
+/// <remarks>
+/// Every verb that takes a caller-supplied tree id composes it through
+/// <see cref="ITenantContextResolver"/> at its entry point, so an unqualified,
+/// tenant-local name is bound to the caller's own <c>t/{tenant}/{name}</c>
+/// namespace before it is used for anything. The resulting effective id drives
+/// both the auth-backed visibility check and the grain dial, so this surface can
+/// never authorize one tree and read another. With tenancy off the core no-op
+/// resolver returns the caller's bare name unchanged (the same
+/// <see cref="string"/> reference, resolved synchronously), so the read paths are
+/// byte-for-byte identical to a non-tenant cluster.
+/// </remarks>
 internal sealed class LatticeStateQuery(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> options,
     IOptions<LatticeApiStateOptions> apiOptions,
-    IServiceProvider services) : ILatticeStateQuery
+    IServiceProvider services,
+    ITenantContextResolver tenantResolver) : ILatticeStateQuery
 {
     private readonly IGrainFactory _grainFactory = grainFactory
         ?? throw new ArgumentNullException(nameof(grainFactory));
@@ -34,8 +46,43 @@ internal sealed class LatticeStateQuery(
     private readonly IServiceProvider _services = services
         ?? throw new ArgumentNullException(nameof(services));
 
+    private readonly ITenantContextResolver _tenantResolver = tenantResolver
+        ?? throw new ArgumentNullException(nameof(tenantResolver));
+
     private readonly LatticeStateVisibilityFilter _visibility =
         new(services, (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value);
+
+    /// <summary>
+    /// Resolves the effective, tenant-scoped tree id a caller-supplied tree name
+    /// addresses. This is the single composition seam of the read surface: every
+    /// verb that accepts a tree id calls it once, at its entry point, and then
+    /// uses the result for the visibility check, the classification checks, the
+    /// per-tree options lookup, and the grain dial alike. The caller's own bare
+    /// name is what the result DTOs echo back, so the internal composition never
+    /// leaks onto the wire.
+    /// </summary>
+    /// <param name="treeId">The caller-supplied, tenant-local tree name.</param>
+    /// <param name="cancellationToken">Cancels an asynchronous tenant resolution.</param>
+    /// <returns>The effective tree id to address.</returns>
+    /// <remarks>
+    /// The resolver's synchronously-completed result is returned unwrapped, so a
+    /// cluster with tenancy off adds no allocation and no state machine here: the
+    /// core no-op resolver resolves <see cref="TenantId.Default"/> synchronously
+    /// and the bare name comes back unchanged. Awaiting an already-completed
+    /// <see cref="ValueTask{TResult}"/> inside an existing <c>async</c> verb
+    /// continues synchronously, so the warm path never suspends.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeTenantAccessDeniedException">
+    /// The resolver denied the operation (no valid active tenant).
+    /// </exception>
+    private ValueTask<string> EffectiveTreeIdAsync(string treeId, CancellationToken cancellationToken)
+    {
+        // Guarded here as well as inside the core helper so the rejection names
+        // this facade's own parameter rather than the helper's 'treeName'.
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken);
+    }
 
     /// <summary>
     /// Applies auth-backed visibility to a tree-scoped read. Resolves the caller
@@ -209,19 +256,21 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return TreeSummaryResult.NotFound(treeId);
         }
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        if (IsReservedTree(treeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
+        if (IsReservedTree(effectiveTreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return TreeSummaryResult.NotFound(treeId);
         }
 
         var report = await tree.DiagnoseAsync(deep, cancellationToken).ConfigureAwait(false);
-        return TreeSummaryResult.Found(MapTree(treeId, report, BuildConfig(treeId, report)));
+        return TreeSummaryResult.Found(MapTree(treeId, report, BuildConfig(effectiveTreeId, report)));
     }
 
     public async Task<ShardSummariesResult> GetShardSummariesAsync(
@@ -237,15 +286,17 @@ internal sealed class LatticeStateQuery(
         // them). Bind under an authorised view-read scope and resolve the active
         // generation, exactly as the entry read paths do; only system trees stay
         // hidden. The result keeps the requested id so the caller keys on it.
-        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return ShardSummariesResult.NotFound(treeId);
         }
 
-        using var viewScope = OpenViewReadScopeIfNeeded(treeId);
-        var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        using var viewScope = OpenViewReadScopeIfNeeded(effectiveTreeId);
+        var bindTreeId = await ResolveReadTreeIdAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
-        if (IsSystemTree(treeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(effectiveTreeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return ShardSummariesResult.NotFound(treeId);
         }
@@ -271,15 +322,17 @@ internal sealed class LatticeStateQuery(
         // Mirror GetShardSummariesAsync's view handling so the saturated-tree
         // degraded metrics path also serves materialised views rather than
         // dropping them; only system trees stay hidden.
-        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return null;
         }
 
-        using var viewScope = OpenViewReadScopeIfNeeded(treeId);
-        var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        using var viewScope = OpenViewReadScopeIfNeeded(effectiveTreeId);
+        var bindTreeId = await ResolveReadTreeIdAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
-        if (IsSystemTree(treeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(effectiveTreeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return null;
         }
@@ -661,13 +714,15 @@ internal sealed class LatticeStateQuery(
 
         // Auth-backed visibility: tag values of a tree the caller may not read are
         // not disclosed (they leak which values exist in unreadable data).
-        if (await IsTreeReadHiddenAsync(request.SourceTreeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(request.SourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return new TagValueCatalogPage();
         }
 
-        var tree = _grainFactory.GetGrain<ILattice>(request.SourceTreeId);
-        if (IsReservedTree(request.SourceTreeId)
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
+        if (IsReservedTree(effectiveTreeId)
             || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return new TagValueCatalogPage();
@@ -946,7 +1001,9 @@ internal sealed class LatticeStateQuery(
         // Auth-backed visibility: the structure of a tree the caller may not read
         // is itself not disclosed (node shape leaks the existence of data). An
         // unresolved/anonymous caller sees no structure.
-        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
@@ -954,12 +1011,12 @@ internal sealed class LatticeStateQuery(
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay
         // hidden everywhere.
-        using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
+        using var viewScope = OpenViewReadScopeIfNeeded(effectiveTreeId);
 
         // A view tree binds to its active generation (a shadow-swap rebuild moves
         // the live data off the generation-0 alias), so resolve the read id here.
-        var bindTreeId = await ResolveReadTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
-        if (IsSystemTree(request.TreeId) || bindTreeId is null)
+        var bindTreeId = await ResolveReadTreeIdAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+        if (IsSystemTree(effectiveTreeId) || bindTreeId is null)
         {
             return TreeStructureResult.NotFound(request.TreeId);
         }
@@ -1051,25 +1108,27 @@ internal sealed class LatticeStateQuery(
         // access (an unresolved/anonymous caller sees nothing), reported as
         // not-found. A partial (prefix) grant proceeds; the gated cursor surface
         // prunes the individual keys the subject may not observe.
-        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return EntryScanResult.NotFound(request.TreeId);
         }
 
         if (!string.IsNullOrEmpty(request.IndexName) && request.Tag is not null)
         {
-            return await ScanByTagAsync(request, cancellationToken).ConfigureAwait(false);
+            return await ScanByTagAsync(request, effectiveTreeId, cancellationToken).ConfigureAwait(false);
         }
 
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay
         // hidden everywhere. The scope must remain active for the cursor open and
         // every page read, so it wraps the whole method.
-        using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
+        using var viewScope = OpenViewReadScopeIfNeeded(effectiveTreeId);
 
         // A view tree binds to its active generation (a shadow-swap rebuild moves
         // the live data off the generation-0 alias), so resolve the read id here.
-        var bindTreeId = await ResolveReadTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        var bindTreeId = await ResolveReadTreeIdAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         if (bindTreeId is null)
         {
             return EntryScanResult.NotFound(request.TreeId);
@@ -1081,7 +1140,7 @@ internal sealed class LatticeStateQuery(
         string cursorId;
         if (fresh)
         {
-            if (IsSystemTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+            if (IsSystemTree(effectiveTreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
             {
                 return EntryScanResult.NotFound(request.TreeId);
             }
@@ -1092,7 +1151,7 @@ internal sealed class LatticeStateQuery(
             // canonical view read surface floors every unbounded scan above that
             // range so readers see only the materialised group values; mirror
             // that here so the state API never leaks the internal rows.
-            var startInclusive = ClampViewScanStart(request.TreeId, request.StartInclusive);
+            var startInclusive = ClampViewScanStart(effectiveTreeId, request.StartInclusive);
 
             // Open the cursor selected by the request mode. Snapshot opens a
             // point-in-time cursor that captures an all-shard frozen baseline so
@@ -1148,7 +1207,7 @@ internal sealed class LatticeStateQuery(
         // scope), so a prefix-granted caller's per-key pruning on the source is
         // applied here rather than by the gated cursor. Null for an ordinary tree
         // or a whole-tree grant (every key admitted).
-        var viewKeyFilter = await ResolveViewKeyFilterAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        var viewKeyFilter = await ResolveViewKeyFilterAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var records = new List<EntryRecord>(page.Entries.Count);
         foreach (var entry in page.Entries)
@@ -1160,12 +1219,12 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            var record = await BuildEntryRecordAsync(tree, request.TreeId, entry.Key, entry.Value, previewBudget, cancellationToken)
+            var record = await BuildEntryRecordAsync(tree, effectiveTreeId, entry.Key, entry.Value, previewBudget, cancellationToken)
                 .ConfigureAwait(false);
             // Decode current members off the full snapshot value bytes (before the
             // preview clip) so the Data list shows a CRDT entry's materialised
             // members, matching the single-entry detail view.
-            records.Add(WithCurrentMembers(record, request.TreeId, entry.Value));
+            records.Add(WithCurrentMembers(record, effectiveTreeId, entry.Value));
         }
 
         string? continuation = page.HasMore ? cursorId : null;
@@ -1179,12 +1238,19 @@ internal sealed class LatticeStateQuery(
         return EntryScanResult.Found(request.TreeId, records, continuation);
     }
 
+    /// <summary>
+    /// Serves the tag-filtered variant of an entry scan.
+    /// <paramref name="effectiveTreeId"/> is the tenant-composed source tree the
+    /// membership rows are read against; <c>request.TreeId</c> stays the
+    /// caller-supplied name the result echoes.
+    /// </summary>
     private async Task<EntryScanResult> ScanByTagAsync(
         EntryScanRequest request,
+        string effectiveTreeId,
         CancellationToken cancellationToken)
     {
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
-        if (IsReservedTree(request.TreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
+        if (IsReservedTree(effectiveTreeId) || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryScanResult.NotFound(request.TreeId);
         }
@@ -1201,7 +1267,10 @@ internal sealed class LatticeStateQuery(
         // the caller can tell a mistyped index from a real-but-empty one, which
         // both otherwise return an empty Found page. Only check on a fresh open:
         // a valid continuation token already implies the index existed at open,
-        // so paging does not pay a per-page existence round-trip.
+        // so paging does not pay a per-page existence round-trip. The index tree
+        // itself is a cluster-global reserved id, so it is never tenant-composed;
+        // the tenant boundary on this path is the composed SOURCE tree above,
+        // which is what the membership rows are read against.
         if (string.IsNullOrEmpty(request.ContinuationToken))
         {
             var indexTreeId = LatticeConstants.TagIndexTreePrefix + request.IndexName!;
@@ -1253,8 +1322,8 @@ internal sealed class LatticeStateQuery(
             }
 
             records.Add(WithCurrentMembers(
-                BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, ResolveCrdtShape(request.TreeId, versioned.MergeMode), versioned.MergeMode),
-                request.TreeId,
+                BuildEntryRecord(key, versioned.Value, versioned.Version, versioned.ExpiresAtTicks, previewBudget, ResolveCrdtShape(effectiveTreeId, versioned.MergeMode), versioned.MergeMode),
+                effectiveTreeId,
                 versioned.Value));
         }
 
@@ -1274,7 +1343,9 @@ internal sealed class LatticeStateQuery(
         // unresolved/anonymous caller included) gets not-found, never a value.
         // A partial (prefix) grant proceeds; the gated point read below returns
         // not-found for any individual key the subject may not observe.
-        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return EntryDetailResult.TreeNotFound(treeId, key);
         }
@@ -1282,7 +1353,7 @@ internal sealed class LatticeStateQuery(
         // A view point read bypasses the data-plane gate; apply the caller's
         // per-key grant on the view's source so a prefix-granted caller cannot read
         // a view key outside its grant. Null for an ordinary tree or whole-tree grant.
-        var viewKeyFilter = await ResolveViewKeyFilterAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var viewKeyFilter = await ResolveViewKeyFilterAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         if (viewKeyFilter is not null && !viewKeyFilter(key))
         {
             return EntryDetailResult.KeyNotFound(treeId, key);
@@ -1291,13 +1362,13 @@ internal sealed class LatticeStateQuery(
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay
         // hidden everywhere.
-        using var viewScope = OpenViewReadScopeIfNeeded(treeId);
+        using var viewScope = OpenViewReadScopeIfNeeded(effectiveTreeId);
 
         // A view tree binds to its active generation (a shadow-swap rebuild moves
         // the live data off the generation-0 alias), so resolve the read id here.
-        var bindTreeId = await ResolveReadTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var bindTreeId = await ResolveReadTreeIdAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
-        if (IsSystemTree(treeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(effectiveTreeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryDetailResult.TreeNotFound(treeId, key);
         }
@@ -1316,7 +1387,7 @@ internal sealed class LatticeStateQuery(
             versioned.Version,
             versioned.ExpiresAtTicks,
             _apiOptions.SingleEntryValuePreviewBytes,
-            ResolveCrdtShape(treeId, versioned.MergeMode),
+            ResolveCrdtShape(effectiveTreeId, versioned.MergeMode),
             versioned.MergeMode);
 
         // For a typed CRDT entry, decode the full folded state into its current
@@ -1325,7 +1396,7 @@ internal sealed class LatticeStateQuery(
         // value bytes the read returned, before the preview clip; an LWW value,
         // a minimal deployment without the CRDT shape registry, or a decode
         // failure all degrade to no members rather than failing the read.
-        record = WithCurrentMembers(record, treeId, versioned.Value);
+        record = WithCurrentMembers(record, effectiveTreeId, versioned.Value);
 
         return EntryDetailResult.Found(treeId, record);
     }
@@ -1342,7 +1413,9 @@ internal sealed class LatticeStateQuery(
         // Auth-backed visibility: hide the tree from a caller with no read access
         // (unresolved/anonymous included). A partial grant proceeds; the gated
         // history read below is already filtered per key.
-        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return EntryHistoryResult.TreeNotFound(request.TreeId, request.Key);
         }
@@ -1350,7 +1423,7 @@ internal sealed class LatticeStateQuery(
         // A view history read bypasses the data-plane gate; apply the caller's
         // per-key grant on the view's source so a prefix-granted caller cannot read
         // the history of a view key outside its grant.
-        var viewKeyFilter = await ResolveViewKeyFilterAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        var viewKeyFilter = await ResolveViewKeyFilterAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         if (viewKeyFilter is not null && !viewKeyFilter(request.Key))
         {
             return EntryHistoryResult.KeyNotFound(request.TreeId, request.Key);
@@ -1359,13 +1432,13 @@ internal sealed class LatticeStateQuery(
         // A materialised view is a read-only tree; permit it on the read path by
         // binding under an authorised view-read scope, while system trees stay
         // hidden everywhere.
-        using var viewScope = OpenViewReadScopeIfNeeded(request.TreeId);
+        using var viewScope = OpenViewReadScopeIfNeeded(effectiveTreeId);
 
         // A view tree binds to its active generation (a shadow-swap rebuild moves
         // the live data off the generation-0 alias), so resolve the read id here.
-        var bindTreeId = await ResolveReadTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+        var bindTreeId = await ResolveReadTreeIdAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
         var tree = bindTreeId is null ? null : _grainFactory.GetGrain<ILattice>(bindTreeId);
-        if (IsSystemTree(request.TreeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        if (IsSystemTree(effectiveTreeId) || tree is null || !await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
         {
             return EntryHistoryResult.TreeNotFound(request.TreeId, request.Key);
         }
@@ -1388,7 +1461,7 @@ internal sealed class LatticeStateQuery(
         for (var i = 0; i < page.Revisions.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            records.Add(MapRevision(request.TreeId, page.Revisions[i], previewBudget, shapeRegistry, decoderRegistry));
+            records.Add(MapRevision(effectiveTreeId, page.Revisions[i], previewBudget, shapeRegistry, decoderRegistry));
         }
 
         if (request.Reverse)
@@ -1648,14 +1721,22 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // An empty token names no cursor, and reserved system trees never expose
-        // a scan cursor: both are a no-op rather than a grain call.
-        if (string.IsNullOrEmpty(continuationToken) || IsReservedTree(treeId))
+        // An empty token names no cursor, so it is a no-op rather than a grain
+        // call - and cheap enough to short-circuit before resolving the tenant.
+        if (string.IsNullOrEmpty(continuationToken))
         {
             return;
         }
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // Reserved system trees never expose a scan cursor.
+        if (IsReservedTree(effectiveTreeId))
+        {
+            return;
+        }
+
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
         try
         {
             await tree.CloseCursorAsync(continuationToken, cancellationToken).ConfigureAwait(false);
@@ -1678,7 +1759,9 @@ internal sealed class LatticeStateQuery(
 
         // Auth-backed visibility: a tree the caller may not read discloses
         // nothing, not even that it has a dead-letter queue.
-        if (await IsTreeReadHiddenAsync(treeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return 0;
         }
@@ -1694,7 +1777,7 @@ internal sealed class LatticeStateQuery(
             return 0;
         }
 
-        return await store.CountAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await store.CountAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1706,7 +1789,9 @@ internal sealed class LatticeStateQuery(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (await IsTreeReadHiddenAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        var effectiveTreeId = await EffectiveTreeIdAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
+
+        if (await IsTreeReadHiddenAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             return new DeadLetterQueuePage();
         }
@@ -1729,7 +1814,7 @@ internal sealed class LatticeStateQuery(
         var index = 0;
         string? nextToken = null;
 
-        await foreach (var entry in store.ListAsync(request.TreeId, cancellationToken).ConfigureAwait(false))
+        await foreach (var entry in store.ListAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false))
         {
             if (index < offset)
             {

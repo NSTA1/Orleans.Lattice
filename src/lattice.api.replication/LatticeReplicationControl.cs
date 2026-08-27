@@ -24,19 +24,29 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
 {
     private readonly ILatticeReplicationConfigAuthority _authority;
     private readonly ReplicationAccessAuthorizer _authorizer;
+    private readonly ITenantContextResolver _tenantResolver;
 
     /// <summary>Initializes a new <see cref="LatticeReplicationControl"/>.</summary>
     /// <param name="authority">The engine config-authoring seam. Must not be <c>null</c>.</param>
     /// <param name="authorizer">The fail-closed replication authorization seam. Must not be <c>null</c>.</param>
+    /// <param name="tenantResolver">
+    /// The active-tenant context resolver used to scope a caller-supplied,
+    /// tenant-local tree name before it is authorized and acted on. Must not be
+    /// <c>null</c>. With no tenancy add-on registered the core no-op resolver
+    /// returns the caller's name unchanged, so behaviour is unaffected.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeReplicationControl(
         ILatticeReplicationConfigAuthority authority,
-        ReplicationAccessAuthorizer authorizer)
+        ReplicationAccessAuthorizer authorizer,
+        ITenantContextResolver tenantResolver)
     {
         ArgumentNullException.ThrowIfNull(authority);
         ArgumentNullException.ThrowIfNull(authorizer);
+        ArgumentNullException.ThrowIfNull(tenantResolver);
         _authority = authority;
         _authorizer = authorizer;
+        _tenantResolver = tenantResolver;
     }
 
     /// <inheritdoc />
@@ -47,6 +57,12 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // Scope the caller-supplied, tenant-local name to the caller's tenant before
+        // anything uses it, so the authorization check and the operation below act on
+        // the SAME effective tree. A no-op when tenancy is off (the core null resolver
+        // returns the bare name unchanged).
+        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeAsync(treeId, cancellationToken).ConfigureAwait(false);
         var result = await _authority
             .EnableReplicationAsync(treeId, mode, bootstrapSourceClusterId, cancellationToken)
@@ -64,6 +80,12 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        // Scope the caller-supplied, tenant-local name to the caller's tenant before
+        // anything uses it, so the authorization check and the operation below act on
+        // the SAME effective tree. A no-op when tenancy is off (the core null resolver
+        // returns the bare name unchanged).
+        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeAsync(treeId, cancellationToken).ConfigureAwait(false);
         var result = await _authority
             .DisableReplicationAsync(treeId, cancellationToken)

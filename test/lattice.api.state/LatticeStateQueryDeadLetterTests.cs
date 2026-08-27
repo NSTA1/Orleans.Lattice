@@ -30,7 +30,7 @@ public sealed class LatticeStateQueryDeadLetterTests
         var options = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         var apiOptions = Options.Create(new LatticeApiStateOptions());
 
-        return new LatticeStateQuery(grainFactory, options, apiOptions, services);
+        return new LatticeStateQuery(grainFactory, options, apiOptions, services, new NullTenantContextResolver());
     }
 
     private static async IAsyncEnumerable<LatticeSchemaDeadLetterEntry> Entries(

@@ -43,7 +43,8 @@ public sealed class LatticeTreeAdminTenantNamespaceGuardTests
             Substitute.For<ILatticeSchemaControl>(),
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
     [TestCase("t/globex/secrets")]
     [TestCase("t/acme/orders")]
@@ -122,6 +123,7 @@ public sealed class LatticeTreeAdminTenantNamespaceGuardTests
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(true)),
             Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver(),
             viewFactory: viewFactory);
 
         // The caller-supplied source is the authorization boundary, so a view must

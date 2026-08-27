@@ -21,55 +21,58 @@ namespace Orleans.Lattice.Api.Data;
 /// </remarks>
 internal sealed partial class LatticeDataApi
 {
-    private ILattice Tree(string treeId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        return _grainFactory.GetGrain<ILattice>(treeId);
-    }
+    // Tree resolution lives on the main partial (TreeAsync), which composes the
+    // caller-supplied name under the active tenant before dialling the grain, so a
+    // CRDT write lands in the caller's own namespace rather than a shared one.
 
     /// <inheritdoc />
-    public Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
+    public async Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).PnCounter(key).IncrementAsync(replicaId, amount, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.PnCounter(key).IncrementAsync(replicaId, amount, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
+    public async Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).PnCounter(key).DecrementAsync(replicaId, amount, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.PnCounter(key).DecrementAsync(replicaId, amount, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).PnCounter(key).ValueAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.PnCounter(key).ValueAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task SetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+    public async Task SetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(element);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).OrSet(key).AddAsync(element, replicaId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.OrSet(key).AddAsync(element, replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task SetRemoveAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)
+    public async Task SetRemoveAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(element);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).OrSet(key).RemoveAsync(element, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.OrSet(key).RemoveAsync(element, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -77,85 +80,94 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var set = await Tree(treeId).OrSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var set = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).OrSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
         return [.. set.Elements()];
     }
 
     /// <inheritdoc />
-    public Task OrFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
+    public async Task OrFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).OrFlag(key).EnableAsync(replicaId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task OrFlagDisableAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task OrFlagDisableAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).OrFlag(key).DisableAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<bool> OrFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> OrFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).OrFlag(key).IsEnabledAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.OrFlag(key).IsEnabledAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task RwFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        ArgumentException.ThrowIfNullOrEmpty(replicaId);
-        cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).RwFlag(key).EnableAsync(replicaId, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task RwFlagDisableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
+    public async Task RwFlagEnableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).RwFlag(key).DisableAsync(replicaId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.RwFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<bool> RwFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).RwFlag(key).IsEnabledAsync(cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
+    public async Task RwFlagDisableAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).GCounter(key).IncrementAsync(replicaId, amount, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.RwFlag(key).DisableAsync(replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> RwFlagGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).GCounter(key).ValueAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.RwFlag(key).IsEnabledAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)
+    public async Task GCounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentException.ThrowIfNullOrEmpty(replicaId);
+        cancellationToken.ThrowIfCancellationRequested();
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.GCounter(key).IncrementAsync(replicaId, amount, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<long> GCounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        cancellationToken.ThrowIfCancellationRequested();
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.GCounter(key).ValueAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task GSetAddAsync(string treeId, string key, byte[] element, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(element);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).GSet(key).AddAsync(element, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.GSet(key).AddAsync(element, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -163,27 +175,29 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return await Tree(treeId).GSet(key).ToListAsync(cancellationToken).ConfigureAwait(false);
+        return await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).GSet(key).ToListAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+    public async Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(element);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).RwSet(key).AddAsync(element, replicaId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.RwSet(key).AddAsync(element, replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
+    public async Task RwSetRemoveAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(element);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).RwSet(key).RemoveAsync(element, replicaId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.RwSet(key).RemoveAsync(element, replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -191,17 +205,18 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var set = await Tree(treeId).RwSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var set = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).RwSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
         return [.. set.Elements()];
     }
 
     /// <inheritdoc />
-    public Task VersionVectorTickAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
+    public async Task VersionVectorTickAsync(string treeId, string key, string replicaId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).VersionVector(key).TickAsync(replicaId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.VersionVector(key).TickAsync(replicaId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -209,7 +224,7 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var vector = await Tree(treeId).VersionVector(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var vector = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).VersionVector(key).GetAsync(cancellationToken).ConfigureAwait(false);
         var result = new Dictionary<string, string>(vector.Entries.Count);
         foreach (var (replicaId, clock) in vector.Entries)
         {
@@ -220,85 +235,94 @@ internal sealed partial class LatticeDataApi
     }
 
     /// <inheritdoc />
-    public Task RegisterSetAsync(string treeId, string key, string replicaId, byte[] value, CancellationToken cancellationToken = default)
+    public async Task RegisterSetAsync(string treeId, string key, string replicaId, byte[] value, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).MvRegister<byte[]>(key).SetAsync(replicaId, value, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.MvRegister<byte[]>(key).SetAsync(replicaId, value, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<byte[]>> RegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<byte[]>> RegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).MvRegister<byte[]>(key).ValuesAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.MvRegister<byte[]>(key).ValuesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        ArgumentNullException.ThrowIfNull(value);
-        cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).MaxRegister<byte[]>(key, static v => v).SetAsync(value, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(key);
-        cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).MaxRegister<byte[]>(key, static v => v).GetAsync(cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+    public async Task MaxRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).MinRegister<byte[]>(key, static v => v).SetAsync(value, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.MaxRegister<byte[]>(key, static v => v).SetAsync(value, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<byte[]?> MaxRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).MinRegister<byte[]>(key, static v => v).GetAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.MaxRegister<byte[]>(key, static v => v).GetAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task SequenceInsertAtAsync(string treeId, string key, int index, string replicaId, byte[] value, CancellationToken cancellationToken = default)
+    public async Task MinRegisterSetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentNullException.ThrowIfNull(value);
+        cancellationToken.ThrowIfCancellationRequested();
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.MinRegister<byte[]>(key, static v => v).SetAsync(value, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<byte[]?> MinRegisterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        cancellationToken.ThrowIfCancellationRequested();
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.MinRegister<byte[]>(key, static v => v).GetAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task SequenceInsertAtAsync(string treeId, string key, int index, string replicaId, byte[] value, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).Sequence<byte[]>(key).InsertAtAsync(index, replicaId, value, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.Sequence<byte[]>(key).InsertAtAsync(index, replicaId, value, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task SequenceRemoveAtAsync(string treeId, string key, int index, CancellationToken cancellationToken = default)
+    public async Task SequenceRemoveAtAsync(string treeId, string key, int index, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).Sequence<byte[]>(key).RemoveAtAsync(index, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.Sequence<byte[]>(key).RemoveAtAsync(index, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<byte[]>> SequenceGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<byte[]>> SequenceGetAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).Sequence<byte[]>(key).ToListAsync(cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.Sequence<byte[]>(key).ToListAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task MapSetAsync(string treeId, string key, string field, string replicaId, byte[] value, CancellationToken cancellationToken = default)
+    public async Task MapSetAsync(string treeId, string key, string field, string replicaId, byte[] value, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(field);
@@ -308,16 +332,18 @@ internal sealed partial class LatticeDataApi
 
         var register = new MvRegister();
         register.Set(replicaId, value);
-        return Tree(treeId).OrMap<string, MvRegister>(key).SetAsync(field, replicaId, register, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.OrMap<string, MvRegister>(key).SetAsync(field, replicaId, register, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task MapRemoveAsync(string treeId, string key, string field, CancellationToken cancellationToken = default)
+    public async Task MapRemoveAsync(string treeId, string key, string field, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentException.ThrowIfNullOrEmpty(field);
         cancellationToken.ThrowIfCancellationRequested();
-        return Tree(treeId).OrMap<string, MvRegister>(key).RemoveAsync(field, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.OrMap<string, MvRegister>(key).RemoveAsync(field, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -326,7 +352,7 @@ internal sealed partial class LatticeDataApi
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var map = await Tree(treeId).OrMap<string, MvRegister>(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var map = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).OrMap<string, MvRegister>(key).GetAsync(cancellationToken).ConfigureAwait(false);
         var result = new Dictionary<string, IReadOnlyList<byte[]>>();
         foreach (var field in map.Keys())
         {

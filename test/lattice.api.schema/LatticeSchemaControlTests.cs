@@ -50,7 +50,8 @@ public sealed class LatticeSchemaControlTests
             compliance,
             new SchemaAccessAuthorizer(gate),
             Options.Create(new LatticeApiSchemaOptions()),
-            services.BuildServiceProvider());
+            services.BuildServiceProvider(),
+            new DefaultTenantContextResolver());
 
         return new Harness
         {
@@ -290,12 +291,12 @@ public sealed class LatticeSchemaControlTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeSchemaControl(null!, remediation, compliance, authorizer, options, services), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaControl(admin, null!, compliance, authorizer, options, services), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaControl(admin, remediation, null!, authorizer, options, services), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, null!, options, services), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, authorizer, null!, services), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, authorizer, options, null!), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaControl(null!, remediation, compliance, authorizer, options, services, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaControl(admin, null!, compliance, authorizer, options, services, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaControl(admin, remediation, null!, authorizer, options, services, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, null!, options, services, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, authorizer, null!, services, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, authorizer, options, null!, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
         });
     }
 

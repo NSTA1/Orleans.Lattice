@@ -189,7 +189,10 @@ public sealed class BackupCatalogReader(IBackupControlClient client) : IBackupCa
                     .CreateBackupSetAsync(new LatticeBackupSetCaptureRequest(name, scopes, crossTreeConsistent), cancellationToken)
                     .ConfigureAwait(false);
                 return BackupOperationResult.Success(
-                    $"Captured backup set '{result.SetManifest.SetId}' ({result.Members.Count} tree(s)).");
+                    result.SetManifest.SetId is { } setId
+                        ? $"Captured backup set '{setId}' ({result.Members.Count} tree(s))."
+                        : $"Captured backup set '{result.SetManifest.Name}' over {result.Members.Count} tree(s); "
+                          + "a single-tree set is captured as a plain backup and carries no set id.");
             });
     }
 

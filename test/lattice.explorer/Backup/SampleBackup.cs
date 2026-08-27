@@ -49,7 +49,12 @@ internal static class SampleBackup
             entriesApplied: entriesApplied);
 
     /// <summary>Builds a well-formed <see cref="LatticeBackupSetCaptureResult"/> over the given member ids.</summary>
-    public static LatticeBackupSetCaptureResult SetResult(string setId, params string[] memberIds)
+    /// <param name="setId">
+    /// The set id to report, or <c>null</c> for a single-member set (which stamps
+    /// no membership and so carries no id).
+    /// </param>
+    /// <param name="memberIds">The member backup ids.</param>
+    public static LatticeBackupSetCaptureResult SetResult(string? setId, params string[] memberIds)
     {
         var members = memberIds.Select(id => new LatticeBackupCaptureResult(id, Manifest(id))).ToList();
         var setManifest = new BackupSetManifest(

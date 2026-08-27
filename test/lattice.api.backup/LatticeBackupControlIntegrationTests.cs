@@ -331,6 +331,55 @@ public sealed class LatticeBackupControlIntegrationTests
     }
 
     [Test]
+    public async Task CreateBackupSetAsync_set_id_matches_what_ListBackupsAsync_reports_for_every_member()
+    {
+        await _fixture.InitializeAsync();
+        await _fixture.GrainFactory.GetGrain<ILattice>("row-solo").SetAsync("k", Bytes("s"));
+        await _fixture.GrainFactory.GetGrain<ILattice>("row-a").SetAsync("k", Bytes("a"));
+        await _fixture.GrainFactory.GetGrain<ILattice>("row-b").SetAsync("k", Bytes("b"));
+
+        var solo = await _fixture.Control.CreateBackupSetAsync(
+            new LatticeBackupSetCaptureRequest(
+                "row-solo-set", new[] { BackupScopeSelector.WholeTree("row-solo") }));
+        var pair = await _fixture.Control.CreateBackupSetAsync(
+            new LatticeBackupSetCaptureRequest(
+                "row-pair-set",
+                new[]
+                {
+                    BackupScopeSelector.WholeTree("row-a"),
+                    BackupScopeSelector.WholeTree("row-b"),
+                }));
+
+        var rows = (await _fixture.Control.ListBackupsAsync(new BackupCatalogRequest()))
+            .Entries.ToDictionary(e => e.Id, e => e.SetId);
+
+        // The whole point of the fix: the create response and the catalog rows a
+        // remote consumer groups by must agree. A one-scope capture reports no set
+        // id and its row carries none; a multi-scope capture reports an id every
+        // member row carries. Grouping by a reported id can therefore never come
+        // back empty.
+        Assert.Multiple(() =>
+        {
+            Assert.That(solo.SetManifest.SetId, Is.Null,
+                "a one-scope capture must not report a set id no catalog row carries");
+            Assert.That(rows[solo.Members[0].BackupId], Is.EqualTo(solo.SetManifest.SetId));
+
+            Assert.That(pair.SetManifest.SetId, Is.Not.Null);
+            foreach (var member in pair.Members)
+            {
+                Assert.That(rows[member.BackupId], Is.EqualTo(pair.SetManifest.SetId));
+            }
+        });
+
+        var grouped = (await _fixture.Control.ListBackupsAsync(new BackupCatalogRequest()))
+            .Entries.Where(e => e.SetId is not null && e.SetId == pair.SetManifest.SetId)
+            .Select(e => e.Id)
+            .ToList();
+        Assert.That(grouped, Is.EquivalentTo(pair.Members.Select(m => m.BackupId)),
+            "grouping catalog rows by a reported set id resolves exactly the set's members");
+    }
+
+    [Test]
     public async Task CreateBackupSetAsync_denied_permission_fails_closed()
     {
         await _fixture.InitializeAsync();

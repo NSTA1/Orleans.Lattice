@@ -58,7 +58,7 @@ public sealed class LatticeStateQueryTenantCatalogTests
             services.GetService(typeof(ITenantEnumerationFilter)).Returns(filter);
         }
 
-        return new LatticeStateQuery(grainFactory, options, apiOptions, services);
+        return new LatticeStateQuery(grainFactory, options, apiOptions, services, new NullTenantContextResolver());
     }
 
     [Test]

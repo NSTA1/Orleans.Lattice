@@ -171,9 +171,7 @@ internal sealed class LatticeBackupRestoreService(
         var members = await resolver.ResolveMembersAsync(setId, cancellationToken).ConfigureAwait(false);
         if (members.Count == 0)
         {
-            throw new ArgumentException(
-                $"No backup set with id '{setId}' exists in the catalog (it resolved to no member trees).",
-                nameof(setId));
+            throw await BuildUnresolvedSetExceptionAsync(setId, cancellationToken).ConfigureAwait(false);
         }
 
         var results = new List<LatticeRestoreResult>(members.Count);
@@ -189,6 +187,65 @@ internal sealed class LatticeBackupRestoreService(
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Builds the failure for a set id that resolved to no member trees,
+    /// distinguishing the two causes a caller can act on differently. A set id is
+    /// minted only for a set of two or more trees, because membership is durable
+    /// only as the per-member <see cref="BackupManifest.SetId"/> stamp and a
+    /// single-member set is deliberately left unstamped; an id persisted from a
+    /// build that minted one anyway therefore names a plain backup that is
+    /// restorable, just not as a set. That case is recognised by re-deriving the
+    /// single-member content address of each catalogued backup id and matching it
+    /// against the supplied id, so the caller is handed the exact backup id to
+    /// pass to <see cref="RestoreAsync"/> rather than being told the set does not
+    /// exist. The catalog walk runs only on this failure path, which throws
+    /// either way.
+    /// </summary>
+    private async Task<ArgumentException> BuildUnresolvedSetExceptionAsync(
+        string setId, CancellationToken cancellationToken)
+    {
+        var singleMemberBackupId = await TryResolveSingleMemberSetAsync(setId, cancellationToken)
+            .ConfigureAwait(false);
+        if (singleMemberBackupId is not null)
+        {
+            return new ArgumentException(
+                $"Backup set id '{setId}' resolved to no member trees because it names a single-tree set, which "
+                + "is captured as a plain backup and is deliberately never stamped as a set member, so it is not "
+                + "restorable as a set. Restore it as an ordinary backup instead: RestoreAsync(backupId: "
+                + $"'{singleMemberBackupId}'). A single-scope CaptureSetAsync reports a null SetId for this "
+                + "reason, so no newly-captured set can produce this id.",
+                nameof(setId));
+        }
+
+        return new ArgumentException(
+            $"No backup set with id '{setId}' exists in the catalog: no catalogued manifest carries it as a set "
+            + "stamp, and it is not the id of a single-tree set either. A set id is returned only for a set "
+            + "spanning two or more trees; a single-scope capture returns a null SetId and is restored with "
+            + "RestoreAsync(backupId).",
+            nameof(setId));
+    }
+
+    /// <summary>
+    /// Reverse-resolves a set id against the single-member content address of every
+    /// catalogued backup, returning the backup id that would have produced it, or
+    /// <c>null</c> when the id names no single-tree set.
+    /// </summary>
+    private async Task<string?> TryResolveSingleMemberSetAsync(
+        string setId, CancellationToken cancellationToken)
+    {
+        var candidate = new string[1];
+        await foreach (var manifest in catalog.ListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            candidate[0] = manifest.Id;
+            if (string.Equals(BackupSetIdentity.Compute(candidate), setId, StringComparison.OrdinalIgnoreCase))
+            {
+                return manifest.Id;
+            }
+        }
+
+        return null;
     }
 
     /// <inheritdoc />

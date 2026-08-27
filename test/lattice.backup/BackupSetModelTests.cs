@@ -113,16 +113,36 @@ public sealed class BackupSetModelTests
     // ---- BackupSetManifest ----------------------------------------------
 
     [Test]
-    public void Manifest_rejects_a_null_or_empty_set_id_or_name()
+    public void Manifest_rejects_an_empty_set_id_or_a_null_or_empty_name()
     {
         Assert.Multiple(() =>
         {
             Assert.That(
                 () => new BackupSetManifest("", "n", DateTimeOffset.UtcNow, false, null, new[] { "m" }),
-                Throws.ArgumentException);
+                Throws.ArgumentException,
+                "an empty id is a malformed id, not the absence of one");
             Assert.That(
                 () => new BackupSetManifest("id", "", DateTimeOffset.UtcNow, false, null, new[] { "m" }),
                 Throws.ArgumentException);
+            Assert.That(
+                () => new BackupSetManifest("id", null!, DateTimeOffset.UtcNow, false, null, new[] { "m" }),
+                Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public void Manifest_accepts_a_null_set_id_for_an_unidentified_set()
+    {
+        // A single-member set records no durable membership, so it carries no set
+        // id at all rather than one that resolves to nothing.
+        var manifest = new BackupSetManifest(
+            null, "solo", DateTimeOffset.UnixEpoch, false, null, new[] { "m1" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(manifest.SetId, Is.Null);
+            Assert.That(manifest.Name, Is.EqualTo("solo"));
+            Assert.That(manifest.MemberBackupIds, Is.EqualTo(new[] { "m1" }));
         });
     }
 

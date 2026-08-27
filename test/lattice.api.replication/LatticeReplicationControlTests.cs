@@ -20,7 +20,7 @@ public sealed class LatticeReplicationControlTests
     private static LatticeReplicationControl CreateControl(
         ILatticeReplicationConfigAuthority authority,
         ILatticeAccessGate gate) =>
-        new(authority, new ReplicationAccessAuthorizer(gate, membership: null));
+        new(authority, new ReplicationAccessAuthorizer(gate, membership: null), new DefaultTenantContextResolver());
 
     [Test]
     public async Task EnableReplicationAsync_authorized_delegates_to_authority_and_maps_result()
@@ -219,7 +219,7 @@ public sealed class LatticeReplicationControlTests
     public void Constructor_null_authority_throws()
     {
         Assert.That(
-            () => new LatticeReplicationControl(null!, new ReplicationAccessAuthorizer(new AllowingAccessGate())),
+            () => new LatticeReplicationControl(null!, new ReplicationAccessAuthorizer(new AllowingAccessGate()), new DefaultTenantContextResolver()),
             Throws.ArgumentNullException);
     }
 
@@ -227,7 +227,19 @@ public sealed class LatticeReplicationControlTests
     public void Constructor_null_authorizer_throws()
     {
         Assert.That(
-            () => new LatticeReplicationControl(Substitute.For<ILatticeReplicationConfigAuthority>(), null!),
+            () => new LatticeReplicationControl(
+                Substitute.For<ILatticeReplicationConfigAuthority>(), null!, new DefaultTenantContextResolver()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_null_tenant_resolver_throws()
+    {
+        Assert.That(
+            () => new LatticeReplicationControl(
+                Substitute.For<ILatticeReplicationConfigAuthority>(),
+                new ReplicationAccessAuthorizer(new AllowingAccessGate(), membership: null),
+                null!),
             Throws.ArgumentNullException);
     }
 }

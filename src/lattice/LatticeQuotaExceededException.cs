@@ -48,6 +48,14 @@ public sealed class LatticeQuotaExceededException : InvalidOperationException
     public const string BytesDimension = "bytes";
 
     /// <summary>
+    /// The <see cref="Dimension"/> value for a sustained request-rate breach (the
+    /// tenancy add-on's per-tenant <c>MaxOpsPerSecond</c> ceiling). Unlike the
+    /// footprint dimensions this one is transient: the tenant's token budget
+    /// refills continuously, so an immediate retry after a short backoff succeeds.
+    /// </summary>
+    public const string OpsPerSecondDimension = "ops-per-second";
+
+    /// <summary>
     /// Logical tree id whose admission cap was breached. Empty on the
     /// parameterless constructor; populated on the production overload.
     /// </summary>

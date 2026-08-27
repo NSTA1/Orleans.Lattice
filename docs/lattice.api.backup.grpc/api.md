@@ -109,7 +109,7 @@ Each RPC wraps the facade DTOs in one of these Orleans-serialized request / resp
 | `BackupIncrementalCaptureRequestMessage` | `required string Name`, `required BackupScopeSelector Scope`, `required string BaseBackupId`, `int PageSize` (default as above). |
 | `BackupSetCaptureRequestMessage` | `required string Name`, `required IReadOnlyList<BackupScopeSelector> Scopes`, `bool CrossTreeConsistent`, `int PageSize` (default `LatticeBackupCaptureRequest.DefaultPageSize`). |
 | `BackupCaptureResponse` | `required string BackupId`, `required BackupManifest Manifest`. |
-| `BackupSetCaptureResponse` | `required BackupSetManifest SetManifest`, `required IReadOnlyList<BackupCaptureResponse> Members` (one per captured tree). |
+| `BackupSetCaptureResponse` | `required BackupSetManifest SetManifest`, `required IReadOnlyList<BackupCaptureResponse> Members` (one per captured tree). `SetManifest.SetId` is `string?` and is `null` for a single-scope capture, which stamps no set membership; it is non-null only for a set spanning two or more trees, where it matches the `SetId` on every member's catalog row. |
 | `BackupDescribeRequest` | `required string BackupId`. |
 | `BackupChainResponse` | `bool Found`, `BackupManifest? Manifest`, `IReadOnlyList<string> ChainBackupIds`. |
 | `BackupDeleteRequest` | `required string BackupId`. |

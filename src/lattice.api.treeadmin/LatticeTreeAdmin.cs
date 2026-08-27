@@ -29,12 +29,26 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// capability. The facade adds no bespoke authorization path; it reuses the audited
 /// enforcement primitive through <see cref="TreeAdminAccessAuthorizer"/>.
 /// </para>
+/// <para>
+/// <b>Tenant scoping.</b> Every verb that takes a caller-supplied tree id composes
+/// it through <see cref="ITenantContextResolver"/> at its entry point, before the
+/// reserved-namespace guard and before the authorization gate, and then uses that
+/// single effective id for the guard, the gate, and the grain dial alike - so the
+/// facade can never authorize one tree and administer another. A verb taking two
+/// tree ids (an alias target, a snapshot destination) composes both, because
+/// scoping only one would leave the other free to name a tree outside the caller's
+/// namespace. Responses echo the caller's own unqualified name, so the internal
+/// composition never leaks onto the wire. With tenancy off the core no-op resolver
+/// returns the bare name unchanged, synchronously and without allocating, so this
+/// surface is byte-for-byte identical to a non-tenant cluster.
+/// </para>
 /// </remarks>
 internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 {
     private readonly ILatticeSchemaControl _schemaControl;
     private readonly IGrainFactory _grainFactory;
     private readonly TreeAdminAccessAuthorizer _authorizer;
+    private readonly ITenantContextResolver _tenantResolver;
     private readonly ILatticeBackupRestoreService? _restoreService;
     private readonly IViewCatalog? _viewCatalog;
     private readonly ILatticeViewFactory? _viewFactory;
@@ -55,6 +69,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// Must not be <c>null</c>.
     /// </param>
     /// <param name="options">The facade options. Must not be <c>null</c>.</param>
+    /// <param name="tenantResolver">
+    /// The active-tenant context resolver that binds a caller-supplied, tenant-local
+    /// tree name to the caller's own <c>t/{tenant}/{name}</c> namespace. Must not be
+    /// <c>null</c>. With no tenancy add-on registered the core no-op resolver returns
+    /// the bare name unchanged, so the facade behaves exactly as it did before.
+    /// </param>
     /// <param name="restoreService">
     /// The optional backup/restore engine the restore verbs compose, or <c>null</c>
     /// when no backup add-on is registered on the cluster. When <c>null</c> the restore
@@ -82,6 +102,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         IGrainFactory grainFactory,
         TreeAdminAccessAuthorizer authorizer,
         IOptions<LatticeApiTreeAdminOptions> options,
+        ITenantContextResolver tenantResolver,
         ILatticeBackupRestoreService? restoreService = null,
         IViewCatalog? viewCatalog = null,
         ILatticeViewFactory? viewFactory = null,
@@ -91,14 +112,48 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(tenantResolver);
 
         _schemaControl = schemaControl;
         _grainFactory = grainFactory;
         _authorizer = authorizer;
+        _tenantResolver = tenantResolver;
         _restoreService = restoreService;
         _viewCatalog = viewCatalog;
         _viewFactory = viewFactory;
         _tagIndexFactory = tagIndexFactory;
+    }
+
+    /// <summary>
+    /// Resolves the effective, tenant-scoped tree id a caller-supplied tree name
+    /// addresses. This is the single composition seam of the tree-administration
+    /// surface: every verb that accepts a tree id calls it once, at its entry
+    /// point, and then uses the result for the reserved-namespace guard, the
+    /// authorization gate, and the grain dial alike, so the facade can never
+    /// authorize one tree and administer another.
+    /// </summary>
+    /// <param name="treeId">The caller-supplied, tenant-local tree name.</param>
+    /// <param name="cancellationToken">Cancels an asynchronous tenant resolution.</param>
+    /// <returns>The effective tree id to guard, authorize, and address.</returns>
+    /// <remarks>
+    /// The resolver's synchronously-completed result is returned unwrapped, so a
+    /// cluster with tenancy off adds no allocation and no state machine here: the
+    /// core no-op resolver resolves <see cref="TenantId.Default"/> synchronously
+    /// and the bare name comes back unchanged (the same <see cref="string"/>
+    /// reference). Awaiting an already-completed <see cref="ValueTask{TResult}"/>
+    /// inside an existing <c>async</c> verb continues synchronously, so the warm
+    /// path never suspends.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeTenantAccessDeniedException">
+    /// The resolver denied the operation (no valid active tenant).
+    /// </exception>
+    private ValueTask<string> EffectiveTreeIdAsync(string treeId, CancellationToken cancellationToken)
+    {
+        // Guarded here as well as inside the core helper so the rejection names
+        // this facade's own parameter rather than the helper's 'treeName'.
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        return _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -107,37 +162,42 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
+        // Composed first, so every capability below is probed against the tree the
+        // caller would actually operate on - a capability report for a different
+        // tree than the verbs address would be worse than none at all.
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+
         // Composition, not absorption: the schema portion of the tree-administration
         // capability report is delegated to the wrapped schema facade, which
         // evaluates its own fail-closed gates with no side effects.
         var schema = await _schemaControl
-            .ProbeCapabilitiesAsync(treeId, cancellationToken)
+            .ProbeCapabilitiesAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
         // The read-only diagnostics capability is probed through the same fail-closed
         // gate the diagnostics verbs use, with no side effects.
         var canViewDiagnostics = await _authorizer
-            .IsTreeReadAuthorizedAsync(treeId, cancellationToken)
+            .IsTreeReadAuthorizedAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
         // The lifecycle administration capability is probed through the same
         // fail-closed Admin gate the mutating lifecycle verbs use, with no side effects.
         var canAdministerTree = await _authorizer
-            .IsTreeAdminAuthorizedAsync(treeId, cancellationToken)
+            .IsTreeAdminAuthorizedAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
         // The irreversible / structural lifecycle capability is probed through its
         // own distinct fail-closed gate (TreeLifecycle), which Admin does not confer,
         // with no side effects.
         var canManageTreeLifecycle = await _authorizer
-            .IsTreeLifecycleAuthorizedAsync(treeId, cancellationToken)
+            .IsTreeLifecycleAuthorizedAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
         // The bulk-load capability is probed through its own distinct fail-closed
         // gate (BulkLoad), which neither Admin nor TreeLifecycle confers, with no
         // side effects.
         var canBulkLoad = await _authorizer
-            .IsBulkLoadAuthorizedAsync(treeId, cancellationToken)
+            .IsBulkLoadAuthorizedAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
         // The restore capability is probed through its own distinct fail-closed gate
@@ -146,7 +206,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // cannot serve.
         var canRestore = _restoreService is not null
             && await _authorizer
-                .IsRestoreAuthorizedAsync(treeId, cancellationToken)
+                .IsRestoreAuthorizedAsync(effectiveTreeId, cancellationToken)
                 .ConfigureAwait(false);
 
         return new LatticeTreeAdminCapabilities
@@ -166,9 +226,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var report = await _grainFactory.GetGrain<ILattice>(treeId)
+        var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .DiagnoseAsync(deep: false, cancellationToken)
             .ConfigureAwait(false);
 
@@ -208,9 +269,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, bool deep = false, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var report = await _grainFactory.GetGrain<ILattice>(treeId)
+        var report = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .DiagnoseAsync(deep, cancellationToken)
             .ConfigureAwait(false);
 
@@ -253,9 +315,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var routing = await _grainFactory.GetGrain<ILattice>(treeId)
+        var routing = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .GetRoutingAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -287,9 +350,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentOutOfRangeException.ThrowIfNegative(shardIndex);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var digest = await _grainFactory.GetGrain<ILattice>(treeId)
+        var digest = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .GetLeafProjectionDigestAsync(shardIndex, cancellationToken)
             .ConfigureAwait(false);
 
@@ -309,9 +373,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
         var diagnostics = await tree.DiagnoseAsync(deep: false, cancellationToken).ConfigureAwait(false);
         var storage = await tree.GetStorageUsageAsync(cancellationToken).ConfigureAwait(false);
 
@@ -381,7 +446,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
         if (shardCount is { } sc)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sc);
@@ -394,7 +460,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(mic);
         }
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
@@ -402,7 +468,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // no-op that preserves the existing configuration, so the caller-supplied
         // sizing is honoured only on first registration. Probe existence first so the
         // result can report whether a new tree was actually registered.
-        var existedBefore = await registry.ExistsAsync(treeId).ConfigureAwait(false);
+        var existedBefore = await registry.ExistsAsync(effectiveTreeId).ConfigureAwait(false);
 
         var entry = (shardCount is null && maxLeafKeys is null && maxInternalChildren is null)
             ? null
@@ -413,10 +479,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 MaxInternalChildren = maxInternalChildren,
             };
 
-        await registry.RegisterAsync(treeId, entry).ConfigureAwait(false);
+        await registry.RegisterAsync(effectiveTreeId, entry).ConfigureAwait(false);
 
         // Re-read for the effective (default-seeded) sizing values.
-        var effective = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var effective = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
 
         return new TreeCreationResult
         {
@@ -433,10 +499,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var exists = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
-            .ExistsAsync(treeId)
+            .ExistsAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
         return new TreeExistenceResult
@@ -452,23 +519,35 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(physicalTreeId);
-        ThrowIfReserved(treeId);
-        if (string.Equals(treeId, physicalTreeId, StringComparison.Ordinal))
+
+        // BOTH ids are caller-supplied and BOTH name a tree, so both are composed:
+        // scoping only the logical id would let a tenant point its own alias at a
+        // bare, cluster-global (or another tenant's) physical tree and read through
+        // it - a cross-tenant crossing dressed up as an alias. The guard then runs
+        // on both composed ids, so an explicitly-qualified id naming a namespace the
+        // caller does not own is refused on either side.
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectivePhysicalTreeId =
+            await EffectiveTreeIdAsync(physicalTreeId, cancellationToken).ConfigureAwait(false);
+
+        ThrowIfReserved(effectiveTreeId);
+        ThrowIfReserved(effectivePhysicalTreeId, nameof(physicalTreeId));
+        if (string.Equals(effectiveTreeId, effectivePhysicalTreeId, StringComparison.Ordinal))
         {
             throw new ArgumentException(
                 "The physical tree id must differ from the logical tree id.", nameof(physicalTreeId));
         }
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.SetAliasAsync(treeId, physicalTreeId).ConfigureAwait(false);
+        await registry.SetAliasAsync(effectiveTreeId, effectivePhysicalTreeId).ConfigureAwait(false);
 
-        var resolved = await registry.ResolveAsync(treeId).ConfigureAwait(false);
+        var resolved = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false);
         return new TreeAliasResolution
         {
             TreeId = treeId,
             PhysicalTreeId = resolved,
-            IsAliased = !string.Equals(treeId, resolved, StringComparison.Ordinal),
+            IsAliased = !string.Equals(effectiveTreeId, resolved, StringComparison.Ordinal),
         };
     }
 
@@ -477,17 +556,18 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var resolved = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
-            .ResolveAsync(treeId)
+            .ResolveAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
         return new TreeAliasResolution
         {
             TreeId = treeId,
             PhysicalTreeId = resolved,
-            IsAliased = !string.Equals(treeId, resolved, StringComparison.Ordinal),
+            IsAliased = !string.Equals(effectiveTreeId, resolved, StringComparison.Ordinal),
         };
     }
 
@@ -496,10 +576,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
-            .GetEntryAsync(treeId)
+            .GetEntryAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
         return ProjectConfig(treeId, entry);
@@ -511,30 +592,31 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(update);
-        ThrowIfReserved(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
         if (update.ApplyHistoryRetention && update.HistoryRetentionWindowTicks is { } ticks)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ticks);
         }
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var registry = _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
         if (update.ApplyPublishEvents)
         {
-            await registry.SetPublishEventsAsync(treeId, update.PublishEvents).ConfigureAwait(false);
+            await registry.SetPublishEventsAsync(effectiveTreeId, update.PublishEvents).ConfigureAwait(false);
         }
         if (update.ApplyMaintainProjectionDigest)
         {
-            await registry.SetMaintainProjectionDigestAsync(treeId, update.MaintainProjectionDigest).ConfigureAwait(false);
+            await registry.SetMaintainProjectionDigestAsync(effectiveTreeId, update.MaintainProjectionDigest).ConfigureAwait(false);
         }
         if (update.ApplyHistoryRetention)
         {
             var window = update.HistoryRetentionWindowTicks is { } t ? TimeSpan.FromTicks(t) : (TimeSpan?)null;
-            await registry.SetHistoryRetentionAsync(treeId, update.HistoryRetentionMode, window).ConfigureAwait(false);
+            await registry.SetHistoryRetentionAsync(effectiveTreeId, update.HistoryRetentionMode, window).ConfigureAwait(false);
         }
 
-        var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
+        var entry = await registry.GetEntryAsync(effectiveTreeId).ConfigureAwait(false);
         return ProjectConfig(treeId, entry);
     }
 
@@ -543,10 +625,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
-            .GetShardMapAsync(treeId)
+            .GetShardMapAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
         if (map is null)
@@ -579,17 +662,18 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public ILattice verb so the tree's own guards (system-tree,
         // protected-view, materialised-view-source) and internal-origin marker are
         // inherited rather than duplicated. The core re-enforces TreeLifecycle.
-        await _grainFactory.GetGrain<ILattice>(treeId)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .DeleteTreeAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+        return await ReadStatusAsync(effectiveTreeId, treeId).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -597,14 +681,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        await _grainFactory.GetGrain<ILattice>(treeId)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .RecoverTreeAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+        return await ReadStatusAsync(effectiveTreeId, treeId).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -612,20 +697,21 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, bool confirm, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
         if (!confirm)
         {
             throw new ArgumentException(
                 "The irreversible tree purge must be explicitly confirmed by passing confirm=true.",
                 nameof(confirm));
         }
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        await _grainFactory.GetGrain<ILattice>(treeId)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .PurgeTreeAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+        return await ReadStatusAsync(effectiveTreeId, treeId).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -633,9 +719,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        return await ReadStatusAsync(treeId).ConfigureAwait(false);
+        return await ReadStatusAsync(effectiveTreeId, treeId).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -643,16 +730,17 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, string operationId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
         ThrowIfInvalidOperationId(operationId);
-        await _authorizer.AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeBulkLoadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Bulk-load is a bottom-up tree-creation primitive, so require the target to
         // start empty: an "already exists / has data" is surfaced as a distinct, typed
         // TreeNotEmptyException rather than a silent right-edge append. The cheap
         // per-shard projection distinguishes an empty tree from a populated one; a
         // tree carrying only tombstones is likewise treated as non-empty.
-        var diagnostics = await _grainFactory.GetGrain<ILattice>(treeId)
+        var diagnostics = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .DiagnoseAsync(deep: false, cancellationToken)
             .ConfigureAwait(false);
         if (diagnostics.TotalLiveKeys > 0 || diagnostics.TotalTombstones > 0)
@@ -672,11 +760,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
         ThrowIfInvalidOperationId(operationId);
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentOutOfRangeException.ThrowIfNegative(chunkIndex);
-        await _authorizer.AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeBulkLoadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Validate strict ascending key order within the chunk and project onto the
         // core entry shape in a single pass. An out-of-order chunk is rejected before
@@ -695,7 +784,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             pairs.Add(new KeyValuePair<string, byte[]>(key, entry.Value ?? []));
         }
 
-        var accepted = await _grainFactory.GetGrain<ILattice>(treeId)
+        var accepted = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .BulkAppendChunkAsync($"{operationId}/{chunkIndex}", pairs, cancellationToken)
             .ConfigureAwait(false);
 
@@ -714,9 +803,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, string operationId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
         ThrowIfInvalidOperationId(operationId);
-        await _authorizer.AuthorizeBulkLoadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeBulkLoadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Commit is the caller's explicit end-of-stream marker; the grafted chunks are
         // already durable, so this persists nothing further and just reports the tree's
@@ -725,7 +815,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // LatticeOptions.DiagnosticsCacheTtl (default 5 s): the emptiness probe in
         // BeginBulkLoadAsync populates that cache with a zero count, so a begin/append/
         // commit sequence completing inside the TTL would otherwise report a stale 0.
-        var liveKeys = await _grainFactory.GetGrain<ILattice>(treeId)
+        var liveKeys = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .CountAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -750,8 +840,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         {
             ArgumentException.ThrowIfNullOrEmpty(operationId);
         }
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeRestoreAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeRestoreAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var service = RequireRestoreService();
 
@@ -761,12 +852,17 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // re-enforces the Restore capability for the target scope fail-closed.
         var request = new LatticeRestoreRequest(
             backupId,
-            targetTreeId: treeId,
+            targetTreeId: effectiveTreeId,
             mode: LatticeRestoreMode.ShadowCutover,
             operationId: operationId);
 
         var result = await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
-        return ToRestoreResult(result);
+
+        // The result echoes the caller's own unqualified name, so the composition
+        // never leaks onto the wire. RevertTreeRestoreAsync re-composes it, which
+        // also means a revert only ever succeeds under the same active tenant that
+        // performed the restore.
+        return ToRestoreResult(result, treeId);
     }
 
     /// <inheritdoc />
@@ -798,15 +894,23 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(restore);
-        ThrowIfReserved(restore.TargetTreeId);
-        await _authorizer.AuthorizeRestoreAsync(restore.TargetTreeId, cancellationToken).ConfigureAwait(false);
+
+        // The DTO carries the caller's own unqualified name (RestoreTreeAsync echoes
+        // it), so it is composed again here under the CURRENT active tenant. A
+        // result handed to a different tenant therefore composes into that tenant's
+        // own namespace instead of reverting the original tree.
+        var effectiveTreeId =
+            await EffectiveTreeIdAsync(restore.TargetTreeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeRestoreAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var service = RequireRestoreService();
 
         // Reconstruct the backup engine's own result shape from the transport DTO so
         // the revert swaps the alias back to PreviousPhysicalTreeId. The engine
         // rejects a non-shadow-cutover result (ArgumentException).
-        await service.RevertRestoreAsync(ToRestoreResult(restore), cancellationToken).ConfigureAwait(false);
+        await service.RevertRestoreAsync(ToRestoreResult(restore, effectiveTreeId), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -814,18 +918,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, int targetShardCount, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public ILattice verb so the tree's own guards (system-tree) and
         // grow-only argument validation are inherited rather than duplicated, and the
         // core re-enforces TreeLifecycle. Orchestration is accepted synchronously; the
         // migration then runs online anchored by reminders.
-        await _grainFactory.GetGrain<ILattice>(treeId)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .ReshardAsync(targetShardCount, cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadReshardStatusAsync(treeId, targetShardCount).ConfigureAwait(false);
+        return await ReadReshardStatusAsync(effectiveTreeId, treeId, targetShardCount).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -833,9 +938,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        return await ReadReshardStatusAsync(treeId, requestedShardCount: null).ConfigureAwait(false);
+        return await ReadReshardStatusAsync(effectiveTreeId, treeId, requestedShardCount: null).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -846,19 +952,20 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// reports zeroed shard counts. <paramref name="requestedShardCount"/> echoes the
     /// trigger's target and is <see langword="null"/> for a standalone status read.
     /// </summary>
-    private async Task<TreeReshardStatus> ReadReshardStatusAsync(string treeId, int? requestedShardCount)
+    private async Task<TreeReshardStatus> ReadReshardStatusAsync(
+        string effectiveTreeId, string reportedTreeId, int? requestedShardCount)
     {
-        var complete = await _grainFactory.GetGrain<ILattice>(treeId)
+        var complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .IsReshardCompleteAsync()
             .ConfigureAwait(false);
 
         var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
-            .GetShardMapAsync(treeId)
+            .GetShardMapAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
         return new TreeReshardStatus
         {
-            TreeId = treeId,
+            TreeId = reportedTreeId,
             InProgress = !complete,
             CurrentPhysicalShardCount = map?.GetPhysicalShardIndices().Count ?? 0,
             VirtualShardCount = map?.VirtualShardCount ?? 0,
@@ -873,18 +980,20 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public ILattice verb so the tree's own guards (system-tree,
         // protected-view) and capacity argument validation are inherited rather than
         // duplicated, and the core re-enforces TreeLifecycle. Orchestration is accepted
         // synchronously; the online snapshot + alias swap then runs anchored by reminders.
-        await _grainFactory.GetGrain<ILattice>(treeId)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .ResizeAsync(newMaxLeafKeys, newMaxInternalChildren, cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadResizeStatusAsync(treeId, newMaxLeafKeys, newMaxInternalChildren).ConfigureAwait(false);
+        return await ReadResizeStatusAsync(effectiveTreeId, treeId, newMaxLeafKeys, newMaxInternalChildren)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -892,14 +1001,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        await _grainFactory.GetGrain<ILattice>(treeId)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .UndoResizeAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadResizeStatusAsync(treeId, requestedMaxLeafKeys: null, requestedMaxInternalChildren: null)
+        return await ReadResizeStatusAsync(
+                effectiveTreeId, treeId, requestedMaxLeafKeys: null, requestedMaxInternalChildren: null)
             .ConfigureAwait(false);
     }
 
@@ -908,9 +1019,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        return await ReadResizeStatusAsync(treeId, requestedMaxLeafKeys: null, requestedMaxInternalChildren: null)
+        return await ReadResizeStatusAsync(
+                effectiveTreeId, treeId, requestedMaxLeafKeys: null, requestedMaxInternalChildren: null)
             .ConfigureAwait(false);
     }
 
@@ -922,19 +1035,28 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(destinationTreeId);
-        ThrowIfReserved(treeId);
-        ThrowIfReserved(destinationTreeId);
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+
+        // BOTH ids are caller-supplied and BOTH name a tree, so both are composed:
+        // scoping only the source would let a tenant drain its own tree into a bare,
+        // cluster-global (or another tenant's) destination - an exfiltration path
+        // dressed up as a snapshot.
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveDestinationTreeId =
+            await EffectiveTreeIdAsync(destinationTreeId, cancellationToken).ConfigureAwait(false);
+
+        ThrowIfReserved(effectiveTreeId);
+        ThrowIfReserved(effectiveDestinationTreeId, nameof(destinationTreeId));
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public ILattice verb so the tree's own guards (system-tree) and
         // destination-existence / in-progress validation are inherited rather than
         // duplicated, and the core re-enforces Admin. Orchestration is accepted
         // synchronously; the shard-by-shard drain then runs anchored by reminders.
-        await _grainFactory.GetGrain<ILattice>(treeId)
-            .SnapshotAsync(destinationTreeId, ToSnapshotMode(mode), maxLeafKeys, maxInternalChildren, cancellationToken)
+        await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+            .SnapshotAsync(effectiveDestinationTreeId, ToSnapshotMode(mode), maxLeafKeys, maxInternalChildren, cancellationToken)
             .ConfigureAwait(false);
 
-        return await ReadSnapshotStatusAsync(treeId, destinationTreeId, mode).ConfigureAwait(false);
+        return await ReadSnapshotStatusAsync(effectiveTreeId, treeId, destinationTreeId, mode).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -942,9 +1064,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        return await ReadSnapshotStatusAsync(treeId, requestedDestinationTreeId: null, requestedMode: null)
+        return await ReadSnapshotStatusAsync(
+                effectiveTreeId, treeId, requestedDestinationTreeId: null, requestedMode: null)
             .ConfigureAwait(false);
     }
 
@@ -953,13 +1077,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var placement = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
-            .GetWalPlacementAsync(treeId, cancellationToken)
+            .GetWalPlacementAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
-        return ToWalPlacement(placement);
+        return ToWalPlacement(placement, treeId);
     }
 
     /// <inheritdoc />
@@ -967,13 +1092,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var audit = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
-            .AuditWalPlacementAsync(treeId, cancellationToken)
+            .AuditWalPlacementAsync(effectiveTreeId, cancellationToken)
             .ConfigureAwait(false);
 
-        return ToWalPlacementAudit(audit);
+        return ToWalPlacementAudit(audit, treeId);
     }
 
     /// <inheritdoc />
@@ -983,13 +1109,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var plan = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
-            .PlanWalMoveAsync(treeId, partition, targetProviderKey, cancellationToken)
+            .PlanWalMoveAsync(effectiveTreeId, partition, targetProviderKey, cancellationToken)
             .ConfigureAwait(false);
 
-        return ToWalMovePlan(plan);
+        return ToWalMovePlan(plan, treeId);
     }
 
     /// <inheritdoc />
@@ -999,14 +1126,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var receipt = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
-            .ExecuteWalMoveAsync(treeId, partition, targetProviderKey, ToWalMoveOptions(options), cancellationToken)
+            .ExecuteWalMoveAsync(effectiveTreeId, partition, targetProviderKey, ToWalMoveOptions(options), cancellationToken)
             .ConfigureAwait(false);
 
-        return ToWalMoveReceipt(receipt);
+        return ToWalMoveReceipt(receipt, treeId);
     }
 
     /// <inheritdoc />
@@ -1016,14 +1144,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(sourceProviderKey);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var receipt = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
-            .ReclaimMovedWalSourceAsync(treeId, partition, sourceProviderKey, cancellationToken)
+            .ReclaimMovedWalSourceAsync(effectiveTreeId, partition, sourceProviderKey, cancellationToken)
             .ConfigureAwait(false);
 
-        return ToWalMoveReceipt(receipt);
+        return ToWalMoveReceipt(receipt, treeId);
     }
 
     /// <inheritdoc />
@@ -1083,6 +1212,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 nameof(sourceTreeId));
         }
 
+        // The caller-supplied source names a tree, so it is composed into the
+        // caller's own tenant namespace before it is guarded, authorized, or dialed.
+        // The view-over-view check above deliberately runs on the CALLER's id: a
+        // composed 't/{tenant}/view-x' no longer carries the view prefix, so testing
+        // it after composition would silently retire that guard.
+        var effectiveSourceTreeId =
+            await EffectiveTreeIdAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+
         // The reserved system namespace is off-limits as a projection source, as it
         // is for every other mutating verb on this facade. The view maintainer
         // deliberately supports a system-tree source (it short-circuits the registry
@@ -1090,15 +1227,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // view over a '_lattice_' internal tree - the tree registry, a WAL, queue
         // state - and have it continuously mirrored into an ordinary, readable
         // 'view-' tree governed only by that view's own read policy.
-        ThrowIfReserved(sourceTreeId);
+        ThrowIfReserved(effectiveSourceTreeId, nameof(sourceTreeId));
 
         var descriptor = new LatticeRuntimeViewProjectionDescriptor(providerKey, payload);
 
         // This ordering is security-critical: the caller-supplied source is the
         // authorization boundary, and no provider code may run before it is granted.
-        await _authorizer.AuthorizeTreeAdminAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveSourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        var source = _grainFactory.GetGrain<ILattice>(sourceTreeId);
+        var source = _grainFactory.GetGrain<ILattice>(effectiveSourceTreeId);
         await _viewFactory!.CreateAsync(source, viewName, descriptor, cancellationToken)
             .ConfigureAwait(false);
 
@@ -1223,6 +1360,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireTagIndex();
         ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        // A tag index materialises as the cluster-global reserved tree
+        // "tag-{indexName}", derived here rather than supplied by the caller, so
+        // there is no caller-supplied tree name to bind to a tenant namespace and
+        // nothing to compose. Tag indexes are not tenant-partitioned today; the
+        // authorization gate remains the boundary on this path.
         var treeId = ResolveTagIndexTreeId(indexName);
         await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
 
@@ -1253,6 +1396,9 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireTagIndex();
         ArgumentException.ThrowIfNullOrEmpty(indexName);
+
+        // Derived, not caller-supplied: see GetTagIndexStatusAsync - nothing here
+        // is a tenant-local tree name, so nothing is composed.
         var treeId = ResolveTagIndexTreeId(indexName);
         await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
 
@@ -1280,13 +1426,14 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, int shardIndex, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Wrap the public operator-tooling trigger so the tree inherits its own guards
         // (compaction-disabled and in-flight gating) and re-enforces the boundary. The
         // pass reaps only tombstones and TTL-expired entries, never live data.
-        var accepted = await _grainFactory.GetGrain<ILattice>(treeId)
+        var accepted = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .CompactShardAsync(shardIndex, cancellationToken)
             .ConfigureAwait(false);
 
@@ -1303,9 +1450,10 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        await _authorizer.AuthorizeTreeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var settings = await _grainFactory.GetGrain<ILattice>(treeId)
+        var settings = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .GetHistoryRetentionAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -1323,10 +1471,11 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             throw new ArgumentException("The retention window must be strictly positive.", nameof(window));
         }
 
-        ThrowIfReserved(treeId);
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
+        ThrowIfReserved(effectiveTreeId);
+        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
         await tree
             .SetHistoryRetentionAsync(ToRetentionMode(mode), window, cancellationToken)
             .ConfigureAwait(false);
@@ -1472,11 +1621,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             ResolvableOnThisSilo = p.ResolvableOnThisSilo,
         };
 
-    /// <summary>Projects the core <see cref="WalPlacement"/> onto the transport-agnostic <see cref="TreeWalPlacement"/>.</summary>
-    private static TreeWalPlacement ToWalPlacement(WalPlacement placement) =>
+    /// <summary>
+    /// Projects the core <see cref="WalPlacement"/> onto the transport-agnostic
+    /// <see cref="TreeWalPlacement"/>, reporting <paramref name="reportedTreeId"/>
+    /// (the caller's own unqualified name) rather than the internally-composed,
+    /// tenant-scoped id the core result carries.
+    /// </summary>
+    private static TreeWalPlacement ToWalPlacement(WalPlacement placement, string reportedTreeId) =>
         new()
         {
-            TreeId = placement.TreeId ?? string.Empty,
+            TreeId = reportedTreeId,
             Version = placement.Version,
             DefaultProviderKey = placement.DefaultProviderKey ?? string.Empty,
             Partitions = placement.Partitions.IsDefault
@@ -1484,11 +1638,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 : placement.Partitions.Select(ToWalPartitionPlacement).ToImmutableArray(),
         };
 
-    /// <summary>Projects the core <see cref="WalPlacementAudit"/> onto the transport-agnostic <see cref="TreeWalPlacementAudit"/>.</summary>
-    private static TreeWalPlacementAudit ToWalPlacementAudit(WalPlacementAudit audit) =>
+    /// <summary>
+    /// Projects the core <see cref="WalPlacementAudit"/> onto the transport-agnostic
+    /// <see cref="TreeWalPlacementAudit"/>, reporting the caller's own unqualified
+    /// name rather than the internally-composed, tenant-scoped id.
+    /// </summary>
+    private static TreeWalPlacementAudit ToWalPlacementAudit(WalPlacementAudit audit, string reportedTreeId) =>
         new()
         {
-            TreeId = audit.TreeId ?? string.Empty,
+            TreeId = reportedTreeId,
             Version = audit.Version,
             PartitionCount = audit.PartitionCount,
             Partitions = audit.Partitions.IsDefault
@@ -1500,11 +1658,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 : audit.KnownProviderKeys,
         };
 
-    /// <summary>Projects the core <see cref="WalMovePlan"/> onto the transport-agnostic <see cref="TreeWalMovePlan"/>.</summary>
-    private static TreeWalMovePlan ToWalMovePlan(WalMovePlan plan) =>
+    /// <summary>
+    /// Projects the core <see cref="WalMovePlan"/> onto the transport-agnostic
+    /// <see cref="TreeWalMovePlan"/>, reporting the caller's own unqualified name
+    /// rather than the internally-composed, tenant-scoped id.
+    /// </summary>
+    private static TreeWalMovePlan ToWalMovePlan(WalMovePlan plan, string reportedTreeId) =>
         new()
         {
-            TreeId = plan.TreeId ?? string.Empty,
+            TreeId = reportedTreeId,
             Partition = plan.Partition,
             FromProviderKey = plan.FromProviderKey ?? string.Empty,
             ToProviderKey = plan.ToProviderKey ?? string.Empty,
@@ -1516,11 +1678,15 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             AlreadyAtTarget = plan.AlreadyAtTarget,
         };
 
-    /// <summary>Projects the core <see cref="WalMoveReceipt"/> onto the transport-agnostic <see cref="TreeWalMoveReceipt"/>.</summary>
-    private static TreeWalMoveReceipt ToWalMoveReceipt(WalMoveReceipt receipt) =>
+    /// <summary>
+    /// Projects the core <see cref="WalMoveReceipt"/> onto the transport-agnostic
+    /// <see cref="TreeWalMoveReceipt"/>, reporting the caller's own unqualified name
+    /// rather than the internally-composed, tenant-scoped id.
+    /// </summary>
+    private static TreeWalMoveReceipt ToWalMoveReceipt(WalMoveReceipt receipt, string reportedTreeId) =>
         new()
         {
-            TreeId = receipt.TreeId ?? string.Empty,
+            TreeId = reportedTreeId,
             Partition = receipt.Partition,
             FromProviderKey = receipt.FromProviderKey ?? string.Empty,
             ToProviderKey = receipt.ToProviderKey ?? string.Empty,
@@ -1576,15 +1742,18 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// <see langword="null"/> for a standalone status read.
     /// </summary>
     private async Task<TreeSnapshotStatus> ReadSnapshotStatusAsync(
-        string treeId, string? requestedDestinationTreeId, TreeSnapshotMode? requestedMode)
+        string effectiveTreeId,
+        string reportedTreeId,
+        string? requestedDestinationTreeId,
+        TreeSnapshotMode? requestedMode)
     {
-        var complete = await _grainFactory.GetGrain<ILattice>(treeId)
+        var complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .IsSnapshotCompleteAsync()
             .ConfigureAwait(false);
 
         return new TreeSnapshotStatus
         {
-            TreeId = treeId,
+            TreeId = reportedTreeId,
             InProgress = !complete,
             RequestedDestinationTreeId = requestedDestinationTreeId,
             RequestedMode = requestedMode,
@@ -1631,19 +1800,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// read or an undo.
     /// </summary>
     private async Task<TreeResizeStatus> ReadResizeStatusAsync(
-        string treeId, int? requestedMaxLeafKeys, int? requestedMaxInternalChildren)
+        string effectiveTreeId, string reportedTreeId, int? requestedMaxLeafKeys, int? requestedMaxInternalChildren)
     {
-        var complete = await _grainFactory.GetGrain<ILattice>(treeId)
+        var complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
             .IsResizeCompleteAsync()
             .ConfigureAwait(false);
 
         var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
-            .GetEntryAsync(treeId)
+            .GetEntryAsync(effectiveTreeId)
             .ConfigureAwait(false);
 
         return new TreeResizeStatus
         {
-            TreeId = treeId,
+            TreeId = reportedTreeId,
             InProgress = !complete,
             CurrentMaxLeafKeys = entry?.MaxLeafKeys ?? LatticeConstants.DefaultMaxLeafKeys,
             CurrentMaxInternalChildren = entry?.MaxInternalChildren ?? LatticeConstants.DefaultMaxInternalChildren,
@@ -1662,12 +1831,17 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             "No backup/restore engine is registered on this cluster. Register the "
             + "Orleans.Lattice.Backup add-on to enable tree-administration restore.");
 
-    /// <summary>Projects the backup engine's <see cref="LatticeRestoreResult"/> onto the transport-agnostic <see cref="TreeRestoreResult"/>.</summary>
-    private static TreeRestoreResult ToRestoreResult(LatticeRestoreResult result) =>
+    /// <summary>
+    /// Projects the backup engine's <see cref="LatticeRestoreResult"/> onto the
+    /// transport-agnostic <see cref="TreeRestoreResult"/>, reporting
+    /// <paramref name="reportedTreeId"/> (the caller's own unqualified name) as the
+    /// target rather than the internally-composed, tenant-scoped id.
+    /// </summary>
+    private static TreeRestoreResult ToRestoreResult(LatticeRestoreResult result, string reportedTreeId) =>
         new()
         {
             BackupId = result.BackupId,
-            TargetTreeId = result.TargetTreeId,
+            TargetTreeId = reportedTreeId,
             Mode = ToRestoreMode(result.Mode),
             OperationId = result.OperationId,
             ManifestChain = result.ManifestChain,
@@ -1676,11 +1850,20 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             PreviousPhysicalTreeId = result.PreviousPhysicalTreeId,
         };
 
-    /// <summary>Reconstructs the backup engine's <see cref="LatticeRestoreResult"/> from the transport-agnostic <see cref="TreeRestoreResult"/> for a revert.</summary>
-    private static LatticeRestoreResult ToRestoreResult(TreeRestoreResult restore) =>
+    /// <summary>Projects the backup engine's <see cref="LatticeRestoreResult"/> onto the transport-agnostic <see cref="TreeRestoreResult"/>.</summary>
+    private static TreeRestoreResult ToRestoreResult(LatticeRestoreResult result) =>
+        ToRestoreResult(result, result.TargetTreeId);
+
+    /// <summary>
+    /// Reconstructs the backup engine's <see cref="LatticeRestoreResult"/> from the
+    /// transport-agnostic <see cref="TreeRestoreResult"/> for a revert, addressing
+    /// <paramref name="effectiveTreeId"/> (the tenant-composed target) rather than
+    /// the unqualified name the DTO carries.
+    /// </summary>
+    private static LatticeRestoreResult ToRestoreResult(TreeRestoreResult restore, string effectiveTreeId) =>
         new(
             restore.BackupId,
-            restore.TargetTreeId,
+            effectiveTreeId,
             ToRestoreMode(restore.Mode),
             restore.OperationId,
             restore.ManifestChain,
@@ -1707,12 +1890,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// (a pure read that asserts no internal-origin marker) and projects it onto the
     /// transport-agnostic <see cref="TreeDeletionStatus"/>.
     /// </summary>
-    private async Task<TreeDeletionStatus> ReadStatusAsync(string treeId)
+    private async Task<TreeDeletionStatus> ReadStatusAsync(string effectiveTreeId, string reportedTreeId)
     {
-        var snapshot = await _grainFactory.GetGrain<ITreeDeletionGrain>(treeId)
+        var snapshot = await _grainFactory.GetGrain<ITreeDeletionGrain>(effectiveTreeId)
             .GetDeletionStatusAsync()
             .ConfigureAwait(false);
-        return ToStatus(treeId, snapshot);
+        return ToStatus(reportedTreeId, snapshot);
     }
 
     /// <summary>
@@ -1740,23 +1923,32 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// <remarks>
     /// Also rejects an id in the structural tenant namespace (<c>t/{tenant}/{name}</c>)
     /// that the ambient active tenant does not own. That namespace is composed
-    /// internally - <see cref="LatticeTenantScopedTreeAdmin"/> composes it under the
-    /// tenant in scope, and the data plane refuses a direct user-origin write to a
-    /// <c>t/</c> id outright - so a caller-supplied id naming a namespace the caller
-    /// is not operating in has no legitimate source. Without this the two paths
-    /// disagreed: tree administration happily created <c>t/other/name</c> while every
-    /// subsequent read and write against it faulted on the data plane's reserved-namespace
-    /// guard, leaving a registered, catalogued, permanently unusable tree inside
-    /// another tenant's namespace. A composed id whose owner IS the active tenant is
-    /// allowed through unchanged, so the tenant-scoped facade is unaffected.
+    /// internally - this facade composes it from the caller's unqualified name
+    /// through <see cref="ITenantContextResolver"/>, <see cref="LatticeTenantScopedTreeAdmin"/>
+    /// composes it under the tenant in scope, and the data plane refuses a direct
+    /// user-origin write to a <c>t/</c> id outright - so a caller-supplied id
+    /// naming a namespace the caller is not operating in has no legitimate source.
+    /// Without this the two paths disagreed: tree administration happily created
+    /// <c>t/other/name</c> while every subsequent read and write against it faulted
+    /// on the data plane's reserved-namespace guard, leaving a registered,
+    /// catalogued, permanently unusable tree inside another tenant's namespace. A
+    /// composed id whose owner IS the active tenant is allowed through unchanged,
+    /// which is exactly what the facade's own composition produces, so a tenant
+    /// caller naming its own tree by its unqualified name passes cleanly.
     /// </remarks>
-    private static void ThrowIfReserved(string treeId)
+    /// <param name="treeId">The (already tenant-composed) tree id to guard.</param>
+    /// <param name="paramName">
+    /// The name of the facade parameter the id arrived on, so a verb taking a
+    /// second tree id (an alias target, a snapshot destination) reports the
+    /// rejection against the right argument.
+    /// </param>
+    private static void ThrowIfReserved(string treeId, string paramName = "treeId")
     {
         if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             throw new ArgumentException(
                 $"Tree id '{treeId}' is reserved: the '{LatticeConstants.SystemTreePrefix}' namespace is managed by the library.",
-                nameof(treeId));
+                paramName);
         }
 
         if (!LatticeTenantTrees.IsTenantScoped(treeId))
@@ -1777,7 +1969,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             $"Tree id '{treeId}' is reserved: the '{LatticeTenantTrees.SegmentPrefix}' namespace is the structural "
             + "tenant namespace and is composed internally by the Lattice tenancy layer. Administer a tenant's tree "
             + "through the tenant-scoped tree-administration surface, by its unqualified name.",
-            nameof(treeId));
+            paramName);
     }
 
     /// <summary>

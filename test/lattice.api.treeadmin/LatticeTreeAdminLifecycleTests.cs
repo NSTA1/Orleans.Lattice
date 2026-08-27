@@ -38,7 +38,8 @@ public sealed class LatticeTreeAdminLifecycleTests
             Substitute.For<ILatticeSchemaControl>(),
             factory,
             new TreeAdminAccessAuthorizer(new FixedGate(allow)),
-            Options.Create(new LatticeApiTreeAdminOptions()));
+            Options.Create(new LatticeApiTreeAdminOptions()),
+            new NullTenantContextResolver());
 
     private static ILatticeRegistry Registry(IGrainFactory factory)
     {

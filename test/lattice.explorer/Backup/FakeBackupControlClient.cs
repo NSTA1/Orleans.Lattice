@@ -20,6 +20,12 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
     public Exception? MutationThrows { get; set; }
     public bool DeleteResult { get; set; } = true;
 
+    /// <summary>
+    /// The set id the fake capture reports. Set to <c>null</c> to model a
+    /// single-scope capture, which stamps no set membership and so carries no id.
+    /// </summary>
+    public string? SetCaptureId { get; set; } = "set-1";
+
     public int ListCallCount { get; private set; }
     public BackupCatalogRequest? LastListRequest { get; private set; }
     public BackupScopeSelector? LastProbedScope { get; private set; }
@@ -81,7 +87,7 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
         }
 
         var memberIds = request.Scopes.Select((_, i) => $"set-member-{i}").ToArray();
-        return Task.FromResult(SampleBackup.SetResult("set-1", memberIds));
+        return Task.FromResult(SampleBackup.SetResult(SetCaptureId, memberIds));
     }
 
     public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)

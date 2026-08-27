@@ -180,6 +180,84 @@ public sealed class LatticeBackupSetCaptureIntegrationTests
         });
     }
 
+    // ---- The set id agrees with what the catalog records -----------------
+
+    [Test]
+    public async Task CaptureSetAsync_single_tree_returns_no_set_id_at_all()
+    {
+        await _fixture.InitializeAsync();
+        await _fixture.GrainFactory.GetGrain<ILattice>("phantom").SetAsync("k", Bytes("v"));
+
+        var result = await _fixture.Capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+            "phantom-set",
+            new[] { BackupScopeSelector.WholeTree("phantom") },
+            crossTreeConsistent: false));
+
+        // Regression: a one-scope capture used to hand back a content-addressed
+        // id indistinguishable from a valid one, which was never written to any
+        // manifest - so a consumer grouping catalog rows by it silently found
+        // nothing. The capture response now agrees with the catalog row.
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.SetManifest.SetId, Is.Null,
+                "an id that is never stamped anywhere must not be handed to the caller");
+            Assert.That(result.SetManifest.Name, Is.EqualTo("phantom-set"),
+                "the set is still self-describing: only the unresolvable id is withheld");
+            Assert.That(result.SetManifest.MemberBackupIds,
+                Is.EqualTo(new[] { result.Members[0].BackupId }),
+                "the member the caller must actually restore is still reported");
+        });
+    }
+
+    [Test]
+    public async Task CaptureSetAsync_set_id_agrees_with_the_catalogued_member_rows()
+    {
+        await _fixture.InitializeAsync();
+        await _fixture.GrainFactory.GetGrain<ILattice>("agree-solo").SetAsync("k", Bytes("v"));
+        await _fixture.GrainFactory.GetGrain<ILattice>("agree-a").SetAsync("k", Bytes("v"));
+        await _fixture.GrainFactory.GetGrain<ILattice>("agree-b").SetAsync("k", Bytes("v"));
+
+        var solo = await _fixture.Capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+            "agree-solo-set", new[] { BackupScopeSelector.WholeTree("agree-solo") }));
+        var pair = await _fixture.Capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+            "agree-pair-set",
+            new[] { BackupScopeSelector.WholeTree("agree-a"), BackupScopeSelector.WholeTree("agree-b") }));
+
+        // The invariant the issue turns on, asserted for both arities: whatever the
+        // create response reports as the set id is exactly what a catalog consumer
+        // reads back off every member row. Previously the one-scope case reported a
+        // real-looking id against a null row.
+        var soloStored = await _fixture.Catalog.GetAsync(solo.Members[0].BackupId);
+        Assert.That(soloStored, Is.Not.Null);
+        Assert.That(soloStored!.SetId, Is.EqualTo(solo.SetManifest.SetId));
+
+        Assert.That(pair.SetManifest.SetId, Is.Not.Null);
+        foreach (var member in pair.Members)
+        {
+            var stored = await _fixture.Catalog.GetAsync(member.BackupId);
+            Assert.That(stored, Is.Not.Null);
+            Assert.That(stored!.SetId, Is.EqualTo(pair.SetManifest.SetId));
+        }
+    }
+
+    [Test]
+    public async Task CaptureSetAsync_multi_tree_set_id_is_the_content_address_of_its_members()
+    {
+        await _fixture.InitializeAsync();
+        await _fixture.GrainFactory.GetGrain<ILattice>("addr-a").SetAsync("k", Bytes("v"));
+        await _fixture.GrainFactory.GetGrain<ILattice>("addr-b").SetAsync("k", Bytes("v"));
+
+        var result = await _fixture.Capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+            "addressed-set",
+            new[] { BackupScopeSelector.WholeTree("addr-a"), BackupScopeSelector.WholeTree("addr-b") }));
+
+        // Withholding the one-member id must not have disturbed the addressing
+        // scheme for the sets that do carry one.
+        Assert.That(
+            result.SetManifest.SetId,
+            Is.EqualTo(BackupSetIdentity.Compute(result.SetManifest.MemberBackupIds)));
+    }
+
     // ---- Fence + drain recorded in metrics ------------------------------
 
     [Test]

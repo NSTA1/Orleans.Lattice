@@ -19,8 +19,25 @@ public sealed class LatticeTenantAdmissionControllerTests
 
     private static LatticeTenantAdmissionController Create(
         FakeTenantUsageIndex index,
-        TenantEnforcementScope scope) =>
-        new(index, new FixedScopeResolver(scope));
+        TenantEnforcementScope scope,
+        ITenantRateLimiter? rateLimiter = null) =>
+        new(index, new FixedScopeResolver(scope), rateLimiter ?? new AdmitAllRateLimiter());
+
+    /// <summary>
+    /// A rate limiter that admits every operation, so a quota test exercises the
+    /// footprint dimensions without the rate budget interfering. The rate-limit
+    /// path has its own dedicated tests.
+    /// </summary>
+    private sealed class AdmitAllRateLimiter : ITenantRateLimiter
+    {
+        public bool TryAcquire(TenantId tenant) => true;
+    }
+
+    /// <summary>A rate limiter that refuses every operation, pinning the rate-budget branch.</summary>
+    private sealed class RefuseAllRateLimiter : ITenantRateLimiter
+    {
+        public bool TryAcquire(TenantId tenant) => false;
+    }
 
     private static FakeTenantUsageIndex IndexWith(TenantQuotas quotas, LocalUsageSample global, LocalUsageSample local)
     {
@@ -33,7 +50,8 @@ public sealed class LatticeTenantAdmissionControllerTests
     public void Constructor_null_index_throws()
     {
         Assert.That(
-            () => new LatticeTenantAdmissionController(null!, new FixedScopeResolver(TenantEnforcementScope.GlobalConverged)),
+            () => new LatticeTenantAdmissionController(
+                null!, new FixedScopeResolver(TenantEnforcementScope.GlobalConverged), new AdmitAllRateLimiter()),
             Throws.ArgumentNullException);
     }
 
@@ -41,8 +59,66 @@ public sealed class LatticeTenantAdmissionControllerTests
     public void Constructor_null_scope_resolver_throws()
     {
         Assert.That(
-            () => new LatticeTenantAdmissionController(new FakeTenantUsageIndex(), null!),
+            () => new LatticeTenantAdmissionController(new FakeTenantUsageIndex(), null!, new AdmitAllRateLimiter()),
             Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_null_rate_limiter_throws()
+    {
+        Assert.That(
+            () => new LatticeTenantAdmissionController(
+                new FakeTenantUsageIndex(),
+                new FixedScopeResolver(TenantEnforcementScope.GlobalConverged),
+                null!),
+            Throws.ArgumentNullException);
+    }
+
+    // ---- Rate budget (issue #1688) --------------------------------------
+    //
+    // MaxOpsPerSecond was inert: ITenantRateLimiter lives in the tenancy package
+    // so the core write seam could not reach it, and nothing else consulted it.
+    // Folding it into the admission controller - which core already reaches
+    // through the ITenantAdmissionController null seam, short-circuited on
+    // IsActive - enforces the dimension without core taking a new dependency.
+
+    [Test]
+    public void A_refused_rate_budget_throws_the_ops_per_second_dimension()
+    {
+        var controller = Create(
+            new FakeTenantUsageIndex(), TenantEnforcementScope.GlobalConverged, new RefuseAllRateLimiter());
+
+        var ex = Assert.ThrowsAsync<LatticeQuotaExceededException>(
+            async () => await controller.IsAdmittedAsync(Acme, Tree));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Dimension, Is.EqualTo(LatticeQuotaExceededException.OpsPerSecondDimension));
+            Assert.That(ex.TenantId, Is.EqualTo("acme"));
+            Assert.That(ex.TreeId, Is.EqualTo(Tree));
+            Assert.That(ex.Message, Does.Contain("retry"), "a rate breach is a transient back-off signal");
+        });
+    }
+
+    [Test]
+    public void The_rate_budget_is_applied_before_the_footprint_quotas()
+    {
+        // An unknown tenant would otherwise fail open on the footprint branch, so a
+        // refusal here proves the rate budget is consulted first.
+        var controller = Create(
+            new FakeTenantUsageIndex(), TenantEnforcementScope.GlobalConverged, new RefuseAllRateLimiter());
+
+        Assert.ThrowsAsync<LatticeQuotaExceededException>(
+            async () => await controller.IsAdmittedAsync(Acme, Tree));
+    }
+
+    [Test]
+    public async Task An_admitted_rate_budget_falls_through_to_the_footprint_quotas()
+    {
+        var index = IndexWith(new TenantQuotas { MaxBytes = 1_000 }, global: Sample(bytes: 100), local: Sample(bytes: 100));
+        var controller = Create(index, TenantEnforcementScope.GlobalConverged);
+
+        Assert.That(await controller.IsAdmittedAsync(Acme, Tree), Is.True);
     }
 
     [Test]

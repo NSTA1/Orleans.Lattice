@@ -12,7 +12,8 @@ namespace Orleans.Lattice.Api.Data;
 /// </summary>
 internal sealed partial class LatticeDataApi(
     IGrainFactory grainFactory,
-    IOptions<LatticeApiDataOptions> apiOptions) : ILatticeDataApi
+    IOptions<LatticeApiDataOptions> apiOptions,
+    ITenantContextResolver tenantResolver) : ILatticeDataApi
 {
     private readonly IGrainFactory _grainFactory = grainFactory
         ?? throw new ArgumentNullException(nameof(grainFactory));
@@ -20,27 +21,72 @@ internal sealed partial class LatticeDataApi(
     private readonly LatticeApiDataOptions _apiOptions = (apiOptions
         ?? throw new ArgumentNullException(nameof(apiOptions))).Value;
 
+    private readonly ITenantContextResolver _tenantResolver = tenantResolver
+        ?? throw new ArgumentNullException(nameof(tenantResolver));
+
+    /// <summary>
+    /// Resolves the caller-supplied, tenant-local tree name to the effective tree
+    /// id and dials that tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the seam that gives an external data-plane caller its own tenant
+    /// namespace. Without it the facade dialled the caller's bare name verbatim, so
+    /// every tenant asking for <c>orders</c> was handed the <em>same</em> physical
+    /// tree: two tenants collided in one namespace, and a tenant could not address
+    /// its own <c>t/{tenant}/orders</c> at all (the reserved-namespace guard
+    /// correctly refuses a caller-supplied <c>t/</c> id, since composition is
+    /// internal).
+    /// </para>
+    /// <para>
+    /// Zero-cost when tenancy is off: the core no-op resolver resolves the reserved
+    /// default tenant synchronously and returns the caller's bare name unchanged -
+    /// the same string reference, no allocation, no await - so a non-tenancy
+    /// cluster behaves byte-for-byte as before.
+    /// </para>
+    /// </remarks>
+    private ValueTask<ILattice> TreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        // Guarded here so the rejection names the facade's own parameter, matching
+        // the contract every sibling verb documents.
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+
+        var pending = _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken);
+
+        // Warm path: the effective id resolved synchronously (the null resolver
+        // always does), so the grain is dialled with no await and no allocation.
+        if (pending.IsCompletedSuccessfully)
+        {
+            return new ValueTask<ILattice>(_grainFactory.GetGrain<ILattice>(pending.Result));
+        }
+
+        return AwaitTreeAsync(pending);
+    }
+
+    private async ValueTask<ILattice> AwaitTreeAsync(ValueTask<string> pending) =>
+        _grainFactory.GetGrain<ILattice>(await pending.ConfigureAwait(false));
+
     /// <inheritdoc />
-    public Task SetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
+    public async Task SetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        return tree.SetAsync(key, value, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.SetAsync(key, value, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<bool> DeleteAsync(string treeId, string key, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(string treeId, string key, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        return tree.DeleteAsync(key, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -55,7 +101,7 @@ internal sealed partial class LatticeDataApi(
         cancellationToken.ThrowIfCancellationRequested();
 
         var stepSize = Math.Max(1, _apiOptions.RangeDeleteStepSize);
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        var tree = await TreeAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
         var deleted = await tree.DeleteRangeAsync(
             request.StartInclusive,
             request.EndExclusive,
@@ -71,7 +117,7 @@ internal sealed partial class LatticeDataApi(
     }
 
     /// <inheritdoc />
-    public Task SetManyAtomicAsync(
+    public async Task SetManyAtomicAsync(
         string treeId,
         DataAtomicBatch batch,
         string operationId,
@@ -87,12 +133,12 @@ internal sealed partial class LatticeDataApi(
             ? (IReadOnlyList<string>)batch.DeleteKeys
             : Array.Empty<string>();
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        return tree.SetManyAtomicAsync(upserts, deletes, operationId, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.SetManyAtomicAsync(upserts, deletes, operationId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task<CrossTreeAtomicWriteOutcome> SetManyAtomicCrossTreeAsync(
+    public async Task<CrossTreeAtomicWriteOutcome> SetManyAtomicCrossTreeAsync(
         IReadOnlyList<DataTreeBatch> batches,
         string operationId,
         CancellationToken cancellationToken = default)
@@ -105,6 +151,13 @@ internal sealed partial class LatticeDataApi(
         foreach (var batch in batches)
         {
             ArgumentNullException.ThrowIfNull(batch);
+
+            // Every slice's tree name is composed under the caller's tenant too, so
+            // a cross-tree atomic batch cannot straddle namespaces by naming an
+            // unqualified tree that belongs to someone else.
+            var effectiveTreeId = await _tenantResolver
+                .ResolveEffectiveTreeIdAsync(batch.TreeId, cancellationToken).ConfigureAwait(false);
+
             var upserts = ToKeyValuePairs(batch.Upserts);
             var deletes = batch.DeleteKeys is { Count: > 0 } ? [.. batch.DeleteKeys] : (List<string>?)null;
 
@@ -125,19 +178,20 @@ internal sealed partial class LatticeDataApi(
                     flags.Add(true);
                 }
 
-                treeBatches.Add(new LatticeTreeBatch(batch.TreeId, upserts, EntryDeletes: flags));
+                treeBatches.Add(new LatticeTreeBatch(effectiveTreeId, upserts, EntryDeletes: flags));
             }
             else
             {
-                treeBatches.Add(new LatticeTreeBatch(batch.TreeId, upserts));
+                treeBatches.Add(new LatticeTreeBatch(effectiveTreeId, upserts));
             }
         }
 
-        return _grainFactory.SetManyAtomicAsync(treeBatches, operationId, cancellationToken);
+        return await _grainFactory
+            .SetManyAtomicAsync(treeBatches, operationId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public Task SetManyAsync(
+    public async Task SetManyAsync(
         string treeId,
         IReadOnlyList<DataEntry> upserts,
         CancellationToken cancellationToken = default)
@@ -148,8 +202,8 @@ internal sealed partial class LatticeDataApi(
 
         var pairs = ToKeyValuePairs(upserts is List<DataEntry> list ? list : [.. upserts]);
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
-        return tree.SetManyAsync(pairs, cancellationToken);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        await tree.SetManyAsync(pairs, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -159,7 +213,7 @@ internal sealed partial class LatticeDataApi(
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tree = _grainFactory.GetGrain<ILattice>(treeId);
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
 
         // A read must never materialise a tree: probing an unknown tree reports a
         // clean miss rather than routing into the shard root (which would register
@@ -200,7 +254,7 @@ internal sealed partial class LatticeDataApi(
         ArgumentException.ThrowIfNullOrEmpty(request.TreeId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tree = _grainFactory.GetGrain<ILattice>(request.TreeId);
+        var tree = await TreeAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
         var fresh = string.IsNullOrEmpty(request.ContinuationToken);
 
         string cursorId;
