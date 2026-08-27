@@ -249,6 +249,17 @@ public static class LatticeTenancyServiceCollectionExtensions
 
         builder.Services.TryAddSingleton<TenantUsagePublisher>();
 
+        // The cadence driver for the publisher above. Without it nothing ever calls
+        // RollUpAndPublishAsync, so no usage sample lands, the admission controller
+        // permanently takes its "fail open until the first sample" branch, and every
+        // authored per-tenant quota is inert however small it is set (issue #1688).
+        // Registered only here, so a cluster without the tenancy add-on meters
+        // nothing and is byte-for-byte unchanged. Registered by concrete
+        // implementation type (not a factory) so TryAddEnumerable can tell it apart
+        // from the other hosted services, exactly as the rate-budget coordinator is.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, TenantUsageMeteringService>());
+
         // First-class, billing-ready per-tenant overage metering (T10). The overage
         // store dogfoods the reserved sys-tenant-overage tree through the same
         // Orleans binary serializer and optimistic-merge path the usage store uses;

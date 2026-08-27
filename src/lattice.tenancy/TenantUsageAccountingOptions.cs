@@ -35,4 +35,25 @@ public sealed class TenantUsageAccountingOptions
     /// (5%), and must be non-negative.
     /// </summary>
     public double PublishMinRelativeDelta { get; set; } = 0.05;
+
+    /// <summary>
+    /// The cadence on which each silo re-meters every registered tenant's trees and
+    /// rolls the result up into that tenant's per-cluster usage slot. Defaults to
+    /// 30 seconds. Set to <see cref="TimeSpan.Zero"/> (or a negative value) to
+    /// disable metering entirely, which leaves quota admission permanently in its
+    /// fail-open state - useful only for a deployment that deliberately runs
+    /// tenancy without resource governance.
+    /// </summary>
+    /// <remarks>
+    /// This cadence is what makes an authored quota bind. Metering is the input to
+    /// admission: with no sample landing, <c>LatticeTenantAdmissionController</c>
+    /// takes its documented "fail open until the first sample lands" branch, so a
+    /// quota can never be breached. The interval trades enforcement latency against
+    /// the cost of the per-cycle walk - a shorter interval detects a breach sooner,
+    /// a longer one costs less. The hysteresis band
+    /// (<see cref="PublishMinAbsoluteDelta"/> / <see cref="PublishMinRelativeDelta"/>)
+    /// independently suppresses a republish when the roll-up barely moved, so a
+    /// short cadence does not by itself churn the registry.
+    /// </remarks>
+    public TimeSpan MeterInterval { get; set; } = TimeSpan.FromSeconds(30);
 }
