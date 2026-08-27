@@ -52,10 +52,185 @@ public abstract class GrpcActiveTenantStampContractTestsBase
     /// <summary>Conventional suffix identifying a gRPC facade service type.</summary>
     private const string ServiceTypeSuffix = "GrpcService";
 
+    /// <summary>Conventional suffix identifying a binding's options type.</summary>
+    private const string OptionsTypeSuffix = "GrpcOptions";
+
+    /// <summary>The option every binding exposes to name the inbound header.</summary>
+    private const string OptionPropertyName = "ActiveTenantHeaderName";
+
+    /// <summary>The canonical header name the option must default to.</summary>
+    private const string DefaultHeaderName = "lattice-active-tenant";
+
     /// <summary>
     /// The package assembly whose gRPC facade services are audited.
     /// </summary>
     protected abstract Assembly PackageAssembly { get; }
+
+    /// <summary>
+    /// Every binding must expose an <c>ActiveTenantHeaderName</c> option defaulting
+    /// to the canonical header, so a host can rename or disable header-based tenant
+    /// selection, and so every binding agrees on the wire name out of the box.
+    /// </summary>
+    /// <remarks>
+    /// A binding that stamps but reads a different default header is as broken as
+    /// one that never stamps: the forwarding interceptor sends a single agreed
+    /// header name, so a mismatch silently resolves no tenant and serves the shared
+    /// cluster-global namespace. Asserting the default here also gives the option
+    /// the per-package test coverage the repository requires of every public member,
+    /// in one place rather than seven near-identical fixtures.
+    /// </remarks>
+    [Test]
+    public void Every_binding_exposes_the_active_tenant_header_option()
+    {
+        var optionTypes = PackageAssembly.GetTypes()
+            .Where(t => t.IsClass && !t.IsAbstract && t.Name.EndsWith(OptionsTypeSuffix, StringComparison.Ordinal))
+            .OrderBy(t => t.FullName, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(optionTypes, Is.Not.Empty,
+            $"No '*{OptionsTypeSuffix}' types were discovered in {PackageAssembly.GetName().Name}; "
+            + "the guard would be inert. Verify PackageAssembly.");
+
+        var offenders = new List<string>();
+        foreach (var optionType in optionTypes)
+        {
+            var property = optionType.GetProperty(OptionPropertyName);
+            if (property is null || property.PropertyType != typeof(string))
+            {
+                offenders.Add($"{optionType.FullName}: no public string '{OptionPropertyName}' property.");
+                continue;
+            }
+
+            var instance = Activator.CreateInstance(optionType);
+            var actual = property.GetValue(instance) as string;
+            if (!string.Equals(actual, DefaultHeaderName, StringComparison.Ordinal))
+            {
+                offenders.Add(
+                    $"{optionType.FullName}.{OptionPropertyName} defaults to '{actual}', expected '{DefaultHeaderName}'.");
+            }
+        }
+
+        Assert.That(offenders, Is.Empty,
+            "Every gRPC binding must expose an active-tenant header option defaulting to the canonical "
+            + $"'{DefaultHeaderName}', so all bindings agree with the header the forwarding interceptor sends. "
+            + "Offenders:" + Environment.NewLine + string.Join(Environment.NewLine, offenders));
+    }
+
+    /// <summary>Simple name of the fail-closed tenant denial every ladder must map.</summary>
+    private const string DenialTypeName = "LatticeTenantAccessDeniedException";
+
+    /// <summary>
+    /// Every gRPC facade service must handle the fail-closed tenant denial
+    /// explicitly, so it maps to <c>PermissionDenied</c> rather than falling
+    /// through to the generic handler and surfacing as <c>Internal</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reported as <c>Internal</c> a denial is actively harmful, not merely
+    /// mislabelled: <c>Internal</c> is a canonical retryable status, so a
+    /// well-behaved client backs off and retries a decision that can never change;
+    /// the generic handler replaces the actionable reason with a fixed message; and
+    /// the refusal is logged as an error and counted against the server-fault rate
+    /// operators alert on.
+    /// </para>
+    /// <para>
+    /// The check reads the compiled exception-handling clauses, which is the only
+    /// way to observe a <c>catch</c> by reflection. Async dispatch compiles its
+    /// try/catch into a generated state machine, so the service's nested types are
+    /// scanned alongside its own methods.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public void Every_grpc_facade_service_maps_the_tenant_denial()
+    {
+        var services = PackageAssembly.GetTypes()
+            .Where(t => t.IsClass && t.Name.EndsWith(ServiceTypeSuffix, StringComparison.Ordinal))
+            .Where(t => !t.IsAbstract)
+            .OrderBy(t => t.FullName, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(services, Is.Not.Empty,
+            $"No '*{ServiceTypeSuffix}' types were discovered in {PackageAssembly.GetName().Name}; "
+            + "the guard would be inert. Verify PackageAssembly.");
+
+        var offenders = new List<string>();
+        foreach (var service in services)
+        {
+            if (!CatchesDenial(service))
+            {
+                offenders.Add(
+                    $"{service.FullName}: no catch clause for {DenialTypeName}, so a fail-closed tenant "
+                    + "denial reaches the generic handler and surfaces as Internal.");
+            }
+        }
+
+        Assert.That(offenders, Is.Empty,
+            "A tenant denial is an authorization outcome, not a server fault, and must map to "
+            + "PermissionDenied on every binding. Offenders:"
+            + Environment.NewLine + string.Join(Environment.NewLine, offenders));
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="service"/> - or any state machine generated
+    /// from its async methods - carries a catch clause for the tenant denial.
+    /// </summary>
+    private static bool CatchesDenial(Type service)
+    {
+        const BindingFlags Members = BindingFlags.Instance | BindingFlags.Static
+            | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+
+        var candidates = new List<Type> { service };
+        candidates.AddRange(service.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic));
+
+        foreach (var type in candidates)
+        {
+            foreach (var method in type.GetMethods(Members))
+            {
+                MethodBody? body;
+                try
+                {
+                    body = method.GetMethodBody();
+                }
+                catch (Exception)
+                {
+                    // A generic definition or an unavailable body tells us nothing;
+                    // it must not mask a genuine handler found elsewhere.
+                    continue;
+                }
+
+                if (body is null)
+                {
+                    continue;
+                }
+
+                foreach (var clause in body.ExceptionHandlingClauses)
+                {
+                    if (clause.Flags != ExceptionHandlingClauseOptions.Clause)
+                    {
+                        continue;
+                    }
+
+                    Type? caught;
+                    try
+                    {
+                        caught = clause.CatchType;
+                    }
+                    catch (Exception)
+                    {
+                        continue;
+                    }
+
+                    if (caught is not null
+                        && string.Equals(caught.Name, DenialTypeName, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Every gRPC facade service in the package must expose a method that stamps
