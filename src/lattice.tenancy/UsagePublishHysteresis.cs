@@ -10,6 +10,12 @@ namespace Orleans.Lattice.Tenancy;
 /// fraction of the last published value; a stream of negligible movements is
 /// suppressed.
 /// </summary>
+/// <remarks>
+/// The band damps <em>churn between successive samples</em>, so it applies only
+/// once a sample has actually been published. A first publish (no prior sample)
+/// is always allowed through, because until the slot exists quota admission is in
+/// its fail-open state and no quota can bind at all.
+/// </remarks>
 internal static class UsagePublishHysteresis
 {
     /// <summary>
@@ -33,6 +39,21 @@ internal static class UsagePublishHysteresis
         long minAbsoluteDelta,
         double minRelativeDelta)
     {
+        // A first publish is never suppressed. The band is defined relative to
+        // "the last published sample", so with no sample yet there is no churn to
+        // damp - only an absent usage slot, which quota admission reads as its
+        // documented "fail open until the first sample lands" state. Applying the
+        // absolute floor here made that state permanent for any tenant whose whole
+        // footprint sits below the floor (the default is 65,536, so a tenant under
+        // ~64 KiB - or under 65,536 keys or trees - never published at all), and an
+        // authored quota could never bind however small it was set. Establishing
+        // the slot costs one write per tenant per publisher lifetime; every
+        // subsequent movement is damped by the band exactly as before.
+        if (lastPublished.IsEmpty)
+        {
+            return !candidate.IsEmpty;
+        }
+
         var absolute = minAbsoluteDelta < 0 ? 0 : minAbsoluteDelta;
         var relative = minRelativeDelta < 0 ? 0 : minRelativeDelta;
 

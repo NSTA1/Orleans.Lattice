@@ -95,4 +95,67 @@ public sealed class UsagePublishHysteresisTests
             UsagePublishHysteresis.ShouldPublish(last, candidate, minAbsoluteDelta: -1, minRelativeDelta: -1.0),
             Is.True);
     }
+
+    // ----- A first publish is never suppressed -----
+
+    [Test]
+    public void A_first_publish_far_below_the_absolute_floor_still_publishes()
+    {
+        // The regression: with no sample yet published there is no churn to damp,
+        // only an absent usage slot that leaves quota admission permanently
+        // fail-open. Suppressing this made an authored quota unbindable for any
+        // tenant whose entire footprint sits below the floor.
+        var candidate = Sample(bytes: 300, keys: 7, memoryBytes: 128, treeCount: 1);
+
+        Assert.That(
+            UsagePublishHysteresis.ShouldPublish(
+                LocalUsageSample.Empty, candidate, minAbsoluteDelta: 64 * 1024, minRelativeDelta: 0.05),
+            Is.True);
+    }
+
+    [Test]
+    public void A_first_publish_of_a_single_key_publishes()
+    {
+        Assert.That(
+            UsagePublishHysteresis.ShouldPublish(
+                LocalUsageSample.Empty, Sample(keys: 1), minAbsoluteDelta: 64 * 1024, minRelativeDelta: 0.05),
+            Is.True);
+    }
+
+    [Test]
+    public void An_empty_first_sample_is_still_suppressed()
+    {
+        // Nothing to record: an empty candidate against no prior sample is not a
+        // transition worth a write.
+        Assert.That(
+            UsagePublishHysteresis.ShouldPublish(
+                LocalUsageSample.Empty, LocalUsageSample.Empty, minAbsoluteDelta: 64 * 1024, minRelativeDelta: 0.05),
+            Is.False);
+    }
+
+    [Test]
+    public void The_band_still_damps_every_movement_after_the_first_publish()
+    {
+        // The exemption is strictly for establishing the slot; once a sample
+        // exists the band applies exactly as before, so a short cadence does not
+        // churn the registry.
+        var last = Sample(bytes: 300, keys: 7, memoryBytes: 128, treeCount: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                UsagePublishHysteresis.ShouldPublish(
+                    last, Sample(bytes: 900, keys: 9, memoryBytes: 128, treeCount: 1),
+                    minAbsoluteDelta: 64 * 1024, minRelativeDelta: 0.05),
+                Is.False,
+                "a small movement after the first publish is still suppressed");
+
+            Assert.That(
+                UsagePublishHysteresis.ShouldPublish(
+                    last, Sample(bytes: 300 + (128 * 1024), keys: 7, memoryBytes: 128, treeCount: 1),
+                    minAbsoluteDelta: 64 * 1024, minRelativeDelta: 0.05),
+                Is.True,
+                "a movement clearing the band still publishes");
+        });
+    }
 }

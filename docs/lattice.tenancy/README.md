@@ -91,7 +91,11 @@ siloBuilder.ConfigureLatticeTenancy(options =>
   `t/{tenantId}/{name}`, and the gate enforces ownership with a cheap ordinal
   prefix check - the same shape as the existing `_lattice_` / `sys-` reserved
   namespaces. The tenant prefix is a third reserved namespace with its own
-  user-write guard. Compose and inspect tenant tree ids with the core
+  user-write guard: a user-origin write may name a `t/` id only when the id's
+  structural owner is the caller's own active tenant - which is exactly what the
+  facades compose - so a caller can never name another tenant's namespace, and with
+  tenancy off (where there is no active tenant) the namespace is uncreatable through
+  the public surface. Compose and inspect tenant tree ids with the core
   `LatticeTenantTrees` helper:
 
 ```csharp verify
@@ -229,6 +233,14 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   has usage. Setting `MeterInterval` to zero disables metering entirely and leaves
   admission permanently open, which is only appropriate for a deployment running
   tenancy without resource governance.
+- **A tenant's first sample always publishes.** Republishing a usage slot is gated
+  by a hysteresis band (`PublishMinAbsoluteDelta` / `PublishMinRelativeDelta`) so a
+  stream of negligible movements does not churn the registry. That band damps churn
+  *between successive samples*, so it is deliberately not applied to a tenant's
+  first publish: until the slot exists admission is fail-open and no quota binds at
+  all, so a tenant whose whole footprint sits below the absolute floor (default
+  65,536) would otherwise never be governed. Establishing the slot costs one write
+  per tenant per publisher lifetime; every movement after it is damped as normal.
 - **Request rate is enforced with the footprint dimensions.** `MaxOpsPerSecond` is
   applied by the same admission seam, ahead of the footprint checks, from the
   tenant's silo-local token budget. A breach surfaces as

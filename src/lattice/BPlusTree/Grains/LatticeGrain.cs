@@ -397,8 +397,26 @@ internal sealed partial class LatticeGrain(
         // sys- guard above. LatticeTenantTrees.SegmentPrefix is the single source
         // of the reserved prefix, so all data-mutation call sites cover it
         // uniformly.
+        //
+        // The one user-origin id that IS legitimate here is the tenancy layer's
+        // own composition: an external facade scopes a caller's unqualified name
+        // into t/{activeTenant}/{name} through ITenantContextResolver and then
+        // writes it under the caller's identity, so the write arrives user-origin
+        // by design (system-origin would skip the access gate and drop per-subject
+        // authorization for every tenant write). Admitting an id the ambient
+        // active tenant owns keeps the guard's purpose - a user may not name a
+        // reserved or foreign namespace - while letting a tenant write its own
+        // trees. The active tenant is an assertion already re-validated against
+        // the caller's membership by the tenancy layer's resolver before it can
+        // compose anything, and the tenant gate independently authorizes the
+        // crossing, so this admits nothing the caller could not already reach.
+        // With tenancy off there is never an ambient active tenant, so this is a
+        // no-op and the namespace stays wholly uncreatable. Mirrors the identical
+        // ownership exit in LatticeTreeAdmin.ThrowIfReserved, so administration
+        // and the data plane agree on which composed ids are legitimate.
         if (LatticeTenantTrees.IsTenantScoped(TreeId)
-            && !LatticeAccessGateContext.IsSystemOrigin)
+            && !LatticeAccessGateContext.IsSystemOrigin
+            && !IsOwnedByActiveTenant(TreeId))
             throw new LatticeReservedTreeNamespaceException(
                 TreeId,
                 $"Tree ID '{TreeId}' is reserved: names starting with '{LatticeTenantTrees.SegmentPrefix}' " +
@@ -421,6 +439,31 @@ internal sealed partial class LatticeGrain(
                 TreeId,
                 $"Tree ID '{ClusterWideAuthSentinelTreeId}' is reserved as the all-trees authorization sentinel " +
                 "and cannot be created via the public ILattice surface. Choose a different tree name.");
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="treeId"/> is a well-formed
+    /// tenant-scoped id whose owning tenant is the ambient active tenant, i.e.
+    /// the id the tenancy layer composes for a caller operating as that tenant.
+    /// </summary>
+    /// <remarks>
+    /// The active tenant is a caller-supplied assertion, but it is re-validated
+    /// against the caller's own membership by the tenancy layer's
+    /// <c>ITenantContextResolver</c> before it can scope a name, so a caller can
+    /// only ever present an id under a tenant it may act as. With no tenancy
+    /// add-on registered the ambient active tenant is never set, so this is
+    /// always <c>false</c> and the <c>t/</c> namespace remains wholly
+    /// uncreatable through the public surface.
+    /// </remarks>
+    private static bool IsOwnedByActiveTenant(string treeId)
+    {
+        if (LatticeActiveTenantContext.Current is not { Value: not null } activeTenant)
+        {
+            return false;
+        }
+
+        var owner = LatticeTenantTrees.GetOwner(treeId);
+        return owner.IsTenantOwned && owner.Tenant.Equals(activeTenant);
     }
 
     /// <summary>

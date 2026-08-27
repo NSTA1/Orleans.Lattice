@@ -143,15 +143,118 @@ public class LatticeGrainTenantTreeGuardTests
 
     // ----- System-origin suppresses the guard (tenancy-layer composed routing) -----
 
+    // ----- The active tenant's own composed id is admitted (user-origin) -----
+
     [Test]
-    public void SetAsync_allows_a_tenant_id_under_system_origin()
+    public void SetAsync_allows_the_active_tenants_own_composed_id()
+    {
+        // The external facades compose t/{activeTenant}/{name} and then write it
+        // under the caller's own identity, so the write arrives user-origin by
+        // design. Refusing it here made every tenant-scoped write through the
+        // data plane fail once the facades began composing.
+        var (grain, factory) = CreateGrain(TenantTreeId);
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        using var _ = LatticeActiveTenantContext.With(TenantId.Parse("contoso"));
+
+        Assert.DoesNotThrowAsync(() => grain.SetAsync("k", [1]));
+    }
+
+    [Test]
+    public void Every_write_verb_allows_the_active_tenants_own_composed_id()
     {
         var (grain, factory) = CreateGrain(TenantTreeId);
         var shardRoot = Substitute.For<IShardRootGrain>();
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
 
-        using var _ = LatticeAccessGateContext.EnterSystemOrigin();
+        using var _ = LatticeActiveTenantContext.With(TenantId.Parse("contoso"));
 
-        Assert.DoesNotThrowAsync(() => grain.SetAsync("k", [1]));
+        Assert.Multiple(() =>
+        {
+            Assert.DoesNotThrowAsync(() => grain.SetAsync("k", [1], TimeSpan.FromMinutes(1)));
+            Assert.DoesNotThrowAsync(() => grain.GetOrSetAsync("k", [1]));
+            Assert.DoesNotThrowAsync(() => grain.SetManyAsync([new("k", [1])]));
+            Assert.DoesNotThrowAsync(() => grain.DeleteAsync("k"));
+            Assert.DoesNotThrowAsync(() => grain.DeleteRangeAsync("a", "z"));
+            Assert.DoesNotThrowAsync(() => grain.BulkLoadAsync([new("k", [1])]));
+        });
+    }
+
+    // ----- but only that tenant's own namespace -----
+
+    [Test]
+    public void SetAsync_rejects_another_tenants_id_while_a_tenant_is_active()
+    {
+        // Acting as one tenant must never let a caller name another tenant's
+        // namespace: the ownership exit is an equality check, not a t/ bypass.
+        var (grain, factory) = CreateGrain(TenantTreeId);
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        using var _ = LatticeActiveTenantContext.With(TenantId.Parse("globex"));
+
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(() => grain.SetAsync("k", [1]));
+    }
+
+    [Test]
+    public void SetAsync_rejects_a_malformed_tenant_id_while_a_tenant_is_active()
+    {
+        // A malformed t/ id has no owning tenant (it classifies as platform-owned),
+        // so it can never match the active tenant and stays uncreatable.
+        var (grain, factory) = CreateGrain("t/contoso");
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        using var _ = LatticeActiveTenantContext.With(TenantId.Parse("contoso"));
+
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(() => grain.SetAsync("k", [1]));
+    }
+
+    // ----- Tenancy off is unchanged: no active tenant, namespace uncreatable -----
+
+    [Test]
+    public void SetAsync_still_rejects_a_tenant_id_when_no_tenant_is_active()
+    {
+        // With no tenancy add-on registered the ambient active tenant is never
+        // set, so the ownership exit is unreachable and the t/ namespace remains
+        // wholly uncreatable - the tenancy-off behaviour is byte-for-byte intact.
+        Assert.That(LatticeActiveTenantContext.Current, Is.Null);
+
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
+            () => CreateGrainFor(TenantTreeId).SetAsync("k", [1]));
+    }
+
+    [Test]
+    public void The_guard_is_restored_after_the_active_tenant_scope_ends()
+    {
+        var (grain, factory) = CreateGrain(TenantTreeId);
+        var shardRoot = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shardRoot);
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("contoso")))
+        {
+            Assert.DoesNotThrowAsync(() => grain.SetAsync("k", [1]));
+        }
+
+        Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(() => grain.SetAsync("k", [1]));
+    }
+
+    // ----- The sibling reserved namespaces are not widened by the exit -----
+
+    [Test]
+    public void An_active_tenant_does_not_unlock_the_system_namespaces()
+    {
+        // The ownership exit is scoped to the t/ guard alone; sys- and the
+        // all-trees sentinel stay refused however the ambient tenant is set.
+        using var _ = LatticeActiveTenantContext.With(TenantId.Parse("contoso"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
+                () => CreateGrainFor("sys-auth-policy").SetAsync("k", [1]));
+            Assert.ThrowsAsync<LatticeReservedTreeNamespaceException>(
+                () => CreateGrainFor("*").SetAsync("k", [1]));
+        });
     }
 }
