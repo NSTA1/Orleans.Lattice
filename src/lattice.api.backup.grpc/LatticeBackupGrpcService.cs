@@ -354,6 +354,15 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
+        // The tenant-scoped backup boundary refusing a tree outside the caller's
+        // namespace is the same authorization outcome by a different name. It
+        // derives from InvalidOperationException and no clause here catches that,
+        // so without this it reads to the caller as an internal fault rather than
+        // the deliberate isolation decision it is.
+        catch (LatticeBackupTenantIsolationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Backup: gRPC catalog stream failed.");
@@ -459,6 +468,15 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         // would replace the actionable reason with a generic message and invite a
         // client to retry a decision that will never change.
         catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        // The tenant-scoped backup boundary refusing a tree outside the caller's
+        // namespace is the same authorization outcome by a different name. It
+        // derives from InvalidOperationException and no clause here catches that,
+        // so without this it reads to the caller as an internal fault rather than
+        // the deliberate isolation decision it is.
+        catch (LatticeBackupTenantIsolationException ex)
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
@@ -589,6 +607,15 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         // would replace the actionable reason with a generic message and invite a
         // client to retry a decision that will never change.
         catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        // The tenant-scoped backup boundary refusing a tree outside the caller's
+        // namespace is the same authorization outcome by a different name. It
+        // derives from InvalidOperationException and no clause here catches that,
+        // so without this it reads to the caller as an internal fault rather than
+        // the deliberate isolation decision it is.
+        catch (LatticeBackupTenantIsolationException ex)
         {
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }

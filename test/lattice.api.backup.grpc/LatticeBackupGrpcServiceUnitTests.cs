@@ -173,6 +173,8 @@ public sealed class LatticeBackupGrpcServiceUnitTests
         yield return new TestCaseData(new LatticeRestoreValidationException("bad"), StatusCode.FailedPrecondition).SetName("RestoreValidation_maps_to_FailedPrecondition");
         yield return new TestCaseData(new ArgumentException("arg"), StatusCode.InvalidArgument).SetName("Argument_maps_to_InvalidArgument");
         yield return new TestCaseData(new LatticeAuthorizationDeniedException("denied"), StatusCode.PermissionDenied).SetName("AuthorizationDenied_maps_to_PermissionDenied");
+        yield return new TestCaseData(new LatticeTenantAccessDeniedException(), StatusCode.PermissionDenied).SetName("TenantAccessDenied_maps_to_PermissionDenied");
+        yield return new TestCaseData(new LatticeBackupTenantIsolationException("cross-tenant"), StatusCode.PermissionDenied).SetName("BackupTenantIsolation_maps_to_PermissionDenied");
         yield return new TestCaseData(new TimeoutException("The operation has timed out."), StatusCode.Unavailable).SetName("TransientReminderTimeout_maps_to_Unavailable");
         yield return new TestCaseData(new InvalidOperationException("Reminder Service is still initializing and it is taking a long time. Please retry again later."), StatusCode.Unavailable).SetName("ReminderStillInitializing_maps_to_Unavailable");
         yield return new TestCaseData(new InvalidTimeZoneException("boom"), StatusCode.Internal).SetName("Unexpected_maps_to_Internal");
