@@ -117,6 +117,13 @@ if (string.Equals(suite, "hotpath", StringComparison.OrdinalIgnoreCase))
     return hotpathSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "ordedup", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> ordedup (OrCrdtReconcileBenchmarks)");
+    var orDedupSummary = BenchmarkRunner.Run<OrCrdtReconcileBenchmarks>(config);
+    return orDedupSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
 var bdnExitCode = summary.HasCriticalValidationErrors ? 1 : 0;
 

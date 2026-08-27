@@ -334,6 +334,13 @@ public sealed class Rga : ICrdt<Rga>
     public void MergeFrom(Rga other)
     {
         ArgumentNullException.ThrowIfNull(other);
+
+        // Capture this sequence's own per-replica maxima before merging so a
+        // legacy self (empty Context, non-empty nodes) is not left with a
+        // Context that reflects only the incoming side - which would let the
+        // next local insert re-mint an already-authored dot.
+        EnsureContextRebuilt();
+
         if (other.Nodes.Count == 0) return;
 
         // For a small incoming side (the steady-state replication merge)
@@ -370,6 +377,22 @@ public sealed class Rga : ICrdt<Rga>
                     && CompareBytes(existing.Value, n.Value) < 0)
                 {
                     existing.Value = n.Value;
+                }
+                // Structural parent reattachment. A tombstone-before-insert
+                // placeholder is recorded with ParentDot == Root (see the
+                // MergeDelta tombstone branch); when the authoritative insert
+                // for the same dot arrives here on the incoming side its real
+                // parent must win, or the placeholder's live children stay
+                // mis-rooted under Root and the two merge orders diverge.
+                // Fold the parent by the same deterministic max rule as the
+                // value (a real parent has Counter >= 1 so it dominates the
+                // Root placeholder's Counter 0) so the merge stays commutative.
+                // MergeDelta reattaches the parent on its insert path; MergeFrom
+                // must do the equivalent.
+                if (existing.ParentDot != n.ParentDot
+                    && CompareDot(n.ParentDot, existing.ParentDot) > 0)
+                {
+                    existing.ParentDot = n.ParentDot;
                 }
             }
             else
@@ -422,6 +445,11 @@ public sealed class Rga : ICrdt<Rga>
     /// </param>
     public void MergeDelta(RgaDelta delta)
     {
+        // Keep the counter cache dominating every node, including on a legacy
+        // sequence whose Context is still empty on first delta apply - otherwise
+        // the next local insert re-mints an already-authored dot.
+        EnsureContextRebuilt();
+
         var insertCount = delta.Inserts?.Count ?? 0;
         var tombstoneCount = delta.Tombstones?.Count ?? 0;
 
@@ -602,6 +630,21 @@ public sealed class Rga : ICrdt<Rga>
             if (c != 0) return c;
         }
         return a.Length.CompareTo(b.Length);
+    }
+
+    /// <summary>
+    /// Deterministic total order over parent dots used when folding a
+    /// same-dot structural disagreement in <see cref="MergeFrom(Rga)"/>.
+    /// Orders by <see cref="OrSetDot.Counter"/> then
+    /// <see cref="OrSetDot.ReplicaId"/> (ordinal), so the <see cref="Root"/>
+    /// placeholder (Counter 0) sorts below every authored parent (Counter
+    /// >= 1) and any same-dot parent disagreement resolves the same way in
+    /// either merge order.
+    /// </summary>
+    private static int CompareDot(OrSetDot a, OrSetDot b)
+    {
+        var c = a.Counter.CompareTo(b.Counter);
+        return c != 0 ? c : string.CompareOrdinal(a.ReplicaId, b.ReplicaId);
     }
 
     /// <summary>
