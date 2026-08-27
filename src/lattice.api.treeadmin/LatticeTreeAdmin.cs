@@ -156,6 +156,33 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         return _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken);
     }
 
+    /// <summary>
+    /// Scopes a caller-supplied materialised-view name to the caller's active
+    /// tenant, so two tenants using the same unqualified view name address
+    /// different maintainers and different view trees.
+    /// </summary>
+    /// <remarks>
+    /// A view name is scoped exactly as a tree name is, through the same audited
+    /// seam: the composed view tree id derives from the name, so scoping the name
+    /// is what places the tree inside the tenant's own structural namespace. With
+    /// tenancy off the core no-op resolver returns the bare name unchanged (the
+    /// same <see cref="string"/> reference), so nothing changes. A caller cannot
+    /// smuggle a tenant segment in, because <c>ViewNameValidator</c> rejects a
+    /// name containing <c>/</c> at every creation seam.
+    /// </remarks>
+    /// <param name="viewName">The caller-supplied view name.</param>
+    /// <param name="cancellationToken">Cancels an asynchronous tenant resolution.</param>
+    /// <returns>The effective, tenant-scoped view name.</returns>
+    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeTenantAccessDeniedException">
+    /// The resolver denied the operation (no valid active tenant).
+    /// </exception>
+    private ValueTask<string> EffectiveViewNameAsync(string viewName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        return _tenantResolver.ResolveEffectiveTreeIdAsync(viewName, cancellationToken);
+    }
+
     /// <inheritdoc />
     public async Task<LatticeTreeAdminCapabilities> ProbeCapabilitiesAsync(
         string treeId, CancellationToken cancellationToken = default)
@@ -1238,11 +1265,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await _authorizer.AuthorizeTreeAdminAsync(effectiveSourceTreeId, cancellationToken).ConfigureAwait(false);
 
         var source = _grainFactory.GetGrain<ILattice>(effectiveSourceTreeId);
-        await _viewFactory!.CreateAsync(source, viewName, descriptor, cancellationToken)
+
+        // The view name is scoped to the caller's tenant for the same reason the
+        // source is: the view tree id derives from the name, so scoping the name
+        // is what places the view tree inside the tenant's own namespace and
+        // gives two tenants using one unqualified name different maintainers.
+        var effectiveViewName =
+            await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
+
+        await _viewFactory!.CreateAsync(source, effectiveViewName, descriptor, cancellationToken)
             .ConfigureAwait(false);
 
-        var resolved = await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
-        return await CaptureViewStatusAsync(viewName, resolved, cancellationToken).ConfigureAwait(false);
+        var resolved = await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
+        return await CaptureViewStatusAsync(effectiveViewName, viewName, resolved, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1250,12 +1285,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string viewName, CancellationToken cancellationToken = default)
     {
         RequireViews();
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
         var resolved =
-            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeReadAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        return await CaptureViewStatusAsync(viewName, resolved, cancellationToken)
+        return await CaptureViewStatusAsync(effectiveViewName, viewName, resolved, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1264,16 +1299,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string viewName, CancellationToken cancellationToken = default)
     {
         RequireViews();
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
         var resolved =
-            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        await _grainFactory.GetGrain<IViewMaintainerGrain>(viewName)
+        await _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName)
             .RebuildAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return await CaptureViewStatusAsync(viewName, resolved, cancellationToken)
+        return await CaptureViewStatusAsync(effectiveViewName, viewName, resolved, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1282,12 +1317,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string viewName, CancellationToken cancellationToken = default)
     {
         RequireViews();
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
         var resolved =
-            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        var repaired = await _grainFactory.GetGrain<IViewMaintainerGrain>(viewName)
+        var repaired = await _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName)
             .ReconcileAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -1304,12 +1339,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string viewName, CancellationToken cancellationToken = default)
     {
         RequireViews();
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
         var resolved =
-            await ResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false);
+            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
-        await _viewFactory!.DeleteAsync(viewName, cancellationToken).ConfigureAwait(false);
+        await _viewFactory!.DeleteAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -1324,6 +1359,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         // Push the tag-index prefix down: the registry is ordinally sorted, so
         // this is a bounded range scan rather than a full catalog read that keeps
         // only the tag- prefixed ids.
+        //
+        // Tag-index trees are still cluster-global (the core tag-index factory
+        // derives "tag-{name}" without a tenant segment), so the bare prefix is
+        // the correct range. When they are partitioned this prefix must become
+        // tenant-scoped in the same change - scanning "tag-" would otherwise
+        // return only cluster-global indexes and none of a tenant's own.
         var allIds = await registry
             .GetAllTreeIdsAsync(LatticeConstants.TagIndexTreePrefix)
             .ConfigureAwait(false);
@@ -1337,7 +1378,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         var indexes = ImmutableArray.CreateBuilder<TreeTagIndexInfo>(indexTreeIds.Count);
         foreach (var treeId in indexTreeIds)
         {
-            var indexName = treeId[LatticeConstants.TagIndexTreePrefix.Length..];
+            var indexName = LatticeTenantTrees.LocalName(treeId)[LatticeConstants.TagIndexTreePrefix.Length..];
             var entry = await registry.GetEntryAsync(treeId).ConfigureAwait(false);
             var covered = await _tagIndexFactory!.CreateMultiTree(indexName)
                 .CoveredTreesAsync(cancellationToken)
@@ -1594,18 +1635,24 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// Captures a view's live status - apply lag and active generation tree id - from
     /// its maintainer, after the caller has already resolved and authorized the source.
     /// </summary>
+    /// <remarks>
+    /// Takes the effective (tenant-scoped) name to dial the maintainer and the
+    /// caller's own name to report, so the composed name never leaks back to the
+    /// caller, exactly as the tree-id verbs echo the tree name they were given.
+    /// </remarks>
     private async Task<TreeViewStatus> CaptureViewStatusAsync(
-        string viewName,
+        string effectiveViewName,
+        string reportedViewName,
         (string SourceTreeId, bool IsAggregation, string? ProviderKey, string? ProjectionVersion) registration,
         CancellationToken cancellationToken)
     {
-        var maintainer = _grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+        var maintainer = _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName);
         var lag = await maintainer.GetLagAsync(cancellationToken).ConfigureAwait(false);
         var activeTreeId = await maintainer.GetActiveTreeIdAsync(cancellationToken).ConfigureAwait(false);
 
         return new TreeViewStatus
         {
-            ViewName = viewName,
+            ViewName = reportedViewName,
             SourceTreeId = registration.SourceTreeId,
             IsAggregation = registration.IsAggregation,
             ApplyLag = lag,

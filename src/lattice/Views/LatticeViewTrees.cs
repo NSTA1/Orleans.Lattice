@@ -61,15 +61,18 @@ internal static class LatticeViewTrees
     public const char LegacyGenerationSeparator = '#';
 
     /// <summary>
-    /// Composes the view tree id for <paramref name="viewName"/>:
-    /// <c>orders</c> yields <c>view-orders</c>.
+    /// Composes the view tree id for <paramref name="viewName"/>, preserving any
+    /// tenant segment the name carries: <c>orders</c> yields <c>view-orders</c>,
+    /// and <c>t/acme/orders</c> yields <c>t/acme/view-orders</c>, so a tenant's
+    /// view tree lands inside that tenant's own structural namespace and is
+    /// owned, enumerated, and cascaded exactly like its other trees.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This deliberately does <b>not</b> lift a tenant segment out of the name.
-    /// <see cref="ViewNameValidator"/> rejects a name containing <c>/</c>, so a
-    /// name can never carry a well-formed tenant segment in the first place;
-    /// tenant scoping of a view is applied to the name before it reaches here.
+    /// A tenant segment on the name can only have been put there by tenant
+    /// scoping: <see cref="ViewNameValidator"/> rejects a caller-supplied name
+    /// containing <c>/</c>, so a caller cannot name another tenant's namespace and
+    /// have the tree planted there.
     /// </para>
     /// <para>
     /// Marked as a grain-key builder because the composed id is an Orleans grain
@@ -77,7 +80,7 @@ internal static class LatticeViewTrees
     /// testing library audits it automatically.
     /// </para>
     /// </remarks>
-    /// <param name="viewName">The view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="viewName">The (possibly tenant-qualified) view name. Must not be <c>null</c> or empty.</param>
     /// <returns>The view tree id.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
     [GrainKeyBuilder]
@@ -85,7 +88,11 @@ internal static class LatticeViewTrees
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
 
-        return string.Concat(SegmentPrefix, viewName);
+        return LatticeTenantTrees.TryGetTenant(viewName, out var tenant)
+            ? LatticeTenantTrees.Compose(
+                tenant,
+                string.Concat(SegmentPrefix, LatticeTenantTrees.LocalName(viewName)))
+            : string.Concat(SegmentPrefix, viewName);
     }
 
     /// <summary>
