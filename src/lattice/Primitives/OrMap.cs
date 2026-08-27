@@ -562,17 +562,29 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         }
     }
 
-    /// <summary>Creates a deep copy of this map (every per-key list is duplicated; value snapshots are referenced as-is).</summary>
+    /// <summary>Creates a deep, independent copy of this map: every per-key list is duplicated and each entry's nested value snapshot is itself cloned, so mutating the copy (or folding another state into it) never affects the receiver, per the <see cref="ICrdt{TSelf}.Clone"/> contract.</summary>
     public OrMap<TKey, TValue> Clone()
     {
         // Presize both backing dictionaries to the source key counts so the
         // entry-by-entry fill below never triggers an intermediate rehash
-        // grow. Mirrors the VersionVector.Clone presize; the per-key list
-        // copies are unchanged.
+        // grow. Mirrors the VersionVector.Clone presize.
         var adds = new Dictionary<TKey, List<OrMapEntry<TValue>>>(Adds.Count);
         foreach (var (key, entries) in Adds)
         {
-            adds[key] = new List<OrMapEntry<TValue>>(entries);
+            // Deep-copy each dot entry AND its nested value CRDT. MergeFrom
+            // folds a same-dot value collision in place via
+            // existing.Value.MergeFrom(other.Value), so sharing the entry
+            // objects or their nested values with the clone source would let a
+            // later merge mutate the source - breaking the purity of the
+            // static Merge (which is Clone().MergeFrom(...)) and the
+            // ICrdt.Clone contract that "mutating the returned value must never
+            // affect the receiver." Mirrors Rga.Clone's per-node deep copy.
+            var copy = new List<OrMapEntry<TValue>>(entries.Count);
+            foreach (var entry in entries)
+            {
+                copy.Add(new OrMapEntry<TValue>(entry.ReplicaId, entry.Counter, entry.Value.Clone()));
+            }
+            adds[key] = copy;
         }
         var tombstones = new Dictionary<TKey, List<OrSetDot>>(Tombstones.Count);
         foreach (var (key, dots) in Tombstones)

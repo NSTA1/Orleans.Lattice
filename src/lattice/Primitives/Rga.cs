@@ -482,11 +482,31 @@ public sealed class Rga : ICrdt<Rga>
                 BumpContext(ins.ReplicaId, ins.Counter);
                 if (Lookup(dot) is { } existing)
                 {
-                    // Idempotent refresh: the insert is authoritative for
-                    // the structural parent link and value; the tombstone
+                    // Idempotent, order-independent refresh: fold the delta
+                    // insert's structural parent link and value into the
+                    // existing node by the SAME deterministic max rules
+                    // MergeFrom uses (CompareDot for the parent, CompareBytes
+                    // for the value), so a delta-fed replica converges to the
+                    // identical node a full-state merge produces even under a
+                    // same-dot parent/value disagreement. Overwriting
+                    // unconditionally here (last-arrival-wins) made MergeDelta
+                    // diverge from MergeFrom and from other delta-fed replicas.
+                    // A real parent (Counter >= 1) still dominates a
+                    // tombstone-before-insert placeholder's Root parent
+                    // (Counter 0), so the placeholder still reattaches; a
+                    // re-delivered identical insert is a no-op. The tombstone
                     // flag is monotonic and never cleared here.
-                    existing.ParentDot = ins.ParentDot;
-                    if (ins.Value is { Length: > 0 }) existing.Value = ins.Value;
+                    if (existing.ParentDot != ins.ParentDot
+                        && CompareDot(ins.ParentDot, existing.ParentDot) > 0)
+                    {
+                        existing.ParentDot = ins.ParentDot;
+                    }
+                    if (ins.Value is { Length: > 0 }
+                        && !ReferenceEquals(existing.Value, ins.Value)
+                        && CompareBytes(existing.Value, ins.Value) < 0)
+                    {
+                        existing.Value = ins.Value;
+                    }
                 }
                 else
                 {
