@@ -78,6 +78,31 @@ public sealed class GrpcLatticeBackupControlTests
     }
 
     [Test]
+    public async Task CreateBackupSetAsync_unwraps_an_absent_set_id_as_null()
+    {
+        // The MCP remote adapter must not invent an id for a single-scope set: the
+        // only thing a remote consumer can do with a set id is group catalog rows,
+        // and a one-member set stamps none.
+        var manifest = Manifest("bk-1");
+        var setManifest = new BackupSetManifest(null, "solo", DateTimeOffset.UnixEpoch, false, null, new[] { "bk-1" });
+        var invoker = new FakeCallInvoker(_ => new BackupSetCaptureResponse
+        {
+            SetManifest = setManifest,
+            Members = new[] { new BackupCaptureResponse { BackupId = "bk-1", Manifest = manifest } },
+        });
+
+        var result = await Adapter(invoker).CreateBackupSetAsync(
+            new LatticeBackupSetCaptureRequest("solo", new[] { Scope }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.SetManifest.SetId, Is.Null);
+            Assert.That(result.SetManifest.Name, Is.EqualTo("solo"));
+            Assert.That(result.Members[0].BackupId, Is.EqualTo("bk-1"));
+        });
+    }
+
+    [Test]
     public async Task ScheduleBackupAsync_forwards_scope_flag_and_interval()
     {
         var invoker = new FakeCallInvoker(_ => new BackupScheduleResponse { Scheduled = true, EffectiveIntervalTicks = 10 });

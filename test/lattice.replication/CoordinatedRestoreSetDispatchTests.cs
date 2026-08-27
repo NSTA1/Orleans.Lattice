@@ -158,7 +158,9 @@ public sealed class CoordinatedRestoreSetDispatchTests
             Assert.That(local.CountAsync().Result, Is.EqualTo(3), "local-only member advanced past the cut");
         });
 
-        return set.SetManifest.SetId;
+        var setId = set.SetManifest.SetId;
+        Assert.That(setId, Is.Not.Null, "a two-tree set records durable membership and so carries a set id");
+        return setId!;
     }
 
     private static async Task SeedAsync(ILattice tree, int count)

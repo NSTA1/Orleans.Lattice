@@ -142,6 +142,26 @@ public class BackupCatalogReaderTests
     }
 
     [Test]
+    public async Task TriggerSetAsync_without_a_set_id_reports_the_set_name_instead_of_an_empty_id()
+    {
+        // A single-scope capture reports no set id. The summary must not render an
+        // empty quoted id ("Captured backup set ''"); it names the set and says why
+        // there is no id to group by.
+        var client = new FakeBackupControlClient { SetCaptureId = null };
+        var scopes = new[] { BackupScopeSelector.WholeTree("tree-a") };
+
+        var result = await CreateReader(client).TriggerSetAsync("nightly-set", scopes, crossTreeConsistent: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsSuccess, Is.True);
+            Assert.That(result.Message, Does.Not.Contain("''"));
+            Assert.That(result.Message, Does.Contain("nightly-set"));
+            Assert.That(result.Message, Does.Contain("no set id"));
+        });
+    }
+
+    [Test]
     public async Task TriggerSetAsync_denied_degrades_gracefully()
     {
         var client = new FakeBackupControlClient

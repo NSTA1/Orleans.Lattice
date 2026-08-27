@@ -459,9 +459,15 @@ internal sealed class LatticeBackupCaptureService(
     }
 
     /// <summary>
-    /// Builds the set manifest from the ordered member results: the set id is the
-    /// content address (lowercase hex SHA-256) of the newline-joined member backup
-    /// ids, so a set of identical members registers the same set id.
+    /// Builds the set manifest from the ordered member results. For a set that
+    /// records durable membership the set id is the content address (lowercase hex
+    /// SHA-256) of the newline-joined member backup ids, so a set of identical
+    /// members registers the same set id. A single-member set gets a <c>null</c>
+    /// id: <see cref="StampSetMembershipAsync"/> deliberately leaves it unstamped,
+    /// so an id minted for it would be a phantom - it would match no catalog row,
+    /// resolve to no member trees, and silently return nothing to a consumer
+    /// grouping catalog rows by it. Both halves of that decision are governed by
+    /// <see cref="BackupSetIdentity.RecordsMembership"/>.
     /// </summary>
     private static BackupSetManifest BuildSetManifest(
         string name,
@@ -475,13 +481,9 @@ internal sealed class LatticeBackupCaptureService(
             memberIds.Add(member.BackupId);
         }
 
-        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var id in memberIds)
-        {
-            hasher.AppendData(System.Text.Encoding.UTF8.GetBytes(id));
-            hasher.AppendData("\n"u8);
-        }
-        var setId = Convert.ToHexStringLower(hasher.GetHashAndReset());
+        var setId = BackupSetIdentity.RecordsMembership(memberIds.Count)
+            ? BackupSetIdentity.Compute(memberIds)
+            : null;
 
         return new BackupSetManifest(
             setId,
@@ -499,13 +501,16 @@ internal sealed class LatticeBackupCaptureService(
     /// per-tree members into one logical entry from a first-class fact rather than
     /// inferring the grouping from the backup name. A single-member set is left
     /// unstamped: it is indistinguishable from a plain backup and lists as one.
+    /// The decision keys off the minted set id rather than re-deriving the member
+    /// threshold, so the stamp and the id can never disagree: exactly the sets
+    /// <see cref="BuildSetManifest"/> identified are the sets stamped.
     /// </summary>
     private async Task<IReadOnlyList<LatticeBackupCaptureResult>> StampSetMembershipAsync(
         BackupSetManifest setManifest,
         IReadOnlyList<LatticeBackupCaptureResult> members,
         CancellationToken cancellationToken)
     {
-        if (members.Count < 2)
+        if (setManifest.SetId is not { } setId)
         {
             return members;
         }
@@ -513,7 +518,7 @@ internal sealed class LatticeBackupCaptureService(
         var stamped = new List<LatticeBackupCaptureResult>(members.Count);
         foreach (var member in members)
         {
-            var manifest = member.Manifest with { SetId = setManifest.SetId, SetName = setManifest.Name, SetCreatedAtUtc = setManifest.CreatedAtUtc };
+            var manifest = member.Manifest with { SetId = setId, SetName = setManifest.Name, SetCreatedAtUtc = setManifest.CreatedAtUtc };
             await sink.WriteManifestAsync(manifest, cancellationToken).ConfigureAwait(false);
             await catalog.RegisterAsync(manifest, cancellationToken).ConfigureAwait(false);
             stamped.Add(new LatticeBackupCaptureResult(member.BackupId, manifest));

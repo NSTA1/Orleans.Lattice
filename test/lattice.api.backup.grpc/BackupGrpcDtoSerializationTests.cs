@@ -127,6 +127,37 @@ public sealed class BackupGrpcDtoSerializationTests
         });
     }
 
+    [Test]
+    public void BackupSetCaptureResponse_round_trips_an_absent_set_id_as_null()
+    {
+        // A single-scope capture reports no set id, because none is ever stamped.
+        // The wire response must carry that absence faithfully rather than
+        // materialising an empty string a remote consumer would try to group by.
+        var original = new BackupSetCaptureResponse
+        {
+            SetManifest = new BackupSetManifest(
+                setId: null,
+                name: "solo-set",
+                createdAtUtc: DateTimeOffset.UnixEpoch,
+                crossTreeConsistent: false,
+                fence: null,
+                memberBackupIds: new[] { "m0" }),
+            Members = new[]
+            {
+                new BackupCaptureResponse { BackupId = "m0", Manifest = Manifest("m0") },
+            },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.SetManifest.SetId, Is.Null);
+            Assert.That(copy.SetManifest.Name, Is.EqualTo("solo-set"));
+            Assert.That(copy.SetManifest.MemberBackupIds, Is.EqualTo(new[] { "m0" }));
+            Assert.That(copy.Members.Select(m => m.BackupId), Is.EqualTo(new[] { "m0" }));
+        });
+    }
+
     private static BackupManifest Manifest(string id)
     {
         var scope = BackupScopeSelector.WholeTree("orders");
