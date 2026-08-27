@@ -609,7 +609,7 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private void ThrowIfProtectedView()
     {
-        if (TreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal)
+        if (LatticeViewTrees.IsViewTree(TreeId)
             && !ViewWriteContext.IsAuthorised)
             throw new InvalidOperationException(
                 $"Tree ID '{TreeId}' is a materialised view and is read-only through the public ILattice surface. A view's contents are maintained from its source tree; write to the source instead. Choose a tree name that does not start with '{LatticeConstants.ViewTreePrefix}' for directly-writable trees.");
@@ -636,7 +636,7 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private void ThrowIfProtectedViewRead()
     {
-        if (TreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal)
+        if (LatticeViewTrees.IsViewTree(TreeId)
             && !ViewWriteContext.IsAuthorised
             && !ViewReadContext.IsAuthorised)
             throw new InvalidOperationException(

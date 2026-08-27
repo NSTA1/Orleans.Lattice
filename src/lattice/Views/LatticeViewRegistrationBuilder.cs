@@ -57,7 +57,7 @@ public sealed class LatticeViewRegistrationBuilder
     /// <param name="projection">The projection that maintains the view.</param>
     public LatticeViewRegistrationBuilder AddView(string viewName, string sourceTreeId, ILatticeViewProjection projection)
     {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projection);
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
@@ -74,7 +74,7 @@ public sealed class LatticeViewRegistrationBuilder
     /// <param name="projectionFactory">Resolves the projection from the service provider.</param>
     public LatticeViewRegistrationBuilder AddView(string viewName, string sourceTreeId, Func<IServiceProvider, ILatticeViewProjection> projectionFactory)
     {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projectionFactory);
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
@@ -91,7 +91,7 @@ public sealed class LatticeViewRegistrationBuilder
     /// <param name="projection">The aggregation projection that maintains the view.</param>
     public LatticeViewRegistrationBuilder AddAggregationView(string viewName, string sourceTreeId, ILatticeAggregationProjection projection)
     {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projection);
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);
@@ -108,7 +108,7 @@ public sealed class LatticeViewRegistrationBuilder
     /// <param name="projectionFactory">Resolves the aggregation projection from the service provider.</param>
     public LatticeViewRegistrationBuilder AddAggregationView(string viewName, string sourceTreeId, Func<IServiceProvider, ILatticeAggregationProjection> projectionFactory)
     {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentNullException.ThrowIfNull(projectionFactory);
         ViewSourceTreeValidator.ThrowIfViewTree(sourceTreeId);

@@ -114,4 +114,37 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(8)]
     public string BoundPhysicalTreeId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The highest generation whose view tree is addressed through the legacy
+    /// generation separator, or <see langword="null"/> when this has never been
+    /// determined.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The generation suffix moved to a storage-safe separator because the view
+    /// tree id is an Orleans grain primary key and is carried into
+    /// <c>ShardRootGrain</c>'s composite key - a persistent grain - where keyed
+    /// storage backends reject the old character. Rewriting the separator
+    /// outright would have orphaned the data of every view already past
+    /// generation 0, whose live tree sits under the old id.
+    /// </para>
+    /// <para>
+    /// Instead the ceiling is pinned once, on the first activation after the
+    /// upgrade, to the generation then active: every generation at or below it
+    /// keeps resolving through the legacy separator, so no existing tree is
+    /// stranded, and the next rebuild allocates a higher generation that uses the
+    /// storage-safe one. The view therefore heals itself with no operator action
+    /// and no forced rebuild, and the old generation is still reclaimed on the
+    /// normal grace cadence.
+    /// </para>
+    /// <para>
+    /// A view created after the upgrade pins <c>0</c>, and generation 0 carries no
+    /// suffix at all, so every suffixed generation it ever allocates is
+    /// storage-safe. Pinning is idempotent and safe to interrupt: it is derived
+    /// from the active generation and recomputed identically if the write is lost.
+    /// </para>
+    /// </remarks>
+    [Id(9)]
+    public long? LegacyGenerationCeiling { get; set; }
 }
