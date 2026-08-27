@@ -11,10 +11,16 @@ namespace Orleans.Lattice;
 /// merge together because neither dot is dominated by the other side's
 /// dot context, so both values remain visible until a future write
 /// observes them.
+/// <para>
+/// Deliberately <em>not</em> <c>[Immutable]</c>: <see cref="Value"/> is a
+/// mutable <c>byte[]</c> and the entry crosses the grain-proxy boundary as part
+/// of an <see cref="MvRegister"/>'s durable state, so Orleans must deep-copy it
+/// on a same-silo call. Marking the type immutable elides that copy and hands
+/// the caller a live handle on the grain's persisted bytes.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.MvRegisterDot)]
-[Immutable]
 public readonly record struct MvRegisterEntry
 {
     /// <summary>The id of the replica that authored this dot.</summary>

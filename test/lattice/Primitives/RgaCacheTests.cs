@@ -382,4 +382,39 @@ public class RgaCacheTests
             Assert.That(r.Count, Is.EqualTo(2));
         });
     }
+
+    // ToList returns the cached materialisation directly. The declared return
+    // type is IReadOnlyList<T>, but the instance behind it is the cache's own
+    // List<T>: a caller that downcasts can mutate the sequence's cached
+    // projection in place, and every subsequent read of the unmutated CRDT then
+    // observes the corruption because nothing invalidated the cache.
+
+    [Test]
+    public void ToList_does_not_hand_back_a_mutable_view_of_the_cache()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("a"));
+        r.InsertAfter(Rga.Root, "r1", B("b"));
+
+        var projection = r.ToList();
+
+        Assert.That(projection as ICollection<(OrSetDot Dot, byte[] Value)>, Is.Null.Or.Property("IsReadOnly").True,
+            "the read projection must not expose a mutable handle on the sequence's cached state");
+    }
+
+    [Test]
+    public void ToList_result_cannot_be_cleared_through_a_downcast()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("a"));
+        r.InsertAfter(Rga.Root, "r1", B("b"));
+
+        if (r.ToList() is List<(OrSetDot Dot, byte[] Value)> mutable)
+        {
+            mutable.Clear();
+        }
+
+        Assert.That(r.ToList(), Has.Count.EqualTo(2),
+            "a downcast-and-clear must not empty the sequence's cached projection");
+    }
 }

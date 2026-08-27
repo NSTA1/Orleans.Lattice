@@ -362,15 +362,22 @@ public sealed class RwSet : ICrdt<RwSet>
 
     private static void AddObservedTombstones(List<OrSetDot> tomb, List<OrSetDot> observed)
     {
-        if (tomb.Count <= DotLinearScanThreshold)
+        if (tomb.Count <= DotLinearScanThreshold || observed.Count <= DotLinearScanThreshold)
         {
+            // Tiny tombstone list, or few observed dots: a linear membership
+            // scan beats allocating a HashSet. When the observed list is the
+            // small side - the common case, a key removed after a handful of
+            // adds against a long observed-remove history - the scan is
+            // O(observed.Count * tomb.Count), bounded by
+            // O(DotLinearScanThreshold * tomb.Count): the same asymptotic as
+            // building the tomb-sized set, but allocation-free.
             foreach (var dot in observed)
             {
                 if (!tomb.Contains(dot)) tomb.Add(dot);
             }
             return;
         }
-        var tombSet = new HashSet<OrSetDot>(tomb);
+        var tombSet = OrSetDotSet.Build(tomb);
         foreach (var dot in observed)
         {
             if (tombSet.Add(dot)) tomb.Add(dot);
@@ -380,8 +387,15 @@ public sealed class RwSet : ICrdt<RwSet>
     private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
     {
         if (tomb is null || tomb.Count == 0) return dots.Count;
-        if (tomb.Count <= DotLinearScanThreshold)
+        if (tomb.Count <= DotLinearScanThreshold || dots.Count <= DotLinearScanThreshold)
         {
+            // Tiny tombstone list, or few live dots: a linear membership scan
+            // beats allocating a HashSet. Mirrors OrSet.LiveDotCount - when the
+            // live side is the small one the scan is
+            // O(DotLinearScanThreshold * tomb.Count), the same asymptotic as
+            // building the tomb-sized set, but allocation-free on every read
+            // (IsEmpty / Count / Elements / Contains) of a heavily-tombstoned
+            // key.
             var live = 0;
             foreach (var d in dots)
             {
@@ -389,7 +403,7 @@ public sealed class RwSet : ICrdt<RwSet>
             }
             return live;
         }
-        var tombSet = new HashSet<OrSetDot>(tomb);
+        var tombSet = OrSetDotSet.Build(tomb);
         var n = 0;
         foreach (var d in dots)
         {
@@ -415,7 +429,7 @@ public sealed class RwSet : ICrdt<RwSet>
                 }
                 continue;
             }
-            var seen = new HashSet<OrSetDot>(existing);
+            var seen = OrSetDotSet.Build(existing, dots.Count);
             foreach (var d in dots)
             {
                 if (seen.Add(d)) existing.Add(d);
