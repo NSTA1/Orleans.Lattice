@@ -54,6 +54,30 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync();
 
     /// <summary>
+    /// Returns the registered tree IDs that begin with <paramref name="prefix"/>,
+    /// in sorted order. A <c>null</c> or empty prefix returns every id and is
+    /// exactly equivalent to <see cref="GetAllTreeIdsAsync()"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The registry is itself an ordinally-sorted Lattice tree, so a prefix
+    /// occupies one contiguous key range. Supplying a prefix therefore turns the
+    /// enumeration into a bounded range scan (the registry stops touching pages
+    /// outside the range) and keeps the whole catalog off the wire, instead of
+    /// transferring every id for the caller to discard most of client-side.
+    /// </para>
+    /// <para>
+    /// The prefix is a <b>performance hint, never an authorization boundary</b>.
+    /// It narrows which ids are read; it grants nothing. Every caller-facing
+    /// visibility and authorization check stays exactly where it was, so a
+    /// hand-crafted prefix can only ever return a subset of what the caller could
+    /// already have enumerated.
+    /// </para>
+    /// </remarks>
+    /// <param name="prefix">The tree-id prefix to scope the enumeration to, or <c>null</c> for all ids.</param>
+    Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix);
+
+    /// <summary>
     /// Sets a tree alias so that the logical <paramref name="treeId"/> maps to
     /// <paramref name="physicalTreeId"/>. All subsequent reads and writes routed
     /// through <see cref="ILattice"/> will target the physical tree instead.

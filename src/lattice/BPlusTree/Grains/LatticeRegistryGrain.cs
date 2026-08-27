@@ -201,11 +201,26 @@ internal sealed class LatticeRegistryGrain(
         return bytes is not null ? DeserializeEntry(bytes) : null;
     }
 
-    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync()
+    public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => GetAllTreeIdsAsync(prefix: null);
+
+    public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix)
     {
+        // The registry tree is ordinally sorted, so a prefix is one contiguous key
+        // range: scanning [prefix, PrefixUpperBound(prefix)) stops the walk
+        // touching pages outside the range entirely, rather than reading every key
+        // and discarding most of them. PrefixUpperBound returns null when the range
+        // is unbounded above (an empty prefix, or one of only U+FFFF), which
+        // KeysAsync reads as "no end bound" - the correct degenerate behaviour.
+        var scoped = !string.IsNullOrEmpty(prefix);
+        var start = scoped ? prefix : null;
+        var end = scoped ? LatticeKeyRange.PrefixUpperBound(prefix!) : null;
+
         var keys = new List<string>();
-        await foreach (var key in Registry.KeysAsync())
+        await foreach (var key in Registry.KeysAsync(start, end))
         {
+            // The reserved system-tree namespace is never part of the catalog,
+            // whether or not the scan was scoped. Kept inside the loop so a
+            // caller-supplied prefix can never widen the enumeration.
             if (!key.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
                 keys.Add(key);
         }

@@ -390,4 +390,100 @@ public partial class LatticeRegistryGrainTests
 
         Assert.That(result, Is.EqualTo(new[] { "alpha", "beta" }));
     }
+
+    // ---- Prefix pushdown (issue #1682) ----------------------------------
+    //
+    // The registry is an ordinally-sorted tree, so a prefix is one contiguous key
+    // range. Pushing it down turns a full catalog walk into a bounded range scan
+    // and keeps the ids the caller would have discarded off the wire entirely.
+
+    [Test]
+    public async Task GetAllTreeIdsAsync_with_a_prefix_scans_only_the_bounded_range()
+    {
+        var (grain, tree) = CreateGrain();
+        tree.KeysAsync("t/acme/", "t/acme0", false)
+            .Returns(ToAsyncEnumerable("t/acme/orders", "t/acme/users"));
+
+        var result = await grain.GetAllTreeIdsAsync("t/acme/");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.EqualTo(new[] { "t/acme/orders", "t/acme/users" }));
+
+            // The exclusive upper bound is the prefix with its last code unit
+            // advanced ('/' is 0x2F, so the bound is "t/acme0'), which is exactly
+            // LatticeKeyRange.PrefixUpperBound.
+            Assert.That(LatticeKeyRange.PrefixUpperBound("t/acme/"), Is.EqualTo("t/acme0"));
+        });
+    }
+
+    [Test]
+    public async Task GetAllTreeIdsAsync_with_a_prefix_still_excludes_system_trees()
+    {
+        // A caller-supplied prefix must never be able to widen the enumeration
+        // past the reserved-namespace exclusion.
+        var (grain, tree) = CreateGrain();
+        tree.KeysAsync("_lattice_", "_lattice`", false)
+            .Returns(ToAsyncEnumerable("_lattice_trees", "_lattice_wal_orders"));
+
+        var result = await grain.GetAllTreeIdsAsync("_lattice_");
+
+        Assert.That(result, Is.Empty, "the system-tree exclusion holds on the scoped path too");
+    }
+
+    [Test]
+    public async Task GetAllTreeIdsAsync_with_a_null_prefix_is_the_unscoped_scan()
+    {
+        var (grain, tree) = CreateGrain();
+        tree.KeysAsync(null, null, false).Returns(ToAsyncEnumerable("alpha", "beta"));
+
+        var result = await grain.GetAllTreeIdsAsync(prefix: null);
+
+        Assert.That(result, Is.EqualTo(new[] { "alpha", "beta" }));
+    }
+
+    [Test]
+    public async Task GetAllTreeIdsAsync_with_an_empty_prefix_is_the_unscoped_scan()
+    {
+        // An empty prefix has no upper bound, so it must degrade to the full walk
+        // rather than composing a nonsensical range.
+        var (grain, tree) = CreateGrain();
+        tree.KeysAsync(null, null, false).Returns(ToAsyncEnumerable("alpha", "beta"));
+
+        var result = await grain.GetAllTreeIdsAsync(string.Empty);
+
+        Assert.That(result, Is.EqualTo(new[] { "alpha", "beta" }));
+    }
+
+    [Test]
+    public async Task GetAllTreeIdsAsync_parameterless_delegates_to_the_unscoped_scan()
+    {
+        var (grain, tree) = CreateGrain();
+        tree.KeysAsync(null, null, false).Returns(ToAsyncEnumerable("alpha"));
+
+        var scoped = await grain.GetAllTreeIdsAsync(prefix: null);
+        tree.KeysAsync(null, null, false).Returns(ToAsyncEnumerable("alpha"));
+        var unscoped = await grain.GetAllTreeIdsAsync();
+
+        Assert.That(unscoped, Is.EqualTo(scoped),
+            "the parameterless overload must stay exactly equivalent to a null prefix");
+    }
+
+    [Test]
+    public async Task GetAllTreeIdsAsync_with_a_max_code_unit_prefix_has_no_upper_bound()
+    {
+        // PrefixUpperBound returns null when the range is unbounded above (a prefix
+        // of only U+FFFF), which must be passed through as "no end bound" rather
+        // than wrapping around to a range that excludes everything.
+        var (grain, tree) = CreateGrain();
+        tree.KeysAsync("\uffff", null, false).Returns(ToAsyncEnumerable("\uffffz"));
+
+        var result = await grain.GetAllTreeIdsAsync("\uffff");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeKeyRange.PrefixUpperBound("\uffff"), Is.Null);
+            Assert.That(result, Is.EqualTo(new[] { "\uffffz" }));
+        });
+    }
 }

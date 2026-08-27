@@ -55,6 +55,30 @@ public static class LatticeTenantTrees
     }
 
     /// <summary>
+    /// Returns the tree-id prefix that every tree owned by <paramref name="tenant"/>
+    /// begins with - <c>t/{tenantId}/</c>. Because tree ids are ordinally sorted,
+    /// this prefix bounds the tenant's trees into a single contiguous key range,
+    /// which lets an enumeration be pushed down to a range scan instead of a full
+    /// catalog walk.
+    /// </summary>
+    /// <param name="tenant">The owning tenant. Must not be the "no tenant" value.</param>
+    /// <returns>The tenant's tree-id prefix, including the trailing separator.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="tenant"/> is the uninitialised "no tenant" value.
+    /// </exception>
+    public static string ComposePrefix(TenantId tenant)
+    {
+        if (tenant.Value is null)
+        {
+            throw new ArgumentException(
+                "Cannot compose a tenant-scoped tree prefix from the uninitialised 'no tenant' value.",
+                nameof(tenant));
+        }
+
+        return string.Concat(SegmentPrefix, tenant.Value, "/");
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="treeId"/> is a tenant-scoped tree
     /// id (it opens with the reserved <see cref="SegmentPrefix"/>). A cheap,
     /// allocation-free prefix check.
