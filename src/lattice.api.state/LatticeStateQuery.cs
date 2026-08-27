@@ -2263,7 +2263,7 @@ internal sealed class LatticeStateQuery(
 
     private static bool IsReservedTree(string treeId) =>
         treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
-        || treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+        || LatticeViewTrees.IsViewTree(treeId);
 
     /// <summary>
     /// Tests whether <paramref name="treeId"/> names a dogfooded system-data tree
@@ -2288,12 +2288,12 @@ internal sealed class LatticeStateQuery(
 
     /// <summary>
     /// Tests whether <paramref name="treeId"/> names a materialised-view tree
-    /// (the <see cref="LatticeConstants.ViewTreePrefix"/>). A view tree is a
-    /// read-only tree that requires an authorised <see cref="ViewReadContext"/>
-    /// scope to read its contents.
+    /// (the <see cref="LatticeConstants.ViewTreePrefix"/>), whether or not the id
+    /// has been tenant-composed. A view tree is a read-only tree that requires an
+    /// authorised <see cref="ViewReadContext"/> scope to read its contents.
     /// </summary>
     private static bool IsViewTree(string treeId) =>
-        treeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal);
+        LatticeViewTrees.IsViewTree(treeId);
 
     /// <summary>
     /// Opens an authorised <see cref="ViewReadContext"/> read scope when
@@ -2341,19 +2341,25 @@ internal sealed class LatticeStateQuery(
     }
 
     /// <summary>
-    /// Recovers the maintainer key (the bare view name) from a materialised-view
-    /// tree id by stripping the reserved <see cref="LatticeConstants.ViewTreePrefix"/>
-    /// and any explicit <c>#g{N}</c> generation suffix.
+    /// Recovers the maintainer key (the view name, tenant segment included) from
+    /// a materialised-view tree id by stripping the reserved
+    /// <see cref="LatticeConstants.ViewTreePrefix"/> and any explicit
+    /// <c>#g{N}</c> generation suffix.
     /// </summary>
-    private static string ViewNameFromTreeId(string treeId)
-    {
-        var name = treeId.AsSpan(LatticeConstants.ViewTreePrefix.Length);
-        var hash = name.IndexOf('#');
-        return (hash >= 0 ? name[..hash] : name).ToString();
-    }
+    private static string ViewNameFromTreeId(string treeId) =>
+        LatticeViewTrees.ViewNameFromTreeId(treeId);
 
+    /// <summary>
+    /// Tests whether <paramref name="treeId"/> names a tag-index membership tree
+    /// (the <see cref="LatticeConstants.TagIndexTreePrefix"/>), whether or not
+    /// the id has been tenant-composed. Like the view prefix this is a
+    /// leading-prefix marker on the tenant-local name, so it is classified
+    /// through <see cref="LatticeTenantTrees.LocalName"/> rather than by testing
+    /// the raw id, which a <c>t/{tenant}/</c> segment would silently defeat.
+    /// </summary>
     private static bool IsTagIndexTree(string treeId) =>
-        treeId.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
+        LatticeTenantTrees.LocalName(treeId)
+            .StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Collects the cluster-wide set of materialised views, deduplicated by name.

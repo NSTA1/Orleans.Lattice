@@ -1205,7 +1205,12 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
                 $"A runtime projection payload cannot exceed {LatticeRuntimeViewProjectionDescriptor.MaxPayloadBytes} bytes.");
         }
 
-        if (sourceTreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal))
+        // Rejected on the CALLER's id, before composition, so a caller naming a
+        // view as its source is refused in its own vocabulary. The check is
+        // composition-aware (LatticeViewTrees.IsViewTree), so an already-composed
+        // 't/{tenant}/view-x' is caught too rather than slipping past a bare
+        // leading-prefix test.
+        if (LatticeViewTrees.IsViewTree(sourceTreeId))
         {
             throw new ArgumentException(
                 $"Source tree '{sourceTreeId}' is itself a materialised view; a view cannot derive from another view.",
@@ -1214,9 +1219,6 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 
         // The caller-supplied source names a tree, so it is composed into the
         // caller's own tenant namespace before it is guarded, authorized, or dialed.
-        // The view-over-view check above deliberately runs on the CALLER's id: a
-        // composed 't/{tenant}/view-x' no longer carries the view prefix, so testing
-        // it after composition would silently retire that guard.
         var effectiveSourceTreeId =
             await EffectiveTreeIdAsync(sourceTreeId, cancellationToken).ConfigureAwait(false);
 
@@ -1327,7 +1329,8 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .ConfigureAwait(false);
 
         var indexTreeIds = allIds
-            .Where(id => id.StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal))
+            .Where(id => LatticeTenantTrees.LocalName(id)
+                .StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal))
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToList();
 

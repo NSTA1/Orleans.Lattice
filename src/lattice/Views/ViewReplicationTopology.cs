@@ -28,7 +28,7 @@ internal static class ViewReplicationTopology
                 : MaintenanceRole.Maintain;
         }
 
-        var viewTreeId = activeViewTreeId ?? $"view-{viewName}";
+        var viewTreeId = activeViewTreeId ?? LatticeViewTrees.ComposeTreeId(viewName);
         var viewReplicated = replicationContext.ResolveMergeMode(viewTreeId) is not null;
         if (options.ReplicationMode == LatticeViewReplicationMode.DeriveLocally)
         {

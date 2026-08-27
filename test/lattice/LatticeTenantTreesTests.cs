@@ -194,4 +194,44 @@ public sealed class LatticeTenantTreesTests
         Assert.That(ownership.IsTenantOwned, Is.True);
         Assert.That(ownership.Tenant, Is.EqualTo(TenantId.Default));
     }
+
+    // ----- LocalName: the seam that keeps classification working after composition -----
+
+    [TestCase("t/acme/orders", "orders")]
+    [TestCase("t/acme/view-orders", "view-orders")]
+    [TestCase("t/acme/tag-bytag", "tag-bytag")]
+    [TestCase("t/globex/a/b/c", "a/b/c")]
+    public void LocalName_strips_the_tenant_segment(string treeId, string expected)
+        => Assert.That(LatticeTenantTrees.LocalName(treeId), Is.EqualTo(expected));
+
+    [TestCase("orders")]
+    [TestCase("view-orders")]
+    [TestCase("sys-auth-policy")]
+    [TestCase("_lattice_registry")]
+    [TestCase("orders/t/eu")]
+    public void LocalName_returns_a_non_tenant_id_unchanged(string treeId)
+        => Assert.That(LatticeTenantTrees.LocalName(treeId), Is.SameAs(treeId));
+
+    [TestCase("t/")]
+    [TestCase("t//orders")]
+    [TestCase("t/acme")]
+    [TestCase("t/acme/")]
+    [TestCase("t/NOT VALID/orders")]
+    public void LocalName_returns_a_malformed_tenant_id_unchanged(string treeId)
+        => Assert.That(
+            LatticeTenantTrees.LocalName(treeId),
+            Is.SameAs(treeId),
+            "a malformed t/ id names no tenant, so there is no local name to expose");
+
+    [Test]
+    public void LocalName_is_consistent_with_Compose()
+    {
+        var composed = LatticeTenantTrees.Compose(TenantId.Parse("acme"), "view-orders");
+
+        Assert.That(LatticeTenantTrees.LocalName(composed), Is.EqualTo("view-orders"));
+    }
+
+    [Test]
+    public void LocalName_null_throws_argument_null()
+        => Assert.That(() => LatticeTenantTrees.LocalName(null!), Throws.ArgumentNullException);
 }

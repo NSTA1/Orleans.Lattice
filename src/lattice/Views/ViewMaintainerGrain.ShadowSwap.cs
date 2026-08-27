@@ -47,12 +47,13 @@ internal sealed partial class ViewMaintainerGrain
     /// <summary>
     /// Resolves a generation number to its view tree id. Generation <c>0</c> maps
     /// to the legacy <c>view-{name}</c> id for backward compatibility; higher
-    /// generations are suffixed <c>#g{N}</c>.
+    /// generations are suffixed <c>#g{N}</c>. Composed through
+    /// <see cref="LatticeViewTrees"/> so a tenant-qualified view name places its
+    /// tree inside that tenant's own structural namespace
+    /// (<c>t/{tenant}/view-{name}</c>) rather than in the cluster-global one.
     /// </summary>
     private string GenerationTreeId(long generation) =>
-        generation <= 0
-            ? $"{LatticeConstants.ViewTreePrefix}{ViewName}"
-            : $"{LatticeConstants.ViewTreePrefix}{ViewName}#g{generation}";
+        LatticeViewTrees.ComposeTreeId(ViewName, generation);
 
     private TimeSpan ReclaimGrace
     {

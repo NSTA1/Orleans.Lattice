@@ -141,6 +141,58 @@ public static class LatticeTenantTrees
     }
 
     /// <summary>
+    /// Returns the tenant-local portion of <paramref name="treeId"/>: the
+    /// <c>{name}</c> of a well-formed <c>t/{tenant}/{name}</c> id, or the id
+    /// itself when it is not tenant-scoped.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the seam that keeps <em>classification</em> working after
+    /// <em>composition</em>. Several structural decisions are made by testing a
+    /// tree id's leading prefix - is this a materialised view, a reserved tree,
+    /// a system-data tree - and composing a name into <c>t/{tenant}/</c> moves
+    /// that prefix off the front of the string, silently turning every such test
+    /// negative. Classifying the local name instead makes the decision
+    /// independent of whether the id has been tenant-composed, so a guard cannot
+    /// be retired by composition alone.
+    /// </para>
+    /// <para>
+    /// Allocation-free for a non-tenant id (the common case, and every id on a
+    /// cluster with tenancy off): the input reference is returned unchanged.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">The tree id to reduce to its tenant-local name. Must not be <c>null</c>.</param>
+    /// <returns>The tenant-local name, or <paramref name="treeId"/> unchanged.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <c>null</c>.</exception>
+    public static string LocalName(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        var span = treeId.AsSpan();
+        if (!span.StartsWith(SegmentPrefix, StringComparison.Ordinal))
+        {
+            return treeId;
+        }
+
+        var rest = span[SegmentPrefix.Length..];
+        var slash = rest.IndexOf('/');
+        if (slash <= 0 || slash >= rest.Length - 1)
+        {
+            // Malformed: it opens with the reserved prefix but names no tenant or
+            // no local name. It is not a legitimate tenant id, so there is no
+            // local name to expose; return it unchanged rather than inventing one.
+            return treeId;
+        }
+
+        if (!TenantId.IsValid(rest[..slash]))
+        {
+            return treeId;
+        }
+
+        return new string(rest[(slash + 1)..]);
+    }
+
+    /// <summary>
     /// Derives the owning <see cref="TreeOwnership"/> of a tree from its id
     /// alone. Ownership is never stored (the tree registry keeps no tenant
     /// column), so it is always re-computed from the id's structural prefix.

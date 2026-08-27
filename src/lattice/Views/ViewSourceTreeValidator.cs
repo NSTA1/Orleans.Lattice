@@ -14,14 +14,16 @@ internal static class ViewSourceTreeValidator
 {
     /// <summary>
     /// Throws <see cref="InvalidOperationException"/> when <paramref name="sourceTreeId"/>
-    /// names a materialised-view tree (it starts with
-    /// <see cref="LatticeConstants.ViewTreePrefix"/>).
+    /// names a materialised-view tree, whether or not the id has been
+    /// tenant-composed (see <see cref="LatticeViewTrees.IsViewTree"/> - testing
+    /// the leading prefix alone would let a composed
+    /// <c>t/{tenant}/view-x</c> through and silently retire this guard).
     /// </summary>
     /// <param name="sourceTreeId">The candidate source tree id.</param>
     public static void ThrowIfViewTree(string sourceTreeId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
-        if (sourceTreeId.StartsWith(LatticeConstants.ViewTreePrefix, StringComparison.Ordinal))
+        if (LatticeViewTrees.IsViewTree(sourceTreeId))
         {
             throw new InvalidOperationException(
                 $"Source tree '{sourceTreeId}' is itself a materialised view (the reserved '{LatticeConstants.ViewTreePrefix}' prefix); a view cannot derive from another view. Point the view at a directly-writable source tree instead.");
