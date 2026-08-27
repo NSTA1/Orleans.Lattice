@@ -49,7 +49,7 @@ public sealed class WalMaterialiserPinRoutingTests
         var a = WalMaterialiserPinRouting.ShardKey(Tree, "_lattice_materialiser_tree-1_leaf-7", 8);
         var b = WalMaterialiserPinRouting.ShardKey(Tree, "_lattice_materialiser_tree-1_leaf-7", 8);
         Assert.That(a, Is.EqualTo(b));
-        Assert.That(a, Does.StartWith("tree-1#s"));
+        Assert.That(a, Does.StartWith("tree-1~s"));
     }
 
     [Test]
@@ -72,7 +72,7 @@ public sealed class WalMaterialiserPinRoutingTests
         var valid = new HashSet<string>(StringComparer.Ordinal);
         for (var s = 0; s < 4; s++)
         {
-            valid.Add($"{Tree}#s{s}");
+            valid.Add($"{Tree}~s{s}");
         }
 
         for (var i = 0; i < 50; i++)
@@ -93,7 +93,8 @@ public sealed class WalMaterialiserPinRoutingTests
     public void EnumerateReadKeys_includes_every_shard_and_legacy_key()
     {
         var keys = WalMaterialiserPinRouting.EnumerateReadKeys(Tree, 3);
-        Assert.That(keys, Is.EquivalentTo(new[] { "tree-1#s0", "tree-1#s1", "tree-1#s2", "tree-1" }));
+        Assert.That(keys, Is.EquivalentTo(new[]{"tree-1~s0","tree-1~s1","tree-1~s2","tree-1#s0","tree-1#s1","tree-1#s2","tree-1"}),
+            "the GC must read both separators so a pin written by an earlier build still holds the trim floor");
     }
 
     [Test]
@@ -110,4 +111,68 @@ public sealed class WalMaterialiserPinRoutingTests
             Assert.That(readKeys, Does.Contain(writeKey));
         }
     }
+
+    // ----- Storage safety and the self-healing separator migration -----
+
+    [Test]
+    public void A_composed_shard_key_is_storage_safe()
+    {
+        // The pin grain is persistent, so its key reaches the Partition/Row key
+        // columns and the request URL of a keyed storage backend, which reject
+        // these characters. The composer must not introduce one.
+        var key = WalMaterialiserPinRouting.ShardKey("tree-1", "consumer-a", shardCount: 8);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(key.IndexOfAny(['/', '\\', '#', '?']), Is.LessThan(0));
+            Assert.That(key.Any(char.IsControl), Is.False);
+        });
+    }
+
+    [Test]
+    public void A_pin_written_under_the_legacy_separator_is_still_read()
+    {
+        // The migration is self-healing precisely because the GC keeps reading the
+        // old key: an existing pin continues to hold the WAL trim floor with no
+        // operator action, so upgrading strands no WAL segment.
+        var keys = WalMaterialiserPinRouting.EnumerateReadKeys(Tree, shardCount: 4);
+
+        for (var shard = 0; shard < 4; shard++)
+        {
+            Assert.That(keys, Does.Contain($"{Tree}{WalMaterialiserPinRouting.LegacyShardSeparator}{shard}"));
+        }
+    }
+
+    [Test]
+    public void The_legacy_separator_is_never_written()
+    {
+        for (var i = 0; i < 50; i++)
+        {
+            var key = WalMaterialiserPinRouting.ShardKey(Tree, $"consumer-{i}", shardCount: 8);
+            Assert.That(key, Does.Not.Contain(WalMaterialiserPinRouting.LegacyShardSeparator));
+        }
+    }
+
+    [TestCase("tree-1~s3", "tree-1")]
+    [TestCase("tree-1#s3", "tree-1")]
+    [TestCase("tree-1", "tree-1")]
+    [TestCase("t/acme/orders~s2", "t/acme/orders")]
+    [TestCase("t/acme/orders", "t/acme/orders")]
+    public void TreeNameFromKey_strips_either_separator(string key, string expected)
+        => Assert.That(WalMaterialiserPinRouting.TreeNameFromKey(key), Is.EqualTo(expected));
+
+    [TestCase("tree~sname")]
+    [TestCase("tree#sname")]
+    public void TreeNameFromKey_does_not_truncate_a_non_numeric_suffix(string key)
+        => Assert.That(
+            WalMaterialiserPinRouting.TreeNameFromKey(key),
+            Is.EqualTo(key),
+            "only a genuine all-digit shard suffix is a suffix; anything else belongs to the tree name");
+
+    [Test]
+    public void TreeNameFromKey_anchors_on_the_last_separator()
+        => Assert.That(
+            WalMaterialiserPinRouting.TreeNameFromKey("tree~s1~s2"),
+            Is.EqualTo("tree~s1"),
+            "the suffix is appended, so an earlier occurrence belongs to the tree name");
 }
