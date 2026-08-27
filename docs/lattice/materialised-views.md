@@ -116,6 +116,49 @@ toward the source as the maintainer applies projected writes. The synchronous
 the background and therefore cannot report a durable-registration failure to
 the caller. Prefer `CreateAsync` for runtime creation.
 
+### View names
+
+A view name is not just a label. It is the view maintainer's grain key, and it is
+interpolated into the view tree id, which is itself a grain key and is carried
+into the shard-root grain's composite key - a *persistent* grain. Keyed storage
+backends reject some characters there (Azure Table grain storage puts a grain key
+into the Partition/Row key columns and the request URL), so a name is validated at
+creation and must not contain:
+
+- the control characters `0x00-0x1F` and `0x7F-0x9F`;
+- `/`, `\`, `#` or `?`;
+- `~`, which separates a view tree id from its rebuild generation.
+
+An existing view whose name predates this rule is not stranded: it is restored as
+before and reported in the log, so it can be re-created under a legal name when
+convenient.
+
+### Rebuild generations
+
+A shadow-swap rebuild materialises the new copy under a suffixed tree id,
+`view-{name}~g{N}`, and swaps the active generation atomically when it completes.
+The suffix separator is storage-safe, and because a view name may not contain it,
+a `(name, generation)` pair always maps to exactly one tree id.
+
+A view built by an earlier release used a different separator. Its existing
+generations keep resolving through the old one - so upgrading strands no data and
+forces no rebuild - and the next rebuild moves the view onto the current naming on
+its own. The superseded generation is still reclaimed on the normal grace cadence.
+
+### Multi-tenancy
+
+With the tenancy add-on enabled, a view is scoped to the tenant that creates it:
+the caller's view name is resolved to the active tenant, so the view materialises
+as `t/{tenant}/view-{name}`. Two tenants can therefore use the same unqualified
+view name over their own same-named sources and each reads back only its own view.
+Because the tenant segment is outermost, a tenant's view tree is owned, filtered
+from enumerations, and deleted with the tenant exactly like its other trees.
+
+Responses echo the name the caller supplied, so the composed name never leaks.
+Adoption is non-destructive: a view that already exists belongs to the reserved
+default tenant and keeps its existing name, maintainer, and tree id. With tenancy
+off nothing is composed and every id is unchanged.
+
 A view's source must be a directly-writable tree, **not another view**: chaining a
 view onto another view's `view-*` tree is unsupported (it compounds apply lag at
 every hop and stacks source-WAL cursor pins), so `Create` and the startup

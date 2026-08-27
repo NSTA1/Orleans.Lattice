@@ -41,6 +41,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `TreeMergeGrain` | `{targetTreeId}` | `"my-tree"` |
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
 | `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1"` |
+| `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `WalMaterialiserPinGrain` | `{treeId}` | `"my-tree"` |
@@ -77,6 +78,14 @@ So when a grain both persists via `[PersistentState]` and is addressed by a
   `build-and-test` if its output can contain a storage-unsafe character, so a new
   composer is covered automatically rather than surfacing as a production
   activation failure.
+- The rule reaches any **caller-supplied string that ends up inside** a persistent
+  grain's key, not only the delimiter. A materialised view's name is interpolated
+  into its tree id, which keys `LatticeGrain` and is carried into
+  `ShardRootGrain`'s `{treeId}/{shardIndex}`, so the name itself is validated at
+  creation (`ViewNameValidator`) rather than trusted. When a composed key needs a
+  delimiter that a name could also contain, reserve the delimiter in that
+  validation so the composition stays unambiguous - two different inputs must
+  never produce one key, or two grain identities collapse onto one state row.
 
 ## State Management
 

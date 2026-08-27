@@ -113,6 +113,17 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
 }
 ```
 
+- **Derived trees are scoped through their name.** A materialised view is not a
+  caller-supplied tree id but a tree the maintainer derives from the view's name,
+  so it is the *name* that is resolved to the active tenant: a view created as
+  `orders` materialises as `t/{tenant}/view-orders`. Placing the tenant segment
+  outermost is what makes ownership, enumeration filtering, and the tenant delete
+  cascade apply to a view tree exactly as they do to any other tree, and it lets
+  two tenants use the same unqualified view name over their own same-named sources
+  while each reads back only its own. Because the maintainer, the view catalog, and
+  the durable view registry are all keyed by the view name, scoping the name is
+  also what makes the isolation survive a silo restart. Tag-index trees are not
+  partitioned today and remain cluster-global.
 - **Identity-derived, enforced at the auth gate.** The active tenant is carried in
   the Orleans `RequestContext` under a single well-known key, populated from the
   caller's membership at the auth seam. The fail-closed `PolicyAccessGate` is made
