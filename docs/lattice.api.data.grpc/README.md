@@ -57,9 +57,22 @@ builder.Services.AddLatticeDataApiGrpc(o =>
 });
 ```
 
-The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules. A call that cannot be attributed to a valid active tenant is refused by that fail-closed resolution and surfaces as a `PermissionDenied` `RpcException`. A call that resolves cleanly but *breaches the tenant's quota* is a different failure: the tenancy admission controller signals it by throwing a typed quota exception carrying the breached dimension, which this binding does not yet map to a dedicated status code, so it currently reaches the caller as a generic `Internal` `RpcException`. Set the option to an empty string to disable header-based tenant selection entirely.
+The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules. A call that cannot be attributed to a valid active tenant is refused by that fail-closed resolution and surfaces as a `PermissionDenied` `RpcException`. A call that resolves cleanly but *breaches the tenant's quota* is a different failure - a capacity outcome, not an authorization one - and surfaces as a `ResourceExhausted` `RpcException` carrying the breached dimension as a trailer (see [Quota refusals](#quota-refusals) below). Set the option to an empty string to disable header-based tenant selection entirely.
 
 See the [`Orleans.Lattice.Api.Data` overview](../lattice.api.data/README.md) for the full facade, its surfaces, and the shared authorization model.
+
+## Quota refusals
+
+A write refused by admission control - a per-tree ceiling ([`LatticeOptions.MaxLiveKeys`](../lattice/configuration.md#maxlivekeys) or [`LatticeOptions.MaxEstimatedBytes`](../lattice/configuration.md#maxestimatedbytes)), or, with the tenancy add-on registered, the active tenant's own quota or sustained request-rate budget - surfaces as a `ResourceExhausted` `RpcException`, the same canonical "refused, back off" code the binding already uses for storage saturation. The status message is the self-contained refusal text; the breached dimension and, where the dimension carries one, the observed value and the configured ceiling are attached as response trailers so a client can branch without parsing prose:
+
+| Trailer | Value |
+|---------|-------|
+| `lattice-quota-dimension` | `keys`, `bytes`, `memory`, `trees`, or `ops-per-second`. |
+| `lattice-quota-tree` | The tree whose admission quota was breached. |
+| `lattice-quota-current` | The observed value on the breached dimension. Omitted for a dimension with no numeric ceiling. |
+| `lattice-quota-limit` | The configured ceiling on the breached dimension. Omitted for a dimension with no numeric ceiling. |
+
+The dimension is what decides the client's next move: `ops-per-second` is **transient** (the tenant's rate budget refills continuously, so an immediate retry after a short backoff succeeds), while the footprint dimensions persist until usage drops or an operator raises the ceiling. No tenant id is echoed back: the caller asserted its own active tenant, so returning a server-side attribution adds nothing it did not already send. As with every trailer this binding emits, a key and a value are never disclosed.
 
 ## Reference
 

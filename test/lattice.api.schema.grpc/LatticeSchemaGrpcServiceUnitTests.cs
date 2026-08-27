@@ -398,10 +398,80 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
     {
         yield return new TestCaseData(new KeyNotFoundException("missing"), StatusCode.NotFound).SetName("KeyNotFound_to_NotFound");
         yield return new TestCaseData(new InvalidOperationException("precondition"), StatusCode.FailedPrecondition).SetName("InvalidOperation_to_FailedPrecondition");
+        yield return new TestCaseData(
+            new LatticeQuotaExceededException("quota", "orders", LatticeQuotaExceededException.KeysDimension, 12, 10),
+            StatusCode.ResourceExhausted).SetName("QuotaExceeded_to_ResourceExhausted");
         yield return new TestCaseData(new ArgumentException("bad-arg"), StatusCode.InvalidArgument).SetName("Argument_to_InvalidArgument");
         yield return new TestCaseData(new OperationCanceledException(), StatusCode.Cancelled).SetName("OperationCanceled_to_Cancelled");
         yield return new TestCaseData(new LatticeAuthorizationDeniedException("denied"), StatusCode.PermissionDenied).SetName("AuthorizationDenied_to_PermissionDenied");
         yield return new TestCaseData(new Exception("boom"), StatusCode.Internal).SetName("Unexpected_to_Internal");
+    }
+
+    [Test]
+    public void Remediate_maps_a_live_key_cap_breach_to_resource_exhausted_with_trailers()
+    {
+        // Regression: a remediation rebuilds the tree into a fresh destination one
+        // entry at a time, so it runs under the per-tree admission caps. The
+        // exception derives from InvalidOperationException, so without a typed arm
+        // placed ahead of it the breach was reported as FailedPrecondition - a
+        // precondition the caller cannot satisfy - instead of a capacity outcome.
+        var control = Substitute.For<ILatticeSchemaControl>();
+        control.RemediateAsync(Tree, Arg.Any<LatticeValueTransform>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new LatticeQuotaExceededException(
+                "Write to tree 'orders/remediated/op-1' rejected: live key count 1200 has reached the configured LatticeOptions.MaxLiveKeys cap of 1000.",
+                "orders/remediated/op-1",
+                LatticeQuotaExceededException.KeysDimension,
+                current: 1200,
+                limit: 1000));
+        var service = CreateService(control);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.Remediate(
+            new RemediateRequest { TreeId = Tree, Transform = LatticeValueTransform.Passthrough(), TargetPolicy = JsonPolicy() },
+            Context(LatticeSchemaGrpcMethods.RemediateMethodName)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaDimensionTrailer),
+                Is.EqualTo(LatticeQuotaExceededException.KeysDimension),
+                "the client must be able to branch on the breached dimension without parsing prose");
+            Assert.That(
+                ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaTreeTrailer),
+                Is.EqualTo("orders/remediated/op-1"));
+            Assert.That(ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaCurrentTrailer), Is.EqualTo("1200"));
+            Assert.That(ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaLimitTrailer), Is.EqualTo("1000"));
+        });
+    }
+
+    [Test]
+    public void MigrateToTargetVersion_maps_a_byte_cap_breach_to_resource_exhausted()
+    {
+        var control = Substitute.For<ILatticeSchemaControl>();
+        control.MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>())
+            .ThrowsAsync(new LatticeQuotaExceededException(
+                "Write to tree 'orders/remediated/op-2' rejected: estimated footprint 4096 bytes has reached the configured LatticeOptions.MaxEstimatedBytes cap of 2048 bytes.",
+                "orders/remediated/op-2",
+                LatticeQuotaExceededException.BytesDimension,
+                current: 4096,
+                limit: 2048));
+        var service = CreateService(control);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.MigrateToTargetVersion(
+            new SchemaTreeRequest { TreeId = Tree },
+            Context(LatticeSchemaGrpcMethods.MigrateToTargetVersionMethodName)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaDimensionTrailer),
+                Is.EqualTo(LatticeQuotaExceededException.BytesDimension));
+            Assert.That(
+                ex.Trailers.Select(static entry => entry.Key),
+                Has.None.Contains("tenant"),
+                "a quota trailer never carries a server-side tenant attribution");
+        });
     }
 
     [Test]

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Schema;
@@ -144,13 +145,36 @@ internal abstract class LatticeSchemaGrpcServiceBase
 /// Server-side gRPC service for the schema control API. Adapts each RPC onto the
 /// transport-agnostic <see cref="ILatticeSchemaControl"/> facade, mapping the
 /// facade's plain results onto the serializable wire responses and translating
-/// typed not-founds, argument failures, precondition failures, and authorization
-/// denials onto gRPC status codes. The streaming RPC drains the facade's
-/// <see cref="IAsyncEnumerable{T}"/> straight to the response stream with bounded
-/// memory.
+/// typed not-founds, argument failures, precondition failures, admission
+/// refusals, and authorization denials onto gRPC status codes. The streaming RPC
+/// drains the facade's <see cref="IAsyncEnumerable{T}"/> straight to the response
+/// stream with bounded memory.
 /// </summary>
 internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
 {
+    /// <summary>
+    /// Trailer key carrying the breached quota dimension (<c>keys</c> or
+    /// <c>bytes</c> for the per-tree admission caps a remediation build can
+    /// reach), so a client can branch on it without parsing the status message.
+    /// </summary>
+    internal const string QuotaDimensionTrailer = "lattice-quota-dimension";
+
+    /// <summary>Trailer key carrying the tree whose admission quota was breached.</summary>
+    internal const string QuotaTreeTrailer = "lattice-quota-tree";
+
+    /// <summary>
+    /// Trailer key carrying the observed value on the breached dimension at the
+    /// moment the write was refused. Omitted for a dimension that carries no
+    /// numeric ceiling.
+    /// </summary>
+    internal const string QuotaCurrentTrailer = "lattice-quota-current";
+
+    /// <summary>
+    /// Trailer key carrying the configured ceiling on the breached dimension.
+    /// Omitted for a dimension that carries no numeric ceiling.
+    /// </summary>
+    internal const string QuotaLimitTrailer = "lattice-quota-limit";
+
     private readonly ILatticeSchemaControl _control;
     private readonly ILatticeSchemaApiCredentialBridge _credentialBridge;
     private readonly ILatticeSchemaApiAuthSchemeSource _authSchemeSource;
@@ -396,6 +420,19 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
         }
+        catch (LatticeQuotaExceededException ex)
+        {
+            // A remediation or schema-version migration rebuilds the tree into a
+            // fresh destination one entry at a time, so it runs under the same
+            // per-tree admission caps (LatticeOptions.MaxLiveKeys /
+            // MaxEstimatedBytes) as any other write - the system-origin scope the
+            // build runs in exempts it from the access gate, not from admission.
+            // Reaching a cap is a capacity outcome, not a precondition failure,
+            // so it must be mapped ahead of the InvalidOperationException arm
+            // below, which would otherwise shadow this type (it derives from it)
+            // and report the breach as FailedPrecondition.
+            throw ToResourceExhausted(ex);
+        }
         catch (InvalidOperationException ex)
         {
             // A precondition failure: schema versioning is not registered, the
@@ -414,5 +451,36 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
             _logger.LogError(ex, "Api.Schema: gRPC call to {Method} failed.", context.Method);
             throw new RpcException(new Status(StatusCode.Internal, "The schema control-API request failed."));
         }
+    }
+
+    /// <summary>
+    /// Projects an admission refusal onto <see cref="StatusCode.ResourceExhausted"/>,
+    /// attaching the breached dimension - and, where the dimension carries one, the
+    /// observed value and the configured ceiling - as response trailers so a client
+    /// can branch on the outcome without parsing the message. The trailers echo only
+    /// fields the self-contained status message already states; never a key and never
+    /// a value.
+    /// </summary>
+    private static RpcException ToResourceExhausted(LatticeQuotaExceededException ex)
+    {
+        var trailers = new global::Grpc.Core.Metadata
+        {
+            { QuotaDimensionTrailer, ex.Dimension },
+            { QuotaTreeTrailer, ex.TreeId },
+        };
+
+        // A dimension with no numeric ceiling reports zero for both fields, so
+        // advertising "current 0 of 0" would be worse than saying nothing.
+        if (ex.Limit > 0)
+        {
+            trailers.Add(QuotaCurrentTrailer, ex.Current.ToString(CultureInfo.InvariantCulture));
+            trailers.Add(QuotaLimitTrailer, ex.Limit.ToString(CultureInfo.InvariantCulture));
+        }
+
+        // The tenant id is deliberately withheld: it is a server-side attribution
+        // decision, and the dimension is what the caller needs to act on.
+        return new RpcException(
+            new Status(StatusCode.ResourceExhausted, ex.Message),
+            trailers);
     }
 }

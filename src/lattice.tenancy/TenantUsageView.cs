@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tenancy;
 /// allocation-free admission path.
 /// </summary>
 /// <remarks>
-/// A <see cref="readonly"/> struct so a warm admission read copies a few machine
+/// A <see langword="readonly"/> struct so a warm admission read copies a few machine
 /// words off the frozen snapshot rather than dereferencing and touching the heap.
 /// It is in-process state only and never serialized.
 /// </remarks>

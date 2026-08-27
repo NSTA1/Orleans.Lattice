@@ -45,12 +45,27 @@ The binding also translates the facade's other failure shapes into stable gRPC s
 | Facade outcome | gRPC `StatusCode` | Notes |
 | --- | --- | --- |
 | Authorization denied (transport gate or facade scope check) | `PermissionDenied` or `Unauthenticated` | The detail is safe to surface; never names a secret. |
+| Entry not found (`KeyNotFoundException`) | `NotFound` | |
+| Admission cap reached (`LatticeQuotaExceededException`) | `ResourceExhausted` | A remediation or version migration rebuilds the tree into a fresh destination one entry at a time, so it runs under the same per-tree admission caps (`LatticeOptions.MaxLiveKeys` / `MaxEstimatedBytes`) as any other write. Mapped ahead of the `InvalidOperationException` row below, which would otherwise shadow it. See [Quota refusals](#quota-refusals). |
 | Versioning operation when versioning is not registered (`InvalidOperationException`) | `FailedPrecondition` | The host has not registered `AddLatticeSchemaVersioning(...)`; non-versioning schema operations may still be available. |
 | Invalid argument (`ArgumentException`) | `InvalidArgument` | |
 | Request cancelled | `Cancelled` | |
 | Any other fault | `Internal` | The detail is deliberately opaque; the real exception is logged server-side, not returned. |
 
 The `FailedPrecondition` shape is the one an operator most often needs to act on for versioning: the endpoint is reachable, but the silo intentionally did not register the optional versioning add-on. The detail should be clear enough for an operator UI to explain which registration is missing.
+
+### Quota refusals
+
+A `ResourceExhausted` refusal carries the breached dimension - and, where the dimension has one, the observed value and the configured ceiling - as response trailers, so a client can branch without parsing the status message:
+
+| Trailer | Value |
+| --- | --- |
+| `lattice-quota-dimension` | `keys` or `bytes` for the per-tree admission caps a remediation build can reach. |
+| `lattice-quota-tree` | The tree whose admission quota was breached (the remediation destination, not the caller's source id). |
+| `lattice-quota-current` | The observed value on the breached dimension. Omitted for a dimension with no numeric ceiling. |
+| `lattice-quota-limit` | The configured ceiling on the breached dimension. Omitted for a dimension with no numeric ceiling. |
+
+No tenant id is echoed back: it is a server-side attribution decision, and the dimension is what the caller needs to act on. The remedy is to reduce the source tree's footprint or raise the cap, then re-run the remediation - it resumes idempotently. See [`LatticeQuotaExceededException`](../lattice/api.md#admission-back-pressure---latticequotaexceededexception) for the full contract.
 
 ## Wire compatibility
 
