@@ -124,6 +124,16 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   the durable view registry are all keyed by the view name, scoping the name is
   also what makes the isolation survive a silo restart. Tag-index trees are not
   partitioned today and remain cluster-global.
+- **The asserted tenant must reach the silo on every transport.** Tenant scoping
+  is applied inside each API facade, so it only takes effect when the caller's
+  asserted tenant has been lifted onto the ambient context. In a co-hosted head
+  that happens in-process and flows to the grain on the Orleans request context.
+  On a **split head** - an API head in its own process reaching the silo over gRPC
+  - each binding must lift the `lattice-active-tenant` header itself, which every
+  binding does through the shared `LatticeActiveTenantAssertion` seam. A binding
+  that did not would not fault: its facade would resolve the reserved default
+  tenant and serve the caller the shared cluster-global namespace, so the
+  behaviour is covered by a contract guard rather than left to review.
 - **Identity-derived, enforced at the auth gate.** The active tenant is carried in
   the Orleans `RequestContext` under a single well-known key, populated from the
   caller's membership at the auth seam. The fail-closed `PolicyAccessGate` is made
@@ -256,6 +266,18 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   all, so a tenant whose whole footprint sits below the absolute floor (default
   65,536) would otherwise never be governed. Establishing the slot costs one write
   per tenant per publisher lifetime; every movement after it is damped as normal.
+- **A stale footprint is re-anchored, not trusted.** The key and memory figures a
+  tree reports are activation-scoped: a shard root rebuilds them as its leaves
+  republish on commit boundaries, so they read zero after a reactivation until
+  writes resume - and Orleans collects idle grains, so that needs no restart or
+  fault. The byte figure is unaffected because it adds durable WAL retention. A
+  tree that reports no keys and no leaf bytes yet a non-zero total is therefore
+  showing a cold cache rather than an empty tree, and metering re-anchors it with
+  a deep walk instead of publishing the zero. Without that, `MaxKeys` and
+  `MaxMemoryBytes` would fail **open** - admitting a tenant well over quota - while
+  `MaxBytes` and `MaxTreeCount` kept binding. The cost is self-limiting: a large
+  tree re-anchors once and then reports non-zero, so only a genuinely empty tree
+  that still retains WAL is re-walked, and walking an empty tree is cheap.
 - **Request rate is enforced with the footprint dimensions.** `MaxOpsPerSecond` is
   applied by the same admission seam, ahead of the footprint checks, from the
   tenant's silo-local token budget. A breach surfaces as
