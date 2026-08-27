@@ -1370,7 +1370,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             .ConfigureAwait(false);
 
         var indexTreeIds = allIds
-            .Where(id => LatticeTenantTrees.LocalName(id.AsSpan())
+            .Where(static id => LatticeTenantTrees.LocalName(id.AsSpan())
                 .StartsWith(LatticeConstants.TagIndexTreePrefix, StringComparison.Ordinal))
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToList();

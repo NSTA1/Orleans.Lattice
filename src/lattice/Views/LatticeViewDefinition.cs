@@ -48,7 +48,13 @@ public sealed class LatticeViewDefinition
         LatticeRuntimeViewProjectionDescriptor? runtimeProjection,
         bool accumulative = false)
     {
-        ViewNameValidator.ThrowIfInvalid(viewName);
+        // Tenant-composition-aware: a runtime projection provider is handed the
+        // already-composed view name and must echo it back verbatim (the factory
+        // compares the two), so a definition legitimately carries a 't/{tenant}/'
+        // prefix the platform added. The caller-supplied name is still validated
+        // whole, before composition, at the facade entry point - which is where the
+        // cross-tenant naming hazard is actually closed.
+        ViewNameValidator.ThrowIfComposedInvalid(viewName);
         ArgumentNullException.ThrowIfNull(projection);
         ViewName = viewName;
         Projection = projection;
@@ -81,7 +87,8 @@ public sealed class LatticeViewDefinition
         ILatticeAggregationProjection aggregation,
         LatticeRuntimeViewProjectionDescriptor? runtimeProjection)
     {
-        ViewNameValidator.ThrowIfInvalid(viewName);
+        // See the sibling constructor: a provider echoes back the composed name.
+        ViewNameValidator.ThrowIfComposedInvalid(viewName);
         ArgumentNullException.ThrowIfNull(aggregation);
         ViewName = viewName;
         AggregationProjection = aggregation;
