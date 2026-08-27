@@ -315,6 +315,42 @@ internal sealed class LatticeStateQuery(
         return filter.Filter(tenant, treeIds);
     }
 
+    /// <summary>
+    /// Resolves the tree-id prefix the catalog enumeration can safely be narrowed
+    /// to, or <c>null</c> to enumerate the whole registry.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Narrowing is applied only where it is <b>provably equivalent</b> to the
+    /// existing full-scan-then-filter shape. That holds when a non-default active
+    /// tenant is asserted and the request excludes system trees: the caller's
+    /// visible set is then exactly the active tenant's own
+    /// <c>t/{tenant}/</c> namespace, because the reserved and system-data ids the
+    /// prefix scan would skip are the very ids the <c>IncludeSystemTrees</c> switch
+    /// already drops downstream. With system trees requested, or under the default
+    /// tenant (whose bare ids share no prefix), the enumeration stays unscoped.
+    /// </para>
+    /// <para>
+    /// This is a performance hint and never an authorization boundary - it can only
+    /// ever return a subset of what the caller could already enumerate, and the
+    /// per-entry visibility check and the tenant filter both still run unchanged.
+    /// </para>
+    /// </remarks>
+    private static string? ResolveCatalogPrefix(CatalogRequest request)
+    {
+        if (request.IncludeSystemTrees)
+        {
+            return null;
+        }
+
+        if (LatticeActiveTenantContext.Current is not { Value: not null } tenant || tenant.IsDefault)
+        {
+            return null;
+        }
+
+        return LatticeTenantTrees.ComposePrefix(tenant);
+    }
+
     public async Task<TreeCatalogPage> ListTreesAsync(
         CatalogRequest request,
         CancellationToken cancellationToken = default)
@@ -334,7 +370,7 @@ internal sealed class LatticeStateQuery(
         IReadOnlyList<string> allIds;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+            allIds = await registry.GetAllTreeIdsAsync(ResolveCatalogPrefix(request)).ConfigureAwait(false);
         }
 
         // Scope the catalog to the ambient active tenant's trees. When tenancy is
@@ -507,10 +543,15 @@ internal sealed class LatticeStateQuery(
 
         // Enumerating the registry is infrastructure: run it under a system-origin
         // scope so the enumeration is not itself filtered or denied by the gate.
+        // The tag-index prefix is pushed down so this is a bounded range scan over
+        // the sorted registry rather than a full catalog read that then keeps only
+        // the tag- prefixed ids.
         IReadOnlyList<string> allIds;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            allIds = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+            allIds = await registry
+                .GetAllTreeIdsAsync(LatticeConstants.TagIndexTreePrefix)
+                .ConfigureAwait(false);
         }
 
         // Scope the tag-index catalog to the ambient active tenant's trees, exactly

@@ -63,6 +63,8 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
 
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => EmptyTreeIds;
 
+    public Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix) => EmptyTreeIds;
+
     public Task RegisterAsync(string treeId, TreeRegistryEntry? entry = null) => Task.CompletedTask;
 
     public Task UpdateAsync(string treeId, TreeRegistryEntry entry) => Task.CompletedTask;

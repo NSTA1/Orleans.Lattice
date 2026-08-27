@@ -155,6 +155,20 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   selected. That check is the durable guarantee - an existence probe can never
   out-reach the enforcement decision, so no broad grant or `DefaultEffect = Allow`
   posture can surface another tenant's tree names.
+- **Enumeration is scoped at the source.** Because a tenant's trees all begin
+  `t/{tenant}/` and the tree registry is itself an ordinally-sorted Lattice tree,
+  a tenant's trees occupy one contiguous key range. Where it is provably
+  equivalent to the unscoped read, an enumeration pushes that prefix down to the
+  registry (`LatticeTenantTrees.ComposePrefix` supplies it), so the scan is bounded
+  to the tenant's own range and no other tenant's ids cross the grain boundary at
+  all - rather than transferring the whole catalog for the caller to discard most
+  of. The tenant delete cascade, which enumerates exactly one tenant's trees, is
+  scoped this way, as is the tree catalog when a non-default tenant is active and
+  the request excludes system trees (the ids a prefix scan skips are the ones that
+  switch already drops). The prefix is a **performance hint, never an
+  authorization boundary**: it can only ever return a subset of what the caller
+  could already enumerate, and the pruning filter and per-entry authorization check
+  both still run unchanged.
 - **Registry-store read isolation.** The `sys-tenant-*` registry, usage, and
   overage trees hold the cross-tenant registry itself - every tenant's admin
   subjects, quotas, region residency, and cross-tenant grants. They live in the

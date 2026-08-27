@@ -56,7 +56,20 @@ public sealed class LatticeTreeAdminTagIndexTests
         (string TreeId, TreeRegistryEntry? Entry)[]? entries = null)
     {
         var registry = Substitute.For<ILatticeRegistry>();
-        registry.GetAllTreeIdsAsync().Returns(allTreeIds ?? []);
+        var ids = allTreeIds ?? [];
+        registry.GetAllTreeIdsAsync().Returns(ids);
+
+        // Model the prefix pushdown rather than ignoring the argument, so a wrong
+        // prefix shows up as a wrong result here instead of being masked.
+        registry.GetAllTreeIdsAsync(Arg.Any<string?>()).Returns(call =>
+        {
+            var prefix = call.Arg<string?>();
+            return Task.FromResult<IReadOnlyList<string>>(
+                string.IsNullOrEmpty(prefix)
+                    ? ids
+                    : ids.Where(id => id.StartsWith(prefix, StringComparison.Ordinal)).ToList());
+        });
+
         if (entries is not null)
         {
             foreach (var (treeId, entry) in entries)
