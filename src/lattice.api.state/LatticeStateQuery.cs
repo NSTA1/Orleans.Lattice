@@ -438,15 +438,20 @@ internal sealed class LatticeStateQuery(
             .OrderBy(id => id, StringComparer.Ordinal);
 
         var pageSize = request.EffectivePageSize;
-        var entries = new List<TreeCatalogEntry>(pageSize);
+        var pageIds = new List<string>(pageSize);
         string? nextToken = null;
 
+        // Pass 1 - filter, one entry at a time, in exactly the position and with
+        // exactly the semantics the per-entry shape had. The visibility check
+        // MUST stay here and must run before anything is read: it thins the
+        // candidate set, so a page's worth of ids is not enough to fill a page,
+        // and batching ahead of it would read entries this filter drops.
         foreach (var id in ordered)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (entries.Count == pageSize)
+            if (pageIds.Count == pageSize)
             {
-                nextToken = entries[^1].TreeId;
+                nextToken = pageIds[^1];
                 break;
             }
 
@@ -464,19 +469,79 @@ internal sealed class LatticeStateQuery(
                 continue;
             }
 
-            TreeRegistryEntry? entry;
-            bool isDeleted;
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
-                var deletion = _grainFactory.GetGrain<ITreeDeletionGrain>(id);
-                isDeleted = await deletion.IsDeletedAsync().ConfigureAwait(false);
-            }
-
-            entries.Add(MapCatalogEntry(id, entry, isDeleted));
+            pageIds.Add(id);
         }
 
+        // Pass 2 - read exactly the surviving page in two batched waves instead of
+        // two sequential grain round-trips per entry.
+        var entries = await ProjectCatalogPageAsync(registry, pageIds).ConfigureAwait(false);
+
         return new TreeCatalogPage { Entries = entries, NextPageToken = nextToken };
+    }
+
+    /// <summary>
+    /// Projects an already-filtered catalog page into
+    /// <see cref="TreeCatalogEntry"/> records using two batched waves - one
+    /// <see cref="ILatticeRegistry.GetEntriesAsync"/> call for the whole page,
+    /// and one bounded fan-out of <see cref="ITreeDeletionGrain.IsDeletedAsync"/>
+    /// probes - rather than the two sequential round-trips per entry the
+    /// per-entry shape paid.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="pageIds"/> must already be exactly the ids that survived
+    /// every filter (tenancy, system-tree, page token, and per-entry visibility).
+    /// The batched read applies no filtering of its own, so passing an unfiltered
+    /// candidate set here would both over-fetch and read entries the per-entry
+    /// path would have dropped.
+    /// </para>
+    /// <para>
+    /// Concurrency is bounded by the page size, since a filled page is the largest
+    /// set that ever reaches here. Both waves are started <em>and</em> awaited
+    /// inside the single <see cref="LatticeAccessGateContext.EnterSystemOrigin"/>
+    /// scope: the marker is <c>RequestContext</c>-backed and flows onto outgoing
+    /// calls issued while it is in effect, so the scope must outlive the fan-out.
+    /// </para>
+    /// </remarks>
+    private async Task<List<TreeCatalogEntry>> ProjectCatalogPageAsync(
+        ILatticeRegistry registry,
+        List<string> pageIds)
+    {
+        var entries = new List<TreeCatalogEntry>(pageIds.Count);
+        if (pageIds.Count == 0)
+        {
+            return entries;
+        }
+
+        Dictionary<string, TreeRegistryEntry> byTreeId;
+        bool[] deleted;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            var registryWave = registry.GetEntriesAsync(pageIds);
+
+            var deletionProbes = new Task<bool>[pageIds.Count];
+            for (var i = 0; i < pageIds.Count; i++)
+            {
+                deletionProbes[i] = _grainFactory.GetGrain<ITreeDeletionGrain>(pageIds[i]).IsDeletedAsync();
+            }
+
+            var deletionWave = Task.WhenAll(deletionProbes);
+
+            // Awaiting the combined wave first observes every fault, so a failure
+            // in one wave cannot leave the other wave's tasks unobserved.
+            await Task.WhenAll(registryWave, deletionWave).ConfigureAwait(false);
+            byTreeId = await registryWave.ConfigureAwait(false);
+            deleted = await deletionWave.ConfigureAwait(false);
+        }
+
+        for (var i = 0; i < pageIds.Count; i++)
+        {
+            var id = pageIds[i];
+            var entry = byTreeId.TryGetValue(id, out var found) ? found : null;
+            entries.Add(MapCatalogEntry(id, entry, deleted[i]));
+        }
+
+        return entries;
     }
 
     public async Task<ViewCatalogPage> ListViewsAsync(
@@ -624,15 +689,20 @@ internal sealed class LatticeStateQuery(
         var needsFactory = request.SourceTreeId is not null || subject is not null;
         var tagFactory = needsFactory ? _services.GetService<ILatticeTagIndexFactory>() : null;
         var pageSize = request.EffectivePageSize;
-        var entries = new List<TagIndexStateSummary>(pageSize);
+        var pageIds = new List<string>(pageSize);
+        var pageIndexNames = new List<string>(pageSize);
         string? nextToken = null;
 
+        // Pass 1 - filter, one index at a time, in exactly the position and with
+        // exactly the semantics the per-entry shape had. Coverage resolution feeds
+        // both filters, so it stays per index; only the registry read that follows
+        // every filter is batchable.
         foreach (var id in ordered)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (entries.Count == pageSize)
+            if (pageIds.Count == pageSize)
             {
-                nextToken = entries[^1].TreeId;
+                nextToken = pageIds[^1];
                 break;
             }
 
@@ -670,18 +740,31 @@ internal sealed class LatticeStateQuery(
                 }
             }
 
-            TreeRegistryEntry? entry;
+            pageIds.Add(id);
+            pageIndexNames.Add(indexName);
+        }
+
+        // Pass 2 - one batched registry read for exactly the surviving page,
+        // instead of one round-trip per emitted index.
+        var entries = new List<TagIndexStateSummary>(pageIds.Count);
+        if (pageIds.Count > 0)
+        {
+            Dictionary<string, TreeRegistryEntry> byTreeId;
             using (LatticeAccessGateContext.EnterSystemOrigin())
             {
-                entry = await registry.GetEntryAsync(id).ConfigureAwait(false);
+                byTreeId = await registry.GetEntriesAsync(pageIds).ConfigureAwait(false);
             }
 
-            entries.Add(new TagIndexStateSummary
+            for (var i = 0; i < pageIds.Count; i++)
             {
-                IndexName = indexName,
-                TreeId = id,
-                ShardCount = entry?.ShardCount ?? 0,
-            });
+                var entry = byTreeId.TryGetValue(pageIds[i], out var found) ? found : null;
+                entries.Add(new TagIndexStateSummary
+                {
+                    IndexName = pageIndexNames[i],
+                    TreeId = pageIds[i],
+                    ShardCount = entry?.ShardCount ?? 0,
+                });
+            }
         }
 
         return new TagIndexCatalogPage { Entries = entries, NextPageToken = nextToken };

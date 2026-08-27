@@ -49,6 +49,36 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task<State.TreeRegistryEntry?> GetEntryAsync(string treeId);
 
     /// <summary>
+    /// Returns the <see cref="State.TreeRegistryEntry"/> for each of
+    /// <paramref name="treeIds"/>, keyed by tree id. Tree ids that are not
+    /// registered are simply absent from the result, so the returned dictionary
+    /// may be smaller than the requested list. An empty list returns an empty
+    /// dictionary without touching the registry tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The batched counterpart to <see cref="GetEntryAsync(string)"/>, for a
+    /// caller that already holds a bounded set of ids (a catalog page). It wins
+    /// twice over a per-id loop: the N facade-to-registry-grain round-trips
+    /// collapse to one, and inside the grain the N reads of the backing registry
+    /// tree are issued as a single concurrent wave instead of N sequential
+    /// awaits.
+    /// </para>
+    /// <para>
+    /// This is a <b>call-shape optimisation and never an authorization
+    /// boundary</b>. It grants nothing: every id it returns is an id the caller
+    /// could already have read one at a time through
+    /// <see cref="GetEntryAsync(string)"/>, and it applies no filtering of its
+    /// own. Callers that filter a candidate set (for visibility, tenancy, or
+    /// lifecycle) must therefore run those filters <em>first</em> and batch only
+    /// the surviving ids, so a batched read can never observe an entry the
+    /// per-entry path would have dropped.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeIds">The tree ids to read. Must not be <c>null</c>.</param>
+    Task<Dictionary<string, State.TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds);
+
+    /// <summary>
     /// Returns all registered tree IDs in sorted order.
     /// </summary>
     Task<IReadOnlyList<string>> GetAllTreeIdsAsync();

@@ -220,6 +220,38 @@ atomic-tree reads (`PointRead_AtomicTreeIdle`,
 (`EncodeWalBatch_AzureTable`), and the replication ship-envelope
 microbenchmarks (`Ship_TypedEnvelope`, `Ship_FramingOnly`).
 
+#### Opt-in suites
+
+The default run drives the cluster-shaped tree workloads above. A handful of
+narrower, cluster-free suites live in the same harness and are selected with
+`BENCH_MICROBENCH_SUITE` (or `--suite`); each one replaces the default suite
+for that run rather than adding to it.
+
+| Suite | Covers |
+|---|---|
+| `observer` | Observer-notification dispatch. |
+| `authdecision` | The warm authorization decision path (`PolicyEvaluator.Evaluate`). |
+| `hotpath` | Assorted per-request hot-path shapes. |
+| `ordedup` | OR-set / CRDT reconcile de-duplication. |
+| `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
+
+```powershell
+$env:BENCH_MICROBENCH_SUITE = 'catalog'
+./benchmark.ps1 microbench
+```
+
+The `catalog` suite reports two independent things. It first prints an exact,
+deterministic census of the grain round-trips needed to page a catalog end to
+end, sweeping tenant counts 1 / 8 / 64 / 256 against both an unscoped
+enumeration and a tenant-scoped one, with visibility enforcement on and off;
+that census is host-independent and is also written to a
+`catalog-roundtrips.json` sidecar next to the run's `results.json`. It then
+runs the BenchmarkDotNet latency arms, which compare the per-entry projection
+shape against the batched one over identical captured page partitions, plus an
+end-to-end arm driving the real `LatticeStateQuery`. Set
+`BENCH_CATALOG_ROUNDTRIPS_ONLY=true` to print the census and skip the latency
+pass, which takes a few seconds instead of a few minutes.
+
 ### Per-method allocation and CPU profiling
 
 When BDN's `MemoryDiagnoser` says a workload allocates 312 B/op but cannot
