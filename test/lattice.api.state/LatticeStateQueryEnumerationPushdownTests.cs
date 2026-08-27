@@ -52,6 +52,11 @@ public sealed class LatticeStateQueryEnumerationPushdownTests
         });
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(null));
 
+        // The catalog projection reads a filtered page through the batched member;
+        // no tree in these fixtures is registered, so every id resolves to absent.
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(
+            Task.FromResult(new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal)));
+
         var deletion = Substitute.For<ITreeDeletionGrain>();
         deletion.IsDeletedAsync().Returns(Task.FromResult(false));
         grainFactory.GetGrain<ITreeDeletionGrain>(Arg.Any<string>()).Returns(deletion);

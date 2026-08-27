@@ -201,6 +201,56 @@ internal sealed class LatticeRegistryGrain(
         return bytes is not null ? DeserializeEntry(bytes) : null;
     }
 
+    public async Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
+    {
+        ArgumentNullException.ThrowIfNull(treeIds);
+        if (treeIds.Count == 0)
+        {
+            // No registry hop at all for an empty page: there is nothing to read,
+            // so the fan-out below would be pure overhead.
+            return new Dictionary<string, TreeRegistryEntry>(0, StringComparer.Ordinal);
+        }
+
+        // One concurrent wave of the same single-key read GetEntryAsync issues,
+        // rather than ISystemLattice.GetManyAsync. That looks like the obvious
+        // primitive but it deadlocks from here: LatticeGrain.GetManyAsyncCore
+        // ends every attempt with an unconditional topology-stability re-probe
+        // (`registry.GetShardMapAsync(TreeId)`) against ILatticeRegistry. Called
+        // from inside this grain that closes a two-hop cycle back onto this
+        // activation, which is non-reentrant and still executing this turn, so
+        // the probe queues behind us forever. The single-key read has no such
+        // re-probe, which is why the per-entry GetEntryAsync path has always
+        // worked from here. Awaiting the whole wave keeps the caller-visible win
+        // (one round-trip for a page instead of one per entry) and collapses the
+        // registry-side cost from N sequential awaits to a single parallel wave;
+        // only the shard-level grouping is given up, and that is silo-internal.
+        var reads = new Task<byte[]?>[treeIds.Count];
+        for (var i = 0; i < treeIds.Count; i++)
+        {
+            var treeId = treeIds[i];
+            ArgumentNullException.ThrowIfNull(treeId);
+            reads[i] = Registry.GetAsync(treeId);
+        }
+
+        await Task.WhenAll(reads);
+
+        // Absent and tombstoned ids read back as null and are simply left out,
+        // which is the "unregistered ids are absent" contract this method
+        // publishes. Later duplicates overwrite earlier ones with an identical
+        // value, so a caller passing a duplicated id still gets one entry.
+        var entries = new Dictionary<string, TreeRegistryEntry>(treeIds.Count, StringComparer.Ordinal);
+        for (var i = 0; i < reads.Length; i++)
+        {
+            var bytes = await reads[i];
+            if (bytes is not null)
+            {
+                entries[treeIds[i]] = DeserializeEntry(bytes);
+            }
+        }
+
+        return entries;
+    }
+
     public Task<IReadOnlyList<string>> GetAllTreeIdsAsync() => GetAllTreeIdsAsync(prefix: null);
 
     public async Task<IReadOnlyList<string>> GetAllTreeIdsAsync(string? prefix)

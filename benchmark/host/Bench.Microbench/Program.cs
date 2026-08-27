@@ -79,6 +79,8 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // via BENCH_MICROBENCH_SUITE=observer (or --suite observer). The default
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
+//
+// Recognised suites: observer, authdecision, hotpath, ordedup, catalog.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -122,6 +124,32 @@ if (string.Equals(suite, "ordedup", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> ordedup (OrCrdtReconcileBenchmarks)");
     var orDedupSummary = BenchmarkRunner.Run<OrCrdtReconcileBenchmarks>(config);
     return orDedupSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "catalog", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> catalog (CatalogEnumerationBenchmarks)");
+
+    // The round-trip census runs first and unconditionally: it is exact and
+    // deterministic (no host, core-count, or scheduler dependence), so it needs
+    // no BenchmarkDotNet job, and it is the figure the batching change actually
+    // targets. Set BENCH_CATALOG_ROUNDTRIPS_ONLY=true to stop after it when only
+    // the hop counts are wanted.
+    var census = CatalogRoundTripReport.MeasureAsync().GetAwaiter().GetResult();
+    Console.Write(CatalogRoundTripReport.Render(census));
+    CatalogRoundTripReport.Write(census, resultsPath);
+
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("BENCH_CATALOG_ROUNDTRIPS_ONLY"),
+            "true",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine("[catalog] BENCH_CATALOG_ROUNDTRIPS_ONLY=true - skipping the latency suite.");
+        return 0;
+    }
+
+    var catalogSummary = BenchmarkRunner.Run<CatalogEnumerationBenchmarks>(config);
+    return catalogSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);

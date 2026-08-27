@@ -55,6 +55,21 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
     public Task<TreeRegistryEntry?> GetEntryAsync(string treeId) =>
         _entries.TryGetValue(treeId, out var entry) ? entry : _defaultEntry;
 
+    public async Task<Dictionary<string, TreeRegistryEntry>> GetEntriesAsync(IReadOnlyList<string> treeIds)
+    {
+        var result = new Dictionary<string, TreeRegistryEntry>(treeIds.Count, StringComparer.Ordinal);
+        foreach (var treeId in treeIds)
+        {
+            var entry = await GetEntryAsync(treeId);
+            if (entry is not null)
+            {
+                result[treeId] = entry;
+            }
+        }
+
+        return result;
+    }
+
     public Task<bool> ExistsAsync(string treeId) => TrueTask;
 
     public Task<string> ResolveAsync(string treeId) => Task.FromResult(treeId);

@@ -62,6 +62,13 @@
          InternalsVisibleTo on the auth csproj so the internal decision engine,
          snapshot maintainer and observer are constructable without a live silo. -->
     <ProjectReference Include="..\..\..\src\lattice.auth\Orleans.Lattice.Auth.csproj" />
+    <!-- The state API package is referenced so the catalog-enumeration suite
+         (suite "catalog") can drive the real LatticeStateQuery.ListTreesAsync
+         paging path end to end against a counting grain surface, measuring the
+         grain round-trips a catalog page actually costs. Reached via
+         InternalsVisibleTo on the api.state csproj, since LatticeStateQuery is
+         internal. -->
+    <ProjectReference Include="..\..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
   </ItemGroup>
 
   <ItemGroup>

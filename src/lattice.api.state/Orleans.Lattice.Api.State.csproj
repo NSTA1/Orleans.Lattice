@@ -20,6 +20,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Api.State.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+    <!-- The catalog-enumeration benchmark suite drives LatticeStateQuery's paging
+         path directly against a counting grain surface, so the internal query
+         type is visible to the microbench host. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
   </ItemGroup>
 
   <ItemGroup>
