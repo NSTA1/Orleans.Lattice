@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 
@@ -47,13 +48,53 @@ internal sealed partial class ViewMaintainerGrain
     /// <summary>
     /// Resolves a generation number to its view tree id. Generation <c>0</c> maps
     /// to the legacy <c>view-{name}</c> id for backward compatibility; higher
-    /// generations are suffixed <c>#g{N}</c>. Composed through
-    /// <see cref="LatticeViewTrees"/> so a tenant-qualified view name places its
-    /// tree inside that tenant's own structural namespace
-    /// (<c>t/{tenant}/view-{name}</c>) rather than in the cluster-global one.
+    /// generations are suffixed. Composed through <see cref="LatticeViewTrees"/>,
+    /// which owns the separator.
     /// </summary>
+    /// <remarks>
+    /// A generation at or below
+    /// <see cref="ViewCheckpointState.LegacyGenerationCeiling"/> was built before
+    /// the storage-safe separator was adopted, so it is still addressed through
+    /// the legacy one - otherwise the change would orphan the live tree of every
+    /// view already past generation 0.
+    /// </remarks>
     private string GenerationTreeId(long generation) =>
-        LatticeViewTrees.ComposeTreeId(ViewName, generation);
+        LatticeViewTrees.ComposeTreeId(
+            ViewName,
+            generation,
+            useLegacySeparator: generation <= (state.State.LegacyGenerationCeiling ?? 0L));
+
+    /// <summary>
+    /// Pins <see cref="ViewCheckpointState.LegacyGenerationCeiling"/> on the first
+    /// activation after the storage-safe generation separator was adopted, so the
+    /// generations this view already built keep resolving to their existing trees
+    /// and the next rebuild moves it onto the new naming.
+    /// </summary>
+    /// <remarks>
+    /// Runs before anything resolves a generation tree id, so a rebuild can never
+    /// allocate a generation under an unpinned ceiling. Idempotent, and safe to
+    /// interrupt: the value is derived from the active generation, so a lost write
+    /// is recomputed identically on the next activation.
+    /// </remarks>
+    private async Task EnsureGenerationNamingPinnedAsync()
+    {
+        if (state.State.LegacyGenerationCeiling is not null)
+        {
+            return;
+        }
+
+        state.State.LegacyGenerationCeiling = state.State.ActiveGeneration;
+        await state.WriteStateAsync();
+
+        if (state.State.ActiveGeneration > 0)
+        {
+            logger.LogInformation(
+                "View '{ViewName}' is at generation {Generation}, which predates the storage-safe generation separator; "
+                + "it keeps addressing that generation through the legacy separator and moves to the new one on its next rebuild.",
+                ViewName,
+                state.State.ActiveGeneration);
+        }
+    }
 
     private TimeSpan ReclaimGrace
     {

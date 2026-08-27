@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Views;
 
@@ -37,10 +38,27 @@ internal static class LatticeViewTrees
 
     /// <summary>
     /// Separates a view tree id from its explicit generation suffix
-    /// (<c>#g{N}</c>), which a shadow-swap rebuild appends to address a
+    /// (<c>{sep}g{N}</c>), which a shadow-swap rebuild appends to address a
     /// non-active generation.
     /// </summary>
-    public const char GenerationSeparator = '#';
+    /// <remarks>
+    /// Storage-safe by construction. The composed tree id is an Orleans grain
+    /// primary key and is carried into <c>ShardRootGrain</c>'s composite key - a
+    /// persistent grain - and keyed storage backends reject <c>/</c>, <c>\</c>,
+    /// <c>#</c> and <c>?</c> there. <c>~</c> is outside that set and rare enough
+    /// in identifiers to be reserved cheaply, which
+    /// <see cref="ViewNameValidator"/> does, keeping the composed id unambiguous.
+    /// </remarks>
+    public const char GenerationSeparator = '~';
+
+    /// <summary>
+    /// The generation separator used before the storage-safe one was adopted.
+    /// A view that was already past generation 0 keeps addressing its existing
+    /// generations through this character, so the change strands no data; the
+    /// next rebuild moves it onto <see cref="GenerationSeparator"/>. Still parsed
+    /// so a legacy id resolves to its view name.
+    /// </summary>
+    public const char LegacyGenerationSeparator = '#';
 
     /// <summary>
     /// Composes the view tree id for <paramref name="viewName"/>:
@@ -48,22 +66,21 @@ internal static class LatticeViewTrees
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This deliberately does <b>not</b> yet lift a tenant segment out of the
-    /// name. A view name is currently validated only for null/empty, so a caller
-    /// can create one literally named <c>t/globex/orders</c>; composing that
-    /// tenant-first would yield <c>t/globex/view-orders</c> and plant the tree in
-    /// another tenant's structural namespace. Tenant-aware composition therefore
-    /// has to arrive together with view-name validation that reserves the
-    /// <see cref="LatticeTenantTrees.SegmentPrefix"/>, not before it.
+    /// This deliberately does <b>not</b> lift a tenant segment out of the name.
+    /// <see cref="ViewNameValidator"/> rejects a name containing <c>/</c>, so a
+    /// name can never carry a well-formed tenant segment in the first place;
+    /// tenant scoping of a view is applied to the name before it reaches here.
     /// </para>
     /// <para>
-    /// Until then this reproduces the legacy interpolation byte for byte, so
-    /// routing every call site through this helper changes no id anywhere.
+    /// Marked as a grain-key builder because the composed id is an Orleans grain
+    /// primary key: the reflection-driven storage-safety guard in the shared
+    /// testing library audits it automatically.
     /// </para>
     /// </remarks>
     /// <param name="viewName">The view name. Must not be <c>null</c> or empty.</param>
     /// <returns>The view tree id.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
+    [GrainKeyBuilder]
     public static string ComposeTreeId(string viewName)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
@@ -74,18 +91,30 @@ internal static class LatticeViewTrees
     /// <summary>
     /// Composes the view tree id for a specific shadow-swap generation.
     /// Generation <c>0</c> (and below) maps to the stable, unsuffixed id for
-    /// backward compatibility; a higher generation appends <c>#g{N}</c>.
+    /// backward compatibility; a higher generation appends <c>{sep}g{N}</c>.
     /// </summary>
-    /// <param name="viewName">The (possibly tenant-qualified) view name. Must not be <c>null</c> or empty.</param>
+    /// <param name="viewName">The view name. Must not be <c>null</c> or empty.</param>
     /// <param name="generation">The generation number.</param>
+    /// <param name="useLegacySeparator">
+    /// When <see langword="true"/>, addresses the generation through
+    /// <see cref="LegacyGenerationSeparator"/> instead of
+    /// <see cref="GenerationSeparator"/>, so a view that already built this
+    /// generation under the old naming still resolves its existing tree.
+    /// </param>
     /// <returns>The generation's view tree id.</returns>
     /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    public static string ComposeTreeId(string viewName, long generation)
+    public static string ComposeTreeId(string viewName, long generation, bool useLegacySeparator = false)
     {
         var stable = ComposeTreeId(viewName);
-        return generation <= 0
-            ? stable
-            : string.Concat(stable, GenerationSeparator.ToString(), "g", generation.ToString());
+        if (generation <= 0)
+        {
+            return stable;
+        }
+
+        var separator = useLegacySeparator ? LegacyGenerationSeparator : GenerationSeparator;
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{stable}{separator}g{generation}");
     }
 
     /// <summary>
@@ -140,7 +169,11 @@ internal static class LatticeViewTrees
         var local = tenantScoped ? LatticeTenantTrees.LocalName(treeId) : treeId;
 
         var name = local.AsSpan(SegmentPrefix.Length);
-        var separator = name.IndexOf(GenerationSeparator);
+
+        // Either separator terminates the name: a view that predates the
+        // storage-safe separator still addresses its existing generations through
+        // the legacy one, so both must resolve to the same view name.
+        var separator = name.IndexOfAny(GenerationSeparator, LegacyGenerationSeparator);
         if (separator >= 0)
         {
             name = name[..separator];

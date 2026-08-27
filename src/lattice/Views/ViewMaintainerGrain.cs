@@ -108,6 +108,21 @@ internal sealed partial class ViewMaintainerGrain(
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
 
+    /// <summary>
+    /// Pins the legacy generation-naming ceiling before any grain method runs.
+    /// </summary>
+    /// <remarks>
+    /// This must happen at activation rather than inside a particular entry point:
+    /// a rebuild can be driven straight through <c>RebuildAsync</c> without
+    /// <c>EnsureActiveAsync</c> having run first, and a ceiling pinned after a
+    /// generation had already been allocated would classify that generation as
+    /// legacy and send every subsequent read to a tree that was never written.
+    /// Activation is the one seam guaranteed to precede every allocation and every
+    /// read.
+    /// </remarks>
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+        => await EnsureGenerationNamingPinnedAsync();
+
     private string ViewName => context.GrainId.Key.ToString()!;
 
     // Cached per-activation: ViewName is fixed for the lifetime of the grain, so
@@ -137,6 +152,12 @@ internal sealed partial class ViewMaintainerGrain(
             logger.LogWarning("View '{ViewName}' has no registration; maintainer cannot start.", ViewName);
             return;
         }
+
+        // Must run before anything resolves a generation tree id, so a rebuild can
+        // never allocate a generation while the legacy-naming ceiling is still
+        // unpinned. Also pinned from OnActivateAsync, which covers the entry points
+        // that reach a generation without coming through here.
+        await EnsureGenerationNamingPinnedAsync();
 
         await reminderRegistry.RegisterOrUpdateReminder(
             callingGrainId: context.GrainId,

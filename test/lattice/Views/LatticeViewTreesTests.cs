@@ -43,7 +43,27 @@ public sealed class LatticeViewTreesTests
 
     [Test]
     public void ComposeTreeId_suffixes_a_higher_generation()
-        => Assert.That(LatticeViewTrees.ComposeTreeId("orders", 2), Is.EqualTo("view-orders#g2"));
+        => Assert.That(LatticeViewTrees.ComposeTreeId("orders", 2), Is.EqualTo("view-orders~g2"));
+
+    [Test]
+    public void ComposeTreeId_addresses_a_pre_existing_generation_through_the_legacy_separator()
+        => Assert.That(
+            LatticeViewTrees.ComposeTreeId("orders", 2, useLegacySeparator: true),
+            Is.EqualTo("view-orders#g2"),
+            "a view already past generation 0 must keep resolving its existing tree, "
+            + "or adopting the storage-safe separator would orphan its data");
+
+    [Test]
+    public void The_generation_suffix_is_storage_safe()
+    {
+        // The composed id is an Orleans grain primary key and is carried into
+        // ShardRootGrain's composite key, a persistent grain. Keyed storage
+        // backends reject these characters there.
+        var id = LatticeViewTrees.ComposeTreeId("orders", 9);
+
+        Assert.That(id.IndexOfAny(['/', '\\', '#', '?']), Is.LessThan(0));
+        Assert.That(id.Any(char.IsControl), Is.False);
+    }
 
     [Test]
     public void ComposeTreeId_rejects_an_empty_name()
@@ -68,8 +88,8 @@ public sealed class LatticeViewTreesTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(LatticeViewTrees.IsViewTree("view-orders#g3"), Is.True);
-            Assert.That(LatticeViewTrees.IsViewTree("t/acme/view-orders#g3"), Is.True);
+            Assert.That(LatticeViewTrees.IsViewTree("view-orders~g3"), Is.True);
+            Assert.That(LatticeViewTrees.IsViewTree("t/acme/view-orders~g3"), Is.True);
         });
     }
 
@@ -96,10 +116,10 @@ public sealed class LatticeViewTreesTests
     // ----- Parsing is the exact inverse of composition -----
 
     [TestCase("view-orders", "orders")]
-    [TestCase("view-orders#g4", "orders")]
+    [TestCase("view-orders~g4", "orders")]
     [TestCase("view-t/globex/orders", "t/globex/orders")]
     [TestCase("t/acme/view-orders", "t/acme/orders")]
-    [TestCase("t/acme/view-orders#g4", "t/acme/orders")]
+    [TestCase("t/acme/view-orders~g4", "t/acme/orders")]
     public void ViewNameFromTreeId_recovers_the_maintainer_key(string treeId, string expected)
         => Assert.That(LatticeViewTrees.ViewNameFromTreeId(treeId), Is.EqualTo(expected));
 
@@ -150,7 +170,7 @@ public sealed class LatticeViewTreesTests
             Assert.Multiple(() =>
             {
                 Assert.That(LatticeViewTrees.ComposeTreeId(name), Is.EqualTo($"view-{name}"));
-                Assert.That(LatticeViewTrees.ComposeTreeId(name, 7), Is.EqualTo($"view-{name}#g7"));
+                Assert.That(LatticeViewTrees.ComposeTreeId(name, 7), Is.EqualTo($"view-{name}~g7"));
             });
         }
     }
