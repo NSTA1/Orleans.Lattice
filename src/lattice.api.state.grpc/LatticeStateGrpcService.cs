@@ -210,15 +210,6 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     }
 
     /// <summary>
-    /// Bridges the caller identity on <paramref name="context"/> into the ambient
-    /// <see cref="LatticeCredentialContext"/> for the duration of the returned
-    /// scope, so the gated data-plane surface resolves the caller's subject and
-    /// filters the read. Returns <see langword="null"/> (no scope) when the call
-    /// carries no credential, leaving the caller anonymous - fail-closed when
-    /// auth-backed visibility is active. This is orthogonal to, and runs after,
-    /// the transport-level <see cref="ILatticeStateApiAuthorizer"/> gate.
-    /// </summary>
-    /// <summary>
     /// Lifts the caller's asserted active tenant onto the ambient
     /// <see cref="LatticeActiveTenantContext"/> for the duration of the call, so
     /// this facade's tenant-scoped name resolution sees the caller's tenant rather
@@ -233,6 +224,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
             static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
             _options.Value.ActiveTenantHeaderName);
 
+    /// <summary>
+    /// Bridges the caller identity on <paramref name="context"/> into the ambient
+    /// <see cref="LatticeCredentialContext"/> for the duration of the returned
+    /// scope, so the gated data-plane surface resolves the caller's subject and
+    /// filters the read. Returns <see langword="null"/> (no scope) when the call
+    /// carries no credential, leaving the caller anonymous - fail-closed when
+    /// auth-backed visibility is active. This is orthogonal to, and runs after,
+    /// the transport-level <see cref="ILatticeStateApiAuthorizer"/> gate.
+    /// </summary>
     private IDisposable? StampCallerCredential(ServerCallContext context)
     {
         var credential = _credentialBridge.Resolve(context);

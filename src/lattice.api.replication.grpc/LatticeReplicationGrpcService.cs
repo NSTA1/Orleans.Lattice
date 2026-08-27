@@ -123,15 +123,6 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     }
 
     /// <summary>
-    /// Bridges the caller identity on <paramref name="context"/> into the ambient
-    /// <see cref="LatticeCredentialContext"/> for the duration of the returned
-    /// scope, so the replication engine's own fail-closed access gate resolves the
-    /// caller's subject. Returns <see langword="null"/> (no scope) when the call
-    /// carries no credential, leaving the caller anonymous. This is orthogonal
-    /// to, and runs after, the transport-level
-    /// <see cref="ILatticeReplicationApiAuthorizer"/> gate.
-    /// </summary>
-    /// <summary>
     /// Lifts the caller's asserted active tenant onto the ambient
     /// <see cref="LatticeActiveTenantContext"/> for the duration of the call, so
     /// this facade's tenant-scoped name resolution sees the caller's tenant rather
@@ -146,6 +137,15 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
             _options.Value.ActiveTenantHeaderName);
 
+    /// <summary>
+    /// Bridges the caller identity on <paramref name="context"/> into the ambient
+    /// <see cref="LatticeCredentialContext"/> for the duration of the returned
+    /// scope, so the replication engine's own fail-closed access gate resolves the
+    /// caller's subject. Returns <see langword="null"/> (no scope) when the call
+    /// carries no credential, leaving the caller anonymous. This is orthogonal
+    /// to, and runs after, the transport-level
+    /// <see cref="ILatticeReplicationApiAuthorizer"/> gate.
+    /// </summary>
     private IDisposable? StampCallerCredential(ServerCallContext context)
     {
         var credential = _credentialBridge.Resolve(context);

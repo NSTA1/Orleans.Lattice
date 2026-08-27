@@ -31,6 +31,18 @@ namespace Orleans.Lattice.Testing;
 /// library needs no compile-time reference to the product assemblies, exactly as
 /// the serializable-exception and grain-key guards do.
 /// </para>
+/// <para>
+/// The guard is bound per package, and two families of gRPC service are
+/// deliberately excluded rather than overlooked. The cross-cluster replication
+/// transports (<c>Orleans.Lattice.Replication.Grpc</c>) carry silo-to-silo
+/// traffic, not caller traffic: lifting a tenant asserted by a peer would be
+/// trusting wire-supplied classification, which the security rules forbid. The
+/// authorization control API (<c>Orleans.Lattice.Api.Auth.Grpc</c>) is
+/// cluster-global and has no tenant-scoped name resolution at all - it treats
+/// tree ids as opaque strings already composed by the data-plane facades - so a
+/// stamp there would be inert. Bind this guard to a package only when its facade
+/// resolves tenant-scoped names.
+/// </para>
 /// </remarks>
 public abstract class GrpcActiveTenantStampContractTestsBase
 {

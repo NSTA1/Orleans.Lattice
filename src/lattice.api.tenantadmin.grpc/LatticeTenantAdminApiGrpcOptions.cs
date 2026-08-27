@@ -38,6 +38,18 @@ public sealed class LatticeTenantAdminApiGrpcOptions
     public string CredentialScheme { get; set; } = "Bearer";
 
     /// <summary>
+    /// The inbound request-header (gRPC metadata) name carrying the tenant the
+    /// caller is acting as, lifted onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for the duration of each call.
+    /// Defaults to <see cref="LatticeActiveTenantAssertion.DefaultHeaderName"/>,
+    /// matching what the API clients send. Without it the self-service surface
+    /// would report the reserved default tenant for every caller regardless of the
+    /// tenant they asserted. The assertion is only carried here; it is re-validated
+    /// against the caller's own membership downstream.
+    /// </summary>
+    public string ActiveTenantHeaderName { get; set; } = LatticeActiveTenantAssertion.DefaultHeaderName;
+
+    /// <summary>
     /// The auth schemes the endpoint advertises from its unauthenticated
     /// <c>GetAuthScheme</c> RPC, in preference order. Empty by default (the
     /// endpoint advertises nothing, so a client falls back to manual or Basic

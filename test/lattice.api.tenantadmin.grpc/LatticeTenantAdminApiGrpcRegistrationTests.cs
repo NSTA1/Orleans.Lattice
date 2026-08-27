@@ -299,7 +299,7 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
             new FakeTenantSelfService(),
             new NullCredentialBridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-            NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
         var binder = new CountingServiceBinder();
 
         LatticeTenantAdminGrpcServiceBase.BindService(binder, service);

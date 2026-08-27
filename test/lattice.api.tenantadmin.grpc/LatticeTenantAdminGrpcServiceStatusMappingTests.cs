@@ -1,6 +1,7 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Serialization;
 
@@ -36,7 +37,7 @@ public sealed class LatticeTenantAdminGrpcServiceStatusMappingTests
             _selfService,
             new NullCredentialBridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-            NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
     }
 
     [TearDown]
