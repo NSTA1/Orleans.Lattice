@@ -45,6 +45,21 @@ app.MapLatticeStateApiGrpc();
 
 See the [`Orleans.Lattice.Api.State` overview](../lattice.api.state/README.md) for the full setup, surfaces, security, and client documentation, and the [`StateExplorer`](../../samples/StateExplorer) sample for a runnable end-to-end journey.
 
+### Per-tenant selection
+
+On a cluster running the optional tenancy add-on, the call's *active tenant* scopes the tree namespace the call reads. The binding lifts it from a single request header - `lattice-active-tenant` by default, configurable through `LatticeStateApiGrpcOptions.ActiveTenantHeaderName` - and stamps it onto the call's ambient scope, so the facade resolves each request's tree name into that tenant's `t/{tenant}/{name}` namespace and its catalog enumerations return only that tenant's trees:
+
+```csharp verify
+var builder = WebApplication.CreateBuilder();
+builder.Services.AddLatticeStateApiGrpc(o =>
+{
+    o.RequireAuthorization = true;
+    o.ActiveTenantHeaderName = "lattice-active-tenant";
+});
+```
+
+The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules; a call that cannot be attributed to a valid active tenant is refused and surfaces as a `PermissionDenied` `RpcException`, while an enumeration for such a caller returns an empty page rather than the cluster-global catalog. Set the option to an empty string to disable header-based tenant selection entirely. With no tenancy add-on registered the header is never consulted and the binding behaves exactly as it did before tenancy existed.
+
 ## Reference
 
 - [gRPC Contract](../lattice.api.state/grpc-contract.md) - the service, the RPCs, and the wire records.

@@ -133,7 +133,25 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   binding does through the shared `LatticeActiveTenantAssertion` seam. A binding
   that did not would not fault: its facade would resolve the reserved default
   tenant and serve the caller the shared cluster-global namespace, so the
-  behaviour is covered by a contract guard rather than left to review.
+  behaviour is covered by a contract guard rather than left to review.- **A refused assertion is reported as a refusal, on every surface.** The resolver
+  denies a caller by resolving the uninitialised `default(TenantId)` "no tenant"
+  value - a `null` `TenantId.Value`, deliberately distinct from the reserved
+  `TenantId.Default`, whose value is `default`. Every surface that reads a
+  resolved tenant honours that sentinel: the data plane refuses the operation, and
+  the tenant self-awareness surface refuses too rather than reporting a live
+  descriptor, so "which tenant am I acting as" can never answer with a tenant the
+  caller was denied. The distinction matters when reading this page: the reserved
+  default tenant is a real tenant that a caller legitimately resolves when it
+  asserts nothing, whereas the sentinel means the assertion was rejected.
+- **A denial is an authorization outcome, not a fault.** A call refused by
+  fail-closed tenant resolution surfaces as `PermissionDenied` on every gRPC
+  binding, carrying the reason. It is deliberately not `Internal`: that is a
+  retryable status, so a client would back off and retry a decision that can never
+  change, and the refusal would be counted against the server-fault rate operators
+  alert on. A call that resolves cleanly but breaches the tenant's quota is a
+  different outcome again - capacity, not authorization - and surfaces as
+  `ResourceExhausted`. An enumeration for a denied caller returns an empty page
+  rather than an error, so listing never leaks the cluster-global catalog.
 - **Identity-derived, enforced at the auth gate.** The active tenant is carried in
   the Orleans `RequestContext` under a single well-known key, populated from the
   caller's membership at the auth seam. The fail-closed `PolicyAccessGate` is made
