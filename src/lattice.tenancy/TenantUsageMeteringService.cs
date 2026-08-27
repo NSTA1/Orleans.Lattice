@@ -203,9 +203,27 @@ internal sealed class TenantUsageMeteringService : IHostedService
             try
             {
                 var usage = await _grainFactory
-                    .GetGrain<ILattice>(treeId)
-                    .GetStorageUsageAsync(cancellationToken)
+                    .GetGrain<ILatticeStorageUsage>(treeId)
+                    .GetReportAsync(forceRefresh: false, cancellationToken)
                     .ConfigureAwait(false);
+
+                // The key and memory figures are activation-scoped: a shard root
+                // reports zero for them until every leaf has republished its
+                // footprint on a commit boundary, which a tenant that is not
+                // actively writing never triggers. The byte figure is unaffected
+                // because it adds durable WAL retention, so a tree that genuinely
+                // holds data but reports no keys and no leaf bytes is displaying a
+                // cold cache, not an empty tree. Admitting on that reading is the
+                // fail-open this re-anchor closes: maxKeys and maxMemoryBytes
+                // would never bind after a routine reactivation (Orleans collects
+                // idle grains, so this needs no restart or fault to happen).
+                if (IsColdFootprint(usage))
+                {
+                    usage = await _grainFactory
+                        .GetGrain<ILatticeStorageUsage>(treeId)
+                        .GetReportAsync(forceRefresh: true, cancellationToken)
+                        .ConfigureAwait(false);
+                }
 
                 samples.Add(new TreeUsageSample(
                     bytes: usage.TotalBytes,
@@ -226,4 +244,30 @@ internal sealed class TenantUsageMeteringService : IHostedService
 
         return samples;
     }
+
+    /// <summary>
+    /// Returns <c>true</c> when a usage report shows the signature of a cold
+    /// activation-scoped cache: no live keys and no leaf-state bytes, yet a
+    /// non-zero total.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="TreeStorageUsageReport.LiveKeys"/> and
+    /// <see cref="TreeStorageUsageReport.LeafStateBytes"/> are summed from each
+    /// shard root's in-memory totals, which reset on reactivation and are rebuilt
+    /// only as leaves republish on commit boundaries.
+    /// <see cref="TreeStorageUsageReport.TotalBytes"/> also adds durable WAL
+    /// retention, so it survives. A tree holding real data therefore reports the
+    /// combination below precisely when the cached figures are stale.
+    /// </para>
+    /// <para>
+    /// The cost of re-anchoring is self-limiting. A large tree re-anchors once and
+    /// then reports non-zero, so it never matches again for that activation; the
+    /// only repeat cost falls on a tree that is genuinely empty but still retains
+    /// WAL, and walking an empty tree is cheap. That is why this is a targeted
+    /// re-anchor rather than forcing a deep walk on every cycle.
+    /// </para>
+    /// </remarks>
+    private static bool IsColdFootprint(TreeStorageUsageReport usage)
+        => usage.LiveKeys == 0 && usage.LeafStateBytes == 0 && usage.TotalBytes > 0;
 }

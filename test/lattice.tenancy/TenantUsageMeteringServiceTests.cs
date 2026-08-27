@@ -137,8 +137,8 @@ public sealed class TenantUsageMeteringServiceTests
 
         foreach (var treeId in treeIds)
         {
-            var tree = Substitute.For<ILattice>();
-            tree.GetStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(
+            var usage = Substitute.For<ILatticeStorageUsage>();
+            usage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(
                 Task.FromResult(new TreeStorageUsageReport
                 {
                     TreeId = treeId,
@@ -146,7 +146,7 @@ public sealed class TenantUsageMeteringServiceTests
                     LiveKeys = keysPerTree,
                     LeafStateBytes = bytesPerTree,
                 }));
-            grainFactory.GetGrain<ILattice>(treeId).Returns(tree);
+            grainFactory.GetGrain<ILatticeStorageUsage>(treeId).Returns(usage);
         }
 
         return grainFactory;
@@ -246,10 +246,10 @@ public sealed class TenantUsageMeteringServiceTests
     public async Task An_unreadable_tree_does_not_abandon_the_tenants_rollup()
     {
         var grainFactory = GrainFactoryWith(["t/acme/good"]);
-        var broken = Substitute.For<ILattice>();
-        broken.GetStorageUsageAsync(Arg.Any<CancellationToken>())
+        var broken = Substitute.For<ILatticeStorageUsage>();
+        broken.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns<Task<TreeStorageUsageReport>>(_ => throw new InvalidOperationException("tree is down"));
-        grainFactory.GetGrain<ILattice>("t/acme/broken").Returns(broken);
+        grainFactory.GetGrain<ILatticeStorageUsage>("t/acme/broken").Returns(broken);
 
         var registryGrain = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         registryGrain.GetAllTreeIdsAsync(Arg.Any<string?>())
@@ -298,5 +298,99 @@ public sealed class TenantUsageMeteringServiceTests
 
         Assert.That(service.Loop, Is.Null, "a zero cadence opts the deployment out of metering entirely");
         await service.StopAsync(CancellationToken.None);
+    }
+
+    // ----- A stale activation-scoped footprint is re-anchored, not trusted -----
+
+    /// <summary>
+    /// Builds a usage source whose non-forced report shows the cold-cache
+    /// signature (no keys, no leaf bytes, but real total bytes) and whose forced
+    /// report returns the true figures, mirroring a shard root that has
+    /// reactivated and not yet had its leaves republish.
+    /// </summary>
+    private static IGrainFactory GrainFactoryWithColdFootprint(string treeId, long trueKeys, long trueLeafBytes)
+    {
+        var grainFactory = GrainFactoryWith([treeId]);
+        var usage = Substitute.For<ILatticeStorageUsage>();
+
+        usage.GetReportAsync(false, Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult(new TreeStorageUsageReport
+            {
+                TreeId = treeId,
+                TotalBytes = 4096,
+                LiveKeys = 0,
+                LeafStateBytes = 0,
+            }));
+
+        usage.GetReportAsync(true, Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult(new TreeStorageUsageReport
+            {
+                TreeId = treeId,
+                TotalBytes = 4096,
+                LiveKeys = trueKeys,
+                LeafStateBytes = trueLeafBytes,
+            }));
+
+        grainFactory.GetGrain<ILatticeStorageUsage>(treeId).Returns(usage);
+        return grainFactory;
+    }
+
+    [Test]
+    public async Task A_cold_footprint_is_re_anchored_so_the_key_dimension_is_not_zero()
+    {
+        // The regression: keys and leaf bytes are activation-scoped and read zero
+        // until every leaf republishes on a commit boundary, while total bytes
+        // survives because it includes durable WAL retention. Publishing the zero
+        // made maxKeys and maxMemoryBytes fail open - a tenant well over quota was
+        // admitted indefinitely after a routine reactivation.
+        var store = new RecordingStore();
+        var grainFactory = GrainFactoryWithColdFootprint("t/acme/orders", trueKeys: 13, trueLeafBytes: 512);
+        var service = Create(new FakeRegistry(Acme), store, grainFactory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        var published = store.Published.Single();
+        var sample = published.Fold();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sample.Keys, Is.EqualTo(13), "the true key count must be metered, not the cold zero");
+            Assert.That(sample.MemoryBytes, Is.EqualTo(512));
+            Assert.That(sample.Bytes, Is.EqualTo(4096));
+        });
+    }
+
+    [Test]
+    public async Task A_warm_footprint_is_not_re_anchored()
+    {
+        // The re-anchor is targeted: a report that already carries live figures
+        // must not trigger a deep walk, or every cycle would pay for one.
+        var store = new RecordingStore();
+        var grainFactory = GrainFactoryWith(["t/acme/orders"], bytesPerTree: 4096, keysPerTree: 7);
+        var service = Create(new FakeRegistry(Acme), store, grainFactory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        await grainFactory
+            .GetGrain<ILatticeStorageUsage>("t/acme/orders")
+            .Received(0)
+            .GetReportAsync(true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task An_empty_tree_is_metered_as_empty()
+    {
+        // A tree with no bytes at all is genuinely empty rather than cold, so it
+        // must not be re-anchored and must meter as zero.
+        var store = new RecordingStore();
+        var grainFactory = GrainFactoryWith(["t/acme/orders"], bytesPerTree: 0, keysPerTree: 0);
+        var service = Create(new FakeRegistry(Acme), store, grainFactory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        await grainFactory
+            .GetGrain<ILatticeStorageUsage>("t/acme/orders")
+            .Received(0)
+            .GetReportAsync(true, Arg.Any<CancellationToken>());
     }
 }
