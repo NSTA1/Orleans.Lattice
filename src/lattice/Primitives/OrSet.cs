@@ -164,9 +164,15 @@ public sealed class OrSet : ICrdt<OrSet>
                 Tombstones[new string(key)] = tomb;
             }
             var anyAdded = false;
-            if (tomb.Count <= DotLinearScanThreshold)
+            if (tomb.Count <= DotLinearScanThreshold || dots.Count <= DotLinearScanThreshold)
             {
-                // Tiny tombstone list: linear Contains beats hashing.
+                // Tiny tombstone list, or few observed add dots: a linear
+                // Contains beats allocating a HashSet. An element's live add
+                // list is overwhelmingly 1-2 dots in practice, so this is the
+                // common case even when the element has already accumulated a
+                // long observed-remove history - which the prior guard (which
+                // checked only the tombstone count) forced through the
+                // HashSet allocation on every such remove.
                 foreach (var dot in dots)
                 {
                     if (!tomb.Contains(dot)) { tomb.Add(dot); anyAdded = true; }
@@ -410,9 +416,18 @@ public sealed class OrSet : ICrdt<OrSet>
     private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
     {
         if (tomb is null || tomb.Count == 0) return dots.Count;
-        if (tomb.Count <= DotLinearScanThreshold)
+        if (tomb.Count <= DotLinearScanThreshold || dots.Count <= DotLinearScanThreshold)
         {
-            // Tiny tombstone list: linear scan beats hashing.
+            // Tiny tombstone list, or few live add dots: a linear membership
+            // scan beats allocating a HashSet. When the live-dot list is the
+            // small side - an element re-added a handful of times against a
+            // long observed-remove history, the common churned-key case - the
+            // scan is O(dots.Count * tomb.Count), bounded by
+            // O(DotLinearScanThreshold * tomb.Count): the same asymptotic as
+            // building the tomb-sized set, but allocation-free. Previously the
+            // large-tombstone branch built the HashSet unconditionally, paying
+            // that allocation on every read (IsEmpty / Count / Elements /
+            // Contains) of a heavily-tombstoned key even for a single live dot.
             var live = 0;
             foreach (var d in dots)
             {

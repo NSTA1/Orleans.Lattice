@@ -659,8 +659,18 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     {
         if (!Tombstones.TryGetValue(key, out var tomb) || tomb.Count == 0) return entries.Count;
 
-        if (tomb.Count <= LinearDedupThreshold)
+        if (tomb.Count <= LinearDedupThreshold || entries.Count <= LinearDedupThreshold)
         {
+            // Tiny tombstone list, or few live entries: a linear membership
+            // scan beats allocating a HashSet. When the live-entry list is the
+            // small side - the common case for a churned key that carries a
+            // long observed-remove history but only a handful of live entries -
+            // the scan is O(entries.Count * tomb.Count), bounded by
+            // O(LinearDedupThreshold * tomb.Count): the same asymptotic as
+            // building the tomb-sized set, but allocation-free. The prior guard
+            // checked only the tombstone count and so built the HashSet on
+            // every read (IsEmpty / Count / Contains / Keys) of a
+            // heavily-tombstoned key even for a single live entry.
             var n = 0;
             foreach (var e in entries)
             {
