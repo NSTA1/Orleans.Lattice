@@ -1,3 +1,4 @@
+using System.Globalization;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
 
@@ -105,7 +106,9 @@ internal abstract class LatticeDataApiGrpcServiceBase
 /// <see cref="ILattice"/> surface enforces per-tree / per-key authorization, and
 /// maps a gate denial onto <see cref="StatusCode.PermissionDenied"/> carrying
 /// only the non-sensitive tree / operation / subject / reason fields (never a
-/// value) as response trailers.
+/// value) as response trailers. An admission refusal maps to
+/// <see cref="StatusCode.ResourceExhausted"/> carrying the breached quota
+/// dimension on the same terms.
 /// </summary>
 internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
 {
@@ -120,6 +123,29 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
 
     /// <summary>Trailer key carrying the gate's denial reason.</summary>
     internal const string DeniedReasonTrailer = "lattice-denied-reason";
+
+    /// <summary>
+    /// Trailer key carrying the breached quota dimension (<c>keys</c>,
+    /// <c>bytes</c>, <c>memory</c>, <c>trees</c>, or <c>ops-per-second</c>), so a
+    /// client can branch on it without parsing the status message.
+    /// </summary>
+    internal const string QuotaDimensionTrailer = "lattice-quota-dimension";
+
+    /// <summary>Trailer key carrying the tree whose admission quota was breached.</summary>
+    internal const string QuotaTreeTrailer = "lattice-quota-tree";
+
+    /// <summary>
+    /// Trailer key carrying the observed value on the breached dimension at the
+    /// moment the write was refused. Omitted for a dimension that carries no
+    /// numeric ceiling.
+    /// </summary>
+    internal const string QuotaCurrentTrailer = "lattice-quota-current";
+
+    /// <summary>
+    /// Trailer key carrying the configured ceiling on the breached dimension.
+    /// Omitted for a dimension that carries no numeric ceiling.
+    /// </summary>
+    internal const string QuotaLimitTrailer = "lattice-quota-limit";
 
     private readonly ILatticeDataApi _dataApi;
     private readonly ILatticeDataApiCredentialBridge _credentialBridge;
@@ -367,11 +393,13 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
         }
         catch (LatticeTenantAccessDeniedException ex)
         {
-            // The caller's active tenant was refused: either no valid active tenant
-            // could be attributed to the caller (fail-closed resolution) or the
-            // tenant is not admitted to write to the target tree (its per-tenant
-            // quota would be exceeded). This is expected control flow on a
-            // tenant-governed surface, not a server fault - map to PermissionDenied
+            // The caller's active tenant was refused: no valid active tenant could
+            // be attributed to the caller (fail-closed resolution), or the caller
+            // may not act as the tenant it asserted, or the tenant may not cross
+            // into the target tree. This is an authorization outcome, not a
+            // capacity one - a per-tenant quota breach is a different type and is
+            // mapped to ResourceExhausted below. Expected control flow on a
+            // tenant-governed surface, not a server fault: map to PermissionDenied
             // carrying the self-contained caller-facing message.
             throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
@@ -432,6 +460,19 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
                 StatusCode.ResourceExhausted,
                 "The requested tree is busy (storage back-pressure) and the operation was refused. Retry after a short backoff."));
         }
+        catch (LatticeQuotaExceededException ex)
+        {
+            // An admission cap was reached: either a per-tree ceiling
+            // (LatticeOptions.MaxLiveKeys / MaxEstimatedBytes) or, on a cluster
+            // running the tenancy add-on, the active tenant's own quota or
+            // sustained request-rate budget. A refusal on a governed surface is a
+            // deterministic, caller-facing outcome - the same class of answer as
+            // the saturation arm directly above - so it is mapped to the same
+            // canonical ResourceExhausted rather than falling through to the
+            // generic server-fault arm, which would report a capacity decision as
+            // though the server had broken.
+            throw ToResourceExhausted(ex);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Data: gRPC call to {Method} failed.", context.Method);
@@ -451,6 +492,41 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
 
         return new RpcException(
             new Status(StatusCode.PermissionDenied, ex.Message),
+            trailers);
+    }
+
+    /// <summary>
+    /// Projects an admission refusal onto <see cref="StatusCode.ResourceExhausted"/>,
+    /// attaching the breached dimension - and, where the dimension carries one, the
+    /// observed value and the configured ceiling - as response trailers so a client
+    /// can branch on the outcome without parsing the message. The trailers echo only
+    /// fields the self-contained status message already states; never a key and never
+    /// a value.
+    /// </summary>
+    private static RpcException ToResourceExhausted(LatticeQuotaExceededException ex)
+    {
+        var trailers = new global::Grpc.Core.Metadata
+        {
+            { QuotaDimensionTrailer, ex.Dimension },
+            { QuotaTreeTrailer, ex.TreeId },
+        };
+
+        // The transient rate dimension carries no numeric ceiling (both fields are
+        // zero), so advertising "current 0 of 0" would be worse than saying nothing.
+        if (ex.Limit > 0)
+        {
+            trailers.Add(QuotaCurrentTrailer, ex.Current.ToString(CultureInfo.InvariantCulture));
+            trailers.Add(QuotaLimitTrailer, ex.Limit.ToString(CultureInfo.InvariantCulture));
+        }
+
+        // The tenant id is deliberately withheld. On this binding the active tenant
+        // is the caller's own assertion (the lattice-active-tenant header), so
+        // echoing it back tells the caller nothing it did not send, while on any
+        // path where the tenant is derived rather than asserted it would disclose a
+        // server-side attribution decision. The dimension is what the caller needs
+        // to act on.
+        return new RpcException(
+            new Status(StatusCode.ResourceExhausted, ex.Message),
             trailers);
     }
 }

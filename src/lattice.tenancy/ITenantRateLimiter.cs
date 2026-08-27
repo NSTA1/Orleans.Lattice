@@ -19,10 +19,17 @@ namespace Orleans.Lattice.Tenancy;
 /// pays only a single dictionary probe on the hot path.
 /// </para>
 /// <para>
-/// This limiter is a decision surface only. Registering it wires no enforcement:
-/// nothing on the data path consults it until a later feature threads it into the
-/// write path. It answers "may this operation proceed?"; it does not itself fence
-/// traffic.
+/// The limiter is consulted on the data path, not merely advertised: the tenancy
+/// add-on's <see cref="ITenantAdmissionController"/> calls
+/// <see cref="TryAcquire"/> first on every tenant-scoped write, ahead of the
+/// footprint-quota evaluation, and turns a refusal into a
+/// <see cref="LatticeQuotaExceededException"/> on the
+/// <see cref="LatticeQuotaExceededException.OpsPerSecondDimension"/> dimension. That
+/// refusal is transient - the budget refills continuously - so it is a back-off
+/// signal rather than a terminal one, and the write-capable gRPC bindings surface
+/// it as <c>ResourceExhausted</c> carrying the breached dimension. Registering a
+/// replacement therefore changes what the cluster admits; substitute one only
+/// with that in mind.
 /// </para>
 /// </remarks>
 public interface ITenantRateLimiter

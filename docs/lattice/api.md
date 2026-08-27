@@ -1107,6 +1107,8 @@ Derives from `InvalidOperationException` so existing catch handlers continue to 
 
 Caller contract: treat as back-pressure. Either reduce the tree's live footprint (delete keys, let TTLs expire and compaction reap tombstones) or, if the ceiling is genuinely too low, raise the cap. The cap is evaluated against a cached, eventually-consistent per-tree aggregate, so it is **best-effort / approximate**: concurrent cross-shard writes can overshoot it slightly before the aggregate refreshes, and enforcement **fails open** until the tree's first sample lands after activation. Replication and atomic-write-saga apply paths bypass admission control, so an incoming replicated write is never refused. Every rejection also increments the `orleans.lattice.admission.rejected` counter (tagged `tree`, `dimension`); see [Metrics - admission control](metrics.md#per-tree-admission-control) for the advisory-first-then-enforce adoption workflow.
 
+Over a remote transport the refusal is mapped to the canonical `ResourceExhausted` gRPC status - the same code the sibling saturation refusal uses - by the [data gRPC binding](../lattice.api.data.grpc/README.md#quota-refusals) and the [schema gRPC binding](../lattice.api.schema.grpc/architecture.md#quota-refusals), each attaching the breached `Dimension` (and, where the dimension carries one, `Current` and `Limit`) as response trailers so a remote client can branch on the outcome exactly as an in-process caller branches on the typed slot. No tenant id is echoed to the caller.
+
 ```csharp verify
 byte[] value = [1, 2, 3];
 try

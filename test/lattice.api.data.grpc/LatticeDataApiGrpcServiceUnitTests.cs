@@ -199,6 +199,128 @@ public sealed class LatticeDataApiGrpcServiceUnitTests
     }
 
     [Test]
+    public void Set_maps_a_live_key_cap_breach_to_resource_exhausted()
+    {
+        // Regression: LatticeQuotaExceededException derives from
+        // InvalidOperationException, so before the typed arm existed a per-tree
+        // MaxLiveKeys breach fell through to the generic handler and reached the
+        // caller as an opaque, non-retryable Internal.
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new LatticeQuotaExceededException(
+                "Write to tree 't' rejected: live key count 1200 has reached the configured LatticeOptions.MaxLiveKeys cap of 1000.",
+                "t",
+                LatticeQuotaExceededException.KeysDimension,
+                current: 1200,
+                limit: 1000)));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
+            Assert.That(ex.Status.Detail, Does.Contain("MaxLiveKeys"));
+        });
+    }
+
+    [Test]
+    public void Set_surfaces_the_breached_dimension_and_ceiling_as_trailers()
+    {
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new LatticeQuotaExceededException(
+                "Write to tree 't' rejected: estimated footprint 4096 bytes has reached the configured LatticeOptions.MaxEstimatedBytes cap of 2048 bytes.",
+                "t",
+                LatticeQuotaExceededException.BytesDimension,
+                current: 4096,
+                limit: 2048)));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                ex!.Trailers.GetValue(LatticeDataApiGrpcService.QuotaDimensionTrailer),
+                Is.EqualTo(LatticeQuotaExceededException.BytesDimension),
+                "the client must be able to branch on the breached dimension without parsing prose");
+            Assert.That(
+                ex.Trailers.GetValue(LatticeDataApiGrpcService.QuotaTreeTrailer),
+                Is.EqualTo("t"));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeDataApiGrpcService.QuotaCurrentTrailer),
+                Is.EqualTo("4096"));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeDataApiGrpcService.QuotaLimitTrailer),
+                Is.EqualTo("2048"));
+        });
+    }
+
+    [Test]
+    public void SetMany_maps_a_tenant_rate_breach_to_a_recoverable_resource_exhausted()
+    {
+        // The transient dimension: the tenant's ops-per-second budget refills, so
+        // this is precisely the case a client should retry. It carries no numeric
+        // ceiling, so the numeric trailers are withheld rather than reported as 0.
+        _api.SetManyAsync("t", Arg.Any<IReadOnlyList<DataEntry>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new LatticeQuotaExceededException(
+                "Tenant 'acme' exceeded its sustained request-rate budget writing to tree 't'. "
+                + "This is a transient back-off signal: the budget refills continuously, so retry after a short backoff.",
+                "t",
+                LatticeQuotaExceededException.OpsPerSecondDimension,
+                current: 0,
+                limit: 0,
+                tenantId: "acme")));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.SetMany(
+                new DataSetManyRequest { TreeId = "t", Upserts = [new DataEntry { Key = "k", Value = [1] }] },
+                Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeDataApiGrpcService.QuotaDimensionTrailer),
+                Is.EqualTo(LatticeQuotaExceededException.OpsPerSecondDimension));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeDataApiGrpcService.QuotaCurrentTrailer),
+                Is.Null,
+                "a dimension with no numeric ceiling must not advertise a fabricated 0");
+            Assert.That(
+                ex.Trailers.GetValue(LatticeDataApiGrpcService.QuotaLimitTrailer),
+                Is.Null);
+        });
+    }
+
+    [Test]
+    public void Set_quota_trailers_never_echo_the_tenant_id()
+    {
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new LatticeQuotaExceededException(
+                "Tenant 'acme' exceeded its keys quota on tree 't': 1200 has reached the cap of 1000.",
+                "t",
+                LatticeQuotaExceededException.KeysDimension,
+                current: 1200,
+                limit: 1000,
+                tenantId: "acme")));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
+            Assert.That(
+                ex.Trailers.Select(static entry => entry.Key),
+                Has.None.Contains("tenant"),
+                "the caller asserted its own active tenant, so echoing a server-side attribution adds nothing");
+            Assert.That(
+                ex.Trailers.Select(static entry => entry.Value),
+                Has.None.EqualTo("acme"));
+        });
+    }
+
+    [Test]
     public void Set_throws_on_null_request()
     {
         Assert.ThrowsAsync<ArgumentNullException>(() => _service.Set(null!, Context()));

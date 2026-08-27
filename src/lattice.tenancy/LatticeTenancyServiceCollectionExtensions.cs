@@ -141,9 +141,11 @@ public static class LatticeTenancyServiceCollectionExtensions
         // lock-free, allocation-free, grain-hop-free acquire. A low-frequency
         // budget coordinator (hosted service) apportions each tenant's cluster-wide
         // rate across the live silos at lease cadence and (re)sizes the buckets;
-        // nothing on the hot path is a grain call. Registering it is inert until a
-        // later feature threads it into the write path. Appended at the end of the
-        // once-only block so the whole limiter stack registers exactly once.
+        // nothing on the hot path is a grain call. LatticeTenantAdmissionController
+        // acquires from it ahead of the footprint-quota evaluation, so registering
+        // the stack arms rate enforcement for any tenant carrying a MaxOpsPerSecond
+        // budget. Appended at the end of the once-only block so the whole limiter
+        // stack registers exactly once.
         builder.Services.AddOptions<LatticeTenantRateLimiterOptions>();
         builder.Services.TryAddSingleton(TimeProvider.System);
         builder.Services.TryAddSingleton<SiloLocalTenantRateLimiter>();

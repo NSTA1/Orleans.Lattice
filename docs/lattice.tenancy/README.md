@@ -221,6 +221,10 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
   overage** - a first-class, billing-ready signal distinct from ordinary usage;
   usage above `cap x (1 + burst%)` is refused with `LatticeQuotaExceededException`
   carrying the tenant id and dimension. A tenant with burst `0` refuses at the cap.
+  Over the [data gRPC binding](../lattice.api.data.grpc/README.md#quota-refusals)
+  the refusal reaches a remote caller as `ResourceExhausted` carrying the breached
+  dimension as a trailer; the tenant id is not echoed back, because the caller
+  asserted its own active tenant on the request.
 - **Metering drives enforcement, on a cadence.** A quota is admitted against the
   tenant's *metered* usage, so nothing binds until a usage sample lands. Each silo
   runs a background metering cycle every
@@ -296,7 +300,11 @@ enforcement stays lock-free:
 A breach surfaces as a `LatticeQuotaExceededException` on the `ops-per-second`
 dimension. Unlike the footprint dimensions it is **transient**: the same call
 generally succeeds once the bucket refills, so a client should treat it as a
-back-pressure signal to retry rather than as a durable capacity failure.
+back-pressure signal to retry rather than as a durable capacity failure. Over the
+[data gRPC binding](../lattice.api.data.grpc/README.md#quota-refusals) it reaches
+a remote caller as a `ResourceExhausted` `RpcException` carrying the breached
+dimension as a trailer, so a client can tell a retryable rate breach from a
+footprint breach that will not clear on its own.
 
 ## Region residency
 
