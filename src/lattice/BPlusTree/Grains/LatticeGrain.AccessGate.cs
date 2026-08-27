@@ -169,6 +169,30 @@ internal sealed partial class LatticeGrain
         LatticeAccessGateEnforcement.EnforceWholeTreeAsync(AccessGate, MembershipContext, TreeId, operation, cancellationToken);
 
     /// <summary>
+    /// Fail-closed enforcement of the caller's right to read the <b>whole</b> of a
+    /// <em>different</em> tree than this activation's own - the caller-supplied
+    /// source of a <see cref="ILattice.MergeAsync"/>. Every other enforcement
+    /// helper on this partial is hard-bound to <see cref="TreeId"/>, which is
+    /// correct for an operation confined to this tree but leaves a cross-tree
+    /// operation's far side ungoverned; this one is parameterised by the tree
+    /// actually being read.
+    /// <para>
+    /// Hard-deny semantics (via
+    /// <see cref="LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync"/>):
+    /// a plain deny <em>and</em> a partial-coverage (filtered) allow both throw.
+    /// A merge copies the source in its entirety, so a filtered allow must be
+    /// refused rather than silently narrowed to the authorized subset. Inherits
+    /// the null-gate / system-origin zero-cost short-circuits, so a default host
+    /// and all internal machinery pay nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="sourceTreeId">The tree whose entire contents the caller will read.</param>
+    /// <param name="cancellationToken">Cancels subject resolution and authorization.</param>
+    private ValueTask EnforceSourceTreeReadAsync(string sourceTreeId, CancellationToken cancellationToken) =>
+        LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(
+            AccessGate, MembershipContext, sourceTreeId, rangeStart: null, rangeEnd: null, cancellationToken);
+
+    /// <summary>
     /// Fail-closed authorization check for a single-key point read
     /// (<see cref="LatticeOperation.Read"/>). Returns <c>true</c> when the caller
     /// may observe <paramref name="key"/>; a denied key returns <c>false</c> so

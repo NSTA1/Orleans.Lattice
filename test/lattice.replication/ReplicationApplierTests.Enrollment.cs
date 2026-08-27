@@ -324,4 +324,64 @@ public partial class ReplicationApplierTests
         await apply.Received(1).ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>());
         await dlq.DidNotReceiveWithAnyArgs().EnqueueAsync(default, default!, default, default!, default);
     }
+
+    [Test]
+    public async Task ApplyBatchAsync_dead_letters_entries_smuggled_behind_a_conforming_first_entry()
+    {
+        // Security regression: a run was segmented on (treeId, originClusterId)
+        // only, so the merge-mode gate - which classifies a run from its
+        // representative first entry - could be satisfied by a single conforming
+        // entry while dispatch inside the run switched on each entry's own
+        // peer-supplied Mode. A peer could therefore head a run with a
+        // conforming LwwRegister entry and smuggle entries carrying an arbitrary
+        // CRDT algebra behind it, writing state into an enrolled tree under a
+        // merge mode the operator never configured, with no dead-letter and no
+        // mismatch metric. Mode is now part of the run key, so the smuggled
+        // entries form their own run and are classified on their own merits.
+        var (applier, apply, _, dlq) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var batch = new[]
+        {
+            // Conforming head: matches the locally-resolved mode.
+            EnrollmentEntry(OrdersTree, "a", Hlc(100)),
+            // Smuggled tail: same tree and origin, attacker-chosen algebra.
+            EnrollmentEntry(OrdersTree, "b", Hlc(101), mode: LatticeMergeMode.GCounter),
+            EnrollmentEntry(OrdersTree, "c", Hlc(102), mode: LatticeMergeMode.GCounter),
+        };
+
+        await applier.ApplyBatchAsync(batch);
+
+        // The mismatched entries are parked with the mode-mismatch reason
+        // instead of being folded through the attacker-chosen merge algebra.
+        await dlq.Received(2).EnqueueAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonModeMismatch,
+            Arg.Any<CancellationToken>());
+        await apply.DidNotReceiveWithAnyArgs().ApplyCrdtDeltaManyAsync(default!);
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_still_applies_the_conforming_prefix_of_a_smuggled_batch()
+    {
+        // The conforming head is legitimate traffic and must still be applied:
+        // splitting the run on a mode change rejects only the smuggled tail, it
+        // does not punish the whole batch.
+        var (applier, apply, _, _) = CreateEnrollmentApplier(
+            new MapReplicationContext(new Dictionary<string, LatticeMergeMode> { [OrdersTree] = LatticeMergeMode.LwwRegister }));
+
+        var batch = new[]
+        {
+            EnrollmentEntry(OrdersTree, "a", Hlc(110)),
+            EnrollmentEntry(OrdersTree, "b", Hlc(111)),
+            EnrollmentEntry(OrdersTree, "c", Hlc(112), mode: LatticeMergeMode.OrSet),
+        };
+
+        var result = await applier.ApplyBatchAsync(batch);
+
+        Assert.That(result.Applied, Is.True, "the conforming prefix is honoured");
+        await apply.Received(1).ApplyMergeManyAsync(Arg.Any<IReadOnlyList<ApplyMergeItem>>());
+    }
 }

@@ -120,10 +120,23 @@ internal sealed partial class ReplicationApplier
             cancellationToken.ThrowIfCancellationRequested();
             var startTreeId = entries[i].TreeId;
             var startOrigin = entries[i].OriginClusterId;
+            // The wire merge-mode is part of the run key, not just the run's
+            // first entry. The receiver gate classifies a run from its
+            // representative first entry, while dispatch inside the run switches
+            // on each entry's own Mode - so segmenting on (tree, origin) alone
+            // let a peer head a run with one conforming entry and smuggle
+            // entries carrying an arbitrary merge algebra behind it, past the
+            // gate. Including Mode means a mode change starts a new run that is
+            // classified on its own merits and dead-lettered if it disagrees
+            // with the locally-resolved mode. A legitimate batch carries a
+            // batch-constant mode per run, so this never splits a well-formed
+            // run and costs one extra comparison per entry.
+            var startMode = entries[i].Mode;
             var j = i + 1;
             while (j < entries.Count
                 && string.Equals(entries[j].TreeId, startTreeId, StringComparison.Ordinal)
-                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal))
+                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal)
+                && entries[j].Mode == startMode)
             {
                 j++;
             }
@@ -346,10 +359,16 @@ internal sealed partial class ReplicationApplier
         {
             var startTreeId = entries[i].TreeId ?? string.Empty;
             var startOrigin = entries[i].OriginClusterId;
+            // Mode is part of the run key here for the same reason as on the
+            // sequential path: the gate classifies a run from its first entry,
+            // so a heterogeneous-mode run would carry unclassified entries past
+            // it. See ApplyRunsSequentiallyAsync.
+            var startMode = entries[i].Mode;
             var j = i + 1;
             while (j < entries.Count
                 && string.Equals(entries[j].TreeId ?? string.Empty, startTreeId, StringComparison.Ordinal)
-                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal))
+                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal)
+                && entries[j].Mode == startMode)
             {
                 j++;
             }
@@ -497,8 +516,9 @@ internal sealed partial class ReplicationApplier
 
         // RECEIVER-SIDE ENROLLMENT / MERGE-MODE GATE (issue #1267). Mirror the
         // per-entry gate in ApplyAsync for the batch path. A run is a single
-        // (treeId, originClusterId) segment carrying one batch-constant wire
-        // mode, so the representative first entry classifies the whole run:
+        // (treeId, originClusterId, mode) segment - mode is part of the run key,
+        // so every entry in the run provably carries the mode the representative
+        // first entry classifies, and the classification covers the whole run:
         // reject the run when the tree is not enrolled here, or dead-letter it
         // when the peer-supplied wire mode disagrees with the locally resolved
         // mode. Checked before any HWM grain call so a rejected run costs no
