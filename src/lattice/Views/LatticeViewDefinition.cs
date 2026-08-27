@@ -1,3 +1,5 @@
+using Orleans.Lattice.Views;
+
 namespace Orleans.Lattice;
 
 /// <summary>
@@ -46,7 +48,7 @@ public sealed class LatticeViewDefinition
         LatticeRuntimeViewProjectionDescriptor? runtimeProjection,
         bool accumulative = false)
     {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentNullException.ThrowIfNull(projection);
         ViewName = viewName;
         Projection = projection;
@@ -79,7 +81,7 @@ public sealed class LatticeViewDefinition
         ILatticeAggregationProjection aggregation,
         LatticeRuntimeViewProjectionDescriptor? runtimeProjection)
     {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentNullException.ThrowIfNull(aggregation);
         ViewName = viewName;
         AggregationProjection = aggregation;

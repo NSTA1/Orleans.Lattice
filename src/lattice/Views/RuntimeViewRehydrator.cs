@@ -48,6 +48,19 @@ internal static class RuntimeViewRehydrator
             return null;
         }
 
+        // A name an older build accepted is re-hydrated rather than refused:
+        // adopting the naming rule must not strand a view that already exists.
+        // It is reported once per activation so the operator can see which views
+        // need renaming, since such a name can make the view's tree id unusable
+        // or ambiguous as a persistent grain key on a keyed storage backend.
+        if (!ViewNameValidator.TryValidate(record.ViewName, out var nameViolation))
+        {
+            logger.LogWarning(
+                "Runtime view '{ViewName}' has a name that is no longer legal and should be re-created under a new name: {Reason}",
+                record.ViewName,
+                nameViolation);
+        }
+
         try
         {
             ViewSourceTreeValidator.ThrowIfViewTree(record.SourceTreeId);

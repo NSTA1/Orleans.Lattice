@@ -75,7 +75,7 @@ internal sealed class LatticeViewFactory(
         LatticeViewDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentNullException.ThrowIfNull(definition);
 
         var sourceTreeId = source.GetPrimaryKeyString();
@@ -103,7 +103,7 @@ internal sealed class LatticeViewFactory(
         LatticeRuntimeViewProjectionDescriptor runtimeProjection)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName);
         ArgumentNullException.ThrowIfNull(runtimeProjection);
 
         var provider = runtimeProviders.TryGet(runtimeProjection.ProviderKey)

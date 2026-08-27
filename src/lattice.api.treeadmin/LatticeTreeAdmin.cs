@@ -1193,7 +1193,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         RequireViews();
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
+        ViewNameValidator.ThrowIfInvalid(viewName, nameof(viewName));
         ArgumentException.ThrowIfNullOrEmpty(sourceTreeId);
         ArgumentException.ThrowIfNullOrEmpty(providerKey);
         ArgumentNullException.ThrowIfNull(payload);
