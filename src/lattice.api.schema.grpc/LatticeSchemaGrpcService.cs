@@ -307,6 +307,15 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Schema: gRPC dead-letter stream failed.");
@@ -467,6 +476,15 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {

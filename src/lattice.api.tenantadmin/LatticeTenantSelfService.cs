@@ -70,6 +70,8 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
     public async Task<TenantDescriptor> GetCurrentTenantAsync(CancellationToken cancellationToken = default)
     {
         var tenant = await _resolver.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+        ThrowIfDenied(tenant);
+
         var status = await ReadStatusAsync(tenant, cancellationToken).ConfigureAwait(false);
         return new TenantDescriptor
         {
@@ -89,6 +91,8 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
         // reserved default tenant is the "no tenant" pseudo-tenant, so it is only
         // surfaced when the caller is operating under a real, non-default tenant.
         var current = await _resolver.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+        ThrowIfDenied(current);
+
         if (!current.IsDefault)
         {
             accessible.Add(current.Value);
@@ -182,15 +186,37 @@ internal sealed class LatticeTenantSelfService : ILatticeTenantSelfService
 
     private async Task<TenantLifecycleStatus> ReadStatusAsync(TenantId tenant, CancellationToken cancellationToken)
     {
-        // An uninitialised default(TenantId) has no registry record to read; treat
-        // it as the reserved default tenant, which is always active.
+        // The uninitialised default(TenantId) is the resolver's fail-closed "no
+        // valid tenant" sentinel, not the reserved default tenant (whose Value is
+        // "default"). It must never be reported as a live tenant: callers guard
+        // with ThrowIfDenied before reaching here, so this is a defensive floor
+        // rather than a reachable path.
         if (tenant.Value is null)
         {
-            return TenantLifecycleStatus.Active;
+            throw new LatticeTenantAccessDeniedException();
         }
 
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
         return record is null ? TenantLifecycleStatus.Active : Map(record.Status);
+    }
+
+    /// <summary>
+    /// Fails closed when the resolver denied the caller's assertion. The resolver
+    /// signals a denial by resolving the uninitialised <c>default(TenantId)</c>
+    /// "no tenant" value - a <c>null</c> <see cref="TenantId.Value"/>, distinct
+    /// from the reserved <see cref="TenantId.Default"/> - which the data plane
+    /// already turns into a <see cref="LatticeTenantAccessDeniedException"/>. This
+    /// surface must agree: reporting the sentinel as a tenant would answer "which
+    /// tenant am I acting as" with a fabricated live descriptor for an assertion
+    /// that was actually refused, and would emit an entry with a <c>null</c> id
+    /// into the accessible-tenant list.
+    /// </summary>
+    private static void ThrowIfDenied(TenantId tenant)
+    {
+        if (tenant.Value is null)
+        {
+            throw new LatticeTenantAccessDeniedException();
+        }
     }
 
     private ValueTask<LatticeSubject> ResolveSubjectAsync(CancellationToken cancellationToken)
