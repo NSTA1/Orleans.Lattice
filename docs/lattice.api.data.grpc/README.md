@@ -46,7 +46,7 @@ The public client wraps a caller-supplied channel and exposes one method per RPC
 
 ### Per-tenant selection
 
-On a cluster running the optional tenancy add-on, per-tenant capacity governance (write admission and quota enforcement) is scoped by the call's *active tenant*. The binding lifts the active tenant from a single request header - `lattice-active-tenant` by default, configurable through `LatticeDataApiGrpcOptions.ActiveTenantHeaderName` - and stamps it onto the call's ambient scope so it reaches the silo-side admission controller:
+On a cluster running the optional tenancy add-on, the call's *active tenant* scopes both the **tree namespace** the call addresses and its **capacity governance** (write admission and quota enforcement). The binding lifts the active tenant from a single request header - `lattice-active-tenant` by default, configurable through `LatticeDataApiGrpcOptions.ActiveTenantHeaderName` - and stamps it onto the call's ambient scope, so the facade resolves each request's tree name into that tenant's `t/{tenant}/{name}` namespace and the silo-side admission controller charges the operation to it:
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();
@@ -57,7 +57,7 @@ builder.Services.AddLatticeDataApiGrpc(o =>
 });
 ```
 
-The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules. A call the asserted tenant is not admitted to make - for example a write that would breach the tenant's quota - surfaces as a `PermissionDenied` `RpcException`. Set the option to an empty string to disable header-based tenant selection entirely.
+The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules. A call that cannot be attributed to a valid active tenant is refused by that fail-closed resolution and surfaces as a `PermissionDenied` `RpcException`. A call that resolves cleanly but *breaches the tenant's quota* is a different failure: the tenancy admission controller signals it by throwing a typed quota exception carrying the breached dimension, which this binding does not yet map to a dedicated status code, so it currently reaches the caller as a generic `Internal` `RpcException`. Set the option to an empty string to disable header-based tenant selection entirely.
 
 See the [`Orleans.Lattice.Api.Data` overview](../lattice.api.data/README.md) for the full facade, its surfaces, and the shared authorization model.
 

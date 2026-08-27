@@ -24,6 +24,8 @@ It currently has no tunable properties.
 
 ## Facade operations
 
+Every `treeId` these operations accept is a **tenant-local name**: the facade resolves it to its effective, tenant-scoped id through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point and uses that one id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another. With the tenancy add-on absent the bare name is returned unchanged, so behaviour is byte-for-byte as before; with it registered an unqualified name is scoped into the active tenant's `t/{tenant}/{name}` namespace, an already-qualified or reserved name is returned unchanged, and a caller with no valid active tenant fails closed with a `LatticeTenantAccessDeniedException`. See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md).
+
 The control facade exposes these methods. Each method corresponds to one RPC in the [gRPC binding](../lattice.api.schema.grpc/api.md), with `ListDeadLettersAsync` projected as the server-streaming `StreamDeadLetters` RPC. Every facade method authorizes its tree scope fail-closed before touching the admin plane.
 
 | Method | Signature |

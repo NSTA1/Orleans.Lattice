@@ -11,7 +11,16 @@ It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](.
 - **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert, single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are Orleans-serialized request / response records that wrap the facade DTOs, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
-Single-tree operations fetch the target `ILattice` grain with `GetGrain<ILattice>(treeId)` and call the same public method the in-cluster client calls. Cross-tree atomic batches are different: the facade converts each tree slice into a cross-tree batch and calls the grain-factory cross-tree coordinator surface. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
+Single-tree operations resolve the caller-supplied tree name to its **effective, tenant-scoped id** and fetch that `ILattice` grain, then call the same public method the in-cluster client calls. Cross-tree atomic batches are different: the facade converts each tree slice into a cross-tree batch and calls the grain-factory cross-tree coordinator surface. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
+
+### Tenant-scoped tree names
+
+Every `treeId` this facade accepts is a **tenant-local name**, resolved through `ITenantContextResolver.ResolveEffectiveTreeIdAsync` at the entry point of each verb before anything uses it. The facade then uses that one effective id for **both** the authorization check and the operation, so a verb can never authorize one tree and act on another; each slice of a cross-tree atomic batch is composed the same way, so a batch cannot straddle namespaces by naming an unqualified tree that belongs to someone else.
+
+- With the tenancy add-on **absent** (the default), the core no-op resolver resolves the reserved `default` tenant synchronously and returns the bare name unchanged - the same string reference, no allocation and no `await` - so behaviour is byte-for-byte identical to dialling the name directly.
+- With the tenancy add-on **registered**, an unqualified name is scoped into the active tenant's `t/{tenant}/{name}` namespace; a name that is already qualified or reserved (the `t/` tenant namespace, or a `_lattice_` / `sys-` system namespace) is returned unchanged and never double-composed; and a caller with no valid active tenant fails closed with a `LatticeTenantAccessDeniedException` rather than silently defaulting.
+
+See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation model this resolution establishes.
 
 ## Core properties
 
