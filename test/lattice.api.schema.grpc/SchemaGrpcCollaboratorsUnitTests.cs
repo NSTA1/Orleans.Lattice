@@ -265,6 +265,7 @@ public sealed class LatticeSchemaGrpcServiceBaseBindServiceTests
             Substitute.For<global::Orleans.Lattice.Api.Schema.ILatticeSchemaControl>(),
             Substitute.For<ILatticeSchemaApiCredentialBridge>(),
             Substitute.For<ILatticeSchemaApiAuthSchemeSource>(),
+            Options.Create(new LatticeSchemaApiGrpcOptions()),
             NullLogger<LatticeSchemaGrpcService>.Instance);
 
         LatticeSchemaGrpcServiceBase.BindService(binder, service);

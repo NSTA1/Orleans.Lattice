@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc;
 
@@ -308,6 +309,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     private readonly ILatticeTreeAdmin _control;
     private readonly ILatticeTreeAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTreeAdminApiAuthSchemeSource _authSchemeSource;
+    private readonly IOptions<LatticeTreeAdminApiGrpcOptions> _options;
     private readonly ILogger<LatticeTreeAdminGrpcService> _logger;
 
     /// <summary>
@@ -325,17 +327,20 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         ILatticeTreeAdmin control,
         ILatticeTreeAdminApiCredentialBridge credentialBridge,
         ILatticeTreeAdminApiAuthSchemeSource authSchemeSource,
+        IOptions<LatticeTreeAdminApiGrpcOptions> options,
         ILogger<LatticeTreeAdminGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
+        _options = options;
         _logger = logger;
     }
 
@@ -348,6 +353,20 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     /// and runs after, the transport-level
     /// <see cref="ILatticeTreeAdminApiAuthorizer"/> gate.
     /// </summary>
+    /// <summary>
+    /// Lifts the caller's asserted active tenant onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for the duration of the call, so
+    /// this facade's tenant-scoped name resolution sees the caller's tenant rather
+    /// than the reserved default. Returns <see langword="null"/> (no scope, no
+    /// allocation) when no tenant is asserted, so a tenancy-off cluster is
+    /// unchanged. The assertion is re-validated against the caller's own
+    /// membership downstream; this seam only carries it.
+    /// </summary>
+    private IDisposable? StampActiveTenant(ServerCallContext context)
+        => LatticeActiveTenantAssertion.Stamp(
+            name => context.RequestHeaders?.GetValue(name),
+            _options.Value.ActiveTenantHeaderName);
+
     private IDisposable? StampCallerCredential(ServerCallContext context)
     {
         var credential = _credentialBridge.Resolve(context);
@@ -598,6 +617,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {

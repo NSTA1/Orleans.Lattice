@@ -29,6 +29,22 @@ public sealed class LatticeBackupApiGrpcOptions
     public string CredentialHeaderName { get; set; } = "authorization";
 
     /// <summary>
+    /// The request header carrying the caller's asserted active tenant, lifted
+    /// onto the ambient active-tenant context so this facade's tenant-scoped name
+    /// resolution sees the caller's tenant rather than the reserved default.
+    /// Defaults to <see cref="LatticeActiveTenantAssertion.DefaultHeaderName"/>,
+    /// matching every other binding so one client works against all of them. Set
+    /// to <c>null</c> or empty to disable the assertion.
+    /// </summary>
+    /// <remarks>
+    /// The asserted tenant is a caller claim, re-validated against the caller's
+    /// own subject membership by the tenancy add-on before it can scope anything;
+    /// carrying it here grants no access. With no tenancy add-on registered the
+    /// assertion resolves the reserved default tenant and changes nothing.
+    /// </remarks>
+    public string ActiveTenantHeaderName { get; set; } = LatticeActiveTenantAssertion.DefaultHeaderName;
+
+    /// <summary>
     /// The authentication scheme stamped on the bridged
     /// <see cref="LatticeCredential"/>, matched by a registered
     /// <c>ILatticeCredentialAuthenticator</c> to resolve the caller's subject.

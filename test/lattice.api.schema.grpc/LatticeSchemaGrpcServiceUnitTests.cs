@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -53,6 +54,7 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
             control,
             bridge ?? AnonymousBridge(),
             authSchemeSource ?? Substitute.For<ILatticeSchemaApiAuthSchemeSource>(),
+            Options.Create(new LatticeSchemaApiGrpcOptions()),
             NullLogger<LatticeSchemaGrpcService>.Instance);
     }
 
@@ -70,11 +72,13 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeSchemaGrpcService(null!, control, bridge, source, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaGrpcService(_methods, null!, bridge, source, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, null!, source, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, bridge, null!, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, bridge, source, null!), Throws.ArgumentNullException);
+            var options = Options.Create(new LatticeSchemaApiGrpcOptions());
+            Assert.That(() => new LatticeSchemaGrpcService(null!, control, bridge, source, options, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaGrpcService(_methods, null!, bridge, source, options, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, null!, source, options, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, bridge, null!, options, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, bridge, source, null!, NullLogger<LatticeSchemaGrpcService>.Instance), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeSchemaGrpcService(_methods, control, bridge, source, options, null!), Throws.ArgumentNullException);
         });
     }
 

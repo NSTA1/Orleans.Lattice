@@ -42,6 +42,7 @@ public sealed class LatticeBackupGrpcServiceUnitTests
             control,
             bridge,
             schemeSource,
+            Options.Create(new LatticeBackupApiGrpcOptions()),
             Substitute.For<ILogger<LatticeBackupGrpcService>>());
     }
 

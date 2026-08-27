@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -47,6 +48,7 @@ public sealed class LatticeReplicationGrpcServiceRpcPassthroughTests
             control,
             bridge,
             authSchemeSource,
+            Options.Create(new LatticeReplicationApiGrpcOptions()),
             NullLogger<LatticeReplicationGrpcService>.Instance);
 
         var ex = Assert.ThrowsAsync<RpcException>(async () => await service.DisableReplication(
