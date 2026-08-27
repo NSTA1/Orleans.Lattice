@@ -257,12 +257,29 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Keep a local entry iff the other side either still has the
         // same dot (so it has not been superseded there) or has never
-        // observed it.
+        // observed it. When both sides still carry the same dot but disagree
+        // on the value under it, keep the deterministically-greater value so
+        // the merge stays commutative (see FindDot / CompareValueBytes).
         for (var i = 0; i < localCount; i++)
         {
             var entry = localEntries[i];
-            if (ContainsDot(otherEntries, entry.ReplicaId, entry.Counter)
-                || !IsObserved(entry, otherContext))
+            if (FindDot(otherEntries, entry.ReplicaId, entry.Counter) is { } dup)
+            {
+                var kept = CompareValueBytes(dup.Value, entry.Value) > 0 ? dup : entry;
+                if (survivors is not null)
+                {
+                    survivors.Add(kept);
+                }
+                else if (!ReferenceEquals(kept.Value, entry.Value))
+                {
+                    // First value change: materialise the kept prefix, then
+                    // the resolved entry in this local slot.
+                    survivors = new List<MvRegisterEntry>(localCount + otherEntries.Count);
+                    for (var k = 0; k < i; k++) survivors.Add(localEntries[k]);
+                    survivors.Add(kept);
+                }
+            }
+            else if (!IsObserved(entry, otherContext))
             {
                 survivors?.Add(entry);
             }
@@ -349,14 +366,41 @@ public sealed class MvRegister : ICrdt<MvRegister>
         return false;
     }
 
-    private static bool ContainsDot(IReadOnlyList<MvRegisterEntry> entries, string replicaId, long counter)
+    private static MvRegisterEntry? FindDot(List<MvRegisterEntry> entries, string replicaId, long counter)
+    {
+        foreach (var entry in entries)
+        {
+            if (entry.Counter == counter && entry.ReplicaId == replicaId) return entry;
+        }
+        return null;
+    }
+
+    private static MvRegisterEntry? FindDot(IReadOnlyList<MvRegisterEntry> entries, string replicaId, long counter)
     {
         for (var i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            if (entry.Counter == counter && entry.ReplicaId == replicaId) return true;
+            if (entry.Counter == counter && entry.ReplicaId == replicaId) return entry;
         }
-        return false;
+        return null;
+    }
+
+    // Lexicographic byte-order comparison used to break a same-dot value
+    // collision deterministically (the greater byte sequence wins) so
+    // MergeFrom / MergeDelta stay commutative even when two writes minted the
+    // same (replicaId, counter) dot carrying different values. Mirrors
+    // Rga.CompareBytes: compare byte-by-byte, then by length, so a shorter
+    // prefix sorts before a longer extension of it.
+    private static int CompareValueBytes(byte[] left, byte[] right)
+    {
+        if (ReferenceEquals(left, right)) return 0;
+        var min = Math.Min(left.Length, right.Length);
+        for (var i = 0; i < min; i++)
+        {
+            var c = left[i].CompareTo(right[i]);
+            if (c != 0) return c;
+        }
+        return left.Length.CompareTo(right.Length);
     }
 
     /// <summary>
@@ -408,12 +452,28 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Keep a local entry iff the delta still carries the same dot (so it
         // has not been superseded there) or the delta's context has never
-        // observed it.
+        // observed it. A same-dot value disagreement is resolved by the same
+        // deterministic max rule MergeFrom uses, so a delta fold agrees with
+        // the equivalent full-state merge and is commutative.
         for (var i = 0; i < localCount; i++)
         {
             var entry = localEntries[i];
-            if ((hasEntries && ContainsDot(otherEntries!, entry.ReplicaId, entry.Counter))
-                || !IsObserved(entry, otherContext))
+            var dup = hasEntries ? FindDot(otherEntries!, entry.ReplicaId, entry.Counter) : null;
+            if (dup is { } match)
+            {
+                var kept = CompareValueBytes(match.Value, entry.Value) > 0 ? match : entry;
+                if (survivors is not null)
+                {
+                    survivors.Add(kept);
+                }
+                else if (!ReferenceEquals(kept.Value, entry.Value))
+                {
+                    survivors = new List<MvRegisterEntry>(localCount + otherCount);
+                    for (var k = 0; k < i; k++) survivors.Add(localEntries[k]);
+                    survivors.Add(kept);
+                }
+            }
+            else if (!IsObserved(entry, otherContext))
             {
                 survivors?.Add(entry);
             }
