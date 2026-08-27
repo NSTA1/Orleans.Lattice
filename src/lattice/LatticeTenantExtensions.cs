@@ -26,6 +26,50 @@ namespace Orleans.Lattice;
 public static class LatticeTenantExtensions
 {
     /// <summary>
+    /// Resolves the effective, tenant-scoped tree id for the caller-supplied,
+    /// tenant-local <paramref name="treeName"/> under the caller's active tenant.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the seam an external API facade uses to scope a caller-supplied
+    /// tree name before it authorizes or operates on it. Both must use the
+    /// <em>same</em> effective id: authorizing the bare name and then operating on
+    /// the composed one (or the reverse) would check one tree and act on another.
+    /// </para>
+    /// <para>
+    /// With no tenancy add-on registered the core no-op resolver resolves
+    /// <see cref="TenantId.Default"/> synchronously and the bare name is returned
+    /// unchanged - the same <see cref="string"/> reference, with no allocation and
+    /// no <c>await</c> on the warm path - so a cluster with tenancy off is
+    /// byte-for-byte identical to not calling this at all. When the tenancy add-on
+    /// is registered, an unqualified name is scoped into the active tenant's
+    /// <c>t/{tenant}/{name}</c> namespace, an already-qualified or reserved name is
+    /// returned unchanged, and a caller with no valid active tenant fails closed
+    /// with <see cref="LatticeTenantAccessDeniedException"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="tenantResolver">The active-tenant context resolver seam.</param>
+    /// <param name="treeName">The caller-supplied, tenant-local tree name.</param>
+    /// <param name="cancellationToken">Cancels an asynchronous tenant resolution.</param>
+    /// <returns>The effective tree id to authorize and operate on.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="tenantResolver"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="treeName"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="LatticeTenantAccessDeniedException">
+    /// The resolver denied the operation (no valid active tenant).
+    /// </exception>
+    public static ValueTask<string> ResolveEffectiveTreeIdAsync(
+        this ITenantContextResolver tenantResolver,
+        string treeName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tenantResolver);
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+
+        return LatticeTenantResolution.ResolveEffectiveTreeIdAsync(
+            tenantResolver, treeName, cancellationToken);
+    }
+
+    /// <summary>
     /// Resolves the <see cref="ILattice"/> handle for the tenant-local tree
     /// <paramref name="treeName"/> under the caller's active tenant, resolving
     /// the <see cref="ITenantContextResolver"/> and <see cref="IGrainFactory"/>
