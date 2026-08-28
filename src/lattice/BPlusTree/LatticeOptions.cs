@@ -1561,6 +1561,69 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultStorageUsageDeepPollInterval = TimeSpan.Zero;
 
     /// <summary>
+    /// Maximum number of trees a cluster-wide storage-usage roll-up
+    /// (<see cref="ILatticeAdmin.GetTotalStorageUsageAsync"/>,
+    /// <see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>, and
+    /// <see cref="ILatticeAdmin.PollWalUsageAsync"/>) samples concurrently.
+    /// <para>
+    /// The roll-up is a two-level fan-out and the levels <b>multiply</b>: each
+    /// tree sampled concurrently fans out again to its own shard roots and WAL
+    /// partitions (bounded by
+    /// <see cref="MaxConcurrentStorageUsageSurfaces"/>), so the peak in-flight
+    /// grain-call count is this value times that one. Left unbounded, a cluster
+    /// of 90 trees at the default 64 shards and 8 WAL partitions dispatches
+    /// roughly 6,500 concurrent calls in a single burst that all race one
+    /// Orleans response deadline, and the roll-up fails wholesale with response
+    /// timeouts rather than merely taking longer. Bounding both levels makes
+    /// the roll-up degrade in <i>latency</i> instead.
+    /// </para>
+    /// Raising it shortens a roll-up on a large, healthy cluster; lowering it
+    /// further reduces the burst a roll-up imposes on silos serving live
+    /// traffic. The aggregated figures are identical under any bound - only the
+    /// dispatch schedule changes, and per-tree result ordering is preserved.
+    /// This is a cluster-wide knob read from the default (unnamed) options by
+    /// the admin grain that drives the roll-up; per-tree overrides do not
+    /// apply, because that grain is not keyed by tree. The inner, genuinely
+    /// per-tree half of the same fan-out
+    /// (<see cref="MaxConcurrentStorageUsageSurfaces"/>) <i>is</i> per-tree
+    /// overridable. Defaults to
+    /// <see cref="DefaultMaxConcurrentStorageUsageTrees"/> (8). Must be at least
+    /// 1; values below 1 are clamped to 1 at the roll-up site.
+    /// </summary>
+    public int MaxConcurrentStorageUsageTrees { get; set; } = DefaultMaxConcurrentStorageUsageTrees;
+
+    /// <summary>Default value for <see cref="MaxConcurrentStorageUsageTrees"/> (8).</summary>
+    public const int DefaultMaxConcurrentStorageUsageTrees = 8;
+
+    /// <summary>
+    /// Maximum number of per-tree storage surfaces - shard roots plus WAL
+    /// partitions - that a single tree's storage-usage aggregator
+    /// (<see cref="ILattice.GetStorageUsageAsync"/>) queries concurrently. The
+    /// bound spans both surface kinds jointly, so a tree never has more than
+    /// this many usage reads outstanding regardless of how its shard count and
+    /// <see cref="WalPartitions"/> divide.
+    /// <para>
+    /// This is the inner level of the two-level roll-up fan-out described on
+    /// <see cref="MaxConcurrentStorageUsageTrees"/>; the two multiply into the
+    /// cluster-wide peak. A wide tree (the default shard count is 64) would
+    /// otherwise dispatch every shard-root read at once even for a single-tree
+    /// report.
+    /// </para>
+    /// The report is byte-for-byte identical under any bound - only the
+    /// dispatch schedule changes. Resolved per tree through
+    /// <c>LatticeOptionsResolver</c>, like
+    /// <see cref="MaxConcurrentSnapshotCaptures"/>, so a single very wide tree
+    /// can narrow its own fan-out without changing the cluster-wide bound.
+    /// Defaults to
+    /// <see cref="DefaultMaxConcurrentStorageUsageSurfaces"/> (16). Must be at
+    /// least 1; values below 1 are clamped to 1 at the fan-out site.
+    /// </summary>
+    public int MaxConcurrentStorageUsageSurfaces { get; set; } = DefaultMaxConcurrentStorageUsageSurfaces;
+
+    /// <summary>Default value for <see cref="MaxConcurrentStorageUsageSurfaces"/> (16).</summary>
+    public const int DefaultMaxConcurrentStorageUsageSurfaces = 16;
+
+    /// <summary>
     /// Hard ceiling on how long a single outbound shard-to-shard write
     /// forward (the shadow-forward and cross-shard migration forwards a
     /// <c>ShardRootGrain</c> issues to a sibling shard while an adaptive

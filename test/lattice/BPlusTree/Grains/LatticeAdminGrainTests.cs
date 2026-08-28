@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -18,7 +19,8 @@ public sealed class LatticeAdminGrainTests
 {
     private static LatticeAdminGrain CreateGrain(
         IGrainFactory factory,
-        ILatticeRegistry? registry = null)
+        ILatticeRegistry? registry = null,
+        LatticeOptions? options = null)
     {
         if (registry is null)
         {
@@ -29,7 +31,19 @@ public sealed class LatticeAdminGrainTests
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("ol.gad", LatticeConstants.AdminGrainKey));
-        return new LatticeAdminGrain(context, factory, Substitute.For<ILogger<LatticeAdminGrain>>());
+
+        IOptionsMonitor<LatticeOptions>? monitor = null;
+        if (options is not null)
+        {
+            monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+            monitor.Get(Arg.Any<string>()).Returns(options);
+        }
+
+        return new LatticeAdminGrain(
+            context,
+            factory,
+            Substitute.For<ILogger<LatticeAdminGrain>>(),
+            optionsMonitor: monitor);
     }
 
     [Test]
@@ -137,6 +151,250 @@ public sealed class LatticeAdminGrainTests
             Assert.That(report.Partial, Is.True);
             Assert.That(report.Trees[0].TreeId, Is.EqualTo("alpha"));
         });
+    }
+
+    // --- Bounded per-tree fan-out (issue #1728) ---
+
+    [Test]
+    public async Task GetTotalStorageUsageAsync_tree_fanout_never_exceeds_the_configured_bound()
+    {
+        const int Bound = 3;
+        const int Trees = 12;
+
+        var treeIds = Enumerable.Range(0, Trees).Select(i => $"tree-{i:D2}").ToArray();
+        var inFlight = 0;
+        var peak = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var factory = Substitute.For<IGrainFactory>();
+        foreach (var treeId in treeIds)
+        {
+            var id = treeId;
+            var storage = Substitute.For<ILatticeStorageUsage>();
+            storage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                var current = Interlocked.Increment(ref inFlight);
+                RecordPeak(ref peak, current);
+                if (current >= Bound) release.TrySetResult();
+                await release.Task;
+                Interlocked.Decrement(ref inFlight);
+                return new TreeStorageUsageReport { TreeId = id, TotalBytes = 1, SampledAt = DateTimeOffset.UtcNow };
+            });
+            factory.GetGrain<ILatticeStorageUsage>(id).Returns(storage);
+        }
+
+        var grain = CreateGrain(
+            factory,
+            BuildRegistry(treeIds),
+            new LatticeOptions { MaxConcurrentStorageUsageTrees = Bound });
+
+        var report = await grain.GetTotalStorageUsageAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(peak, Is.EqualTo(Bound),
+                $"Expected at most {Bound} trees sampled concurrently across {Trees} registered trees.");
+            // Bounding changes the schedule, not the answer.
+            Assert.That(report.TreeCount, Is.EqualTo(Trees));
+            Assert.That(report.TotalBytes, Is.EqualTo(Trees));
+        });
+    }
+
+    [Test]
+    public async Task PollWalUsageAsync_tree_fanout_never_exceeds_the_configured_bound()
+    {
+        const int Bound = 2;
+        const int Trees = 10;
+
+        var treeIds = Enumerable.Range(0, Trees).Select(i => $"tree-{i:D2}").ToArray();
+        var inFlight = 0;
+        var peak = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var factory = Substitute.For<IGrainFactory>();
+        foreach (var treeId in treeIds)
+        {
+            var id = treeId;
+            var wal = Substitute.For<ILatticeWalUsage>();
+            wal.GetWalUsageAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                var current = Interlocked.Increment(ref inFlight);
+                RecordPeak(ref peak, current);
+                if (current >= Bound) release.TrySetResult();
+                await release.Task;
+                Interlocked.Decrement(ref inFlight);
+                return new TreeWalUsageReport { TreeId = id, WalRetainedBytes = 1 };
+            });
+            factory.GetGrain<ILatticeWalUsage>(id).Returns(wal);
+        }
+
+        var grain = CreateGrain(
+            factory,
+            BuildRegistry(treeIds),
+            new LatticeOptions { MaxConcurrentStorageUsageTrees = Bound });
+
+        await grain.PollWalUsageAsync(CancellationToken.None);
+
+        Assert.That(peak, Is.EqualTo(Bound),
+            $"Expected at most {Bound} trees polled concurrently across {Trees} registered trees.");
+    }
+
+    [Test]
+    public async Task GetTotalStorageUsageAsync_bounded_rollup_preserves_registry_tree_order()
+    {
+        // The registry returns sorted ids and the roll-up's ordering guarantee
+        // is load-bearing; a bound that completed trees out of order (for
+        // example by appending results as they finish) would break it.
+        var treeIds = Enumerable.Range(0, 9).Select(i => $"tree-{i:D2}").ToArray();
+
+        var factory = Substitute.For<IGrainFactory>();
+        for (var i = 0; i < treeIds.Length; i++)
+        {
+            var id = treeIds[i];
+            // Later trees answer first, so completion order is the reverse of
+            // registry order.
+            var delayMs = (treeIds.Length - i) * 4;
+            var storage = Substitute.For<ILatticeStorageUsage>();
+            storage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                await Task.Delay(delayMs, CancellationToken.None);
+                return new TreeStorageUsageReport { TreeId = id, SampledAt = DateTimeOffset.UtcNow };
+            });
+            factory.GetGrain<ILatticeStorageUsage>(id).Returns(storage);
+        }
+
+        var grain = CreateGrain(
+            factory,
+            BuildRegistry(treeIds),
+            new LatticeOptions { MaxConcurrentStorageUsageTrees = 2 });
+
+        var report = await grain.GetTotalStorageUsageAsync(CancellationToken.None);
+
+        Assert.That(report.Trees.Select(t => t.TreeId), Is.EqualTo(treeIds).AsCollection);
+    }
+
+    [Test]
+    public async Task GetTotalStorageUsageAsync_one_failing_tree_still_yields_a_partial_cluster_report()
+    {
+        var treeIds = new[] { "alpha", "beta", "gamma" };
+        var factory = Substitute.For<IGrainFactory>();
+        foreach (var treeId in treeIds)
+        {
+            var id = treeId;
+            var storage = Substitute.For<ILatticeStorageUsage>();
+            if (id == "beta")
+            {
+                storage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+                    .Returns<TreeStorageUsageReport>(_ => throw new TimeoutException("beta deadline"));
+            }
+            else
+            {
+                storage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+                    .Returns(new TreeStorageUsageReport
+                    {
+                        TreeId = id,
+                        LeafStateBytes = 100,
+                        TotalBytes = 100,
+                        SampledAt = DateTimeOffset.UtcNow,
+                    });
+            }
+            factory.GetGrain<ILatticeStorageUsage>(id).Returns(storage);
+        }
+
+        var grain = CreateGrain(
+            factory,
+            BuildRegistry(treeIds),
+            new LatticeOptions { MaxConcurrentStorageUsageTrees = 2 });
+
+        var report = await grain.GetTotalStorageUsageAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // The roll-up completes rather than aborting...
+            Assert.That(report.TreeCount, Is.EqualTo(3));
+            Assert.That(report.TotalBytes, Is.EqualTo(200));
+            // ...and is honest that it is missing a tree.
+            Assert.That(report.Partial, Is.True);
+            Assert.That(report.Trees.Select(t => t.TreeId), Is.EqualTo(treeIds).AsCollection);
+        });
+    }
+
+    [Test]
+    public void GetTotalStorageUsageAsync_cancelled_mid_rollup_throws_rather_than_reporting_partial_zeroes()
+    {
+        using var cts = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var treeIds = Enumerable.Range(0, 8).Select(i => $"tree-{i:D2}").ToArray();
+
+        var factory = Substitute.For<IGrainFactory>();
+        foreach (var treeId in treeIds)
+        {
+            var storage = Substitute.For<ILatticeStorageUsage>();
+            storage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(async _ =>
+            {
+                started.TrySetResult();
+                await Task.Delay(Timeout.Infinite, cts.Token);
+                return new TreeStorageUsageReport();
+            });
+            factory.GetGrain<ILatticeStorageUsage>(treeId).Returns(storage);
+        }
+
+        var grain = CreateGrain(
+            factory,
+            BuildRegistry(treeIds),
+            new LatticeOptions { MaxConcurrentStorageUsageTrees = 2 });
+
+        var pending = grain.GetTotalStorageUsageAsync(cts.Token);
+
+        Assert.That(async () =>
+        {
+            await started.Task;
+            await cts.CancelAsync();
+            await pending;
+        }, Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task PollWalUsageAsync_bounded_poll_still_visits_every_tree()
+    {
+        var treeIds = Enumerable.Range(0, 7).Select(i => $"tree-{i:D2}").ToArray();
+        var visited = new List<string>();
+
+        var factory = Substitute.For<IGrainFactory>();
+        foreach (var treeId in treeIds)
+        {
+            var id = treeId;
+            var wal = Substitute.For<ILatticeWalUsage>();
+            wal.GetWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            {
+                lock (visited) visited.Add(id);
+                return new TreeWalUsageReport { TreeId = id };
+            });
+            factory.GetGrain<ILatticeWalUsage>(id).Returns(wal);
+        }
+
+        var grain = CreateGrain(
+            factory,
+            BuildRegistry(treeIds),
+            new LatticeOptions { MaxConcurrentStorageUsageTrees = 2 });
+
+        await grain.PollWalUsageAsync(CancellationToken.None);
+
+        lock (visited)
+        {
+            Assert.That(visited, Is.EquivalentTo(treeIds));
+        }
+    }
+
+    private static void RecordPeak(ref int peak, int candidate)
+    {
+        var observed = Volatile.Read(ref peak);
+        while (candidate > observed)
+        {
+            var prior = Interlocked.CompareExchange(ref peak, candidate, observed);
+            if (prior == observed) return;
+            observed = prior;
+        }
     }
 
     private static ILatticeRegistry BuildRegistry(params string[] treeIds)

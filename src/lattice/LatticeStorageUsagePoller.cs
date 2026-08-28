@@ -70,12 +70,44 @@ internal sealed class LatticeStorageUsagePoller(
     /// </summary>
     private const int StalenessHorizonPolls = 4;
 
+    /// <summary>
+    /// Longest period <see cref="PeriodicTimer"/> accepts. A configured cadence
+    /// beyond this is clamped rather than allowed to throw out of the loop: an
+    /// out-of-range knob should degrade the poller, not fault
+    /// <see cref="ExecuteAsync"/> and take the host down with it under
+    /// <see cref="BackgroundServiceExceptionBehavior.StopHost"/>.
+    /// </summary>
+    private static readonly TimeSpan MaxPollInterval = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            await RunAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Normal shutdown.
+        }
+        catch (Exception ex)
+        {
+            // Nothing the poller can fail at is worth stopping the host for.
+            // BackgroundService's default StopHost behaviour would otherwise
+            // turn an unusable options value or a startup-ordering hiccup into
+            // a host-wide outage; degrade to "gauges populate on demand only",
+            // which is exactly the configured-off behaviour.
+            logger.LogError(
+                ex,
+                "Storage-usage poller stopped after an unrecoverable error; storage gauges will populate only when the public API is called.");
+        }
+    }
+
+    private async Task RunAsync(CancellationToken stoppingToken)
+    {
         var options = optionsMonitor.Get(Options.DefaultName);
-        var walInterval = options.StorageUsagePollInterval;
-        var deepInterval = options.StorageUsageDeepPollInterval;
+        var walInterval = ClampInterval(options.StorageUsagePollInterval);
+        var deepInterval = ClampInterval(options.StorageUsageDeepPollInterval);
 
         var walEnabled = walInterval > TimeSpan.Zero;
         var deepEnabled = deepInterval > TimeSpan.Zero;
@@ -119,6 +151,14 @@ internal sealed class LatticeStorageUsagePoller(
 
         await Task.WhenAll(loops).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Clamps a configured cadence into the range <see cref="PeriodicTimer"/>
+    /// accepts. A non-positive value is left alone: the caller treats that as
+    /// "disabled" before any timer is built.
+    /// </summary>
+    private static TimeSpan ClampInterval(TimeSpan interval)
+        => interval > MaxPollInterval ? MaxPollInterval : interval;
 
     /// <summary>
     /// Drives one poll cadence. The <paramref name="deep"/> loop calls the

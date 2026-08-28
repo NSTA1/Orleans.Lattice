@@ -45,11 +45,21 @@ public readonly record struct TreeStorageUsageReport
     [Id(4)] public long TotalBytes { get; init; }
 
     /// <summary>
-    /// <c>true</c> when at least one storage surface reported that it does
-    /// not support byte accounting (a provider that does not override
+    /// <c>true</c> when the report is a lower bound rather than an exact
+    /// figure, for either of two reasons:
+    /// <list type="bullet">
+    /// <item><description>a storage surface reported that it does not support
+    /// byte accounting (a provider that does not override
     /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>, or a
-    /// snapshot store without content-length metadata). Consumers should
-    /// render the affected gauge as "no data" rather than a wrong zero.
+    /// snapshot store without content-length metadata); or</description></item>
+    /// <item><description>a shard root or WAL partition did not answer the
+    /// fan-out at all (it failed or timed out). Such a surface contributes
+    /// nothing rather than a zero, because summing its zeroes would understate
+    /// the tree while still presenting the total as complete.</description></item>
+    /// </list>
+    /// Either way, consumers should render the affected gauge as "no data"
+    /// rather than a wrong zero. A partial report is transient: the next
+    /// sample after the surface recovers is exact again.
     /// </summary>
     [Id(5)] public bool Partial { get; init; }
 
@@ -65,8 +75,11 @@ public readonly record struct TreeStorageUsageReport
     /// incrementally-maintained live-key total (or re-anchored exactly on a
     /// deep refresh), so a concurrent cross-shard write may make it lag or lead
     /// the true count slightly. A time-expired entry that compaction has not yet
-    /// reaped is counted as live until the next deep re-anchor. Unaffected by
-    /// <see cref="Partial"/> (which only flags a missing <i>byte</i> surface).
+    /// reaped is counted as live until the next deep re-anchor. A shard that did
+    /// not answer the fan-out contributes no keys and sets
+    /// <see cref="Partial"/>, so this is a lower bound whenever
+    /// <see cref="Partial"/> is <c>true</c>; a WAL-only cause of
+    /// <see cref="Partial"/> (an unsupported byte surface) leaves it exact.
     /// </summary>
     [Id(7)] public long LiveKeys { get; init; }
 }

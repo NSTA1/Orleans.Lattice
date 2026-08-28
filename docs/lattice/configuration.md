@@ -90,6 +90,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
 | [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
+| [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces) | `int` | 16 | Yes |
+| [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees) | `int` | 8 | No (cluster-wide) |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
 | [`MaxEstimatedBytes`](#maxestimatedbytes) | `long?` | `null` (unbounded) | Yes |
 | [`MaxKeyLength`](#maxkeylength) | `int?` | `null` (unbounded) | Yes |
@@ -427,6 +429,40 @@ This option can be changed freely at any time.
 Maximum number of shard roots that opening a snapshot-isolated (point-in-time) cursor may block on their per-shard baseline capture at once (default: 4). Opening such a cursor freezes a baseline on every physical shard root; each capture walks that shard's whole leaf chain and materialises its rows on the shard root's non-reentrant turn, so fanning the capture out to every shard simultaneously blocks every shard root at once - starving cross-cluster replication applies and reads queued on those same roots. Bounding the fan-out keeps all but this many shard roots free while the open proceeds in waves. Lower values reduce the per-open blast radius at the cost of a longer open; higher values open faster but block more shard roots at once. The captured baseline and its point-in-time consistency are identical under any cap - only the dispatch schedule changes. Values below 1 are clamped to 1.
 
 This option can be changed freely at any time; a new value applies to the next snapshot-cursor open.
+
+### `MaxConcurrentStorageUsageTrees`
+
+Maximum number of trees a cluster-wide storage-usage roll-up samples concurrently (default: 8). Applies to `ILatticeAdmin.GetTotalStorageUsageAsync`, `ILatticeAdmin.RefreshStorageUsageAsync`, and the background poller's `ILatticeAdmin.PollWalUsageAsync`.
+
+The roll-up is a **two-level** fan-out and the levels multiply: every tree sampled concurrently fans out again to its own shard roots and WAL partitions, bounded by [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces). Left unbounded, a cluster of 90 trees at the default 64 shards and 8 WAL partitions dispatches roughly `90 x (64 + 8) = 6,480` grain calls in a single burst that all race one 30 s Orleans response deadline, so the roll-up fails wholesale with response timeouts instead of merely taking longer. Bounding both levels caps the peak at `MaxConcurrentStorageUsageTrees x MaxConcurrentStorageUsageSurfaces` (128 by default) and makes the roll-up degrade in *latency* instead.
+
+Raising it shortens a roll-up on a large, healthy cluster; lowering it further reduces the burst a roll-up imposes on silos serving live traffic. The aggregated figures are identical under any bound - only the dispatch schedule changes - and the per-tree ordering in `ClusterStorageUsageReport.Trees` follows the registry's sort order regardless. Values below 1 are clamped to 1.
+
+This is a cluster-wide knob read from the default (unnamed) options by the admin grain that drives the roll-up; per-tree overrides do not apply, because the grain is not keyed by tree. It can be changed freely at any time; a new value applies to the next roll-up.
+
+### `MaxConcurrentStorageUsageSurfaces`
+
+Maximum number of per-tree storage surfaces - shard roots plus WAL partitions - that a single tree's storage-usage aggregator queries concurrently (default: 16). Applies to `ILattice.GetStorageUsageAsync` and every path that reaches it, including the cluster roll-up.
+
+The bound spans both surface kinds **jointly**, so a tree never has more than this many usage reads outstanding regardless of how its shard count and `WalPartitions` divide. A wide tree (the default shard count is 64) would otherwise dispatch every shard-root read at once even for a single-tree report. This is the inner level of the two-level fan-out described under [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees).
+
+The report is byte-for-byte identical under any bound - only the dispatch schedule changes. Values below 1 are clamped to 1.
+
+This option can be changed freely at any time; a new value applies to the next storage-usage fan-out.
+
+```csharp verify
+// Halve the cluster-wide roll-up burst on a silo that also serves
+// latency-sensitive traffic: 4 x 8 = 32 concurrent calls at peak.
+siloBuilder.ConfigureLattice(o =>
+{
+    o.MaxConcurrentStorageUsageTrees = 4;
+    o.MaxConcurrentStorageUsageSurfaces = 8;
+});
+
+// A single very wide tree can narrow its own surface fan-out further
+// without changing the cluster-wide roll-up bound.
+siloBuilder.ConfigureLattice("wide-archive", o => o.MaxConcurrentStorageUsageSurfaces = 4);
+```
 
 ### `ShedSnapshotOpensWhenSaturated`
 

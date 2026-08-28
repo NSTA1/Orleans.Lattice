@@ -553,7 +553,7 @@ internal sealed partial class LatticeAdminGrain
             // catch can release every fenced source deterministically.
             try
             {
-                await RunBoundedAsync(realMoveIndexes.Count, opts.EffectiveMaxConcurrentPartitionMoves, async slot =>
+                await BoundedFanOut.RunAsync(realMoveIndexes.Count, opts.EffectiveMaxConcurrentPartitionMoves, async slot =>
                 {
                     var i = realMoveIndexes[slot];
                     copyResults[i] = await RunMoveCopyPhasesAsync(
@@ -698,51 +698,6 @@ internal sealed partial class LatticeAdminGrain
                 "The move batch must contain at least one (partition, targetProviderKey) pair.", nameof(moves));
         }
         return list;
-    }
-
-    /// <summary>
-    /// Runs <paramref name="body"/> for each slot in <c>[0, count)</c> with at most
-    /// <paramref name="maxConcurrency"/> in flight at once. <see cref="Task.WhenAll(Task[])"/>
-    /// completes only after every slot settles, so the caller's catch can act on a
-    /// fully-quiesced batch even when one slot faulted.
-    /// </summary>
-    private static async Task RunBoundedAsync(int count, int maxConcurrency, Func<int, Task> body)
-    {
-        if (count <= 0)
-        {
-            return;
-        }
-        if (maxConcurrency >= count)
-        {
-            var all = new Task[count];
-            for (var i = 0; i < count; i++)
-            {
-                all[i] = body(i);
-            }
-            await Task.WhenAll(all);
-            return;
-        }
-
-        using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-        var tasks = new Task[count];
-        for (var i = 0; i < count; i++)
-        {
-            tasks[i] = RunOneAsync(i);
-        }
-        await Task.WhenAll(tasks);
-
-        async Task RunOneAsync(int slot)
-        {
-            await gate.WaitAsync();
-            try
-            {
-                await body(slot);
-            }
-            finally
-            {
-                gate.Release();
-            }
-        }
     }
 
     /// <inheritdoc />

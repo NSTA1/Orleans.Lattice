@@ -234,4 +234,61 @@ public sealed class LatticeStorageUsagePollerTests
         Assert.That(metrics.StalenessHorizon, Is.EqualTo(TimeSpan.FromSeconds(120)),
             "the poller sizes the sink staleness horizon off the slower of the WAL and deep cadences");
     }
+
+    // --- Crash-safety: the poller must never stop the host (issue #1728) ---
+
+    [Test]
+    public async Task ExecuteAsync_out_of_range_poll_interval_does_not_fault_the_background_service()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
+
+        // PeriodicTimer rejects any period beyond ~49.7 days. Constructing it
+        // outside the loop's try turned an out-of-range knob into a faulted
+        // ExecuteAsync, which BackgroundService's default StopHost behaviour
+        // escalates into a host-wide outage.
+        var poller = CreatePoller(
+            factory,
+            new LatticeOptions { StorageUsagePollInterval = TimeSpan.FromDays(365) },
+            out _);
+
+        await poller.StartAsync(CancellationToken.None);
+        await Task.Delay(100);
+        await poller.StopAsync(CancellationToken.None);
+
+        Assert.That(poller.ExecuteTask, Is.Not.Null);
+        Assert.That(poller.ExecuteTask!.IsFaulted, Is.False,
+            "an out-of-range poll interval must degrade the poller, not fault the background service");
+        // The immediate first poll still runs; only the wait cadence is clamped.
+        await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_options_read_failure_does_not_fault_the_background_service()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(Substitute.For<ILatticeAdmin>());
+
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(_ => throw new OptionsValidationException(
+            Options.DefaultName, typeof(LatticeOptions), ["bad options"]));
+
+        var metrics = new LatticeStorageUsageMetrics();
+        _createdMetrics.Add(metrics);
+        var poller = new LatticeStorageUsagePoller(
+            factory,
+            metrics,
+            monitor,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeStorageUsagePoller>>());
+
+        await poller.StartAsync(CancellationToken.None);
+        await Task.Delay(100);
+        await poller.StopAsync(CancellationToken.None);
+
+        Assert.That(poller.ExecuteTask, Is.Not.Null);
+        Assert.That(poller.ExecuteTask!.IsFaulted, Is.False,
+            "an unusable options value must not take the host down with the poller");
+    }
 }

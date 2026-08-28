@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -15,9 +16,20 @@ internal sealed partial class LatticeAdminGrain(
     ILogger<LatticeAdminGrain> logger,
     LatticeOptionsResolver? optionsResolver = null,
     IWalStorageProviderCatalog? walProviderCatalog = null,
-    IWalRecordEncoder? walRecordEncoder = null) : ILatticeAdmin, IGrainBase
+    IWalRecordEncoder? walRecordEncoder = null,
+    IOptionsMonitor<LatticeOptions>? optionsMonitor = null) : ILatticeAdmin, IGrainBase
 {
     IGrainContext IGrainBase.GrainContext => context;
+
+    /// <summary>
+    /// How many trees a cluster-wide storage-usage fan-out samples at once.
+    /// Read from the default (unnamed) options: the roll-up spans every tree,
+    /// so a per-tree override has no meaningful scope here. Falls back to the
+    /// documented default when no options monitor is registered.
+    /// </summary>
+    private int MaxConcurrentUsageTrees
+        => optionsMonitor?.Get(Options.DefaultName).MaxConcurrentStorageUsageTrees
+           ?? LatticeOptions.DefaultMaxConcurrentStorageUsageTrees;
 
     /// <inheritdoc />
     public Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default)
@@ -38,12 +50,13 @@ internal sealed partial class LatticeAdminGrain(
 
         if (treeIds.Count == 0) return;
 
-        var tasks = new Task[treeIds.Count];
-        for (var i = 0; i < treeIds.Count; i++)
-        {
-            tasks[i] = PollWalUsageForTreeAsync(treeIds[i], cancellationToken);
-        }
-        await Task.WhenAll(tasks);
+        // Bounded so a large cluster's poll tick cannot dispatch one call per
+        // tree in a single burst that races the Orleans response deadline.
+        await BoundedFanOut.RunAsync(
+            treeIds.Count,
+            MaxConcurrentUsageTrees,
+            slot => PollWalUsageForTreeAsync(treeIds[slot], cancellationToken),
+            cancellationToken);
     }
 
     private async Task PollWalUsageForTreeAsync(string treeId, CancellationToken cancellationToken)
@@ -52,6 +65,12 @@ internal sealed partial class LatticeAdminGrain(
         {
             var wal = grainFactory.GetGrain<ILatticeWalUsage>(treeId);
             await wal.GetWalUsageAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller-driven cancellation aborts the poll promptly instead of
+            // being absorbed once per remaining tree.
+            throw;
         }
         catch (Exception ex)
         {
@@ -70,17 +89,22 @@ internal sealed partial class LatticeAdminGrain(
         var treeIds = await registry.GetAllTreeIdsAsync();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var tasks = new Task<TreeStorageUsageReport>[treeIds.Count];
-        for (var i = 0; i < treeIds.Count; i++)
-        {
-            tasks[i] = GetTreeUsageAsync(treeIds[i], forceRefresh, cancellationToken);
-        }
+        // Bounded: each tree sampled here fans out again to its own shard roots
+        // and WAL partitions, so an unbounded outer level multiplies against the
+        // inner one into a burst that fails on the response deadline rather than
+        // merely taking longer. BoundedFanOut writes results by slot index, so
+        // the registry's sort order survives the bound.
+        var reports = await BoundedFanOut.RunAsync(
+            treeIds.Count,
+            MaxConcurrentUsageTrees,
+            slot => GetTreeUsageAsync(treeIds[slot], forceRefresh, cancellationToken),
+            cancellationToken);
 
-        var reports = await Task.WhenAll(tasks);
         cancellationToken.ThrowIfCancellationRequested();
 
         // Tree ids come back sorted from the registry; preserve that order.
         var sorted = reports.ToImmutableArray();
+
 
         long walRetained = 0;
         long snapshot = 0;
@@ -115,6 +139,13 @@ internal sealed partial class LatticeAdminGrain(
         {
             var usage = grainFactory.GetGrain<ILatticeStorageUsage>(treeId);
             return await usage.GetReportAsync(forceRefresh, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Caller-driven cancellation must abort the roll-up rather than be
+            // absorbed once per tree into a cluster report of partial zeroes,
+            // which would look like a real - but wildly understated - answer.
+            throw;
         }
         catch (Exception ex)
         {
