@@ -72,6 +72,28 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
     public abstract Task<TenantStatusReport> GetTenant(TenantAdminTenantRequest request, ServerCallContext context);
 
     /// <summary>
+    /// Authorizes a tenant's allowed region set. An <b>operator-only</b> action:
+    /// the facade authorizes it as cluster-wide admin on the reserved auth policy
+    /// tree, independent of the data-plane default effect. Implemented in
+    /// <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegions(TenantAdminRegionSetRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Sets a tenant's residency set within its allowed regions. An
+    /// <b>operator-or-tenant-admin</b> action, enforced fail-closed by the facade.
+    /// Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantResidencyChangeResult> SetTenantResidency(TenantAdminRegionSetRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Reads a tenant's per-region residency status. Read-only, and an
+    /// <b>operator-or-tenant-admin</b> action enforced fail-closed by the facade.
+    /// Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantRegionStatusReport> GetTenantRegionStatus(TenantAdminTenantRequest request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
     /// method metadata; the actual service instance is resolved per request from
@@ -99,6 +121,9 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.GetCurrentTenant, (UnaryServerMethod<TenantSelfCurrentRequest, TenantDescriptor>?)null);
             binder.AddMethod(methods.ListAccessibleTenants, (UnaryServerMethod<TenantSelfListRequest, TenantSelfDescriptorList>?)null);
             binder.AddMethod(methods.GetTenant, (UnaryServerMethod<TenantAdminTenantRequest, TenantStatusReport>?)null);
+            binder.AddMethod(methods.AuthorizeAllowedRegions, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>?)null);
+            binder.AddMethod(methods.SetTenantResidency, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantResidencyChangeResult>?)null);
+            binder.AddMethod(methods.GetTenantRegionStatus, (UnaryServerMethod<TenantAdminTenantRequest, TenantRegionStatusReport>?)null);
             return;
         }
 
@@ -111,6 +136,9 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.GetCurrentTenant, new UnaryServerMethod<TenantSelfCurrentRequest, TenantDescriptor>(serviceImpl.GetCurrentTenant));
         binder.AddMethod(methods.ListAccessibleTenants, new UnaryServerMethod<TenantSelfListRequest, TenantSelfDescriptorList>(serviceImpl.ListAccessibleTenants));
         binder.AddMethod(methods.GetTenant, new UnaryServerMethod<TenantAdminTenantRequest, TenantStatusReport>(serviceImpl.GetTenant));
+        binder.AddMethod(methods.AuthorizeAllowedRegions, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>(serviceImpl.AuthorizeAllowedRegions));
+        binder.AddMethod(methods.SetTenantResidency, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantResidencyChangeResult>(serviceImpl.SetTenantResidency));
+        binder.AddMethod(methods.GetTenantRegionStatus, new UnaryServerMethod<TenantAdminTenantRequest, TenantRegionStatusReport>(serviceImpl.GetTenantRegionStatus));
     }
 }
 
@@ -125,6 +153,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
 {
     private readonly ILatticeTenantAdmin _control;
     private readonly ILatticeTenantSelfService _selfService;
+    private readonly ILatticeTenantRegionAdmin? _regionAdmin;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeTenantAdminApiGrpcOptions> _options;
@@ -140,6 +169,15 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// <see cref="LatticeTenantAdminGrpcServiceBase.BindService"/> hook always
     /// observes a populated holder.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="regionAdmin"/> is <b>optional</b>. The region-residency
+    /// facade is a separate opt-in registration, so a host that binds tenant
+    /// administration without it must keep working exactly as it did before the
+    /// region RPCs existed: the binding still serves every lifetime and
+    /// self-service RPC, and the three region RPCs answer
+    /// <see cref="StatusCode.Unimplemented"/> rather than failing container
+    /// construction at startup.
+    /// </remarks>
     public LatticeTenantAdminGrpcService(
         LatticeTenantAdminGrpcMethods methods,
         ILatticeTenantAdmin control,
@@ -147,7 +185,8 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ILatticeTenantAdminApiCredentialBridge credentialBridge,
         ILatticeTenantAdminApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeTenantAdminApiGrpcOptions> options,
-        ILogger<LatticeTenantAdminGrpcService> logger)
+        ILogger<LatticeTenantAdminGrpcService> logger,
+        ILatticeTenantRegionAdmin? regionAdmin = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -159,6 +198,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
 
         _control = control;
         _selfService = selfService;
+        _regionAdmin = regionAdmin;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;
@@ -244,6 +284,119 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// <inheritdoc />
     public override Task<TenantStatusReport> GetTenant(TenantAdminTenantRequest request, ServerCallContext context)
         => InvokeSelfServiceAsync(request, context, static (service, req, ct) => service.GetTenantAsync(req.TenantId, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegions(TenantAdminRegionSetRequest request, ServerCallContext context)
+        => InvokeRegionAdminAsync(request, context, static (admin, req, ct) => admin.AuthorizeAllowedRegionsAsync(req.TenantId, req.Regions, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantResidencyChangeResult> SetTenantResidency(TenantAdminRegionSetRequest request, ServerCallContext context)
+        => InvokeRegionAdminAsync(request, context, static (admin, req, ct) => admin.SetResidencyAsync(req.TenantId, req.Regions, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantRegionStatusReport> GetTenantRegionStatus(TenantAdminTenantRequest request, ServerCallContext context)
+        => InvokeRegionAdminAsync(request, context, static (admin, req, ct) => admin.GetTenantRegionStatusAsync(req.TenantId, ct));
+
+    /// <summary>
+    /// Runs a per-tenant region-residency call under the caller-credential and
+    /// asserted-tenant scopes, mapping the facade's outcomes onto gRPC status
+    /// codes. Authorization stays entirely at the facade's own two-tier,
+    /// fail-closed gate - operator-only for the allowed set, operator-or-tenant-admin
+    /// for residency and status - which is independent of the data-plane default
+    /// effect; the transport interceptor only applies the coarse per-operation host
+    /// policy on top.
+    /// </summary>
+    /// <remarks>
+    /// Every domain refusal this surface can raise has its own typed arm below and
+    /// a deliberate status. In particular
+    /// <see cref="TenantRegionNotAllowedException"/> and
+    /// <see cref="TenantLastRegionException"/> derive directly from
+    /// <see cref="Exception"/>, so without an explicit arm they would fall to the
+    /// catch-all and reach the caller as an opaque <c>Internal</c> - the exact
+    /// defect the tenant lifecycle surface already had to fix. Both are
+    /// precondition breaches on a well-formed request, so both map to
+    /// <c>FailedPrecondition</c>, which is also what their own contract documents.
+    /// </remarks>
+    private async Task<TResponse> InvokeRegionAdminAsync<TRequest, TResponse>(
+        TRequest request,
+        ServerCallContext context,
+        Func<ILatticeTenantRegionAdmin, TRequest, CancellationToken, Task<TResponse>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        // The region-residency facade is a separate opt-in. A host that binds
+        // tenant administration without it serves every other RPC unchanged and
+        // answers these three honestly rather than faulting at startup.
+        if (_regionAdmin is not { } regionAdmin)
+        {
+            throw new RpcException(new Status(
+                StatusCode.Unimplemented,
+                "This cluster does not serve tenant region residency. Register the "
+                + "region-residency facade to enable it."));
+        }
+
+        using var activeTenantScope = StampActiveTenant(context);
+        using var credentialScope = StampCallerCredential(context);
+
+        try
+        {
+            return await handler(regionAdmin, request, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new RpcException(new Status(StatusCode.Cancelled, "The tenant region-residency request was cancelled."));
+        }
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (TenantNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        // A region outside the tenant's allowed set, or a revoke of a region the
+        // tenant is still resident in. The request is well-formed; the cluster
+        // state refuses it, so it is a precondition breach, not a bad argument.
+        catch (TenantRegionNotAllowedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        // The unbypassable last-resident-region guard. Also a precondition breach:
+        // the caller must add a region before it can remove this one.
+        catch (TenantLastRegionException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (ReservedTenantOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant, or
+        // may not act as the one it asserted. An authorization outcome, not a server
+        // fault, so it must not fall through to Internal below.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.TenantAdmin: gRPC region-residency call to {Method} failed.", context.Method);
+            throw new RpcException(new Status(StatusCode.Internal, "The tenant region-residency request failed."));
+        }
+    }
 
     private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,

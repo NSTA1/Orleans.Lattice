@@ -9,8 +9,10 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// re-exposing the full transport-agnostic <see cref="ILatticeTenantAdmin"/> facade
 /// surface over the wire - the four tenant lifecycle operations (create, suspend,
 /// resume, and delete with tree cascade) alongside the unauthenticated auth-scheme
-/// discovery RPC. A management surface (dashboard, CLI) consumes the API through
-/// this client rather than hand-rolling channel calls.
+/// discovery RPC - plus the three <see cref="ILatticeTenantRegionAdmin"/>
+/// region-residency operations (authorize allowed regions, set residency, read
+/// per-region status). A management surface (dashboard, CLI) consumes the API
+/// through this client rather than hand-rolling channel calls.
 /// </summary>
 /// <remarks>
 /// The client carries no transport policy of its own: address, TLS, retries,
@@ -169,6 +171,79 @@ public sealed class LatticeTenantAdminApiGrpcClient
         return UnaryAsync(
             _methods.SetTenantQuotas,
             new TenantAdminSetQuotasRequest { TenantId = tenantId, Quotas = quotas },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Authorizes a tenant's allowed region set, replacing it with exactly
+    /// <paramref name="allowedRegions"/>: absent regions are revoked. An
+    /// <b>operator</b> action - the server authorizes it as cluster-wide admin on
+    /// the reserved auth policy tree and denies every non-operator caller
+    /// regardless of the data-plane default effect. Revoking a region the tenant is
+    /// still resident in is refused with <c>FailedPrecondition</c>.
+    /// </summary>
+    /// <param name="tenantId">The tenant id whose allowed set to author. Must not be <c>null</c> or empty.</param>
+    /// <param name="allowedRegions">The complete desired allowed region set. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The authorization result with the resulting allowed region ids.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="allowedRegions"/> is <c>null</c>.</exception>
+    public Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(
+        string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        ArgumentNullException.ThrowIfNull(allowedRegions);
+
+        return UnaryAsync(
+            _methods.AuthorizeAllowedRegions,
+            new TenantAdminRegionSetRequest { TenantId = tenantId, Regions = [.. allowedRegions] },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Sets a tenant's residency set within its allowed regions, replacing it with
+    /// exactly <paramref name="residencyRegions"/>: newly-listed regions begin
+    /// adding, and currently-resident regions absent from the set begin draining. A
+    /// <b>tenant-admin</b> action - the server authorizes the caller as the platform
+    /// operator <b>or</b> a live admin subject on the tenant record. A region
+    /// outside the allowed set, and a change that would remove the last resident
+    /// region, are both refused with <c>FailedPrecondition</c>.
+    /// </summary>
+    /// <param name="tenantId">The tenant id whose residency to author. Must not be <c>null</c> or empty.</param>
+    /// <param name="residencyRegions">The complete desired residency set. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The residency-change result with the added, removed, and resulting regions.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="residencyRegions"/> is <c>null</c>.</exception>
+    public Task<TenantResidencyChangeResult> SetTenantResidencyAsync(
+        string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        ArgumentNullException.ThrowIfNull(residencyRegions);
+
+        return UnaryAsync(
+            _methods.SetTenantResidency,
+            new TenantAdminRegionSetRequest { TenantId = tenantId, Regions = [.. residencyRegions] },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads a tenant's per-region residency status: one row per region that is
+    /// either allowed or carries a non-<c>None</c> status, ordered by region id.
+    /// Read-only, and a <b>tenant-admin</b> action - the server authorizes the caller
+    /// as the platform operator <b>or</b> a live admin subject on the tenant record.
+    /// </summary>
+    /// <param name="tenantId">The tenant id to report on. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The per-region status report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        return UnaryAsync(
+            _methods.GetTenantRegionStatus,
+            new TenantAdminTenantRequest { TenantId = tenantId },
             cancellationToken);
     }
 

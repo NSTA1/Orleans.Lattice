@@ -71,4 +71,62 @@ internal static class TenantAdminToolMappings
             IsUnbounded = quotas.IsUnbounded,
         };
     }
+
+    /// <summary>Projects an allowed-region authorization result onto its MCP DTO.</summary>
+    /// <param name="result">The authorization result. Must not be <c>null</c>.</param>
+    /// <returns>The MCP allowed-region authorization DTO.</returns>
+    public static McpTenantRegionAuthorizationResult ToMcp(TenantRegionAuthorizationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return new McpTenantRegionAuthorizationResult
+        {
+            TenantId = result.TenantId,
+            AllowedRegions = result.AllowedRegions,
+        };
+    }
+
+    /// <summary>Projects a residency-change result onto its MCP DTO.</summary>
+    /// <param name="result">The residency-change result. Must not be <c>null</c>.</param>
+    /// <returns>The MCP residency-change DTO.</returns>
+    public static McpTenantResidencyChangeResult ToMcp(TenantResidencyChangeResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return new McpTenantResidencyChangeResult
+        {
+            TenantId = result.TenantId,
+            AddedRegions = result.AddedRegions,
+            RemovedRegions = result.RemovedRegions,
+            Regions = ToMcp(result.Regions),
+        };
+    }
+
+    /// <summary>Projects a per-region status report onto its MCP DTO.</summary>
+    /// <param name="report">The status report. Must not be <c>null</c>.</param>
+    /// <returns>The MCP per-region status DTO.</returns>
+    public static McpTenantRegionStatusResult ToMcp(TenantRegionStatusReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return new McpTenantRegionStatusResult
+        {
+            TenantId = report.TenantId,
+            Regions = ToMcp(report.Regions),
+        };
+    }
+
+    private static McpTenantRegionStatusRow[] ToMcp(IReadOnlyList<TenantRegionStatusDescriptor> regions)
+    {
+        var rows = new McpTenantRegionStatusRow[regions.Count];
+        for (var i = 0; i < regions.Count; i++)
+        {
+            var region = regions[i];
+            rows[i] = new McpTenantRegionStatusRow
+            {
+                RegionId = region.RegionId,
+                Status = region.Status.ToString(),
+                IsAllowed = region.IsAllowed,
+            };
+        }
+
+        return rows;
+    }
 }

@@ -20,4 +20,7 @@ public static class ApiRegionTypeAliases
 
     /// <summary>Alias for <see cref="LatticeRegionDescriptor"/>.</summary>
     public const string LatticeRegionDescriptor = "olrg.rd";
+
+    /// <summary>Alias for <see cref="LatticeRegionTenantScope"/>.</summary>
+    public const string LatticeRegionTenantScope = "olrg.ts";
 }

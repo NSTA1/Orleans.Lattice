@@ -57,6 +57,16 @@ A tool call targeting a named region passes the region id as the optional `regio
 
 The result carries the served region in its `_meta.region` field. Omit `region` to target the current region; the call and its result are then identical to a region-unaware binding. Call `lattice_list_regions` (no arguments) first to discover the routable region ids.
 
+### Tenant-scoped region discovery
+
+On a cluster running the tenancy add-on, what `lattice_list_regions` returns depends on whether the call asserts an active tenant (the `lattice-active-tenant` header - see [Security](security.md#3a-the-active-tenant-bridge)):
+
+- **No tenant asserted** (an operator, or any caller on a non-tenancy cluster) - the full routing topology, unannotated and byte-for-byte as before. The reserved `default` tenant is treated the same way.
+- **A non-default tenant asserted** - the current region plus only those peers in the tenant's **actionable set**: the regions its operator has authorized it into, plus the regions it is resident in. Each entry gains an additive `tenantScope` object reporting `tenantId`, `isAllowed`, `status`, and `isResident`. The current region is always listed (the caller is already talking to it) and is annotated truthfully, which may say the tenant is neither allowed into nor resident in it.
+- **A tenant asserted whose standing cannot be resolved** - the current region alone, fail-closed. It never falls back to the full topology.
+
+A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`. See [the three region sets](../lattice.tenancy/README.md#the-three-region-sets).
+
 ## State tools (`lattice_state_*`)
 
 Read-only introspection over `ILatticeStateQuery`. Registered by `AddStateTools()`.
@@ -297,7 +307,7 @@ This module is served under both topologies. In-silo it delegates to the co-host
 
 ## Tenant-admin tools (`lattice_tenant_create`, `lattice_tenant_suspend`, `lattice_tenant_resume`, `lattice_tenant_delete`, `lattice_tenant_set_quotas`)
 
-Tenant lifecycle control over the tenant-administration facade, registered by `AddTenantAdminTools(enableControl)`. The lifecycle verbs are all mutating, so the module contributes tools only when `enableControl: true`; called without it, the `tenantadmin` capability is advertised to an `Admin` caller but no tools are contributed, and a cluster that never calls `AddTenantAdminTools` exposes no tenant-admin capability at all. The group is discovered only by a caller granted `LatticeOperation.Admin`.
+Tenant lifecycle control over the tenant-administration facade, registered by `AddTenantAdminTools(enableControl)`. The lifecycle verbs are all mutating, so the module contributes tools only when `enableControl: true`; called without it, the `tenantadmin` capability is advertised to an `Admin` caller but no tools are contributed, and a cluster that never calls `AddTenantAdminTools` exposes no tenant-admin capability at all. The same registration also contributes the three [region-residency tools](#tenant-region-residency-lattice_tenant_authorize_regions-lattice_tenant_set_residency-lattice_tenant_region_status). The group is discovered only by a caller granted `LatticeOperation.Admin`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -310,6 +320,38 @@ Tenant lifecycle control over the tenant-administration facade, registered by `A
 Every tool carries `destructiveHint = true` and `readOnlyHint = false`. The module adds no authorization path of its own: each tool stamps the caller credential onto the ambient context and defers to the facade's own fail-closed tenant-admin access gate, so an unauthorized caller is default-denied on every mutation.
 
 This module is served under both topologies. In-silo it delegates to the co-hosted tenant-administration facade directly; over the remote (out-of-silo) topology the `AddLatticeMcpRemote` composition wires `GrpcLatticeTenantAdmin` off the `RemoteOptions.TenantAdmin` endpoint, with the mutating tools additionally requiring `RemoteOptions.EnableTenantControl = true` (which maps onto `enableControl`). Caller credentials are forwarded on every gRPC call by the shared credential-forwarding interceptor, so the remote cluster re-runs the facade's own fail-closed access gate.
+
+## Tenant region residency (`lattice_tenant_authorize_regions`, `lattice_tenant_set_residency`, `lattice_tenant_region_status`)
+
+Per-tenant region-residency control over the region-residency facade, contributed by the same `AddTenantAdminTools(enableControl)` registration and gated behind the same `enableControl` opt-in. They author two of the [three region sets](../lattice.tenancy/README.md#the-three-region-sets): the operator-owned **allowed** set and the tenant-owned **resident** set.
+
+| Tool | Kind | Arguments | Purpose |
+|---|---|---|---|
+| `lattice_tenant_authorize_regions` | manage | `tenantId`, `allowedRegions` (both required) | Author the complete set of regions a tenant is allowed to place residency in. **Operator action.** |
+| `lattice_tenant_set_residency` | manage | `tenantId`, `residencyRegions` (both required) | Author the complete set of regions a tenant is resident in, within its allowed set. **Tenant-admin action.** |
+| `lattice_tenant_region_status` | inspect | `tenantId` (required) | Read the tenant's per-region residency lifecycle, ordered by region id. **Tenant-admin action.** |
+
+Both region-set arguments are a **replacement, not a delta**: a currently-allowed region absent from `allowedRegions` is revoked, and a currently-resident region absent from `residencyRegions` begins draining. Because an omitted list would be indistinguishable from "revoke everything", both are mandatory in the tool schema - an agent must state the set it wants rather than wiping a tenant's standing by forgetting an argument.
+
+The two mutating tools carry `destructiveHint = true` and `readOnlyHint = false`; `lattice_tenant_region_status` carries `readOnlyHint = true` and `destructiveHint = false`, so this group is no longer uniformly mutating.
+
+Authorization is **two-tier and inherited from the facade**, which the tools do not widen:
+
+- `lattice_tenant_authorize_regions` is **operator-only** - the server authorizes it as cluster-wide admin on the reserved auth policy tree and denies every non-operator caller, including a tenant admin. The allowed set is the operator's containment boundary.
+- `lattice_tenant_set_residency` and `lattice_tenant_region_status` are **operator-or-tenant-admin** - the caller is authorized as the platform operator or as a live admin subject on the tenant record.
+
+Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request resolves to deny even under `DefaultEffect = Allow`.
+
+Ordering matters and the tools fail closed when it is violated: `lattice_tenant_set_residency` refuses a region outside the allowed set, refuses to remove the last resident region, and `lattice_tenant_authorize_regions` refuses to revoke a region the tenant is still resident in. Transitions are asynchronous, so a newly added region reports `Provisioning`, not `Online`; poll `lattice_tenant_region_status` until it reaches `Online` before routing traffic there with a `region` argument.
+
+The typical workflow is:
+
+1. An operator calls `lattice_tenant_authorize_regions` to widen the allowed set.
+2. A tenant admin calls `lattice_tenant_region_status` and sees the new region as `isAllowed: true` with status `None`.
+3. The tenant admin calls `lattice_tenant_set_residency` to move into it; it reports `Provisioning`.
+4. Once it reaches `Online`, `lattice_list_regions` advertises it with `tenantScope.isResident: true` and a `region`-targeted call routed there succeeds.
+
+This module is served under both topologies. In-silo it delegates to the co-hosted region-residency facade directly; over the remote topology `AddLatticeMcpRemote` wires `GrpcLatticeTenantRegionAdmin` off the same `RemoteOptions.TenantAdmin` endpoint.
 
 ## Error handling
 

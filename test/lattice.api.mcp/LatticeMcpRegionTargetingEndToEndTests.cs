@@ -58,6 +58,30 @@ public sealed class LatticeMcpRegionTargetingEndToEndTests
     }
 
     [Test]
+    public async Task List_regions_carries_no_tenant_annotation_when_no_tenant_is_asserted()
+    {
+        await using var host = await StartHostAsync();
+        await using var client = await ConnectAsync(host);
+
+        var result = await client.CallToolAsync(
+            "lattice_list_regions",
+            cancellationToken: TestContext.CurrentContext.CancellationToken);
+
+        var regions = result.StructuredContent!.Value.GetProperty("regions");
+        Assert.Multiple(() =>
+        {
+            Assert.That(regions.GetArrayLength(), Is.EqualTo(2),
+                "A host with no tenancy asserted must still advertise the whole topology.");
+            foreach (var region in regions.EnumerateArray())
+            {
+                Assert.That(region.TryGetProperty("tenantScope", out _), Is.False,
+                    "The tenant annotation is additive and absent on the tenancy-off path, so the payload is "
+                    + "byte-for-byte what it was before tenant scoping existed.");
+            }
+        });
+    }
+
+    [Test]
     public async Task Explicit_region_returns_the_result_annotated_with_the_served_region()
     {
         await using var host = await StartHostAsync();

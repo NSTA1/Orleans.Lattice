@@ -18,8 +18,11 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
     private static string Method(string name) => Svc + name;
 
     [Test]
-    public void Operation_values_are_stable_and_unknown_is_last()
+    public void Operation_values_are_stable_and_unknown_keeps_its_original_value()
     {
+        // Appended after Unknown rather than before it: the values are a stable
+        // wire-adjacent contract a host policy is written against, so an existing
+        // operation must never shift when a new one is added.
         Assert.Multiple(() =>
         {
             Assert.That((int)LatticeTenantAdminApiOperation.CreateTenant, Is.EqualTo(0));
@@ -28,6 +31,9 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
             Assert.That((int)LatticeTenantAdminApiOperation.DeleteTenant, Is.EqualTo(3));
             Assert.That((int)LatticeTenantAdminApiOperation.SetTenantQuotas, Is.EqualTo(4));
             Assert.That((int)LatticeTenantAdminApiOperation.Unknown, Is.EqualTo(5));
+            Assert.That((int)LatticeTenantAdminApiOperation.AuthorizeAllowedRegions, Is.EqualTo(6));
+            Assert.That((int)LatticeTenantAdminApiOperation.SetTenantResidency, Is.EqualTo(7));
+            Assert.That((int)LatticeTenantAdminApiOperation.GetTenantRegionStatus, Is.EqualTo(8));
         });
     }
 
@@ -60,6 +66,28 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
                 Method(LatticeTenantAdminGrpcMethods.SetTenantQuotasMethodName),
                 new TenantAdminSetQuotasRequest { TenantId = "acme", Quotas = TenantQuotasDescriptor.Unbounded }),
                 Is.EqualTo((LatticeTenantAdminApiOperation.SetTenantQuotas, "acme")));
+        });
+    }
+
+    [Test]
+    public void DescribeCall_maps_each_region_residency_rpc_and_decodes_the_target_tenant()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.AuthorizeAllowedRegionsMethodName),
+                new TenantAdminRegionSetRequest { TenantId = "acme", Regions = ["eu", "ap"] }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.AuthorizeAllowedRegions, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.SetTenantResidencyMethodName),
+                new TenantAdminRegionSetRequest { TenantId = "acme", Regions = ["eu"] }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.SetTenantResidency, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.GetTenantRegionStatusMethodName),
+                new TenantAdminTenantRequest { TenantId = "acme" }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.GetTenantRegionStatus, "acme")));
         });
     }
 
@@ -113,6 +141,31 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
                 Method(LatticeTenantAdminGrpcMethods.SetTenantQuotasMethodName)), Is.False);
             Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
                 Method(LatticeTenantAdminGrpcMethods.GetAuthSchemeMethodName)), Is.False);
+
+            // Nor are the region-residency RPCs - including the read-only status
+            // read, which is operator-or-tenant-admin at the facade and stays
+            // interceptor-enforced here rather than joining the self-service
+            // exemption list.
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.AuthorizeAllowedRegionsMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.SetTenantResidencyMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(
+                Method(LatticeTenantAdminGrpcMethods.GetTenantRegionStatusMethodName)), Is.False);
+        });
+    }
+
+    [Test]
+    public void IsUnauthenticatedMethod_never_exempts_a_region_residency_rpc()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTenantAdminGrpcMethods.AuthorizeAllowedRegionsMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTenantAdminGrpcMethods.SetTenantResidencyMethodName)), Is.False);
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
+                Method(LatticeTenantAdminGrpcMethods.GetTenantRegionStatusMethodName)), Is.False);
         });
     }
 }

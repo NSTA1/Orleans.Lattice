@@ -23,6 +23,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
     private ServiceProvider _serializers = null!;
     private FakeTenantAdmin _facade = null!;
     private FakeTenantSelfService _selfService = null!;
+    private FakeTenantRegionAdmin _regionAdmin = null!;
     private LatticeTenantAdminApiGrpcClient _client = null!;
     private LatticeTenantSelfServiceApiGrpcClient _selfClient = null!;
 
@@ -32,6 +33,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
         _serializers = new ServiceCollection().AddSerializer().BuildServiceProvider();
         _facade = new FakeTenantAdmin();
         _selfService = new FakeTenantSelfService();
+        _regionAdmin = new FakeTenantRegionAdmin();
         var methods = LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers);
         var service = new LatticeTenantAdminGrpcService(
             methods,
@@ -42,7 +44,8 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             {
                 Schemes = new[] { new AuthSchemeDescriptor { SchemeId = "basic", DisplayName = "Basic" } },
             }),
-            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance,
+            _regionAdmin);
         var invoker = new LoopbackCallInvoker(service, _serializers);
         _client = new LatticeTenantAdminApiGrpcClient(invoker, methods);
         _selfClient = new LatticeTenantSelfServiceApiGrpcClient(invoker, methods);
@@ -245,6 +248,129 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             new Exception("boom"), StatusCode.Internal).SetName("SelfService_Unexpected_to_Internal");
     }
 
+    // ----- region-residency round-trips -----
+
+    [Test]
+    public async Task AuthorizeAllowedRegions_round_trips_through_the_wire()
+    {
+        var result = await _client.AuthorizeAllowedRegionsAsync("acme", ["eu-west", "ap-south"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.AllowedRegions, Is.EqualTo(new[] { "eu-west", "ap-south" }));
+            Assert.That(_regionAdmin.LastTenantId, Is.EqualTo("acme"));
+            Assert.That(_regionAdmin.LastAllowedRegions, Is.EqualTo(new[] { "eu-west", "ap-south" }));
+        });
+    }
+
+    [Test]
+    public async Task AuthorizeAllowedRegions_round_trips_an_empty_set_as_a_full_revocation()
+    {
+        var result = await _client.AuthorizeAllowedRegionsAsync("acme", []);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AllowedRegions, Is.Empty);
+            Assert.That(_regionAdmin.LastAllowedRegions, Is.Empty,
+                "The empty set must survive the wire as 'revoke everything', not as null.");
+        });
+    }
+
+    [Test]
+    public async Task SetTenantResidency_round_trips_the_added_regions_and_rows()
+    {
+        var result = await _client.SetTenantResidencyAsync("acme", ["eu-west"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AddedRegions, Is.EqualTo(new[] { "eu-west" }));
+            Assert.That(result.Regions[0].RegionId, Is.EqualTo("eu-west"));
+            Assert.That(result.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Provisioning));
+            Assert.That(_regionAdmin.LastResidencyRegions, Is.EqualTo(new[] { "eu-west" }));
+        });
+    }
+
+    [Test]
+    public async Task GetTenantRegionStatus_round_trips_the_report()
+    {
+        var report = await _client.GetTenantRegionStatusAsync("acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TenantId, Is.EqualTo("acme"));
+            Assert.That(report.Regions[0].RegionId, Is.EqualTo("eu-west"));
+            Assert.That(report.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
+            Assert.That(report.Regions[0].IsAllowed, Is.True);
+        });
+    }
+
+    [TestCaseSource(nameof(RegionExceptionMappings))]
+    public void Region_facade_exceptions_map_to_the_expected_status_code(Exception thrown, StatusCode expected)
+    {
+        _regionAdmin.Throw = thrown;
+
+        var rpc = Assert.ThrowsAsync<RpcException>(
+            async () => await _client.SetTenantResidencyAsync("acme", ["eu-west"]));
+        Assert.That(rpc!.StatusCode, Is.EqualTo(expected));
+    }
+
+    private static IEnumerable<TestCaseData> RegionExceptionMappings()
+    {
+        // The two region-specific refusals derive directly from Exception, so an
+        // absent typed arm would surface them as an opaque Internal.
+        yield return new TestCaseData(
+            new TenantRegionNotAllowedException("acme", "eu-west"),
+            StatusCode.FailedPrecondition).SetName("RegionNotAllowed_to_FailedPrecondition");
+        yield return new TestCaseData(
+            new TenantLastRegionException("acme"),
+            StatusCode.FailedPrecondition).SetName("LastRegion_to_FailedPrecondition");
+        yield return new TestCaseData(
+            new TenantNotFoundException("acme"), StatusCode.NotFound).SetName("Region_NotFound_to_NotFound");
+        yield return new TestCaseData(
+            new LatticeAuthorizationDeniedException("*", LatticeOperation.Admin, "anon", "denied"),
+            StatusCode.PermissionDenied).SetName("Region_AuthorizationDenied_to_PermissionDenied");
+        yield return new TestCaseData(
+            new ReservedTenantOperationException("default", "set-residency"),
+            StatusCode.FailedPrecondition).SetName("Region_Reserved_to_FailedPrecondition");
+        yield return new TestCaseData(
+            new ArgumentException("bad arg"), StatusCode.InvalidArgument).SetName("Region_Argument_to_InvalidArgument");
+        yield return new TestCaseData(
+            new Exception("boom"), StatusCode.Internal).SetName("Region_Unexpected_to_Internal");
+    }
+
+    [Test]
+    public void Region_client_calls_reject_a_null_or_empty_tenant_id()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await _client.AuthorizeAllowedRegionsAsync(null!, []),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.AuthorizeAllowedRegionsAsync(string.Empty, []),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.SetTenantResidencyAsync(null!, []),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.SetTenantResidencyAsync(string.Empty, []),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.GetTenantRegionStatusAsync(null!),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _client.GetTenantRegionStatusAsync(string.Empty),
+                Throws.InstanceOf<ArgumentException>());
+        });
+    }
+
+    [Test]
+    public void Region_client_calls_reject_a_null_region_collection()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await _client.AuthorizeAllowedRegionsAsync("acme", null!),
+                Throws.ArgumentNullException);
+            Assert.That(async () => await _client.SetTenantResidencyAsync("acme", null!),
+                Throws.ArgumentNullException);
+        });
+    }
+
     [Test]
     public void Self_service_client_GetTenant_rejects_a_null_or_empty_tenant_id()
     {
@@ -263,7 +389,8 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             new LatticeTenantAdminGrpcService(
                 methods, _facade, _selfService, new NullCredentialBridge(),
                 new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-                Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance),
+                Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance,
+                _regionAdmin),
             _serializers);
 
         Assert.Multiple(() =>
@@ -283,6 +410,13 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             Throws.ArgumentNullException);
     }
 
+    /// <summary>
+    /// Every required dependency is guarded. <c>regionAdmin</c> is deliberately
+    /// absent from this list: it is optional so a host that never opted the
+    /// region-residency facade in still composes (see
+    /// <c>LatticeTenantAdminApiGrpcRegistrationTests</c>), and a null there is a
+    /// supported configuration rather than a programming error.
+    /// </summary>
     [Test]
     public void Constructor_rejects_null_dependencies()
     {
@@ -291,16 +425,18 @@ public sealed class LatticeTenantAdminGrpcServiceTests
         var source = new FixedAuthSchemeSource(new AuthSchemeAdvertisement());
         var options = Options.Create(new LatticeTenantAdminApiGrpcOptions());
         var logger = NullLogger<LatticeTenantAdminGrpcService>.Instance;
+        var regionAdmin = new FakeTenantRegionAdmin();
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeTenantAdminGrpcService(null!, _facade, _selfService, bridge, source, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, null!, _selfService, bridge, source, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, null!, bridge, source, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, null!, source, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, null!, options, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, null!, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, options, null!), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(null!, _facade, _selfService, bridge, source, options, logger, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, null!, _selfService, bridge, source, options, logger, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, null!, bridge, source, options, logger, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, null!, source, options, logger, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, null!, options, logger, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, null!, logger, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, options, null!, regionAdmin), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, options, logger, null), Throws.Nothing);
         });
     }
 
@@ -316,7 +452,8 @@ public sealed class LatticeTenantAdminGrpcServiceTests
                 new LatticeTenantAdminGrpcService(
                     LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers),
                     _facade, _selfService, new NullCredentialBridge(), new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-                    Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance),
+                    Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance,
+                    _regionAdmin),
                 _serializers), null!), Throws.ArgumentNullException);
         });
     }

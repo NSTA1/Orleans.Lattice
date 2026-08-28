@@ -2,8 +2,9 @@
 
 The code-first gRPC **binding** and public **clients** for the
 [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) tenant
-lifecycle control facade and its read-only tenant self-service companion. It
-exposes `ILatticeTenantAdmin` and `ILatticeTenantSelfService` over a network
+lifecycle and region-residency control facades and their read-only tenant
+self-service companion. It exposes `ILatticeTenantAdmin`,
+`ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` over a network
 transport as thin adapters - the control and scoping semantics live in the
 facades, this package only marshals them.
 
@@ -19,8 +20,8 @@ auth-scheme advertisement RPC so a client can discover how to authenticate.
 
 ## Core properties
 
-- **Thin adapter.** Each RPC forwards one-to-one to an `ILatticeTenantAdmin` method;
-  no control logic lives here.
+- **Thin adapter.** Each RPC forwards one-to-one to an `ILatticeTenantAdmin` or
+  `ILatticeTenantRegionAdmin` method; no control logic lives here.
 - **Fail-closed authorization.** The server interceptor requires a caller credential
   by default (`RequireAuthorization = true`); a request without an accepted credential
   is rejected before it reaches the facade, which then applies its own gate.
@@ -36,8 +37,9 @@ auth-scheme advertisement RPC so a client can discover how to authenticate.
 
 ## Service and RPCs
 
-The service surfaces the five `ILatticeTenantAdmin` lifecycle operations, three
-read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
+The service surfaces the five `ILatticeTenantAdmin` lifecycle operations, the three
+`ILatticeTenantRegionAdmin` region-residency operations, three read-only
+`ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 
 | RPC | Facade method |
 |---|---|
@@ -46,10 +48,46 @@ read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 | `ResumeTenant` | `ResumeTenantAsync` |
 | `DeleteTenant` | `DeleteTenantAsync` |
 | `SetTenantQuotas` | `SetTenantQuotasAsync` |
+| `AuthorizeAllowedRegions` | `ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync` (operator-only) |
+| `SetTenantResidency` | `ILatticeTenantRegionAdmin.SetResidencyAsync` (operator or tenant admin) |
+| `GetTenantRegionStatus` | `ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync` (operator or tenant admin) |
 | `GetCurrentTenant` | `ILatticeTenantSelfService.GetCurrentTenantAsync` (self-service; exempt from default-deny) |
 | `ListAccessibleTenants` | `ILatticeTenantSelfService.ListAccessibleTenantsAsync` (self-service; exempt from default-deny) |
 | `GetTenant` | `ILatticeTenantSelfService.GetTenantAsync` (self-service; exempt from default-deny) |
 | `GetAuthScheme` | (binding-local) advertises accepted credential schemes |
+
+### Region-residency RPCs
+
+The three region-residency RPCs bind the
+[`ILatticeTenantRegionAdmin`](../lattice.api.tenantadmin/README.md#ilatticetenantregionadmin)
+facade without widening it. All three are **interceptor-enforced**: none is on the
+self-service exemption list, so `RequireAuthorization` applies, and the facade then
+re-runs its own two-tier gate. `AuthorizeAllowedRegions` stays **operator-only** and
+the other two stay **operator-or-tenant-admin** exactly as in-process, independent of
+the data-plane `DefaultEffect`.
+
+`AuthorizeAllowedRegions` and `SetTenantResidency` share the
+`TenantAdminRegionSetRequest` DTO (`TenantId` plus the complete replacement region
+set); `GetTenantRegionStatus` reuses the existing `TenantAdminTenantRequest`. The
+interceptor decodes the authorization target from each, so an audit record names the
+tenant the call acts on.
+
+Each domain failure maps to an explicit status rather than falling through to a
+generic fault:
+
+| Exception | gRPC status | Why |
+|---|---|---|
+| `TenantNotFoundException` | `NotFound` | The tenant is not registered. |
+| `TenantRegionNotAllowedException` | `FailedPrecondition` | The requested residency is outside the operator-authored allowed set, or the revoked region is still resident. The caller must change state first, then retry. |
+| `TenantLastRegionException` | `FailedPrecondition` | The change would remove the tenant's last resident region. |
+| `LatticeAuthorizationDeniedException` | `PermissionDenied` | The caller does not hold the required tier. |
+| `ReservedTenantOperationException` | `FailedPrecondition` | The operation targets the reserved `default` tenant. |
+| `ArgumentException` | `InvalidArgument` | A malformed tenant id or region id. |
+
+Each arm is explicit and separately tested. `TenantRegionNotAllowedException` and
+`TenantLastRegionException` in particular must never reach the catch-all arm: that is
+the failure mode fixed in #1697, where a domain exception surfaced to callers as an
+opaque `Internal`.
 
 ### Client method signatures
 
@@ -62,6 +100,9 @@ read-only `ILatticeTenantSelfService` RPCs, and the auth-scheme advertisement:
 | `ResumeTenantAsync` | `Task<TenantStatusChangeResult> ResumeTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `DeleteTenantAsync` | `Task<TenantDeletionResult> DeleteTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `SetTenantQuotasAsync` | `Task<TenantQuotasUpdateResult> SetTenantQuotasAsync(string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)` |
+| `AuthorizeAllowedRegionsAsync` | `Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)` |
+| `SetTenantResidencyAsync` | `Task<TenantResidencyChangeResult> SetTenantResidencyAsync(string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)` |
+| `GetTenantRegionStatusAsync` | `Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
 
 `LatticeTenantSelfServiceApiGrpcClient` (read-only; construct with

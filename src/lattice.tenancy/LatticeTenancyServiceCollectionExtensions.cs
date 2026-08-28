@@ -187,6 +187,16 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.Replace(
             ServiceDescriptor.Singleton<ITenantEnumerationFilter, TenantEnumerationFilter>());
 
+        // Replace the core null per-tenant region-standing seam with the active,
+        // registry-backed resolver (issue #1714). Registering it here - with the
+        // tenancy engine itself rather than with the tenant-admin facade - is what
+        // keeps a region-discovery surface fail-closed: a host that runs tenancy but
+        // not the control facade must still scope what it advertises to a tenant
+        // caller. Replace (not TryAdd) deterministically supersedes the core
+        // NullTenantRegionVisibilityResolver regardless of registration order.
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<ITenantRegionVisibilityResolver, TenantRegionVisibilityResolver>());
+
         // Per-tenant region residency (issue #1637, T20). Replace the null residency
         // seam with the active resolver, which reads its decision from an in-memory
         // per-region snapshot kept current off the core change-feed - NOT from a live

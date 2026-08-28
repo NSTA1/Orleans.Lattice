@@ -99,4 +99,65 @@ internal static class TenantAdminToolInvocations
         var result = await admin.SetTenantQuotasAsync(tenantId, quotas, cancellationToken).ConfigureAwait(false);
         return TenantAdminToolMappings.ToMcp(result);
     }
+
+    /// <summary>
+    /// Authors a tenant's allowed region set (an operator action), replacing it
+    /// with exactly <paramref name="allowedRegions"/>.
+    /// </summary>
+    /// <param name="regionAdmin">The region-residency facade. Must not be <c>null</c>.</param>
+    /// <param name="tenantId">The tenant id whose allowed set to author.</param>
+    /// <param name="allowedRegions">The complete desired allowed region set.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The MCP allowed-region authorization DTO.</returns>
+    public static async Task<McpTenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(
+        ILatticeTenantRegionAdmin regionAdmin,
+        string tenantId,
+        IReadOnlyCollection<string> allowedRegions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(regionAdmin);
+        var result = await regionAdmin
+            .AuthorizeAllowedRegionsAsync(tenantId, allowedRegions, cancellationToken)
+            .ConfigureAwait(false);
+        return TenantAdminToolMappings.ToMcp(result);
+    }
+
+    /// <summary>
+    /// Authors a tenant's residency set within its allowed regions (a tenant-admin
+    /// action), replacing it with exactly <paramref name="residencyRegions"/>.
+    /// </summary>
+    /// <param name="regionAdmin">The region-residency facade. Must not be <c>null</c>.</param>
+    /// <param name="tenantId">The tenant id whose residency to author.</param>
+    /// <param name="residencyRegions">The complete desired residency set.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The MCP residency-change DTO.</returns>
+    public static async Task<McpTenantResidencyChangeResult> SetResidencyAsync(
+        ILatticeTenantRegionAdmin regionAdmin,
+        string tenantId,
+        IReadOnlyCollection<string> residencyRegions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(regionAdmin);
+        var result = await regionAdmin
+            .SetResidencyAsync(tenantId, residencyRegions, cancellationToken)
+            .ConfigureAwait(false);
+        return TenantAdminToolMappings.ToMcp(result);
+    }
+
+    /// <summary>Reads a tenant's per-region residency status (a tenant-admin action).</summary>
+    /// <param name="regionAdmin">The region-residency facade. Must not be <c>null</c>.</param>
+    /// <param name="tenantId">The tenant id to report on.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The MCP per-region status DTO.</returns>
+    public static async Task<McpTenantRegionStatusResult> GetTenantRegionStatusAsync(
+        ILatticeTenantRegionAdmin regionAdmin,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(regionAdmin);
+        var result = await regionAdmin
+            .GetTenantRegionStatusAsync(tenantId, cancellationToken)
+            .ConfigureAwait(false);
+        return TenantAdminToolMappings.ToMcp(result);
+    }
 }

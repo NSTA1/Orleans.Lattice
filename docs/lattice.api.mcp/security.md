@@ -40,9 +40,48 @@ The bridge resolves the caller's principal id from the durable object-id (`oid`)
 
 ## 3a. The active-tenant bridge
 
-On a cluster running the optional tenancy add-on, per-tenant capacity governance (write admission and quota enforcement) is scoped by the call's *active tenant*, a channel distinct from caller identity. A parallel bridge lifts the caller's asserted active tenant from a single inbound header - `lattice-active-tenant` by default, set by `ActiveTenantHeaderName` - and stamps it onto the ambient `LatticeActiveTenantContext` at each tool invocation, right beside the credential stamp and through the same single narrowest seam every facade tool funnels through. In-silo the stamped tenant flows to the grain on the Orleans request context; on a remote (split) head the credential-forwarding interceptor re-emits it as a gRPC metadata header, so both topologies reach the same silo-side enforcement.
+On a cluster running the optional tenancy add-on, per-tenant capacity governance (write admission and quota enforcement) is scoped by the call's *active tenant*, a channel distinct from caller identity. A parallel bridge lifts the caller's asserted active tenant from a single inbound header - `lattice-active-tenant` by default, set by `ActiveTenantHeaderName` - and stamps it onto the ambient `LatticeActiveTenantContext` at each tool invocation, right beside the credential stamp. In-silo the stamped tenant flows to the grain on the Orleans request context; on a remote (split) head the credential-forwarding interceptor re-emits it as a gRPC metadata header, so both topologies reach the same silo-side enforcement.
 
 Like the credential, the header carries only an *assertion*: the tenancy add-on's resolver and admission controller re-validate it against the caller's subject membership downstream, so a caller cannot escalate by asserting a tenant it is not a member of. The bridge performs no authorization of its own and is fail-closed - an absent, blank, or syntactically invalid header asserts no tenant. It is the public `ILatticeApiMcpActiveTenantBridge` seam, `TryAdd`-registered, so a host can substitute its own; setting `ActiveTenantHeaderName` empty disables header-based tenant selection. On a non-tenancy cluster the whole path is inert and allocation-free.
+
+The stamp is applied at every facade tool invocation, beside the credential stamp, and additionally at the `lattice_list_regions` discovery tool, which stamps the tenant but no credential (it is a meta-tool that reads only routing configuration, never a facade). Both stamps run through the same `IHttpContextAccessor` and bridge, so the tenant a facade tool acts as is the same tenant discovery is scoped to.
+
+## 3b. Tenant-scoped region discovery
+
+`lattice_list_regions` projects the host's routing topology: each entry carries a region id, a cluster id, and the per-group gRPC endpoint of that region. On a cluster running the tenancy add-on that is operator information, so the tool answers differently depending on whether the call asserts a tenant.
+
+| Caller | What `lattice_list_regions` returns |
+|--------|-------------------------------------|
+| No tenant asserted (an operator, or any caller on a non-tenancy cluster) | The full routing topology, unannotated and byte-for-byte as before tenant scoping existed. |
+| The reserved default tenant | The same full topology - the default tenant *is* the pre-tenancy behaviour by definition. |
+| A non-default tenant, standing resolved | The current region, plus only those peers in the tenant's **actionable set** (`allowed` union `resident`). Every entry is annotated with a `tenantScope` object. |
+| A non-default tenant, standing unresolvable | The current region alone. Never a fallback to the full topology. |
+
+The **actionable set** is the union of the two tenant-facing region sets described in [the tenancy guide](../lattice.tenancy/README.md#the-three-region-sets): the regions the operator has authorized the tenant into, and the regions the tenant is currently resident in. A region outside it is neither usable by that caller (routing a call there is refused by the residency gate) nor modifiable by it (`lattice_tenant_set_residency` refuses anything outside the allowed set), so omitting it removes disclosure without removing capability.
+
+The **current region is always advertised**, even when the tenant has no standing in it. The caller is already talking to it, so concealing it would break the caller's own session rather than conceal anything; its `tenantScope` reports the standing truthfully, which may be `isAllowed: false` with status `None`.
+
+The `tenantScope` annotation is **additive and optional**: it is present only on a tenant-scoped answer. An operator answer, and every answer on a non-tenancy cluster, carries no `tenantScope` property at all.
+
+```json
+{
+  "regionId": "eu-west",
+  "clusterId": "cluster-eu",
+  "isCurrent": false,
+  "tenantScope": {
+    "tenantId": "acme",
+    "isAllowed": true,
+    "status": "Online",
+    "isResident": true
+  }
+}
+```
+
+Scoping is keyed on the **asserted active tenant**, not on the caller's role. An operator administering the platform sends no `lattice-active-tenant` header, so the operator path costs no extra authorization round trip - it simply never enters the scoping branch. This mirrors how `ITenantEnumerationFilter` scopes tree, tag-index, covered-tree, and view enumeration.
+
+**Tenancy off is free.** The tenancy probe is a single ambient-context read - no service resolution, no allocation - and it is false whenever nothing stamped a tenant. A host with no tenancy add-on therefore keeps the original path and returns the router's frozen snapshot by reference, exactly as before.
+
+`lattice_capabilities` is deliberately unchanged: it advertises only the **current** region's per-group endpoints, which the caller is already connected to, so it discloses no peer topology and needs no scoping.
 
 ## Permission-scoped discovery
 

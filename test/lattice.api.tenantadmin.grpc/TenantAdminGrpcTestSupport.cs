@@ -135,6 +135,82 @@ internal sealed class FakeTenantSelfService : ILatticeTenantSelfService
     }
 }
 
+/// <summary>
+/// Configurable in-memory <see cref="ILatticeTenantRegionAdmin"/> facade for the
+/// gRPC region-residency tests. Returns canned results per operation, or throws a
+/// pre-seeded exception, so the service's region-residency result-mapping and its
+/// exception-to-<see cref="StatusCode"/> translation can be exercised without a
+/// real tenancy engine.
+/// </summary>
+internal sealed class FakeTenantRegionAdmin : ILatticeTenantRegionAdmin
+{
+    public Exception? Throw { get; set; }
+
+    public string? LastTenantId { get; private set; }
+
+    public IReadOnlyCollection<string>? LastAllowedRegions { get; private set; }
+
+    public IReadOnlyCollection<string>? LastResidencyRegions { get; private set; }
+
+    public Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(
+        string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        LastAllowedRegions = allowedRegions;
+        return Throw is not null
+            ? Task.FromException<TenantRegionAuthorizationResult>(Throw)
+            : Task.FromResult(new TenantRegionAuthorizationResult
+            {
+                TenantId = tenantId,
+                AllowedRegions = allowedRegions is null ? [] : [.. allowedRegions],
+            });
+    }
+
+    public Task<TenantResidencyChangeResult> SetResidencyAsync(
+        string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        LastResidencyRegions = residencyRegions;
+        return Throw is not null
+            ? Task.FromException<TenantResidencyChangeResult>(Throw)
+            : Task.FromResult(new TenantResidencyChangeResult
+            {
+                TenantId = tenantId,
+                AddedRegions = residencyRegions is null ? [] : [.. residencyRegions],
+                RemovedRegions = [],
+                Regions = residencyRegions is null
+                    ? []
+                    : [.. residencyRegions.Select(r => new TenantRegionStatusDescriptor
+                    {
+                        RegionId = r,
+                        Status = TenantRegionLifecycleStatus.Provisioning,
+                        IsAllowed = true,
+                    })],
+            });
+    }
+
+    public Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        return Throw is not null
+            ? Task.FromException<TenantRegionStatusReport>(Throw)
+            : Task.FromResult(new TenantRegionStatusReport
+            {
+                TenantId = tenantId,
+                Regions =
+                [
+                    new TenantRegionStatusDescriptor
+                    {
+                        RegionId = "eu-west",
+                        Status = TenantRegionLifecycleStatus.Online,
+                        IsAllowed = true,
+                    },
+                ],
+            });
+    }
+}
+
 /// <summary>A fixed auth-scheme source returning a pre-built advertisement.</summary>
 internal sealed class FixedAuthSchemeSource(AuthSchemeAdvertisement advertisement) : ILatticeTenantAdminApiAuthSchemeSource
 {
@@ -189,6 +265,9 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "GetCurrentTenant" => await service.GetCurrentTenant((TenantSelfCurrentRequest)(object)wireRequest, context),
             "ListAccessibleTenants" => await service.ListAccessibleTenants((TenantSelfListRequest)(object)wireRequest, context),
             "GetTenant" => await service.GetTenant((TenantAdminTenantRequest)(object)wireRequest, context),
+            "AuthorizeAllowedRegions" => await service.AuthorizeAllowedRegions((TenantAdminRegionSetRequest)(object)wireRequest, context),
+            "SetTenantResidency" => await service.SetTenantResidency((TenantAdminRegionSetRequest)(object)wireRequest, context),
+            "GetTenantRegionStatus" => await service.GetTenantRegionStatus((TenantAdminTenantRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };
 

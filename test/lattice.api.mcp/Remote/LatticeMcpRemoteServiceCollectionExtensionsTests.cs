@@ -66,6 +66,24 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.TypeOf<GrpcLatticeSchemaControl>());
             Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.TypeOf<GrpcLatticeTenantSelfService>());
             Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.TypeOf<GrpcLatticeTenantAdmin>());
+            Assert.That(provider.GetService<ILatticeTenantRegionAdmin>(), Is.TypeOf<GrpcLatticeTenantRegionAdmin>());
+        });
+    }
+
+    [Test]
+    public void Tenant_endpoint_configured_replaces_the_null_region_visibility_resolver()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.TenantAdmin = Endpoint("https://tenant:5007"))
+            .BuildServiceProvider();
+
+        var resolver = provider.GetService<ITenantRegionVisibilityResolver>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolver, Is.TypeOf<GrpcTenantRegionVisibilityResolver>());
+            Assert.That(resolver!.IsActive, Is.True,
+                "A head that can reach the tenant-admin facade must scope what it advertises.");
         });
     }
 
@@ -87,7 +105,24 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             Assert.That(provider.GetService<ILatticeSchemaControl>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTenantSelfService>(), Is.Null);
             Assert.That(provider.GetService<ILatticeTenantAdmin>(), Is.Null);
+            Assert.That(provider.GetService<ILatticeTenantRegionAdmin>(), Is.Null);
         });
+    }
+
+    [Test]
+    public void Tenant_endpoint_absent_leaves_the_region_visibility_resolver_inactive()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
+            .BuildServiceProvider();
+
+        var resolver = provider.GetService<ITenantRegionVisibilityResolver>();
+
+        Assert.That(
+            resolver is null || !resolver.IsActive,
+            Is.True,
+            "With no tenant-admin endpoint the head cannot resolve standing, so the catalog must stay on its "
+            + "unscoped, allocation-free path.");
     }
 
     [Test]
