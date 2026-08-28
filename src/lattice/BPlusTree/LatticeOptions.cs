@@ -1624,6 +1624,36 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentStorageUsageSurfaces = 16;
 
     /// <summary>
+    /// Wall-clock budget a cluster-wide storage-usage roll-up
+    /// (<see cref="ILatticeAdmin.GetTotalStorageUsageAsync"/>) may spend sampling
+    /// trees before it stops dispatching and returns what it has.
+    /// <para>
+    /// Bounding the fan-out caps the <i>burst</i> a roll-up imposes, but it
+    /// cannot cap the <i>total</i> work: a deep refresh re-walks every shard of
+    /// every tree, so a large enough catalogue cannot be sampled inside one
+    /// Orleans response deadline however gently it is dispatched. Without a
+    /// budget the whole call then fails on the deadline and the caller learns
+    /// nothing at all. With one, the trees sampled so far report real figures,
+    /// the remainder report as not-answered, and
+    /// <see cref="ClusterStorageUsageReport.Partial"/> is set - the same
+    /// "an honest flagged lower bound beats a silently wrong or absent answer"
+    /// rule the per-surface reporting follows.
+    /// </para>
+    /// Set it comfortably below the response deadline of the transport carrying
+    /// the call, so the truncated report can still be returned. This is a
+    /// cluster-wide knob read from the default (unnamed) options by the admin
+    /// grain that drives the roll-up; per-tree overrides do not apply, because
+    /// that grain is not keyed by tree. Defaults to
+    /// <see cref="DefaultStorageUsageRollupBudget"/> (20 seconds). A
+    /// non-positive value disables the budget, restoring the previous
+    /// run-to-completion behaviour.
+    /// </summary>
+    public TimeSpan StorageUsageRollupBudget { get; set; } = DefaultStorageUsageRollupBudget;
+
+    /// <summary>Default value for <see cref="StorageUsageRollupBudget"/> (20 seconds).</summary>
+    public static readonly TimeSpan DefaultStorageUsageRollupBudget = TimeSpan.FromSeconds(20);
+
+    /// <summary>
     /// Hard ceiling on how long a single outbound shard-to-shard write
     /// forward (the shadow-forward and cross-shard migration forwards a
     /// <c>ShardRootGrain</c> issues to a sibling shard while an adaptive

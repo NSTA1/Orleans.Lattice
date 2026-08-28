@@ -424,4 +424,144 @@ public sealed class LatticeAdminGrainTests
         factory.GetGrain<ILattice>(treeId).Returns(lattice);
         return (factory, lattice, storage);
     }
+
+    /// <summary>
+    /// Builds a factory whose per-tree usage grains never answer: each blocks on
+    /// a delay far longer than any budget under test, so the only way the call
+    /// completes is the roll-up budget lapsing.
+    /// </summary>
+    private static IGrainFactory StallingTreeFactory(IEnumerable<string> treeIds)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        foreach (var treeId in treeIds)
+        {
+            var storage = Substitute.For<ILatticeStorageUsage>();
+            storage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+                .Returns(call => StallAsync(call.Arg<CancellationToken>()));
+            factory.GetGrain<ILatticeStorageUsage>(treeId).Returns(storage);
+        }
+
+        return factory;
+    }
+
+    private static async Task<TreeStorageUsageReport> StallAsync(CancellationToken cancellationToken)
+    {
+        await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken);
+        throw new InvalidOperationException("The stall should always be cancelled first.");
+    }
+
+    [Test]
+    public async Task GetTotalStorageUsageAsync_budget_expiry_returns_a_flagged_partial_rather_than_failing()
+    {
+        // Bounding the fan-out caps the burst but not the total work: a deep
+        // refresh over a large catalogue cannot finish inside one response
+        // deadline however gently it is dispatched. Before the budget the whole
+        // call failed on the deadline and the caller learned nothing at all.
+        var treeIds = new[] { "alpha", "beta", "gamma" };
+        var factory = StallingTreeFactory(treeIds);
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetAllTreeIdsAsync().Returns(Task.FromResult<IReadOnlyList<string>>(treeIds));
+        var grain = CreateGrain(
+            factory,
+            registry,
+            new LatticeOptions { StorageUsageRollupBudget = TimeSpan.FromMilliseconds(150) });
+
+        var report = await grain.RefreshStorageUsageAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.True, "A budget-truncated roll-up must flag itself Partial.");
+            Assert.That(report.TreeCount, Is.EqualTo(treeIds.Length));
+            Assert.That(report.Trees.Select(t => t.TreeId), Is.EqualTo(treeIds));
+            Assert.That(report.Trees.All(t => t.Partial), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task GetTotalStorageUsageAsync_trees_sampled_before_the_budget_keep_their_real_figures()
+    {
+        // The budget truncates rather than discards: whatever was sampled in
+        // time is real, and only the remainder reads as not-answered.
+        var treeIds = new[] { "alpha", "beta" };
+        var factory = Substitute.For<IGrainFactory>();
+
+        var fast = Substitute.For<ILatticeStorageUsage>();
+        fast.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(new TreeStorageUsageReport
+            {
+                TreeId = "alpha",
+                LeafStateBytes = 400,
+                TotalBytes = 400,
+                SampledAt = DateTimeOffset.UtcNow,
+            });
+        factory.GetGrain<ILatticeStorageUsage>("alpha").Returns(fast);
+
+        var stalled = Substitute.For<ILatticeStorageUsage>();
+        stalled.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(call => StallAsync(call.Arg<CancellationToken>()));
+        factory.GetGrain<ILatticeStorageUsage>("beta").Returns(stalled);
+
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetAllTreeIdsAsync().Returns(Task.FromResult<IReadOnlyList<string>>(treeIds));
+        var grain = CreateGrain(
+            factory,
+            registry,
+            new LatticeOptions { StorageUsageRollupBudget = TimeSpan.FromMilliseconds(150) });
+
+        var report = await grain.RefreshStorageUsageAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.True);
+            Assert.That(report.LeafStateBytes, Is.EqualTo(400), "The tree that answered in time must still contribute.");
+            Assert.That(report.TotalBytes, Is.EqualTo(400));
+            Assert.That(report.Trees.Single(t => t.TreeId == "alpha").Partial, Is.False);
+            Assert.That(report.Trees.Single(t => t.TreeId == "beta").Partial, Is.True);
+        });
+    }
+
+    [Test]
+    public void GetTotalStorageUsageAsync_caller_cancellation_still_aborts_rather_than_reporting_partial()
+    {
+        // A budget expiry is a deliberate truncation; a caller-driven cancel is
+        // not, and must never be laundered into a confident-looking partial.
+        var treeIds = new[] { "alpha", "beta" };
+        var factory = StallingTreeFactory(treeIds);
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetAllTreeIdsAsync().Returns(Task.FromResult<IReadOnlyList<string>>(treeIds));
+        var grain = CreateGrain(
+            factory,
+            registry,
+            new LatticeOptions { StorageUsageRollupBudget = TimeSpan.FromMinutes(5) });
+
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(150));
+
+        Assert.That(
+            async () => await grain.RefreshStorageUsageAsync(cts.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
+    public async Task GetTotalStorageUsageAsync_non_positive_budget_runs_to_completion()
+    {
+        // A non-positive budget disables truncation, restoring the previous
+        // run-to-completion behaviour for an operator who wants it.
+        var (factory, _, _) = SetUpDeepFactoryWithOneTree("alpha", wal: 1, snap: 2, leaf: 3);
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetAllTreeIdsAsync()
+            .Returns(Task.FromResult<IReadOnlyList<string>>(new[] { "alpha" }));
+        var grain = CreateGrain(
+            factory,
+            registry,
+            new LatticeOptions { StorageUsageRollupBudget = TimeSpan.Zero });
+
+        var report = await grain.GetTotalStorageUsageAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Partial, Is.False);
+            Assert.That(report.TotalBytes, Is.EqualTo(6));
+        });
+    }
 }

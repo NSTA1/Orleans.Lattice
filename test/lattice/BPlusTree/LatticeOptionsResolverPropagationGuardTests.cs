@@ -166,6 +166,12 @@ public class LatticeOptionsResolverPropagationGuardTests
             // (MaxConcurrentStorageUsageSurfaces) does flow through the resolver,
             // exactly like MaxConcurrentSnapshotCaptures.
             "MaxConcurrentStorageUsageTrees",
+
+            // StorageUsageRollupBudget is cluster-scoped for the same reason:
+            // it bounds the wall-clock time one cluster-wide roll-up may spend
+            // sampling trees, and that roll-up is driven by the same admin
+            // singleton, so there is no tree whose override could sensibly win.
+            "StorageUsageRollupBudget",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

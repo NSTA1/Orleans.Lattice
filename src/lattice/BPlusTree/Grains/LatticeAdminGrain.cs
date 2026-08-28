@@ -31,6 +31,15 @@ internal sealed partial class LatticeAdminGrain(
         => optionsMonitor?.Get(Options.DefaultName).MaxConcurrentStorageUsageTrees
            ?? LatticeOptions.DefaultMaxConcurrentStorageUsageTrees;
 
+    /// <summary>
+    /// Wall-clock budget the roll-up may spend sampling trees before it stops
+    /// dispatching and returns a flagged partial. Cluster-wide, for the same
+    /// reason as <see cref="MaxConcurrentUsageTrees"/>.
+    /// </summary>
+    private TimeSpan UsageRollupBudget
+        => optionsMonitor?.Get(Options.DefaultName).StorageUsageRollupBudget
+           ?? LatticeOptions.DefaultStorageUsageRollupBudget;
+
     /// <inheritdoc />
     public Task<ClusterStorageUsageReport> GetTotalStorageUsageAsync(CancellationToken cancellationToken = default)
         => BuildRollupAsync(forceRefresh: false, cancellationToken);
@@ -94,11 +103,30 @@ internal sealed partial class LatticeAdminGrain(
         // inner one into a burst that fails on the response deadline rather than
         // merely taking longer. BoundedFanOut writes results by slot index, so
         // the registry's sort order survives the bound.
+        //
+        // Bounding the burst is necessary but not sufficient: a deep refresh
+        // re-walks every shard of every tree, so a large enough catalogue cannot
+        // be sampled inside one response deadline however gently it is
+        // dispatched. The budget caps the total, so a roll-up that cannot finish
+        // returns the trees it did sample and flags the rest, instead of failing
+        // the whole call and telling the caller nothing.
+        var budget = UsageRollupBudget;
+        using var budgetSource = budget > TimeSpan.Zero
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : null;
+        budgetSource?.CancelAfter(budget);
+        // The caller's own token still gates dispatch, so a caller-driven cancel
+        // aborts promptly; the budget token is handed to the per-tree call, where
+        // its expiry degrades that tree to "did not answer" rather than faulting
+        // the roll-up.
+        var budgetToken = budgetSource?.Token ?? cancellationToken;
+
         var reports = await BoundedFanOut.RunAsync(
             treeIds.Count,
             MaxConcurrentUsageTrees,
-            slot => GetTreeUsageAsync(treeIds[slot], forceRefresh, cancellationToken),
+            slot => GetTreeUsageAsync(treeIds[slot], forceRefresh, budgetToken, cancellationToken),
             cancellationToken);
+
 
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -133,31 +161,55 @@ internal sealed partial class LatticeAdminGrain(
         };
     }
 
-    private async Task<TreeStorageUsageReport> GetTreeUsageAsync(string treeId, bool forceRefresh, CancellationToken cancellationToken)
+    /// <summary>
+    /// Samples one tree's usage for the roll-up.
+    /// <para>
+    /// Two cancellation tokens, deliberately: <paramref name="callerToken"/> is
+    /// the caller's own, and its cancellation must abort the whole roll-up
+    /// rather than be absorbed once per tree into a cluster report of partial
+    /// zeroes that would look like a real - but wildly understated - answer.
+    /// <paramref name="budgetToken"/> additionally expires when the roll-up's
+    /// wall-clock budget runs out; that is not a failure of the caller's request
+    /// but a deliberate truncation, so it degrades this tree to "did not answer"
+    /// and lets the roll-up return a flagged partial.
+    /// </para>
+    /// </summary>
+    private async Task<TreeStorageUsageReport> GetTreeUsageAsync(
+        string treeId, bool forceRefresh, CancellationToken budgetToken, CancellationToken callerToken)
     {
         try
         {
             var usage = grainFactory.GetGrain<ILatticeStorageUsage>(treeId);
-            return await usage.GetReportAsync(forceRefresh, cancellationToken);
+            return await usage.GetReportAsync(forceRefresh, budgetToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
         {
             // Caller-driven cancellation must abort the roll-up rather than be
             // absorbed once per tree into a cluster report of partial zeroes,
             // which would look like a real - but wildly understated - answer.
             throw;
         }
+        catch (OperationCanceledException)
+        {
+            // Budget expiry, not caller cancellation. Report the tree as
+            // not-answered so the roll-up can still return; every tree left
+            // after the budget lapses short-circuits here without dialing its
+            // grain, so the truncated report is returned promptly.
+            return NotAnswered(treeId);
+        }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Cluster storage-usage roll-up failed for tree {TreeId}", treeId);
             // A failing tree contributes a partial zero rather than aborting
             // the whole cluster roll-up.
-            return new TreeStorageUsageReport
-            {
-                TreeId = treeId,
-                Partial = true,
-                SampledAt = DateTimeOffset.UtcNow,
-            };
+            return NotAnswered(treeId);
         }
     }
+
+    private static TreeStorageUsageReport NotAnswered(string treeId) => new()
+    {
+        TreeId = treeId,
+        Partial = true,
+        SampledAt = DateTimeOffset.UtcNow,
+    };
 }
