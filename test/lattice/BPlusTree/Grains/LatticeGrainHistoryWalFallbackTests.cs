@@ -24,7 +24,7 @@ public sealed class LatticeGrainHistoryWalFallbackTests
 {
     private const string TreeId = "hist-wal-fallback";
 
-    private static LatticeGrain CreateGrain(IServiceProvider services)
+    private static LatticeGrain CreateGrain(IServiceProvider services, HistoryRetentionMode? retention = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", TreeId));
@@ -38,7 +38,13 @@ public sealed class LatticeGrainHistoryWalFallbackTests
         registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1 }));
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = 1,
+                HistoryRetentionMode = retention,
+            }));
 
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, new LatticeOptions { WalPartitions = 1 });
         return new LatticeGrain(
@@ -162,11 +168,52 @@ public sealed class LatticeGrainHistoryWalFallbackTests
         {
             Assert.That(page.Revisions, Has.Count.EqualTo(3));
             Assert.That(page.Revisions[0].Kind, Is.EqualTo(HistoryRowKind.Set));
-            Assert.That(page.Revisions[0].ValuePreview, Is.EqualTo(new byte[] { 1 }));
+            // The tree carries no explicit retention policy, so the MetadataOnly
+            // default applies: the revision keeps its length and content hash but
+            // not the value bytes.
+            Assert.That(page.Revisions[0].ValuePreview, Is.Null);
+            Assert.That(page.Revisions[0].ValueLength, Is.EqualTo(1));
+            Assert.That(page.Revisions[0].ValueHash, Is.Not.EqualTo(0));
             Assert.That(page.Revisions[1].Kind, Is.EqualTo(HistoryRowKind.CrdtDelta));
             Assert.That(page.Revisions[1].Delta, Is.EqualTo(new byte[] { 7, 7 }));
             Assert.That(page.Revisions[1].Mode, Is.EqualTo(LatticeMergeMode.PnCounter));
             Assert.That(page.Revisions[2].Kind, Is.EqualTo(HistoryRowKind.Delete));
+        });
+    }
+
+    [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_retains_value_bytes_under_FullValue()
+    {
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1, 2, 3 }, 10));
+        var grain = CreateGrain(ServicesWith(reader), HistoryRetentionMode.FullValue);
+
+        var page = await grain.ScanEntryHistoryAsync("k", null, null, 100, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Revisions, Has.Count.EqualTo(1));
+            Assert.That(page.Revisions[0].ValuePreview, Is.EqualTo(new byte[] { 1, 2, 3 }));
+            Assert.That(page.Revisions[0].RetentionShape, Is.EqualTo(HistoryRetentionMode.FullValue));
+        });
+    }
+
+    [Test]
+    public async Task ScanEntryHistoryAsync_wal_fallback_strips_value_bytes_under_MetadataOnly()
+    {
+        var reader = new FakeCommitLogReader();
+        reader.Append(TreeId, 0, Set("k", new byte[] { 1, 2, 3 }, 10));
+        var grain = CreateGrain(ServicesWith(reader), HistoryRetentionMode.MetadataOnly);
+
+        var page = await grain.ScanEntryHistoryAsync("k", null, null, 100, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Revisions, Has.Count.EqualTo(1));
+            Assert.That(page.Revisions[0].ValuePreview, Is.Null);
+            Assert.That(page.Revisions[0].ValueLength, Is.EqualTo(3));
+            Assert.That(page.Revisions[0].ValueHash, Is.Not.EqualTo(0));
+            Assert.That(page.Revisions[0].RetentionShape, Is.EqualTo(HistoryRetentionMode.MetadataOnly));
         });
     }
 

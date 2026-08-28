@@ -21,9 +21,28 @@ namespace Orleans.Lattice.Api.Data;
 /// </remarks>
 internal sealed partial class LatticeDataApi
 {
+    /// <summary>
+    /// The empty result a version-vector read of an unregistered tree answers
+    /// with. Cached so the miss path allocates nothing.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> EmptyClockMap =
+        System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// The empty result an OR-Map read of an unregistered tree answers with.
+    /// Cached so the miss path allocates nothing.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<byte[]>> EmptyFieldMap =
+        System.Collections.ObjectModel.ReadOnlyDictionary<string, IReadOnlyList<byte[]>>.Empty;
+
     // Tree resolution lives on the main partial (TreeAsync), which composes the
     // caller-supplied name under the active tenant before dialling the grain, so a
     // CRDT write lands in the caller's own namespace rather than a shared one.
+    //
+    // Every read verb resolves through ExistingTreeAsync instead, which probes the
+    // catalogue first and answers the documented empty/zero/false result for an
+    // unregistered tree rather than routing into the shard root - which would
+    // durably register the tree as a side-effect of a read.
 
     /// <inheritdoc />
     public async Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)
@@ -50,7 +69,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return 0;
+        }
+
         return await tree.PnCounter(key).ValueAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -80,7 +104,13 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var set = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).OrSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return Array.Empty<byte[]>();
+        }
+
+        var set = await tree.OrSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
         return [.. set.Elements()];
     }
 
@@ -108,7 +138,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return false;
+        }
+
         return await tree.OrFlag(key).IsEnabledAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -137,7 +172,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return false;
+        }
+
         return await tree.RwFlag(key).IsEnabledAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -156,7 +196,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return 0;
+        }
+
         return await tree.GCounter(key).ValueAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -175,7 +220,13 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        return await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).GSet(key).ToListAsync(cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return Array.Empty<byte[]>();
+        }
+
+        return await tree.GSet(key).ToListAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -205,7 +256,13 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var set = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).RwSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return Array.Empty<byte[]>();
+        }
+
+        var set = await tree.RwSet(key).GetAsync(cancellationToken).ConfigureAwait(false);
         return [.. set.Elements()];
     }
 
@@ -224,7 +281,13 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var vector = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).VersionVector(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return EmptyClockMap;
+        }
+
+        var vector = await tree.VersionVector(key).GetAsync(cancellationToken).ConfigureAwait(false);
         var result = new Dictionary<string, string>(vector.Entries.Count);
         foreach (var (replicaId, clock) in vector.Entries)
         {
@@ -250,7 +313,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return Array.Empty<byte[]>();
+        }
+
         return await tree.MvRegister<byte[]>(key).ValuesAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -269,7 +337,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return null;
+        }
+
         return await tree.MaxRegister<byte[]>(key, static v => v).GetAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -288,7 +361,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return null;
+        }
+
         return await tree.MinRegister<byte[]>(key, static v => v).GetAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -317,7 +395,12 @@ internal sealed partial class LatticeDataApi
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
-        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return Array.Empty<byte[]>();
+        }
+
         return await tree.Sequence<byte[]>(key).ToListAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -352,7 +435,13 @@ internal sealed partial class LatticeDataApi
         ArgumentException.ThrowIfNullOrEmpty(key);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var map = await (await TreeAsync(treeId, cancellationToken).ConfigureAwait(false)).OrMap<string, MvRegister>(key).GetAsync(cancellationToken).ConfigureAwait(false);
+        var tree = await ExistingTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (tree is null)
+        {
+            return EmptyFieldMap;
+        }
+
+        var map = await tree.OrMap<string, MvRegister>(key).GetAsync(cancellationToken).ConfigureAwait(false);
         var result = new Dictionary<string, IReadOnlyList<byte[]>>();
         foreach (var field in map.Keys())
         {

@@ -1,3 +1,4 @@
+using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -192,6 +193,61 @@ public sealed class AuthAdminMcpPermissionResolverTests
 
         Assert.That(access.IsEmpty, Is.True,
             "A resolution failure must fail closed rather than grant an unscoped set.");
+    }
+
+    [TestCase(StatusCode.Cancelled)]
+    [TestCase(StatusCode.DeadlineExceeded)]
+    [TestCase(StatusCode.Unavailable)]
+    [TestCase(StatusCode.Internal)]
+    public void A_transient_backend_fault_surfaces_a_retryable_error_not_an_empty_grant_set(StatusCode status)
+    {
+        // The answer never arrived, so there is no permission set to report.
+        // Returning an empty one would answer tools/list SUCCESSFULLY with a single
+        // meta-tool, which a client cannot tell apart from a genuine revocation -
+        // the observed failure had a platform administrator advertised one tool
+        // instead of 147 with no error anywhere on the wire.
+        var admin = Substitute.For<ILatticeAuthAdmin>();
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
+            .Returns<Task<AuthEffectivePermissions>>(
+                _ => throw new RpcException(new Status(status, "backend stalled")));
+        var resolver = CreateResolver(admin);
+
+        Assert.That(
+            async () => await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None),
+            Throws.TypeOf<LatticeApiMcpDiscoveryUnavailableException>());
+    }
+
+    [Test]
+    public void An_orleans_response_timeout_surfaces_a_retryable_error()
+    {
+        var admin = Substitute.For<ILatticeAuthAdmin>();
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
+            .Returns<Task<AuthEffectivePermissions>>(
+                _ => throw new TimeoutException("Response did not arrive on response id 42."));
+        var resolver = CreateResolver(admin);
+
+        Assert.That(
+            async () => await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None),
+            Throws.TypeOf<LatticeApiMcpDiscoveryUnavailableException>());
+    }
+
+    [TestCase(StatusCode.PermissionDenied)]
+    [TestCase(StatusCode.Unauthenticated)]
+    [TestCase(StatusCode.NotFound)]
+    [TestCase(StatusCode.InvalidArgument)]
+    public async Task An_authoritative_denial_still_fails_closed(StatusCode status)
+    {
+        // The backend replied, and the reply denies. Fail-closed is correct here and
+        // must not be traded for a retryable error.
+        var admin = Substitute.For<ILatticeAuthAdmin>();
+        admin.EffectivePermissionsAsync(Arg.Any<string>(), Arg.Any<LatticeSubjectSelectorKind>(), Arg.Any<CancellationToken>())
+            .Returns<Task<AuthEffectivePermissions>>(
+                _ => throw new RpcException(new Status(status, "denied")));
+        var resolver = CreateResolver(admin);
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.That(access.IsEmpty, Is.True);
     }
 
     [Test]

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Views;
 
@@ -160,6 +161,17 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
+    /// Resolves the hybrid full-value window the retention policy consults under
+    /// <see cref="HistoryRetentionMode.Hybrid"/>. The views feature owns the option,
+    /// but the write-ahead-log history fallback runs on trees that have no view at
+    /// all and on hosts that never called <c>AddLatticeViews</c>, so the options
+    /// monitor is resolved optionally and falls back to the documented default.
+    /// </summary>
+    private TimeSpan ResolveHybridFullValueWindow() =>
+        services.GetService<IOptionsMonitor<LatticeViewOptions>>()?.CurrentValue.HistoryHybridFullValueWindow
+            ?? LatticeViewOptions.DefaultHistoryHybridFullValueWindow;
+
+    /// <summary>
     /// Best-effort fallback for a tree with no history view: reads the retained
     /// write-ahead-log window for the key's partition above the current trim point,
     /// in offset order, and reports truncation when garbage collection has trimmed
@@ -197,6 +209,15 @@ internal sealed partial class LatticeGrain
         var tail = await reader.GetTailOffsetAsync(physicalTreeId, partition, cancellationToken);
         var truncated = tail > 0;
 
+        // Resolve the tree's durable-history retention policy once for the page and
+        // shape every revision by it. Without this the fallback served the full
+        // plaintext value regardless of the configured mode, which made the default
+        // MetadataOnly retention inert for every tree with no history view - that
+        // is, for every tree created at runtime.
+        var retention = await optionsResolver
+            .GetHistoryRetentionAsync(TreeId, ResolveHybridFullValueWindow());
+        var nowTicks = DateTime.UtcNow.Ticks;
+
         var fromOffsetExclusive = -1L;
         if (continuation is not null && long.TryParse(continuation, out var parsed))
         {
@@ -228,7 +249,8 @@ internal sealed partial class LatticeGrain
                 continue;
             }
 
-            revisions.Add(EntryHistoryReader.MapWalMutation(mutation, EntryHistoryReader.DefaultValuePreviewBudget));
+            revisions.Add(EntryHistoryReader.MapWalMutation(
+                mutation, EntryHistoryReader.DefaultValuePreviewBudget, retention, nowTicks));
             if (revisions.Count >= effectiveLimit)
             {
                 continuationOut = offset.ToString(System.Globalization.CultureInfo.InvariantCulture);

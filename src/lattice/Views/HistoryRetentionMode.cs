@@ -11,7 +11,10 @@ namespace Orleans.Lattice;
 /// the current mode from the source tree's registry configuration at drain time
 /// and shapes each emitted revision row accordingly, so a change is absorbed
 /// forward (already-written rows keep their stamped shape; new rows adopt the new
-/// mode).
+/// mode). A tree with no history view is served from the retained source
+/// write-ahead-log window instead, and that path applies the same mode at read
+/// time, so the retention shape a caller observes is the configured one either
+/// way.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -21,8 +24,10 @@ public enum HistoryRetentionMode
     /// <summary>
     /// The default for LWW values: store the revision's metadata only - a
     /// content hash and the byte length - and <b>not</b> the value bytes. Tiny
-    /// and bounded; the full bytes for a revision still inside the TTL-pinned
-    /// source WAL window can be fetched lazily by the read path.
+    /// and bounded. The history read path reports the same shape, so a revision
+    /// read back under this mode carries its hash and length but no value bytes,
+    /// whether it is served from a durable history view or from the retained
+    /// source write-ahead-log window.
     /// </summary>
     MetadataOnly = 0,
 

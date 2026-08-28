@@ -97,6 +97,15 @@ internal sealed partial class LatticeCursorGrain(
     /// </summary>
     private string SnapshotConsumerId => SnapshotConsumerIdPrefix + CursorKey;
 
+    /// <summary>
+    /// Sticky per-activation memo that the cursor's source tree carries a
+    /// catalogue registration, so a multi-step delete-range drain pays the
+    /// catalogue read once rather than on every step. Only the positive answer is
+    /// memoised: a tree that exists cannot become unregistered underneath a drain
+    /// that is actively retracting from it.
+    /// </summary>
+    private bool _sourceTreeRegistered;
+
     /// <inheritdoc />
     protected override string TtlReminderName => IdleReminderName;
 
@@ -462,6 +471,31 @@ internal sealed partial class LatticeCursorGrain(
         // checking the full range here prevents even the probe read from
         // observing a partially authorized range.
         await EnforceCursorRangeDeleteAsync(effStart, effEnd);
+
+        // Retracting a range from a tree that was never created is a documented
+        // no-op, and the probe read below would provision the tree as a
+        // side-effect of discovering that there is nothing to retract. Answer from
+        // the catalogue instead, behind the range-delete gate asserted just above
+        // so a caller who may not delete is still denied rather than quietly told
+        // the range was already empty. Only the positive answer is memoised, so a
+        // multi-step drain pays the catalogue read once per activation.
+        if (!_sourceTreeRegistered)
+        {
+            var catalogue = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            if (!await catalogue.ExistsAsync(state.State.TreeId))
+            {
+                state.State.Phase = LatticeCursorPhase.Exhausted;
+                await state.WriteStateAsync();
+                return new LatticeCursorDeleteProgress
+                {
+                    DeletedThisStep = 0,
+                    DeletedTotal = state.State.DeletedTotal,
+                    IsComplete = true,
+                };
+            }
+
+            _sourceTreeRegistered = true;
+        }
 
         // Probe the range: collect up to maxToDelete+1 keys so we can tell
         // whether this step exhausts the range. One-past-budget lets us pick

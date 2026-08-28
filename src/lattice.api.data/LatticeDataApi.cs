@@ -66,6 +66,38 @@ internal sealed partial class LatticeDataApi(
     private async ValueTask<ILattice> AwaitTreeAsync(ValueTask<string> pending) =>
         _grainFactory.GetGrain<ILattice>(await pending.ConfigureAwait(false));
 
+    /// <summary>
+    /// Resolves the tree for a <em>read</em> that is documented to answer without
+    /// side-effects on an unknown tree, returning <c>null</c> when the tree is not
+    /// registered in the catalogue.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Routing an operation into a tree's shard root activates the shard-root and
+    /// leaf grains, and the options resolver those grains go through lazily seeds a
+    /// catalogue registration for any tree that has no structural pin - so a plain
+    /// read of a name nobody ever created durably creates it, with a full default
+    /// shard configuration. That turns every read verb into an unbounded catalogue
+    /// growth vector, and lets a caller holding only read grants provision trees it
+    /// is not permitted to create.
+    /// </para>
+    /// <para>
+    /// Probing first costs one extra grain call on the miss path only and is the
+    /// same shape <see cref="GetAsync"/> and <see cref="ReadRangeAsync"/> already
+    /// use. The probe is read-gated, and reports a read denial as absence; for a
+    /// read verb that is exactly right, because the caller receives the documented
+    /// empty answer either way. It is therefore <em>only</em> valid for reads: a
+    /// mutating verb resolved this way would turn an authorization denial into a
+    /// no-op-shaped success, so the delete verbs answer from an ungated catalogue
+    /// probe inside the core grain instead, sequenced after their own gate.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<ILattice?> ExistingTreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
+        return await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false) ? tree : null;
+    }
+
     /// <inheritdoc />
     public async Task SetAsync(string treeId, string key, byte[] value, CancellationToken cancellationToken = default)
     {
@@ -85,6 +117,11 @@ internal sealed partial class LatticeDataApi(
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Deleting from a tree that does not exist is a documented no-op and must
+        // not materialise one. The short-circuit deliberately lives in the core
+        // grain rather than here: it has to run *after* the delete gate so a caller
+        // who is not entitled to delete still gets a denial rather than a
+        // no-op-shaped answer. See LatticeGrain.DeleteAsyncCore.
         var tree = await TreeAsync(treeId, cancellationToken).ConfigureAwait(false);
         return await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
     }
@@ -101,6 +138,9 @@ internal sealed partial class LatticeDataApi(
         cancellationToken.ThrowIfCancellationRequested();
 
         var stepSize = Math.Max(1, _apiOptions.RangeDeleteStepSize);
+
+        // As for the single-key delete: an unknown tree is a documented no-op whose
+        // short-circuit lives behind the range-delete gate, in the cursor grain.
         var tree = await TreeAsync(request.TreeId, cancellationToken).ConfigureAwait(false);
         var deleted = await tree.DeleteRangeAsync(
             request.StartInclusive,

@@ -1012,6 +1012,8 @@ internal sealed class LatticeStateQuery(
             return new TagValueCatalogPage();
         }
 
+        await RequireTagIndexAsync(request.IndexName!, cancellationToken).ConfigureAwait(false);
+
         var index = tagFactory.CreateMultiTree(request.IndexName);
 
         // Auth-backed visibility: an index-wide tag list aggregates tags across
@@ -1080,6 +1082,8 @@ internal sealed class LatticeStateQuery(
             return new TagMemberScanPage();
         }
 
+        await RequireTagIndexAsync(request.IndexName!, cancellationToken).ConfigureAwait(false);
+
         // Auth-backed visibility: an unresolved/anonymous caller is denied outright
         // (fail-closed) regardless of the policy default effect. For a resolved
         // subject the per-member presence probe (ExistsAsync) below runs through
@@ -1129,6 +1133,52 @@ internal sealed class LatticeStateQuery(
         }
 
         return new TagMemberScanPage { Entries = members, NextPageToken = nextToken };
+    }
+
+    /// <summary>
+    /// Probes whether the membership tree backing a tag index exists, without
+    /// materialising it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A tag index materialises as an internal membership tree named
+    /// <c>tag-{indexName}</c>. Handing an index handle a name that was never
+    /// created and then enumerating it registers that tree, which both provisions
+    /// a durable index nobody asked for and collapses the documented distinction
+    /// between a mistyped index name (reported <c>IndexNotFound</c>) and a
+    /// real-but-empty one (reported <c>Found</c> with zero entries) - the second
+    /// call would see the index the first call had just conjured.
+    /// </para>
+    /// <para>
+    /// The index tree is a cluster-global reserved id, so it is never
+    /// tenant-composed and the probe runs under a system-origin scope: the tenant
+    /// and authorization boundary on these paths is the covered <em>source</em>
+    /// tree, which each caller checks separately.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> TagIndexExistsAsync(string indexName, CancellationToken cancellationToken)
+    {
+        var indexTree = _grainFactory.GetGrain<ILattice>(LatticeConstants.TagIndexTreePrefix + indexName);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            return await indexTree.TreeExistsAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Asserts a tag index exists, throwing <see cref="KeyNotFoundException"/>
+    /// when it does not, so an index-scoped catalogue read reports an unknown
+    /// index rather than silently answering with an empty page (and creating the
+    /// index as a side-effect). Matches how the tree-administration tag verbs
+    /// report the same condition.
+    /// </summary>
+    private async Task RequireTagIndexAsync(string indexName, CancellationToken cancellationToken)
+    {
+        if (!await TagIndexExistsAsync(indexName, cancellationToken).ConfigureAwait(false))
+        {
+            throw new KeyNotFoundException(
+                $"No tag index backed by tree '{LatticeConstants.TagIndexTreePrefix}{indexName}' is registered on this cluster.");
+        }
     }
 
     // NUL joins the (treeId, key) continuation token: a tree id never contains
@@ -1447,20 +1497,10 @@ internal sealed class LatticeStateQuery(
         // itself is a cluster-global reserved id, so it is never tenant-composed;
         // the tenant boundary on this path is the composed SOURCE tree above,
         // which is what the membership rows are read against.
-        if (string.IsNullOrEmpty(request.ContinuationToken))
+        if (string.IsNullOrEmpty(request.ContinuationToken)
+            && !await TagIndexExistsAsync(request.IndexName!, cancellationToken).ConfigureAwait(false))
         {
-            var indexTreeId = LatticeConstants.TagIndexTreePrefix + request.IndexName!;
-            var indexTree = _grainFactory.GetGrain<ILattice>(indexTreeId);
-            bool indexExists;
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                indexExists = await indexTree.TreeExistsAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!indexExists)
-            {
-                return EntryScanResult.IndexNotFound(request.TreeId);
-            }
+            return EntryScanResult.IndexNotFound(request.TreeId);
         }
 
         var index = tagFactory.Create(tree, request.IndexName!);

@@ -160,6 +160,12 @@ internal sealed partial class LatticeGrain
         await ShardActivationRetry.RunAsync(
             () => deletion.DeleteTreeAsync(),
             cancellationToken);
+
+        // The tree's catalogue row is gone, so drop the sticky registration memo
+        // this activation may be holding: without the reset a delete arriving on
+        // the same activation would route into the shard roots and re-provision
+        // the tree that was just retired.
+        InvalidateRegistrationMemo();
     }
 
     /// <summary>
@@ -210,6 +216,7 @@ internal sealed partial class LatticeGrain
         await ShardActivationRetry.RunAsync(
             () => deletion.PurgeNowAsync(),
             cancellationToken);
+        InvalidateRegistrationMemo();
     }
 
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren, CancellationToken cancellationToken = default)

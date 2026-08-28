@@ -43,12 +43,7 @@ internal static class HistoryRetentionShaper
             return (row with { RetentionShape = policy.Mode }, expiresAtTicks);
         }
 
-        var keepBytes = policy.Mode switch
-        {
-            HistoryRetentionMode.FullValue => true,
-            HistoryRetentionMode.Hybrid => IsRecent(row, policy, drainNowTicks),
-            _ => false, // MetadataOnly (the default).
-        };
+        var keepBytes = KeepsValueBytes(row.Kind, row.Timestamp.WallClockTicks, policy, drainNowTicks);
 
         var shaped = keepBytes
             ? row with { RetentionShape = policy.Mode }
@@ -57,18 +52,53 @@ internal static class HistoryRetentionShaper
         return (shaped, expiresAtTicks);
     }
 
+    /// <summary>
+    /// The single definition of whether a revision keeps its LWW value bytes under
+    /// <paramref name="policy"/>. Shared by the drain-time view shaping above and
+    /// by the write-ahead-log history fallback, so a tree with no history view
+    /// honours exactly the same retention rule as one with a view rather than
+    /// serving the full plaintext regardless of the configured mode.
+    /// </summary>
+    /// <param name="kind">The revision's row kind.</param>
+    /// <param name="revisionWallClockTicks">
+    /// The revision's wall-clock tick, used only by the hybrid window.
+    /// </param>
+    /// <param name="policy">The resolved retention policy for the source tree.</param>
+    /// <param name="nowTicks"><see cref="DateTime.UtcNow"/> ticks captured once for the pass.</param>
+    /// <returns><see langword="true"/> when the value bytes are retained.</returns>
+    public static bool KeepsValueBytes(
+        HistoryRowKind kind,
+        long revisionWallClockTicks,
+        HistoryRetentionPolicy policy,
+        long nowTicks)
+    {
+        // Only an LWW Set carries value bytes the mode can strip; every other kind
+        // is already metadata (or a CRDT delta, which is the compact history).
+        if (kind != HistoryRowKind.Set)
+        {
+            return true;
+        }
+
+        return policy.Mode switch
+        {
+            HistoryRetentionMode.FullValue => true,
+            HistoryRetentionMode.Hybrid => IsRecent(revisionWallClockTicks, policy, nowTicks),
+            _ => false, // MetadataOnly (the default).
+        };
+    }
+
     // A hybrid revision keeps its full bytes while its apply-time age is within
     // the configured full-value window; an older revision (drained from a backlog
     // or a catch-up replay) is shaped to metadata. A non-positive window degrades
     // hybrid to metadata-only.
-    private static bool IsRecent(HistoryRow row, HistoryRetentionPolicy policy, long drainNowTicks)
+    private static bool IsRecent(long revisionWallClockTicks, HistoryRetentionPolicy policy, long nowTicks)
     {
         if (policy.HybridFullValueWindow <= TimeSpan.Zero)
         {
             return false;
         }
 
-        var age = drainNowTicks - row.Timestamp.WallClockTicks;
+        var age = nowTicks - revisionWallClockTicks;
         return age <= policy.HybridFullValueWindow.Ticks;
     }
 }

@@ -218,6 +218,11 @@ public sealed class EntryHistoryReaderTests
 
     // -- MapWalMutation -------------------------------------------------------
 
+    private static HistoryRetentionPolicy Policy(
+        HistoryRetentionMode mode = HistoryRetentionMode.FullValue,
+        TimeSpan? hybridWindow = null) =>
+        new(mode, TimeSpan.Zero, hybridWindow ?? TimeSpan.FromMinutes(5));
+
     [Test]
     public void MapWalMutation_set_maps_to_set_with_hash_length_and_full_value_shape()
     {
@@ -233,7 +238,7 @@ public sealed class EntryHistoryReaderTests
             Mode = LatticeMergeMode.LwwRegister,
         };
 
-        var rev = EntryHistoryReader.MapWalMutation(mutation, previewBudget: 256);
+        var rev = EntryHistoryReader.MapWalMutation(mutation, previewBudget: 256, Policy(), nowTicks: 6);
 
         Assert.Multiple(() =>
         {
@@ -243,6 +248,83 @@ public sealed class EntryHistoryReaderTests
             Assert.That(rev.ValueHash, Is.Not.Zero);
             Assert.That(rev.RetentionShape, Is.EqualTo(HistoryRetentionMode.FullValue));
             VectorClockAssert.SameFrontier(rev.VectorClock, vc);
+        });
+    }
+
+    [Test]
+    public void MapWalMutation_metadata_only_withholds_the_value_bytes_but_keeps_hash_and_length()
+    {
+        var mutation = new LatticeMutation
+        {
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 1, 2, 3, 4 },
+            Timestamp = Clock(6, 1),
+            Mode = LatticeMergeMode.LwwRegister,
+        };
+
+        var rev = EntryHistoryReader.MapWalMutation(
+            mutation, previewBudget: 256, Policy(HistoryRetentionMode.MetadataOnly), nowTicks: 6);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rev.ValuePreview, Is.Null);
+            Assert.That(rev.ValueTruncated, Is.False);
+            Assert.That(rev.ValueLength, Is.EqualTo(4));
+            Assert.That(rev.ValueHash, Is.Not.Zero);
+            Assert.That(rev.RetentionShape, Is.EqualTo(HistoryRetentionMode.MetadataOnly));
+        });
+    }
+
+    [Test]
+    public void MapWalMutation_hybrid_keeps_a_recent_value_and_withholds_an_old_one()
+    {
+        static LatticeMutation At(long wall) => new()
+        {
+            Kind = MutationKind.Set,
+            Key = "k",
+            Value = new byte[] { 9 },
+            Timestamp = new HybridLogicalClock { WallClockTicks = wall, Counter = 0 },
+            Mode = LatticeMergeMode.LwwRegister,
+        };
+
+        var window = TimeSpan.FromTicks(100);
+        var policy = Policy(HistoryRetentionMode.Hybrid, window);
+
+        var recent = EntryHistoryReader.MapWalMutation(At(950), 256, policy, nowTicks: 1000);
+        var old = EntryHistoryReader.MapWalMutation(At(500), 256, policy, nowTicks: 1000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recent.ValuePreview, Is.EqualTo(new byte[] { 9 }));
+            Assert.That(recent.RetentionShape, Is.EqualTo(HistoryRetentionMode.Hybrid));
+            Assert.That(old.ValuePreview, Is.Null);
+            Assert.That(old.ValueLength, Is.EqualTo(1));
+            Assert.That(old.ValueHash, Is.Not.Zero);
+            Assert.That(old.RetentionShape, Is.EqualTo(HistoryRetentionMode.Hybrid));
+        });
+    }
+
+    [Test]
+    public void MapWalMutation_metadata_only_still_carries_a_crdt_delta()
+    {
+        var mutation = new LatticeMutation
+        {
+            Kind = MutationKind.Set,
+            Key = "k",
+            Delta = new byte[] { 5, 5 },
+            Timestamp = Clock(6, 2),
+            Mode = LatticeMergeMode.OrSet,
+        };
+
+        var rev = EntryHistoryReader.MapWalMutation(
+            mutation, previewBudget: 256, Policy(HistoryRetentionMode.MetadataOnly), nowTicks: 6);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rev.Kind, Is.EqualTo(HistoryRowKind.CrdtDelta));
+            Assert.That(rev.Delta, Is.EqualTo(new byte[] { 5, 5 }));
+            Assert.That(rev.RetentionShape, Is.EqualTo(HistoryRetentionMode.MetadataOnly));
         });
     }
 
@@ -258,7 +340,7 @@ public sealed class EntryHistoryReaderTests
             Mode = LatticeMergeMode.OrSet,
         };
 
-        var rev = EntryHistoryReader.MapWalMutation(mutation, previewBudget: 256);
+        var rev = EntryHistoryReader.MapWalMutation(mutation, previewBudget: 256, Policy(), nowTicks: 6);
 
         Assert.Multiple(() =>
         {
@@ -275,8 +357,12 @@ public sealed class EntryHistoryReaderTests
         var delete = new LatticeMutation { Kind = MutationKind.Delete, Key = "k", Timestamp = Clock(1, 0) };
         var tombstone = new LatticeMutation { Kind = MutationKind.Tombstone, Key = "k", Timestamp = Clock(2, 0) };
 
-        Assert.That(EntryHistoryReader.MapWalMutation(delete, 256).Kind, Is.EqualTo(HistoryRowKind.Delete));
-        Assert.That(EntryHistoryReader.MapWalMutation(tombstone, 256).Kind, Is.EqualTo(HistoryRowKind.Delete));
+        Assert.That(
+            EntryHistoryReader.MapWalMutation(delete, 256, Policy(), 2).Kind,
+            Is.EqualTo(HistoryRowKind.Delete));
+        Assert.That(
+            EntryHistoryReader.MapWalMutation(tombstone, 256, Policy(), 2).Kind,
+            Is.EqualTo(HistoryRowKind.Delete));
     }
 
     [Test]
@@ -290,7 +376,7 @@ public sealed class EntryHistoryReaderTests
             Timestamp = Clock(3, 0),
         };
 
-        var rev = EntryHistoryReader.MapWalMutation(mutation, 256);
+        var rev = EntryHistoryReader.MapWalMutation(mutation, 256, Policy(), nowTicks: 3);
 
         Assert.Multiple(() =>
         {
@@ -311,7 +397,7 @@ public sealed class EntryHistoryReaderTests
             Timestamp = Clock(1, 0),
         };
 
-        var rev = EntryHistoryReader.MapWalMutation(mutation, previewBudget: 128);
+        var rev = EntryHistoryReader.MapWalMutation(mutation, previewBudget: 128, Policy(), nowTicks: 1);
 
         Assert.That(rev.ValuePreview, Has.Length.EqualTo(128));
         Assert.That(rev.ValueLength, Is.EqualTo(1000));

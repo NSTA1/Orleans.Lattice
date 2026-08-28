@@ -68,6 +68,32 @@ public partial class ViewMaintainerIntegrationTests
     }
 
     [Test]
+    public async Task DeleteAsync_on_a_view_over_a_reserved_system_tree_is_rejected()
+    {
+        // The first-party add-ons (auth, membership, tenancy, backup, schema)
+        // declare their history views from their own initializers rather than
+        // through AddLatticeViews, so the startup-declaration guard never saw them
+        // and a runtime drop succeeded - only for the add-on to re-create the view
+        // on the next silo start, which is exactly the condition the contract says
+        // is rejected. A reserved source tree is the signal that identifies them.
+        const string viewName = "sys-fake-addon-history";
+        var view = await _fixture.ViewFactory.CreateAsync(
+            _fixture.Source("sys-fake-addon"),
+            viewName,
+            new LatticeRuntimeViewProjectionDescriptor(
+                ViewClusterFixture.RuntimeCountProvider,
+                []));
+        Assert.That(view.ViewName, Is.EqualTo(viewName));
+
+        Assert.That(
+            async () => await _fixture.ViewFactory.DeleteAsync(viewName),
+            Throws.InstanceOf<InvalidOperationException>());
+
+        // Rejected, not partially torn down: the view is still resolvable.
+        Assert.That(await _fixture.ViewFactory.GetAsync(viewName), Is.Not.Null);
+    }
+
+    [Test]
     public async Task Create_runtime_view_registers_handle_and_decommissions()
     {
         const string runtimeView = "runtime-count";

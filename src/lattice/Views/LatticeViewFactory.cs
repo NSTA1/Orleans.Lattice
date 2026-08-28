@@ -261,10 +261,24 @@ internal sealed class LatticeViewFactory(
         // registered was never created (or is already deleted), so there is
         // nothing to tear down - and crucially nothing to delete that would
         // otherwise materialise a phantom backing tree.
-        if (!await ViewExistsAsync(viewName))
+        var sourceTreeId = await ResolveSourceTreeIdAsync(viewName);
+        if (sourceTreeId is null)
         {
             logger.LogDebug("DeleteAsync for view '{ViewName}' is a no-op; the view is not registered.", viewName);
             return;
+        }
+
+        // Same reasoning as the startup-declaration guard, for the views a
+        // first-party add-on declares from its own initializer rather than through
+        // AddLatticeViews: the add-on re-creates the view on the next silo start,
+        // so a runtime delete only tears down history the add-on owns and then has
+        // it silently reappear. Those views are identified by their source living
+        // in the reserved system-data namespace, which no caller-created view can
+        // name (the tree-administration facade refuses a reserved source id).
+        if (IsLibraryOwnedSource(sourceTreeId))
+        {
+            throw new InvalidOperationException(
+                $"View '{viewName}' is declared by a Lattice add-on over the reserved system tree '{sourceTreeId}' and cannot be deleted at runtime; the add-on would re-create it on the next silo start.");
         }
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
@@ -305,11 +319,16 @@ internal sealed class LatticeViewFactory(
         return null;
     }
 
-    private async Task<bool> ViewExistsAsync(string viewName)
+    /// <summary>
+    /// Resolves a registered view's source tree id from the silo-local catalog,
+    /// falling back to the cluster-wide durable registry, and returns <c>null</c>
+    /// when the view is registered in neither.
+    /// </summary>
+    private async Task<string?> ResolveSourceTreeIdAsync(string viewName)
     {
-        if (catalog.TryGet(viewName) is not null)
+        if (catalog.TryGet(viewName) is { } registration)
         {
-            return true;
+            return registration.SourceTreeId;
         }
 
         var durable = await RegistryGrain.ListAsync();
@@ -317,12 +336,21 @@ internal sealed class LatticeViewFactory(
         {
             if (string.Equals(durable[i].ViewName, viewName, StringComparison.Ordinal))
             {
-                return true;
+                return durable[i].SourceTreeId;
             }
         }
 
-        return false;
+        return null;
     }
+
+    /// <summary>
+    /// Reports whether a view's source tree is one the library itself owns, so the
+    /// view is re-created by its owning add-on on the next silo start and must not
+    /// be droppable at runtime.
+    /// </summary>
+    private static bool IsLibraryOwnedSource(string sourceTreeId) =>
+        sourceTreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+        || sourceTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
 
     private LatticeRuntimeViewProjectionDescriptor? ResolveRuntimeDescriptor(
         LatticeViewDefinition definition)

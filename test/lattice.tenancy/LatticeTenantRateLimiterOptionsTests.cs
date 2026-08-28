@@ -4,22 +4,46 @@ namespace Orleans.Lattice.Tenancy.Tests;
 public sealed class LatticeTenantRateLimiterOptionsTests
 {
     [Test]
-    public void Defaults_are_five_second_lease_demand_strategy_and_a_fifth_reserve()
+    public void Defaults_are_a_thirty_second_lease_demand_strategy_and_a_fifth_reserve()
     {
         var options = new LatticeTenantRateLimiterOptions();
 
         Assert.Multiple(() =>
         {
-            Assert.That(options.LeaseInterval, Is.EqualTo(TimeSpan.FromSeconds(5)));
+            Assert.That(options.LeaseInterval, Is.EqualTo(TimeSpan.FromSeconds(30)));
             Assert.That(options.Apportionment, Is.EqualTo(TenantRateApportionmentStrategy.Demand));
             Assert.That(options.DemandReserveFraction, Is.EqualTo(0.2));
         });
     }
 
     [Test]
-    public void DefaultLeaseInterval_constant_is_five_seconds()
+    public void DefaultLeaseInterval_constant_is_thirty_seconds()
     {
-        Assert.That(LatticeTenantRateLimiterOptions.DefaultLeaseInterval, Is.EqualTo(TimeSpan.FromSeconds(5)));
+        // Each cycle re-reads the durable tenant registry, which is a whole-tree
+        // scan; a five-second cadence could not complete before the next tick on a
+        // loaded cluster, so the scans ran back to back and never drained.
+        Assert.That(LatticeTenantRateLimiterOptions.DefaultLeaseInterval, Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
+
+    [Test]
+    public void Backpressure_defaults_bound_a_cycle_inside_its_own_tick()
+    {
+        var options = new LatticeTenantRateLimiterOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.LeaseCycleTimeout, Is.EqualTo(LatticeTenantRateLimiterOptions.DefaultLeaseCycleTimeout));
+            Assert.That(options.MaxLeaseBackoff, Is.EqualTo(LatticeTenantRateLimiterOptions.DefaultMaxLeaseBackoff));
+            Assert.That(options.RateSnapshotTtl, Is.EqualTo(LatticeTenantRateLimiterOptions.DefaultRateSnapshotTtl));
+            Assert.That(
+                LatticeTenantRateLimiterOptions.DefaultLeaseCycleTimeout,
+                Is.LessThan(LatticeTenantRateLimiterOptions.DefaultLeaseInterval),
+                "a cycle must not be able to outlast the tick that scheduled it");
+            Assert.That(
+                LatticeTenantRateLimiterOptions.DefaultMaxLeaseBackoff,
+                Is.GreaterThan(LatticeTenantRateLimiterOptions.DefaultLeaseInterval),
+                "the backoff ceiling must leave room to actually back off");
+        });
     }
 
     [Test]
@@ -30,6 +54,9 @@ public sealed class LatticeTenantRateLimiterOptionsTests
             LeaseInterval = TimeSpan.FromSeconds(30),
             Apportionment = TenantRateApportionmentStrategy.StaticEven,
             DemandReserveFraction = 0.5,
+            LeaseCycleTimeout = TimeSpan.FromSeconds(7),
+            MaxLeaseBackoff = TimeSpan.FromMinutes(9),
+            RateSnapshotTtl = TimeSpan.FromMinutes(11),
         };
 
         Assert.Multiple(() =>
@@ -37,6 +64,9 @@ public sealed class LatticeTenantRateLimiterOptionsTests
             Assert.That(options.LeaseInterval, Is.EqualTo(TimeSpan.FromSeconds(30)));
             Assert.That(options.Apportionment, Is.EqualTo(TenantRateApportionmentStrategy.StaticEven));
             Assert.That(options.DemandReserveFraction, Is.EqualTo(0.5));
+            Assert.That(options.LeaseCycleTimeout, Is.EqualTo(TimeSpan.FromSeconds(7)));
+            Assert.That(options.MaxLeaseBackoff, Is.EqualTo(TimeSpan.FromMinutes(9)));
+            Assert.That(options.RateSnapshotTtl, Is.EqualTo(TimeSpan.FromMinutes(11)));
         });
     }
 }

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.Auth;
@@ -151,7 +152,15 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton<SiloLocalTenantRateLimiter>();
         builder.Services.TryAddSingleton<ITenantRateLimiter>(
             sp => sp.GetRequiredService<SiloLocalTenantRateLimiter>());
-        builder.Services.TryAddSingleton<ITenantRateProvider, RegistryTenantRateProvider>();
+        builder.Services.TryAddSingleton<RegistryTenantRateProvider>();
+        // The configured rates come from a whole-tree registry scan, so they are
+        // cached with their own TTL: the coordinator re-apportions buckets on its
+        // lease cadence without re-reading the registry every tick.
+        builder.Services.TryAddSingleton<ITenantRateProvider>(sp => new CachingTenantRateProvider(
+            sp.GetRequiredService<RegistryTenantRateProvider>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IOptionsMonitor<LatticeTenantRateLimiterOptions>>(),
+            sp.GetRequiredService<ILogger<CachingTenantRateProvider>>()));
         builder.Services.TryAddSingleton<ILiveSiloCountProvider, ManagementLiveSiloCountProvider>();
         builder.Services.TryAddSingleton<ITenantClusterDemandExchange, LocalTenantClusterDemandExchange>();
         builder.Services.TryAddSingleton<TenantRateBudgetCoordinator>();

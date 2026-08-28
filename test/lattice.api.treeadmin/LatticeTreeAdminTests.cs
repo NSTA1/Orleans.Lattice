@@ -435,6 +435,7 @@ public sealed class LatticeTreeAdminTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var lattice = Lattice(factory);
+        lattice.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(true);
         lattice.DiagnoseAsync(false, Arg.Any<CancellationToken>()).Returns(CoreDiagnostics());
         lattice.GetStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(new TreeStorageUsageReport
         {
@@ -473,6 +474,67 @@ public sealed class LatticeTreeAdminTests
 
         Assert.That(async () => await facade.GetTreeStatsAsync(Tree),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
+    }
+
+    [Test]
+    public async Task GetTreeStatsAsync_unknown_tree_reports_a_zeroed_snapshot_without_fanning_out()
+    {
+        // Diagnostics and storage accounting both fan out through the shard roots,
+        // and activating those grains lazily registers a tree that has none - so
+        // reading the statistics of a name nobody created used to create it.
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Lattice(factory);
+        lattice.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(false);
+        var facade = Create(Substitute.For<ILatticeSchemaControl>(), factory);
+
+        var stats = await facade.GetTreeStatsAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stats.TreeId, Is.EqualTo(Tree));
+            Assert.That(stats.ShardCount, Is.Zero);
+            Assert.That(stats.TotalLiveKeys, Is.Zero);
+            Assert.That(stats.TotalBytes, Is.Zero);
+            Assert.That(stats.PartialStorage, Is.False);
+        });
+        await lattice.DidNotReceive().DiagnoseAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().GetStorageUsageAsync(Arg.Any<CancellationToken>());
+    }
+
+    // ----- SetHistoryRetention -----
+
+    [Test]
+    public void SetHistoryRetentionAsync_rejects_a_reserved_system_data_tree()
+    {
+        // Documented as "Rejected for a reserved system tree id"; the guard was
+        // missing, so an operator could put an age bound on the authorization
+        // policy tree and age out auth history the auth add-on owns.
+        var facade = Create(Substitute.For<ILatticeSchemaControl>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await facade.SetHistoryRetentionAsync(
+                    "sys-auth-policy", TreeHistoryRetentionMode.Hybrid, TimeSpan.FromMinutes(1)),
+                Throws.ArgumentException);
+            Assert.That(
+                async () => await facade.SetHistoryRetentionAsync(
+                    "sys-membership-groups", TreeHistoryRetentionMode.MetadataOnly, null),
+                Throws.ArgumentException);
+        });
+    }
+
+    [Test]
+    public async Task SetHistoryRetentionAsync_still_accepts_an_ordinary_tree()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Lattice(factory);
+        var facade = Create(Substitute.For<ILatticeSchemaControl>(), factory);
+
+        await facade.SetHistoryRetentionAsync(Tree, TreeHistoryRetentionMode.FullValue, TimeSpan.FromHours(1));
+
+        await lattice.Received(1).SetHistoryRetentionAsync(
+            HistoryRetentionMode.FullValue, TimeSpan.FromHours(1), Arg.Any<CancellationToken>());
     }
 
     // ----- GetStorageUsage -----
