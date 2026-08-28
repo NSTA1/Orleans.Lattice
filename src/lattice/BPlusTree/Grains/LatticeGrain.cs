@@ -3312,21 +3312,46 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <inheritdoc />
-    public Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)
+    public async Task<TreeDiagnosticReport> DiagnoseAsync(bool deep = false, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // A diagnostic report is a whole-tree read: it carries the tree's total
+        // live-key and tombstone counts, its physical and virtual shard counts, a
+        // per-shard key-distribution breakdown, and its recent split activity - a
+        // volumetric and write-activity profile of data the caller may not be
+        // able to read a single key of. This call previously performed no gate
+        // call at all, so any caller able to address the grain could profile any
+        // nameable tree (and, with tenancy on, any other tenant's tree). Gated
+        // exactly as the external `LatticeTreeAdmin` facade already gates the
+        // same report, so a filtered (prefix) allow is refused rather than
+        // narrowed: a per-shard count aggregate cannot be pruned per key without
+        // still disclosing the keys it counted.
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+
         var stats = grainFactory.GetGrain<ILatticeStats>(TreeId);
-        return stats.GetReportAsync(deep, cancellationToken);
+        return await stats.GetReportAsync(deep, cancellationToken);
     }
 
     /// <inheritdoc />
-    public Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default)
+    public async Task<TreeStorageUsageReport> GetStorageUsageAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Storage usage is the same class of whole-tree disclosure as
+        // DiagnoseAsync - live keys plus the leaf-state, snapshot, WAL-retained
+        // and total byte footprint - and was likewise ungated. Internal consumers
+        // are unaffected: the admission write-guard, LatticeAdminGrain, the
+        // usage poller, and tenant metering all dial ILatticeStorageUsage
+        // directly rather than through this facade, and the usage grain's only
+        // callback into the facade is GetRoutingAsync, which stays ungated by
+        // design - so there is no re-entrancy path through this gate.
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+
         var usage = grainFactory.GetGrain<ILatticeStorageUsage>(TreeId);
-        return usage.GetReportAsync(forceRefresh: false, cancellationToken);
+        return await usage.GetReportAsync(forceRefresh: false, cancellationToken);
     }
 
     /// <summary>
