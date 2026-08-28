@@ -453,10 +453,15 @@ public sealed class OrSet : ICrdt<OrSet>
                 target[key] = [.. dots];
                 continue;
             }
-            if (existing.Count <= DotLinearScanThreshold && dots.Count <= DotLinearScanThreshold)
+            if (dots.Count <= DotLinearScanThreshold)
             {
-                // Tiny dot list (the common 1-2-concurrent-add case): a
-                // linear Contains is cheaper than allocating a HashSet.
+                // Small incoming dot list (the steady-state delta / replication
+                // fold case): at most DotLinearScanThreshold appends, so the
+                // linear Contains stays O(existing) and never grows quadratic.
+                // Only the incoming side must be small - the previous guard also
+                // required the accumulated list to be small, allocating a
+                // HashSet over the whole existing list every time a churned key
+                // with many concurrent adds absorbed even a 1-2-dot delta.
                 foreach (var d in dots)
                 {
                     if (!existing.Contains(d)) existing.Add(d);

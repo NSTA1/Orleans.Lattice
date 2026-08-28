@@ -421,8 +421,15 @@ public sealed class RwSet : ICrdt<RwSet>
                 target[key] = [.. dots];
                 continue;
             }
-            if (existing.Count <= DotLinearScanThreshold && dots.Count <= DotLinearScanThreshold)
+            if (dots.Count <= DotLinearScanThreshold)
             {
+                // Small incoming dot list (the steady-state delta / replication
+                // fold case): at most DotLinearScanThreshold appends, so the
+                // linear Contains stays O(existing) and never grows quadratic.
+                // Only the incoming side must be small - the previous guard also
+                // required the accumulated list to be small, allocating a
+                // HashSet over the whole existing list every time a churned key
+                // with a long dot history absorbed even a 1-2-dot delta.
                 foreach (var d in dots)
                 {
                     if (!existing.Contains(d)) existing.Add(d);

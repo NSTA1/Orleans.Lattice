@@ -233,6 +233,7 @@ for that run rather than adding to it.
 | `authdecision` | The warm authorization decision path (`PolicyEvaluator.Evaluate`). |
 | `hotpath` | Assorted per-request hot-path shapes. |
 | `ordedup` | OR-set / CRDT reconcile de-duplication. |
+| `mergefold` | The CRDT merge fold: folding an incoming dot delta into an accumulated dot list. |
 | `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
 
 ```powershell

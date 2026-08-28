@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, ordedup, catalog.
+// Recognised suites: observer, authdecision, hotpath, ordedup, mergefold, catalog.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -124,6 +124,13 @@ if (string.Equals(suite, "ordedup", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> ordedup (OrCrdtReconcileBenchmarks)");
     var orDedupSummary = BenchmarkRunner.Run<OrCrdtReconcileBenchmarks>(config);
     return orDedupSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "mergefold", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> mergefold (CrdtMergeFoldBenchmarks)");
+    var mergeFoldSummary = BenchmarkRunner.Run<CrdtMergeFoldBenchmarks>(config);
+    return mergeFoldSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "catalog", StringComparison.OrdinalIgnoreCase))
