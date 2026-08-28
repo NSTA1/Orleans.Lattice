@@ -261,7 +261,182 @@ public sealed class TenantUsageMeteringServiceTests
         await service.MeterOnceAsync(CancellationToken.None);
 
         Assert.That(store.Published, Has.Count.EqualTo(1),
-            "one unreadable tree contributes nothing but must not fault the cycle");
+            "an unreadable tree with nothing on record contributes nothing but must not fault the cycle");
+    }
+
+    /// <summary>
+    /// A grain factory whose per-tree behaviour and tree list can both be changed
+    /// between cycles, so a test can fail a tree that previously sampled cleanly -
+    /// the sequence that exposes whether a footprint is retained or silently lost.
+    /// </summary>
+    private sealed class MutableUsageHarness
+    {
+        private readonly Dictionary<string, Func<TreeStorageUsageReport>> _behaviour =
+            new(StringComparer.Ordinal);
+
+        public List<string> TreeIds { get; } = [];
+
+        public IGrainFactory Factory { get; }
+
+        public MutableUsageHarness()
+        {
+            Factory = Substitute.For<IGrainFactory>();
+
+            var registryGrain = Substitute.For<ILatticeRegistry>();
+            registryGrain.GetAllTreeIdsAsync(Arg.Any<string?>()).Returns(call =>
+            {
+                var prefix = call.Arg<string?>();
+                return Task.FromResult<IReadOnlyList<string>>(
+                    string.IsNullOrEmpty(prefix)
+                        ? TreeIds.ToList()
+                        : TreeIds.Where(id => id.StartsWith(prefix, StringComparison.Ordinal)).ToList());
+            });
+            Factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registryGrain);
+        }
+
+        public void AddTree(string treeId, long bytes, long keys)
+        {
+            TreeIds.Add(treeId);
+            Healthy(treeId, bytes, keys);
+
+            var usage = Substitute.For<ILatticeStorageUsage>();
+            usage.GetReportAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+                .Returns(_ => Task.FromResult(_behaviour[treeId]()));
+            Factory.GetGrain<ILatticeStorageUsage>(treeId).Returns(usage);
+        }
+
+        public void Healthy(string treeId, long bytes, long keys) =>
+            _behaviour[treeId] = () => new TreeStorageUsageReport
+            {
+                TreeId = treeId,
+                TotalBytes = bytes,
+                LiveKeys = keys,
+                LeafStateBytes = bytes,
+            };
+
+        public void Broken(string treeId) =>
+            _behaviour[treeId] = () => throw new InvalidOperationException($"'{treeId}' is down");
+    }
+
+    [Test]
+    public async Task A_tree_that_stops_answering_retains_its_last_known_footprint()
+    {
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        var store = new RecordingStore();
+        var service = Create(new FakeRegistry(Acme), store, harness.Factory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+        harness.Broken("t/acme/orders");
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        // The headline guard. The publisher sums exactly the samples it is handed
+        // and REPLACES the tenant's slot with that sum, so an omitted tree does not
+        // read as "unknown" - it reads as zero, and the quota ceiling lifts by that
+        // tree's whole contribution.
+        var latest = store.Published[^1].LocalSample("cluster-a");
+        Assert.Multiple(() =>
+        {
+            Assert.That(latest.Bytes, Is.EqualTo(4096),
+                "an unreadable tree must not shrink the tenant's accounted footprint");
+            Assert.That(latest.Keys, Is.EqualTo(32));
+        });
+    }
+
+    [Test]
+    public async Task Every_tree_failing_does_not_collapse_the_tenant_to_zero_usage()
+    {
+        // The severe shape: a storage-subsystem overload fails every tree at once,
+        // which is exactly when the tenant is pushing enough volume to break
+        // metering. Collapsing to zero here would stop the quota binding outright.
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        harness.AddTree("t/acme/events", bytes: 1024, keys: 8);
+        var store = new RecordingStore();
+        var service = Create(new FakeRegistry(Acme), store, harness.Factory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+        harness.Broken("t/acme/orders");
+        harness.Broken("t/acme/events");
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        var latest = store.Published[^1].LocalSample("cluster-a");
+        Assert.Multiple(() =>
+        {
+            Assert.That(latest.Bytes, Is.EqualTo(5120));
+            Assert.That(latest.Keys, Is.EqualTo(40));
+        });
+    }
+
+    [Test]
+    public async Task A_tree_that_has_never_been_sampled_contributes_nothing()
+    {
+        // Retention only ever replays a figure that was genuinely observed: a tree
+        // with nothing on record must not invent a footprint.
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        harness.AddTree("t/acme/broken", bytes: 999, keys: 9);
+        harness.Broken("t/acme/broken");
+        var store = new RecordingStore();
+        var service = Create(new FakeRegistry(Acme), store, harness.Factory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        var latest = store.Published[^1].LocalSample("cluster-a");
+        Assert.Multiple(() =>
+        {
+            Assert.That(latest.Bytes, Is.EqualTo(4096));
+            Assert.That(latest.Keys, Is.EqualTo(32));
+        });
+    }
+
+    [Test]
+    public async Task A_tree_that_is_no_longer_enumerated_is_dropped_from_the_retained_footprint()
+    {
+        // Retention must not outlive the tree it describes: a deleted or reassigned
+        // tree stops being enumerated and its retained figure must go with it,
+        // otherwise a tenant would be charged forever for storage it no longer has.
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        harness.AddTree("t/acme/events", bytes: 1024, keys: 8);
+        var store = new RecordingStore();
+        var service = Create(new FakeRegistry(Acme), store, harness.Factory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+        harness.TreeIds.Remove("t/acme/events");
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        var latest = store.Published[^1].LocalSample("cluster-a");
+        Assert.Multiple(() =>
+        {
+            Assert.That(latest.Bytes, Is.EqualTo(4096));
+            Assert.That(latest.Keys, Is.EqualTo(32));
+        });
+    }
+
+    [Test]
+    public async Task A_recovered_tree_supersedes_its_retained_footprint()
+    {
+        // Retention is a floor under a failure, not a ratchet: once a tree answers
+        // again its fresh figure wins, including when the footprint shrank.
+        var harness = new MutableUsageHarness();
+        harness.AddTree("t/acme/orders", bytes: 4096, keys: 32);
+        var store = new RecordingStore();
+        var service = Create(new FakeRegistry(Acme), store, harness.Factory);
+
+        await service.MeterOnceAsync(CancellationToken.None);
+        harness.Broken("t/acme/orders");
+        await service.MeterOnceAsync(CancellationToken.None);
+        harness.Healthy("t/acme/orders", bytes: 128, keys: 2);
+        await service.MeterOnceAsync(CancellationToken.None);
+
+        var latest = store.Published[^1].LocalSample("cluster-a");
+        Assert.Multiple(() =>
+        {
+            Assert.That(latest.Bytes, Is.EqualTo(128),
+                "a recovered tree's fresh figure must supersede the retained one");
+            Assert.That(latest.Keys, Is.EqualTo(2));
+        });
     }
 
     [Test]
