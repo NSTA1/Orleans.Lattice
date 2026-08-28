@@ -34,6 +34,43 @@ namespace Orleans.Lattice;
 /// the composite can recognise "absent after remove" without inspecting
 /// the type's internal shape.
 /// </para>
+/// <para>
+/// <b>Buffer ownership.</b> Every primitive in this family stores opaque
+/// <see cref="byte"/>[] payloads, and who owns a given array is decided by
+/// its <em>provenance</em>, not by the type holding it. The rule is uniform
+/// across the family and implementers must follow all three legs:
+/// </para>
+/// <list type="bullet">
+/// <item>
+/// <description>
+/// <b>Ingress from the caller is a hand-off.</b> An array passed to an
+/// authoring method (<c>Set</c>, <c>Add</c>, <c>InsertAfter</c>) is stored by
+/// reference: the caller has just authored it and has no reason to retain it,
+/// so a copy here would be pure waste. The caller must not mutate the array
+/// afterwards, and the method's documentation must say so.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>A fold from a peer or a delta copies.</b> An array reached through
+/// <see cref="MergeFrom(TSelf)"/> or a <c>MergeDelta</c> belongs to somebody
+/// else - a peer replica that keeps using it, or a producer that may retry or
+/// fan the delta out - so adopting it by reference would leave this instance's
+/// durable state aliased to another owner's buffer. This is the seam that turns
+/// a skipped copy into cross-replica corruption; only a <em>winning</em>
+/// candidate need be copied, so a losing fold still allocates nothing.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>Egress to a caller copies.</b> Anything handed back out - through
+/// <see cref="Clone"/>, a composite's <c>Get</c>, or a materialised projection
+/// - must share no buffer with the retained state, or a caller can write
+/// through the returned value into durable state without passing any mutation
+/// API.
+/// </description>
+/// </item>
+/// </list>
 /// </remarks>
 public interface ICrdt<TSelf> where TSelf : ICrdt<TSelf>
 {
@@ -61,6 +98,12 @@ public interface ICrdt<TSelf> where TSelf : ICrdt<TSelf>
     /// - for example the single-live-entry fast path in
     /// <see cref="OrMap{TKey, TValue}.Get(TKey)"/> - without allocating an
     /// identity element and folding it through <see cref="MergeFrom(TSelf)"/>.
+    /// <para>
+    /// "Deep" includes any <see cref="byte"/>[] or collection payload the
+    /// implementer holds: this is the <em>egress</em> seam of the buffer
+    /// ownership rule described on this interface, so a returned copy must
+    /// share no mutable buffer with the receiver.
+    /// </para>
     /// </summary>
     /// <returns>A structurally independent copy of this instance.</returns>
     TSelf Clone();

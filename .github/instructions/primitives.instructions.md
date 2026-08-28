@@ -52,6 +52,24 @@ public sealed class MyAggregate
 - Use `sealed class` when the type has mutable collections or in-place mutation methods.
 - Provide a static `Zero` or `Empty` property for the identity element when applicable.
 
+## Buffer Ownership (`byte[]` payloads)
+
+Every primitive stores opaque `byte[]` payloads. Who owns a given array is decided by its **provenance**, not by the type holding it. All three legs are mandatory - this is the rule `ICrdt<TSelf>` documents, and the one `BoundedRegister` and `Rga` are the reference implementations of.
+
+| Seam | Rule | Why |
+|---|---|---|
+| **Ingress** from the caller (`Set`, `Add`, `InsertAfter`) | **Hand-off** - store by reference, no copy | The caller just authored the array and has no reason to retain it, so copying is pure waste. Document the hand-off on the parameter, and state that the caller must not mutate afterwards. |
+| **Fold** from a peer or a delta (`MergeFrom`, `MergeDelta`) | **Copy** the winning candidate | The array belongs to a peer replica still using it, or a producer that may retry or fan out. Adopting it aliases durable state to another owner's buffer. A *losing* candidate must still allocate nothing. |
+| **Egress** to a caller (`Clone`, composite `Get`, materialised projections) | **Copy** | Otherwise a caller can write through the returned value into durable state without passing any mutation API. |
+
+Copy with a span copy (`value.AsSpan().ToArray()`), never `Array.Clone` - the two allocate identically, but `Array.Clone` goes through the non-generic `Array` path and measured roughly 3-4x slower on the `ordedup` microbench suite. An empty span's `ToArray()` returns the shared `Array.Empty<T>()` singleton, so empty and tombstoned payloads cost nothing.
+
+The egress leg is the one that has actually drawn blood: `OrMap.Clone` (#1705), `OrMap.Get` (#1709), and `Rga.Clone` (#1724) were each a returned value aliasing durable state.
+
+## Source of Truth for Mode-Carried State
+
+Where a primitive carries a field that duplicates something the registered `LatticeMergeMode` already determines - `BoundedRegister.IsMin` is the only current instance - the **mode is the authority** and the field is a wire-carried cache of it. Re-stamp the field from the mode at **every decode seam** (the `CrdtShapeRegistry` shape decode *and* any accessor read path), so state that reaches the store without passing through a directional accessor self-heals on read rather than folding wrongly forever. Stamp in place on the just-decoded instance; it costs no allocation. Do not resolve such a disagreement by throwing on the merge path - a throw there can wedge replication on a single bad payload and still leaves the stored payload wrong.
+
 ## Existing Primitives
 
 | Type | Purpose |

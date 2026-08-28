@@ -220,7 +220,7 @@ public class ShardRootGrainMutationObserverTests
 
             Assert.That(h.Observer.Mutations, Has.Count.EqualTo(1));
             Assert.That(h.Observer.Mutations[0].Kind, Is.EqualTo(MutationKind.DeleteRange));
-            Assert.That(h.Observer.Mutations[0].VectorClock, Is.SameAs(vc));
+            VectorClockAssert.SameFrontier(h.Observer.Mutations[0].VectorClock, vc);
         }
         finally
         {

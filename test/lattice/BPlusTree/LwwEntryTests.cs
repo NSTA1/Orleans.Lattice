@@ -30,7 +30,7 @@ public class LwwEntryTests
         Assert.That(entry.IsTombstone, Is.False);
         Assert.That(entry.ExpiresAtTicks, Is.EqualTo(999L));
         Assert.That(entry.OriginClusterId, Is.EqualTo("peer-a"));
-        Assert.That(entry.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(entry.VectorClock, vc);
     }
 
     [Test]
@@ -48,7 +48,7 @@ public class LwwEntryTests
         Assert.That(roundTripped.IsTombstone, Is.False);
         Assert.That(roundTripped.ExpiresAtTicks, Is.EqualTo(42L));
         Assert.That(roundTripped.OriginClusterId, Is.EqualTo("east"));
-        Assert.That(roundTripped.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(roundTripped.VectorClock, vc);
     }
 
     [Test]
@@ -90,8 +90,8 @@ public class LwwEntryTests
         var entry = new LwwEntry("k", tomb);
 
         Assert.That(entry.IsTombstone, Is.True);
-        Assert.That(entry.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(entry.VectorClock, vc);
         Assert.That(entry.ToLwwValue().IsTombstone, Is.True);
-        Assert.That(entry.ToLwwValue().VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(entry.ToLwwValue().VectorClock, vc);
     }
 }

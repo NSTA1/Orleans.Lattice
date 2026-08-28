@@ -307,7 +307,7 @@ public sealed class CrdtShape
         var ctx = CrdtJsonSerializerContext.Default;
         return new CrdtShape(
             mode,
-            bytes => JsonSerializer.Deserialize(bytes, ctx.BoundedRegister)!,
+            bytes => JsonSerializer.Deserialize(bytes, ctx.BoundedRegister)!.WithDirection(isMin),
             bytes => JsonSerializer.Deserialize(bytes, ctx.BoundedRegisterDelta),
             (state, delta) => ((BoundedRegister)state).MergeDelta((BoundedRegisterDelta)delta),
             (state, other) => ((BoundedRegister)state).MergeFrom((BoundedRegister)other),

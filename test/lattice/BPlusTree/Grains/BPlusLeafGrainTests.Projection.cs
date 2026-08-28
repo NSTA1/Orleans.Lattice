@@ -125,7 +125,7 @@ public partial class BPlusLeafGrainTests
         var raw = await grain.GetRawEntryAsync("k1");
         Assert.That(raw, Is.Not.Null);
         Assert.That(raw!.Value.OriginClusterId, Is.EqualTo("dc-1"));
-        Assert.That(raw.Value.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(raw.Value.VectorClock, vc);
     }
 
     [Test]

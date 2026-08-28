@@ -35,7 +35,7 @@ public class LatticeVectorClockContextTests
     {
         var vc = NewVc("a");
         LatticeVectorClockContext.Current = vc;
-        Assert.That(LatticeVectorClockContext.Current, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, vc);
     }
 
     [Test]
@@ -52,7 +52,7 @@ public class LatticeVectorClockContextTests
         var vc = NewVc("b");
         using (LatticeVectorClockContext.With(vc))
         {
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(vc));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, vc);
         }
     }
 
@@ -64,9 +64,9 @@ public class LatticeVectorClockContextTests
         LatticeVectorClockContext.Current = outer;
         using (LatticeVectorClockContext.With(inner))
         {
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(inner));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, inner);
         }
-        Assert.That(LatticeVectorClockContext.Current, Is.SameAs(outer));
+        VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, outer);
     }
 
     [Test]
@@ -78,7 +78,7 @@ public class LatticeVectorClockContextTests
         {
             Assert.That(LatticeVectorClockContext.Current, Is.Null);
         }
-        Assert.That(LatticeVectorClockContext.Current, Is.SameAs(outer));
+        VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, outer);
     }
 
     [Test]
@@ -88,12 +88,12 @@ public class LatticeVectorClockContextTests
         var b = NewVc("b");
         using (LatticeVectorClockContext.With(a))
         {
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(a));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, a);
             using (LatticeVectorClockContext.With(b))
             {
-                Assert.That(LatticeVectorClockContext.Current, Is.SameAs(b));
+                VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, b);
             }
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(a));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, a);
         }
         Assert.That(LatticeVectorClockContext.Current, Is.Null);
     }
@@ -107,14 +107,14 @@ public class LatticeVectorClockContextTests
         var scope = LatticeVectorClockContext.With(inner);
 
         scope.Dispose();
-        Assert.That(LatticeVectorClockContext.Current, Is.SameAs(outer));
+        VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, outer);
 
         // Second dispose must not re-apply the restore - otherwise it would
         // overwrite any value set after the first dispose returned.
         var after = NewVc("after");
         LatticeVectorClockContext.Current = after;
         scope.Dispose();
-        Assert.That(LatticeVectorClockContext.Current, Is.SameAs(after));
+        VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, after);
     }
 
     [Test]
@@ -124,7 +124,7 @@ public class LatticeVectorClockContextTests
         using (LatticeVectorClockContext.With(vc))
         {
             await Task.Yield();
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(vc));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, vc);
         }
     }
 
@@ -142,7 +142,7 @@ public class LatticeVectorClockContextTests
             LatticeVectorClockContext.Current = vc;
 
             Assert.That(LatticeOriginContext.Current, Is.EqualTo("origin-only"));
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(vc));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, vc);
 
             LatticeVectorClockContext.Current = null;
             Assert.That(LatticeOriginContext.Current, Is.EqualTo("origin-only"),

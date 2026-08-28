@@ -63,6 +63,18 @@ public sealed class BoundedRegister : ICrdt<BoundedRegister>
     /// (a <c>Max</c> register); <see langword="true"/> keeps the smallest (a
     /// <c>Min</c> register). Carried on the state so the direction is durable on
     /// the wire and a receiver folds without a separate mode lookup.
+    /// <para>
+    /// This field is a <em>cache of</em>, not the authority for, the direction.
+    /// The authority is the registered <see cref="LatticeMergeMode"/> for the key
+    /// (<see cref="LatticeMergeMode.MaxRegister"/> or
+    /// <see cref="LatticeMergeMode.MinRegister"/>), which is what the tree
+    /// dispatches on. Every decode seam re-stamps this field from that mode via
+    /// <see cref="WithDirection(bool)"/>, so a payload persisted or supplied with
+    /// the wrong direction - a raw <c>SetAsync</c> of hand-written state, or a
+    /// foreign writer - self-heals on read instead of silently folding backwards
+    /// forever. Keep the setter: the stamp is an in-place write on a
+    /// just-decoded instance, which costs no allocation.
+    /// </para>
     /// </summary>
     [Id(3)]
     public bool IsMin { get; set; }
@@ -83,6 +95,33 @@ public sealed class BoundedRegister : ICrdt<BoundedRegister>
     /// <summary>Creates an empty register in the given direction.</summary>
     /// <param name="isMin"><see langword="true"/> for a <c>Min</c> register; <see langword="false"/> for <c>Max</c>.</param>
     public static BoundedRegister CreateEmpty(bool isMin) => new(isMin);
+
+    /// <summary>
+    /// Stamps <see cref="IsMin"/> from the authoritative registered merge mode
+    /// and returns this same instance, so a decode seam can stamp inline without
+    /// allocating a second register.
+    /// <para>
+    /// Direction is authored in exactly one place - the
+    /// <see cref="LatticeMergeMode"/> registered for the key - and
+    /// <see cref="IsMin"/> on the state is only a wire-carried cache of it. The
+    /// two can disagree whenever state reaches the store without going through a
+    /// directional accessor (a raw byte write of hand-authored JSON, a payload
+    /// from a foreign or older writer, or a key whose mode was re-registered).
+    /// Left unstamped, such a payload folds under the wrong direction
+    /// indefinitely and silently: <see cref="MergeFrom(BoundedRegister)"/>
+    /// resolves under the <em>receiver's</em> direction and never inspects the
+    /// other side's, so nothing detects the disagreement. Re-stamping on decode
+    /// makes the registered mode win, which is what the rest of the tree already
+    /// treats as authoritative.
+    /// </para>
+    /// </summary>
+    /// <param name="isMin">The direction carried by the registered merge mode.</param>
+    /// <returns>This instance, with <see cref="IsMin"/> set to <paramref name="isMin"/>.</returns>
+    internal BoundedRegister WithDirection(bool isMin)
+    {
+        IsMin = isMin;
+        return this;
+    }
 
     /// <inheritdoc />
     /// <remarks>

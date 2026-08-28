@@ -242,7 +242,7 @@ public sealed class EntryHistoryReaderTests
             Assert.That(rev.ValueLength, Is.EqualTo(4));
             Assert.That(rev.ValueHash, Is.Not.Zero);
             Assert.That(rev.RetentionShape, Is.EqualTo(HistoryRetentionMode.FullValue));
-            Assert.That(rev.VectorClock, Is.SameAs(vc));
+            VectorClockAssert.SameFrontier(rev.VectorClock, vc);
         });
     }
 

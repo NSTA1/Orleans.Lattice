@@ -346,8 +346,22 @@ public sealed class Rga : ICrdt<Rga>
         // Capture this sequence's own per-replica maxima before merging so a
         // legacy self (empty Context, non-empty nodes) is not left with a
         // Context that reflects only the incoming side - which would let the
-        // next local insert re-mint an already-authored dot.
+        // next local insert re-mint an already-authored dot. This must stay
+        // ahead of MergeContextFrom below: EnsureContextRebuilt bails out on a
+        // non-empty Context, so folding the incoming side first would suppress
+        // the rebuild of our own maxima.
         EnsureContextRebuilt();
+
+        // Fold the incoming per-replica maxima before the empty-nodes
+        // short-circuit. Context is a second, independent piece of merge state
+        // (the node union is the first), and an incoming sequence can carry a
+        // populated Context with no nodes - a decoded wire/storage payload, or
+        // any future tombstone GC, which Context exists precisely to survive.
+        // Dropping those maxima lets the next local insert re-mint an
+        // already-authored dot, so two nodes share a dot identity and the
+        // sequence stops converging. The early return predates Context by many
+        // releases and was simply never revisited when it was introduced.
+        MergeContextFrom(other);
 
         if (other.Nodes.Count == 0) return;
 
@@ -418,7 +432,6 @@ public sealed class Rga : ICrdt<Rga>
             }
         }
 
-        MergeContextFrom(other);
         // A merge can flip nodes live<->tombstoned and add nodes on either
         // side; rebuild the counter lazily on the next read rather than
         // tracking every transition here (the merge is already O(N)).
@@ -568,7 +581,31 @@ public sealed class Rga : ICrdt<Rga>
         InvalidateMaterializedCache();
     }
 
-    /// <summary>Creates a deep copy of this sequence (every node is duplicated; value byte arrays are referenced as-is).</summary>
+    /// <summary>
+    /// Creates a deep, independent copy of this sequence, per the
+    /// <see cref="ICrdt{TSelf}.Clone"/> contract: every node is duplicated and
+    /// each node's value byte array is copied, not shared.
+    /// <para>
+    /// The value arrays are treated as immutable <em>inside</em> this type, but
+    /// that invariant stops at its boundary. <c>Clone</c> is the egress seam: a
+    /// caller that reads a sequence out of an <c>OrMap&lt;string, Rga&gt;</c> gets
+    /// it through <c>OrMap.Get</c>, which hands back <c>Clone()</c>, so sharing
+    /// the node values there would give the caller a live handle on the map's
+    /// durable state and a write through a returned <see cref="RgaNode.Value"/>
+    /// would corrupt the stored CRDT without going through any mutation API -
+    /// the same defect already fixed one level up in <c>OrMap.Clone</c> and
+    /// <c>OrMap.Get</c>. The per-node copy is the price of the contract, exactly
+    /// as <see cref="BoundedRegister.Clone"/> pays it.
+    /// </para>
+    /// <para>
+    /// The copy is expressed as a span copy rather than <see cref="Array.Clone"/>,
+    /// which allocates identically but goes through the non-generic
+    /// <see cref="Array"/> path and measured roughly 3-4x slower on the
+    /// <c>ordedup</c> microbench suite. A tombstoned node carries an empty value,
+    /// and an empty span's <c>ToArray</c> returns the shared
+    /// <see cref="Array.Empty{T}"/> singleton, so tombstones add no allocation.
+    /// </para>
+    /// </summary>
     public Rga Clone()
     {
         var copy = new Rga();
@@ -580,7 +617,7 @@ public sealed class Rga : ICrdt<Rga>
                 ReplicaId = n.ReplicaId,
                 Counter = n.Counter,
                 ParentDot = n.ParentDot,
-                Value = n.Value,
+                Value = n.Value.AsSpan().ToArray(),
                 IsTombstone = n.IsTombstone,
             });
         }
