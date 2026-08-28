@@ -12,12 +12,12 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.BulkLoad, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         IReadOnlyList<KeyValuePair<string, byte[]>> effectiveEntries = entries;
         if (WriteInterceptionActive)
         {
@@ -85,13 +85,13 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentException.ThrowIfNullOrEmpty(operationId);
         ArgumentNullException.ThrowIfNull(sortedEntries);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.BulkLoad, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
 
         if (sortedEntries.Count == 0)
             return 0;

@@ -31,21 +31,32 @@ public sealed class LatticeTenantScopedTreeAdminTests
     public void Constructor_null_tree_admin_throws()
         => Assert.That(
             () => new LatticeTenantScopedTreeAdmin(
-                null!, Substitute.For<ILatticeSchemaAdmin>(), Admission(active: false, admit: true)),
+                null!, Substitute.For<ILatticeSchemaAdmin>(), Admission(active: false, admit: true),
+                new TenantAdminTestSupport.FixedGate(allow: true)),
             Throws.ArgumentNullException);
 
     [Test]
     public void Constructor_null_schema_admin_throws()
         => Assert.That(
             () => new LatticeTenantScopedTreeAdmin(
-                Substitute.For<ILatticeTreeAdmin>(), null!, Admission(active: false, admit: true)),
+                Substitute.For<ILatticeTreeAdmin>(), null!, Admission(active: false, admit: true),
+                new TenantAdminTestSupport.FixedGate(allow: true)),
             Throws.ArgumentNullException);
 
     [Test]
     public void Constructor_null_admission_throws()
         => Assert.That(
             () => new LatticeTenantScopedTreeAdmin(
-                Substitute.For<ILatticeTreeAdmin>(), Substitute.For<ILatticeSchemaAdmin>(), null!),
+                Substitute.For<ILatticeTreeAdmin>(), Substitute.For<ILatticeSchemaAdmin>(), null!,
+                new TenantAdminTestSupport.FixedGate(allow: true)),
+            Throws.ArgumentNullException);
+
+    [Test]
+    public void Constructor_null_gate_throws()
+        => Assert.That(
+            () => new LatticeTenantScopedTreeAdmin(
+                Substitute.For<ILatticeTreeAdmin>(), Substitute.For<ILatticeSchemaAdmin>(),
+                Admission(active: false, admit: true), null!),
             Throws.ArgumentNullException);
 
     // ----- fail-closed: no active tenant refuses every op ---------------------
@@ -309,6 +320,69 @@ public sealed class LatticeTenantScopedTreeAdminTests
             Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 
+    // ----- authorize-before-account ordering (cross-tenant regression) --------
+
+    [Test]
+    public async Task CreateTree_when_gate_denies_never_consults_admission()
+    {
+        // The active tenant is a client-supplied assertion that only the access
+        // gate validates. Consulting the quota controller first let an
+        // unauthorized caller nominate any victim tenant and have a stateful,
+        // quota-consuming, rate-limiting evaluation charged to it - confirming
+        // the tenant's existence, draining its rate budget, and leaking its
+        // current usage and ceiling through the quota exception's message.
+        var admission = Admission(active: true, admit: true);
+        var facade = CreateFacade(
+            out var treeAdmin, out _, admission, new TenantAdminTestSupport.FixedGate(allow: false));
+
+        using var scope = ActiveTenant("victim");
+        Assert.That(
+            async () => await facade.CreateTreeAsync("orders"),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+
+        Assert.That(admission.AdmitCalls, Is.Zero,
+            "admission must not be consulted for a create the access gate denies");
+        await treeAdmin.DidNotReceive().CreateTreeAsync(
+            Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void CreateTree_when_gate_denies_reports_authorization_not_quota()
+    {
+        // A denied caller must not be able to distinguish "no such tenant" from
+        // "tenant over quota": the refusal is an authorization denial carrying no
+        // tenant usage figures, even when the controller would have thrown a
+        // quota breach naming them.
+        var admission = Admission(
+            active: true, admit: true, throwOnAdmit: new LatticeQuotaExceededException("current=41 ceiling=42"));
+        var facade = CreateFacade(
+            out _, out _, admission, new TenantAdminTestSupport.FixedGate(allow: false));
+
+        using var scope = ActiveTenant("victim");
+        var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await facade.CreateTreeAsync("orders"));
+
+        Assert.That(ex!.Message, Does.Not.Contain("41"));
+        Assert.That(ex.Message, Does.Not.Contain("42"));
+    }
+
+    [Test]
+    public async Task CreateTree_authorizes_the_composed_id_as_a_whole_tree_admin_operation()
+    {
+        var gate = new TenantAdminTestSupport.RecordingGate();
+        var facade = CreateFacade(out var treeAdmin, out _, Admission(active: false, admit: true), gate);
+        treeAdmin
+            .CreateTreeAsync(Arg.Any<string>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Task.FromResult(new TreeCreationResult { TreeId = (string)ci[0]! }));
+
+        using var scope = ActiveTenant();
+        await facade.CreateTreeAsync("orders");
+
+        Assert.That(gate.Calls, Is.EqualTo(1));
+        Assert.That(gate.LastOperation, Is.EqualTo(LatticeOperation.Admin));
+        Assert.That(gate.LastScope, Is.EqualTo("t/acme/orders"));
+    }
+
     // ----- structural confinement: adversarial local names --------------------
 
     private static readonly string[] AdversarialNames =
@@ -406,11 +480,13 @@ public sealed class LatticeTenantScopedTreeAdminTests
     private static LatticeTenantScopedTreeAdmin CreateFacade(
         out ILatticeTreeAdmin treeAdmin,
         out ILatticeSchemaAdmin schemaAdmin,
-        ITenantAdmissionController admission)
+        ITenantAdmissionController admission,
+        ILatticeAccessGate? gate = null)
     {
         treeAdmin = Substitute.For<ILatticeTreeAdmin>();
         schemaAdmin = Substitute.For<ILatticeSchemaAdmin>();
-        return new LatticeTenantScopedTreeAdmin(treeAdmin, schemaAdmin, admission);
+        return new LatticeTenantScopedTreeAdmin(
+            treeAdmin, schemaAdmin, admission, gate ?? new TenantAdminTestSupport.FixedGate(allow: true));
     }
 
     /// <summary>

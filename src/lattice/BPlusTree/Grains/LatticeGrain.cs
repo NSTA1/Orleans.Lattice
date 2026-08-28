@@ -1528,24 +1528,40 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(key);
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
+        var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        if (!enforce.IsCompletedSuccessfully)
+            return SetEnforcedSlowAsync(enforce, key, value, cancellationToken);
+        enforce.GetAwaiter().GetResult();
         var admit = ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (!admit.IsCompletedSuccessfully)
             return SetAdmitThenWriteAsync(admit, key, value, cancellationToken);
         admit.GetAwaiter().GetResult();
-        var enforce = EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
-        if (enforce.IsCompletedSuccessfully && !WriteInterceptionActive)
-        {
-            enforce.GetAwaiter().GetResult();
-            return LatticeIdempotencyContext.IsActive
-                ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
-                : SetAsyncCore(key, value, cancellationToken);
-        }
-        return SetEnforcedSlowAsync(enforce, key, value, cancellationToken);
+        if (WriteInterceptionActive)
+            return SetGatedTailAsync(key, value, cancellationToken);
+        return LatticeIdempotencyContext.IsActive
+            ? RunMutationAsync(ct => SetAsyncCore(key, value, ct), cancellationToken)
+            : SetAsyncCore(key, value, cancellationToken);
     }
 
     private async Task SetEnforcedSlowAsync(ValueTask enforce, string key, byte[] value, CancellationToken cancellationToken)
     {
         await enforce;
+
+        // Admission is deliberately behind enforcement: it accounts against the
+        // caller-asserted active tenant, so running it first would let an
+        // unauthorized caller drive another tenant's quota and rate budget.
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
+        await SetGatedTailAsync(key, value, cancellationToken);
+    }
+
+    /// <summary>
+    /// The post-gate tail of <see cref="SetAsync(string, byte[], CancellationToken)"/>:
+    /// write interception followed by the mutation. Shared by the synchronous
+    /// fast path and both slow-path continuations so the enforce-then-admit
+    /// ordering is expressed exactly once.
+    /// </summary>
+    private async Task SetGatedTailAsync(string key, byte[] value, CancellationToken cancellationToken)
+    {
         if (WriteInterceptionActive)
         {
             var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
@@ -1728,7 +1744,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1737,6 +1752,7 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (ttl <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ttl), "TTL must be positive.");
         var nowUtc = DateTimeOffset.UtcNow;
@@ -1787,7 +1803,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1796,6 +1811,7 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
         {
             var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
@@ -1848,7 +1864,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfCrdtWriteViolatesReplicationMode(mode);
@@ -1857,6 +1872,7 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, deltaBytes);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.CrdtApply, key, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
         {
             var outcome = await InterceptWriteAsync(LatticeOperation.CrdtApply, key, deltaBytes, ttl: null, cancellationToken);
@@ -1891,7 +1907,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1900,6 +1915,7 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
         {
             var outcome = await InterceptWriteAsync(LatticeOperation.Write, key, value, ttl: null, cancellationToken);
@@ -1935,7 +1951,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -1953,6 +1968,7 @@ internal sealed partial class LatticeGrain(
         }
         EnforceAdmissionControl();
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: false, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -2135,12 +2151,12 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(entries);
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: false, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
@@ -2241,7 +2257,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2250,6 +2265,7 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
@@ -2290,7 +2306,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2300,6 +2315,7 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
@@ -2350,7 +2366,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2366,6 +2381,7 @@ internal sealed partial class LatticeGrain(
         await EnforceEntryWritesAsync(upserts, null, cancellationToken);
         if (deletes.Count > 0)
             await EnforceManyPointsAsync(LatticeOperation.Delete, deletes, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             upserts = await InterceptEntriesAsync(LatticeOperation.Write, upserts, atomic: true, cancellationToken);
 
@@ -2408,7 +2424,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2417,6 +2432,7 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var operationId = Guid.NewGuid().ToString("N");
@@ -2439,7 +2455,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2449,6 +2464,7 @@ internal sealed partial class LatticeGrain(
         if (entries.Count == 0) return AtomicWriteOutcome.Committed;
 
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
             entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: true, cancellationToken);
         var saga = grainFactory.GetGrain<IAtomicWriteGrain>($"{TreeId}/{operationId}");
@@ -2465,24 +2481,25 @@ internal sealed partial class LatticeGrain(
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
         ArgumentNullException.ThrowIfNull(key);
+        var enforce = EnforcePointAsync(LatticeOperation.Delete, key, cancellationToken);
+        if (!enforce.IsCompletedSuccessfully)
+            return DeleteEnforcedSlowAsync(enforce, key, cancellationToken);
+        enforce.GetAwaiter().GetResult();
         var admit = ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (!admit.IsCompletedSuccessfully)
             return DeleteAdmitThenDeleteAsync(admit, key, cancellationToken);
         admit.GetAwaiter().GetResult();
-        var enforce = EnforcePointAsync(LatticeOperation.Delete, key, cancellationToken);
-        if (enforce.IsCompletedSuccessfully)
-        {
-            enforce.GetAwaiter().GetResult();
-            return LatticeIdempotencyContext.IsActive
-                ? RunMutationAsync(ct => DeleteRegisteredAsync(key, ct), cancellationToken)
-                : DeleteRegisteredAsync(key, cancellationToken);
-        }
-        return DeleteEnforcedSlowAsync(enforce, key, cancellationToken);
+        return LatticeIdempotencyContext.IsActive
+            ? RunMutationAsync(ct => DeleteRegisteredAsync(key, ct), cancellationToken)
+            : DeleteRegisteredAsync(key, cancellationToken);
     }
 
     private async Task<bool> DeleteEnforcedSlowAsync(ValueTask enforce, string key, CancellationToken cancellationToken)
     {
         await enforce;
+
+        // Admission runs behind enforcement; see SetEnforcedSlowAsync.
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         return LatticeIdempotencyContext.IsActive
             ? await RunMutationAsync(ct => DeleteRegisteredAsync(key, ct), cancellationToken)
             : await DeleteRegisteredAsync(key, cancellationToken);
@@ -2545,7 +2562,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2553,6 +2569,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
 
         // Behind the range-delete gate, and for the same reason as the single-key
         // delete: retracting a range from a tree that was never created is a no-op
@@ -2577,7 +2594,6 @@ internal sealed partial class LatticeGrain(
     {
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
-        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         ThrowIfProtectedView();
         ThrowIfShuttingDown();
         ThrowIfLwwWriteToCrdtReplicatedTree();
@@ -2585,6 +2601,7 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();

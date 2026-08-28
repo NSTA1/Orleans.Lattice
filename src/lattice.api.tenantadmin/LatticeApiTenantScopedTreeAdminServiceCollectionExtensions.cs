@@ -68,8 +68,18 @@ public static class LatticeApiTenantScopedTreeAdminServiceCollectionExtensions
         // The transport-agnostic tenant-scoped control facade. Registered as a silo
         // singleton that every transport binding (for example gRPC, MCP) adapts
         // over. ITenantAdmissionController is always resolvable from core (the no-op
-        // controller when tenancy is off), so no guard is needed for it.
-        builder.Services.TryAddSingleton<ILatticeTenantScopedTreeAdmin, LatticeTenantScopedTreeAdmin>();
+        // controller when tenancy is off), so no guard is needed for it. The access
+        // gate is likewise always registered by core (the no-op gate when no auth
+        // add-on is present); the facade consults it before the admission
+        // controller so quota accounting can never precede authorization. The
+        // membership context is optional, so the facade is constructed through a
+        // factory rather than by DI activation.
+        builder.Services.TryAddSingleton<ILatticeTenantScopedTreeAdmin>(sp => new LatticeTenantScopedTreeAdmin(
+            sp.GetRequiredService<ILatticeTreeAdmin>(),
+            sp.GetRequiredService<ILatticeSchemaAdmin>(),
+            sp.GetRequiredService<ITenantAdmissionController>(),
+            sp.GetRequiredService<ILatticeAccessGate>(),
+            sp.GetService<ILatticeMembershipContext>()));
 
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method, matching how the sibling add-ons
