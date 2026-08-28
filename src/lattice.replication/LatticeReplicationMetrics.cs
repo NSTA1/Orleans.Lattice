@@ -313,14 +313,16 @@ public static class LatticeReplicationMetrics
             description: "Duration of outbound ship-batch attempts, tagged by tree, peer and outcome.");
 
     /// <summary>
-    /// Histogram of inbound apply-batch durations. Recorded by the receiver
-    /// after each batch is applied (or rejected). Tagged by
+    /// Histogram of inbound <b>per-entry</b> apply durations. Recorded by the
+    /// receiver once for each entry it applies (or rejects), on both the
+    /// single-entry and the batch path - a batch of N entries therefore
+    /// contributes N samples, not one. Tagged by
     /// <see cref="TagTree"/>, <see cref="TagPeer"/>, and
     /// <see cref="TagOutcome"/>.
     /// </summary>
     public static readonly Histogram<double> ApplyDuration =
         Meter.CreateHistogram<double>("orleans.lattice.replication.apply.duration", unit: "ms",
-            description: "Duration of inbound apply-batch attempts, tagged by tree, peer and outcome.");
+            description: "Duration of an individual inbound entry apply attempt, tagged by tree, peer and outcome. One sample per entry, not per batch: a batch of N entries contributes N samples.");
 
     /// <summary>
     /// Histogram of receiver-side replication lag, computed at successful
@@ -922,7 +924,7 @@ public static class LatticeReplicationMetrics
     /// this histogram - only successful waits are observed.
     /// </summary>
     public static readonly Histogram<double> ApplyDependencyWaitMs =
-        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms",
+        Meter.CreateHistogram<double>("orleans.lattice.replication.apply.dependency_wait_ms", unit: "ms",
             description: "Wait time between park and drain for a buffered causal-apply entry, tagged by tree.");
 
     /// <summary>

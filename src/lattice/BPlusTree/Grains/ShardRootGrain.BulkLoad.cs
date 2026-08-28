@@ -19,7 +19,7 @@ internal sealed partial class ShardRootGrain
 
         if (sortedEntries.Count == 0) return;
 
-        RecordWrite();
+        RecordWrite(sortedEntries.Count);
 
         var shardKey = context.GrainId.Key.ToString()!;
         var options = await GetOptionsAsync();
@@ -79,7 +79,7 @@ internal sealed partial class ShardRootGrain
 
         if (sortedEntries.Count == 0) return;
 
-        RecordWrite();
+        RecordWrite(sortedEntries.Count);
 
         var shardKey = context.GrainId.Key.ToString()!;
         var options = await GetOptionsAsync();
@@ -201,7 +201,7 @@ internal sealed partial class ShardRootGrain
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
-        RecordWrite();
+        RecordWrite(sortedEntries.Count);
 
         if (state.State.PendingBulkGraft is not null)
         {

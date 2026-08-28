@@ -52,11 +52,38 @@ internal sealed partial class ShardRootGrain
         LatticeMetrics.ShardReads.Add(1, GetMetricTags());
     }
 
-    /// <summary>Increments the write operation counter and publishes a meter data point.</summary>
-    private void RecordWrite()
+    /// <summary>
+    /// Increments the write operation counter and publishes a meter data point,
+    /// together with the number of individual records the operation carried.
+    /// </summary>
+    /// <param name="records">
+    /// The number of records this operation writes - 1 for a single-key write, the
+    /// entry count for a batched or bulk write. Pass 0 when the affected-record
+    /// count is not yet known (the operation is still counted) and publish it later
+    /// with <see cref="RecordRecordsWritten"/>.
+    /// </param>
+    private void RecordWrite(long records = 1)
     {
         _writeOps++;
-        LatticeMetrics.ShardWrites.Add(1, GetMetricTags());
+        var tags = GetMetricTags();
+        LatticeMetrics.ShardWrites.Add(1, tags);
+        if (records > 0)
+        {
+            LatticeMetrics.ShardRecordsWritten.Add(records, tags);
+        }
+    }
+
+    /// <summary>
+    /// Publishes the record count for a write operation whose affected-record count
+    /// is only known once it completes (<c>DeleteRangeAsync</c>,
+    /// <c>SetManyWherePredicateAsync</c>). The operation itself is counted up-front
+    /// by <see cref="RecordWrite"/> with <c>records: 0</c>.
+    /// </summary>
+    /// <param name="records">The number of records the completed operation affected.</param>
+    private void RecordRecordsWritten(long records)
+    {
+        if (records <= 0) return;
+        LatticeMetrics.ShardRecordsWritten.Add(records, GetMetricTags());
     }
 
     /// <inheritdoc />

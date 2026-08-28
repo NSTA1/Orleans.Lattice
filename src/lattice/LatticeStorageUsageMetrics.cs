@@ -131,7 +131,7 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         meter.CreateObservableGauge(
             LatticeMetrics.StoragePolicyOverThresholdName,
             static () => ObserveAllOverThreshold(),
-            unit: "{tree}",
+            unit: "1",
             description: "1 when the tree's retained WAL bytes currently breach the advisory ceiling, else 0.");
     }
 
