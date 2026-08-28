@@ -228,10 +228,14 @@ public sealed class RwFlag : ICrdt<RwFlag>
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {
         if (source.Count == 0) return;
-        if (target.Count <= DotLinearScanThreshold && source.Count <= DotLinearScanThreshold)
+        if (source.Count <= DotLinearScanThreshold)
         {
-            // Tiny dot lists (the common 1-2-concurrent-dot case): a linear
-            // Contains is cheaper than allocating a HashSet.
+            // Small incoming dot list (the common 1-2-concurrent-dot and
+            // steady-state delta-fold case): at most DotLinearScanThreshold
+            // appends, so the linear Contains stays O(target) and never grows
+            // quadratic. Only the incoming side must be small - the previous
+            // guard also required the target to be small, allocating a HashSet
+            // over a long-lived flag's accumulated list on every small merge.
             foreach (var dot in source)
             {
                 if (!target.Contains(dot)) target.Add(dot);
@@ -248,7 +252,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
     private static void UnionDots(List<OrSetDot> target, IReadOnlyList<OrSetDot>? source)
     {
         if (source is not { Count: > 0 }) return;
-        if (target.Count <= DotLinearScanThreshold && source.Count <= DotLinearScanThreshold)
+        if (source.Count <= DotLinearScanThreshold)
         {
             for (var i = 0; i < source.Count; i++)
             {

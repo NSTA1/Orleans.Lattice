@@ -8,6 +8,13 @@ namespace Orleans.Lattice.Tests.Primitives;
 /// once a dot list grows past the internal linear-scan threshold (4). The
 /// common-case linear paths are covered elsewhere; these drive the same
 /// operations with larger dot sets so the set-based branches execute.
+/// <para>
+/// The union helpers pick their branch off the <em>incoming</em> side alone, so
+/// the merge tests below size the incoming dot list either side of the
+/// threshold and assert both branches produce the same union: a large incoming
+/// list takes the set-based fold, and a small one folded into an already-large
+/// target takes the allocation-free linear scan.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Unit")]
@@ -63,14 +70,33 @@ public sealed class FlagLargeDotSetTests
     }
 
     [Test]
-    public void OrFlag_MergeDelta_with_large_target_unions_via_set()
+    public void OrFlag_MergeDelta_with_large_delta_unions_via_set()
     {
+        // The incoming side selects the branch: 5 delta dots exceed the
+        // threshold, so the union goes through the HashSet fold.
         var flag = new OrFlag { Enables = Dots("a-", 5) };
-        var delta = new OrFlagDelta { Enables = Dots("b-", 2), Disables = [] };
+        var delta = new OrFlagDelta { Enables = Dots("b-", 5), Disables = [] };
+
+        flag.MergeDelta(delta);
+
+        Assert.That(flag.Enables, Has.Count.EqualTo(10));
+    }
+
+    [Test]
+    public void OrFlag_MergeDelta_with_small_delta_into_large_target_unions_via_linear_scan()
+    {
+        // The mirror case: an accumulated target past the threshold absorbing a
+        // 1-2-dot delta stays on the allocation-free linear path and must union
+        // identically, including de-duplicating a dot the target already holds.
+        var enables = Dots("a-", 5);
+        var flag = new OrFlag { Enables = [.. enables] };
+        var delta = new OrFlagDelta { Enables = [enables[0], .. Dots("b-", 2)], Disables = [] };
 
         flag.MergeDelta(delta);
 
         Assert.That(flag.Enables, Has.Count.EqualTo(7));
+        Assert.That(flag.Enables, Is.SupersetOf(enables));
+        Assert.That(flag.Enables, Is.SupersetOf(Dots("b-", 2)));
     }
 
     // ===== RwFlag =====
@@ -121,14 +147,40 @@ public sealed class FlagLargeDotSetTests
     }
 
     [Test]
-    public void RwFlag_MergeDelta_with_large_target_unions_via_set()
+    public void RwFlag_MergeDelta_with_large_delta_unions_via_set()
     {
+        // The incoming side selects the branch: 5 delta dots exceed the
+        // threshold, so the union goes through the HashSet fold.
         var flag = new RwFlag { Enables = Dots("a-", 5), Disables = Dots("da-", 5) };
-        var delta = new RwFlagDelta { Enables = Dots("b-", 2), Disables = Dots("db-", 2), Tombstones = [] };
+        var delta = new RwFlagDelta { Enables = Dots("b-", 5), Disables = Dots("db-", 5), Tombstones = [] };
+
+        flag.MergeDelta(delta);
+
+        Assert.That(flag.Enables, Has.Count.EqualTo(10));
+        Assert.That(flag.Disables, Has.Count.EqualTo(10));
+    }
+
+    [Test]
+    public void RwFlag_MergeDelta_with_small_delta_into_large_target_unions_via_linear_scan()
+    {
+        // The mirror case: an accumulated target past the threshold absorbing a
+        // 1-2-dot delta stays on the allocation-free linear path and must union
+        // identically, including de-duplicating dots the target already holds.
+        var enables = Dots("a-", 5);
+        var disables = Dots("da-", 5);
+        var flag = new RwFlag { Enables = [.. enables], Disables = [.. disables] };
+        var delta = new RwFlagDelta
+        {
+            Enables = [enables[0], .. Dots("b-", 2)],
+            Disables = [disables[0], .. Dots("db-", 2)],
+            Tombstones = [],
+        };
 
         flag.MergeDelta(delta);
 
         Assert.That(flag.Enables, Has.Count.EqualTo(7));
         Assert.That(flag.Disables, Has.Count.EqualTo(7));
+        Assert.That(flag.Enables, Is.SupersetOf(enables));
+        Assert.That(flag.Disables, Is.SupersetOf(disables));
     }
 }
