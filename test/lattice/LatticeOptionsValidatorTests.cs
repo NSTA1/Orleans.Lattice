@@ -468,40 +468,40 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void ReshardEmptyProbeBudget_default_is_ten_seconds()
+    public void EmptyTreeProbeBudget_default_is_ten_seconds()
     {
-        Assert.That(new LatticeOptions().ReshardEmptyProbeBudget, Is.EqualTo(TimeSpan.FromSeconds(10)));
-        Assert.That(LatticeOptions.DefaultReshardEmptyProbeBudget, Is.EqualTo(TimeSpan.FromSeconds(10)));
+        Assert.That(new LatticeOptions().EmptyTreeProbeBudget, Is.EqualTo(TimeSpan.FromSeconds(10)));
+        Assert.That(LatticeOptions.DefaultEmptyTreeProbeBudget, Is.EqualTo(TimeSpan.FromSeconds(10)));
     }
 
     [Test]
-    public void ReshardEmptyProbeBudget_positive_passes()
+    public void EmptyTreeProbeBudget_positive_passes()
     {
-        var result = Validate(o => o.ReshardEmptyProbeBudget = TimeSpan.FromSeconds(5));
+        var result = Validate(o => o.EmptyTreeProbeBudget = TimeSpan.FromSeconds(5));
         Assert.That(result.Succeeded, Is.True);
     }
 
     [Test]
-    public void ReshardEmptyProbeBudget_infinite_passes()
+    public void EmptyTreeProbeBudget_infinite_passes()
     {
-        var result = Validate(o => o.ReshardEmptyProbeBudget = Timeout.InfiniteTimeSpan);
+        var result = Validate(o => o.EmptyTreeProbeBudget = Timeout.InfiniteTimeSpan);
         Assert.That(result.Succeeded, Is.True);
     }
 
     [Test]
-    public void ReshardEmptyProbeBudget_zero_fails()
+    public void EmptyTreeProbeBudget_zero_fails()
     {
-        var result = Validate(o => o.ReshardEmptyProbeBudget = TimeSpan.Zero);
+        var result = Validate(o => o.EmptyTreeProbeBudget = TimeSpan.Zero);
         Assert.That(result.Failed, Is.True);
-        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ReshardEmptyProbeBudget)));
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.EmptyTreeProbeBudget)));
     }
 
     [Test]
-    public void ReshardEmptyProbeBudget_negative_fails()
+    public void EmptyTreeProbeBudget_negative_fails()
     {
-        var result = Validate(o => o.ReshardEmptyProbeBudget = TimeSpan.FromSeconds(-1));
+        var result = Validate(o => o.EmptyTreeProbeBudget = TimeSpan.FromSeconds(-1));
         Assert.That(result.Failed, Is.True);
-        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ReshardEmptyProbeBudget)));
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.EmptyTreeProbeBudget)));
     }
 
     [Test]

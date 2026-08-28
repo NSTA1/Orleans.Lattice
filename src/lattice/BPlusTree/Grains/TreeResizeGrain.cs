@@ -93,9 +93,24 @@ internal sealed class TreeResizeGrain(
         // the structural leaf/internal sizes atomically on the registry and
         // short-circuit the coordinator machinery. No snapshot, no shadow-
         // forward, no alias swap.
-        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        var liveCount = await lattice.CountAsync();
-        if (liveCount == 0)
+        //
+        // Probed via TreeEmptinessProbe rather than ILattice.CountAsync: the
+        // fast path needs only a boolean, and a strongly-consistent count
+        // reconciles against a moving shard map (retrying until
+        // MaxScanRetries is spent), which can outlast the caller's response
+        // budget on a tree being written concurrently. See TreeEmptinessProbe
+        // for why an existence question needs no such reconciliation.
+        var registryForProbe = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var resolvedOptions = await optionsResolver.ResolveAsync(TreeId);
+        var probeMap = await registryForProbe.GetShardMapAsync(TreeId)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount, resolvedOptions.ShardCount);
+
+        if (await TreeEmptinessProbe.IsObservablyEmptyAsync(
+                grainFactory,
+                await registryForProbe.ResolveAsync(TreeId),
+                probeMap.GetPhysicalShardIndices(),
+                resolvedOptions.EmptyTreeProbeBudget))
         {
             await ApplyEmptyTreeResizeAsync(newMaxLeafKeys, newMaxInternalChildren);
             return;

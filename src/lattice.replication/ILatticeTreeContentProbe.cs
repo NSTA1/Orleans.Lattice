@@ -6,7 +6,16 @@ namespace Orleans.Lattice.Replication;
 /// enabled for it. Enabling replication on a non-empty tree must compose with a
 /// snapshot bootstrap because the change feed only carries <i>new</i> mutations
 /// (see <see cref="ILatticeReplicationConfigAuthority.EnableReplicationAsync"/>),
-/// so the authority needs the tree's current entry count.
+/// so the authority needs to know whether the tree holds anything at all.
+/// <para>
+/// The seam deliberately exposes the <em>boolean</em> the authority actually
+/// needs rather than an entry count. It previously returned a count that the
+/// only caller immediately reduced to <c>count &gt; 0</c>, which made the
+/// cheapest possible question - "is there at least one row?" - cost a
+/// strongly-consistent whole-tree fan-out that walks every leaf chain and
+/// retries whenever the shard map moves under it. Asking for existence lets the
+/// implementation stop at the first row it sees.
+/// </para>
 /// <para>
 /// The seam exists so the authority can be unit-tested without an Orleans
 /// cluster: the default implementation resolves the target
@@ -17,10 +26,11 @@ namespace Orleans.Lattice.Replication;
 internal interface ILatticeTreeContentProbe
 {
     /// <summary>
-    /// Returns the current number of live entries in <paramref name="treeId"/>.
+    /// Returns <see langword="true"/> when <paramref name="treeId"/> holds at
+    /// least one live entry.
     /// </summary>
     /// <param name="treeId">The target tree id. Must be non-empty.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <returns>The tree's live entry count.</returns>
-    Task<int> CountAsync(string treeId, CancellationToken cancellationToken);
+    /// <returns><see langword="true"/> when the tree holds at least one live entry.</returns>
+    Task<bool> HasContentAsync(string treeId, CancellationToken cancellationToken);
 }

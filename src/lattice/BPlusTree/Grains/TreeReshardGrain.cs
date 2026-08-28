@@ -102,7 +102,7 @@ internal sealed class TreeReshardGrain(
         // without activating the coordinator machinery. This also relaxes
         // the grow-only restriction so callers (including test fixtures)
         // can set any desired shard count on a freshly-created tree.
-        if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved))
+        if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap))
         {
             await ApplyEmptyTreeResharAsync(registry, newShardCount, LatticeConstants.DefaultVirtualShardCount);
             return;
@@ -221,37 +221,21 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
     /// <returns><see langword="true"/> only when the tree was positively observed to be empty.</returns>
-    private async Task<bool> IsObservablyEmptyAsync(LatticeOptions resolved)
-    {
-        try
-        {
-            var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-            var countTask = lattice.CountAsync();
-
-            var budget = resolved.ReshardEmptyProbeBudget;
-            if (budget != Timeout.InfiniteTimeSpan
-                && !ReferenceEquals(await Task.WhenAny(countTask, Task.Delay(budget)), countTask))
-            {
-                // Abandon the probe, but observe its eventual fault so an
-                // in-flight count that later fails cannot surface as an
-                // unobserved task exception.
-                _ = countTask.ContinueWith(
-                    static t => _ = t.Exception,
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-                return false;
-            }
-
-            return await countTask == 0;
-        }
-        catch (InvalidOperationException)
-        {
-            // The count gave up reconciling against a shard map that kept
-            // moving under it.
-            return false;
-        }
-    }
+    /// <summary>
+    /// Bounded, one-sided emptiness probe for the empty-tree fast path. See
+    /// <see cref="TreeEmptinessProbe"/> for why this deliberately does not go
+    /// through <see cref="ILattice.CountAsync(CancellationToken)"/>, and why an
+    /// existence question needs no reconciliation against a moving shard map.
+    /// </summary>
+    /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
+    /// <param name="currentMap">The shard map observed by the caller, used to enumerate physical shards.</param>
+    /// <returns><see langword="true"/> only when the tree was positively observed to be empty.</returns>
+    private async Task<bool> IsObservablyEmptyAsync(LatticeOptions resolved, ShardMap currentMap) =>
+        await TreeEmptinessProbe.IsObservablyEmptyAsync(
+            grainFactory,
+            await ResolvePhysicalTreeIdAsync(),
+            currentMap.GetPhysicalShardIndices(),
+            resolved.EmptyTreeProbeBudget);
 
     /// <inheritdoc />
     public async Task RunReshardPassAsync()

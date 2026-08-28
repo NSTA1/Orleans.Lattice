@@ -32,15 +32,15 @@ public sealed class LatticeReplicationConfigAuthorityTests
         var preconditions = new LatticeReplicationPreconditionValidator(context);
 
         admin ??= Substitute.For<ILatticeReplicationAdmin>();
-        probe ??= FixedProbe(0);
+        probe ??= FixedProbe(hasContent: false);
 
         return new LatticeReplicationConfigAuthority(store, preconditions, context, admin, probe);
     }
 
-    private static ILatticeTreeContentProbe FixedProbe(int count)
+    private static ILatticeTreeContentProbe FixedProbe(bool hasContent)
     {
         var probe = Substitute.For<ILatticeTreeContentProbe>();
-        probe.CountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(count));
+        probe.HasContentAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(hasContent));
         return probe;
     }
 
@@ -198,7 +198,7 @@ public sealed class LatticeReplicationConfigAuthorityTests
     {
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(5));
+        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: true));
 
         var result = await authority.EnableReplicationAsync(
             Tree, LatticeMergeMode.OrSet, bootstrapSourceClusterId: "site-b");
@@ -212,7 +212,7 @@ public sealed class LatticeReplicationConfigAuthorityTests
     {
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(0));
+        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: false));
 
         var result = await authority.EnableReplicationAsync(
             Tree, LatticeMergeMode.OrSet, bootstrapSourceClusterId: "site-b");
@@ -227,7 +227,7 @@ public sealed class LatticeReplicationConfigAuthorityTests
     {
         var store = new InMemoryConfigStore();
         var admin = Substitute.For<ILatticeReplicationAdmin>();
-        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(5));
+        var authority = CreateAuthority(store, admin: admin, probe: FixedProbe(hasContent: true));
 
         var result = await authority.EnableReplicationAsync(Tree, LatticeMergeMode.OrSet);
 

@@ -24,7 +24,7 @@ public partial class TreeReshardGrainTests
         ShardMap? existingMap = null,
         FakePersistentState<TreeReshardState>? existingState = null,
         int maxConcurrentMigrations = 4,
-        TimeSpan? reshardEmptyProbeBudget = null)
+        TimeSpan? emptyTreeProbeBudget = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("reshard", TreeId));
@@ -41,8 +41,8 @@ public partial class TreeReshardGrainTests
         var opts = new LatticeOptions
         {
             MaxConcurrentMigrations = maxConcurrentMigrations,
-            ReshardEmptyProbeBudget =
-                reshardEmptyProbeBudget ?? LatticeOptions.DefaultReshardEmptyProbeBudget,
+            EmptyTreeProbeBudget =
+                emptyTreeProbeBudget ?? LatticeOptions.DefaultEmptyTreeProbeBudget,
         };
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
@@ -61,7 +61,12 @@ public partial class TreeReshardGrainTests
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, opts);
 
         // Default: simulate a non-empty tree so validation paths run.
-        // Empty-tree fast-path tests override CountAsync explicitly.
+        // Emptiness is now probed per-shard via IShardRootGrain.AnyAsync, so
+        // the fast-path tests override the shard stub (not ILattice).
+        var defaultShard = Substitute.For<IShardRootGrain>();
+        defaultShard.AnyAsync().Returns(Task.FromResult(true));
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(defaultShard);
+
         var defaultLattice = Substitute.For<ILattice>();
         defaultLattice.CountAsync().Returns(Task.FromResult(1));
         defaultLattice.IsResizeCompleteAsync().Returns(true);

@@ -1615,7 +1615,7 @@ public class LatticeOptions
     /// probe slow is concurrent split churn, and a tree whose topology is
     /// churning necessarily holds keys. A genuinely empty tree has nothing to
     /// churn, answers well inside the budget, and still takes the fast path.
-    /// Defaults to <see cref="DefaultReshardEmptyProbeBudget"/> (10 seconds) -
+    /// Defaults to <see cref="DefaultEmptyTreeProbeBudget"/> (10 seconds) -
     /// comfortably above a cold fan-out's activation-retry envelope, yet well
     /// below the caller-side budget. Set to
     /// <see cref="Timeout.InfiniteTimeSpan"/> to restore the historical
@@ -1623,10 +1623,10 @@ public class LatticeOptions
     /// other non-positive value at first-resolve time.
     /// </para>
     /// </summary>
-    public TimeSpan ReshardEmptyProbeBudget { get; set; } = DefaultReshardEmptyProbeBudget;
+    public TimeSpan EmptyTreeProbeBudget { get; set; } = DefaultEmptyTreeProbeBudget;
 
-    /// <summary>Default value for <see cref="ReshardEmptyProbeBudget"/> (10 seconds).</summary>
-    public static readonly TimeSpan DefaultReshardEmptyProbeBudget = TimeSpan.FromSeconds(10);
+    /// <summary>Default value for <see cref="EmptyTreeProbeBudget"/> (10 seconds).</summary>
+    public static readonly TimeSpan DefaultEmptyTreeProbeBudget = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Hard ceiling on how long a <c>ShardRootGrain</c>'s one-time

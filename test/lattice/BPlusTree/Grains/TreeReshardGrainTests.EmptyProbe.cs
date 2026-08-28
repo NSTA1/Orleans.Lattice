@@ -4,24 +4,27 @@ using Orleans.Lattice.BPlusTree;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Regression coverage for the bounded emptiness probe that reshard
-/// initiation runs before taking its empty-tree fast path.
+/// Regression coverage for the emptiness probe that reshard initiation runs
+/// before taking its empty-tree fast path.
 /// <para>
-/// The fast path only needs a boolean - "does this tree hold any live key?" -
-/// but the count that answers it is a strongly-consistent whole-tree fan-out
-/// that restarts whenever the shard map moves under it and abandons once
-/// <see cref="LatticeOptions.MaxScanRetries"/> is exhausted. Reshard
-/// initiation is precisely when that map is most likely to be churning, so an
-/// unbounded probe could consume the caller's whole response budget and time
-/// the reshard out before it had started - observed as a
-/// <c>TimeoutException</c> on <c>ILattice.ReshardAsync</c> while a concurrent
-/// write batch drove continuous adaptive splits.
+/// The fast path needs only a boolean - "does this tree hold any live key?" -
+/// but it used to ask <c>ILattice.CountAsync</c>, a strongly-consistent
+/// whole-tree fan-out that walks every leaf chain, discards its result whenever
+/// the shard map moves under it, and retries until
+/// <see cref="LatticeOptions.MaxScanRetries"/> is spent. Reshard initiation is
+/// exactly when that map churns hardest, so the probe could burn the caller's
+/// whole response budget and surface as a <c>TimeoutException</c> on
+/// <c>ReshardAsync</c> before the reshard had even started.
 /// </para>
 /// <para>
-/// Both inconclusive outcomes must be reported as "not empty" so initiation
-/// proceeds down the normal coordinator path. That is the accurate reading,
-/// not just the safe one: only concurrent split churn makes this probe slow
-/// or unstable, and a churning tree necessarily holds keys.
+/// It now OR-s a short-circuiting <see cref="IShardRootGrain.AnyAsync"/> across
+/// the physical shards, which needs no stability loop: a split only ever
+/// <em>moves</em> keys, so a key that exists is seen by at least one shard
+/// wherever the split has got to, and seeing it twice still just means "a key
+/// exists". The answer is deliberately one-sided - it may report non-empty
+/// while keys migrate, but never empty while a key exists - and only "empty"
+/// unlocks the fast path, so the sole consequential direction is the one that
+/// cannot be wrong.
 /// </para>
 /// </summary>
 public partial class TreeReshardGrainTests
@@ -36,25 +39,42 @@ public partial class TreeReshardGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(state.State.InProgress, Is.True,
-                "an inconclusive emptiness probe must fall through to the coordinator path, not the empty-tree fast path");
+                "a tree that is not observably empty must fall through to the coordinator path, not the empty-tree fast path");
             Assert.That(state.State.TargetShardCount, Is.EqualTo(expectedTarget));
         });
+    }
+
+    private static void StubEveryShard(IGrainFactory grainFactory, Action<IShardRootGrain> configure)
+    {
+        var shard = Substitute.For<IShardRootGrain>();
+        configure(shard);
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
+    }
+
+    [Test]
+    public async Task ReshardAsync_probes_emptiness_without_counting_the_whole_tree()
+    {
+        // The headline behaviour: initiation must not drive ILattice.CountAsync,
+        // whose stability-retry loop is what could outlast the caller's budget.
+        var (grain, _, grainFactory, _) = CreateGrain(physicalShardCount: 2);
+        var lattice = grainFactory.GetGrain<ILattice>(TreeId);
+        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(Task.FromResult(false)));
+
+        await grain.ReshardAsync(4);
+
+        await lattice.DidNotReceive().CountAsync();
     }
 
     [Test]
     public async Task ReshardAsync_treats_a_probe_that_exceeds_its_budget_as_non_empty()
     {
-        // Model the pathological case directly: a count that never returns
-        // because the shard map keeps moving under it. Before the budget the
-        // initiation turn awaited this forever and the caller timed out.
+        // A shard whose probe never returns must not pin initiation. Before the
+        // budget the turn awaited this forever and the caller timed out.
         var (grain, state, grainFactory, _) = CreateGrain(
             physicalShardCount: 2,
-            reshardEmptyProbeBudget: TimeSpan.FromMilliseconds(50));
+            emptyTreeProbeBudget: TimeSpan.FromMilliseconds(50));
 
-        var stalledLattice = Substitute.For<ILattice>();
-        stalledLattice.CountAsync().Returns(new TaskCompletionSource<int>().Task);
-        stalledLattice.IsResizeCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ILattice>(TreeId).Returns(stalledLattice);
+        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(new TaskCompletionSource<bool>().Task));
 
         await grain.ReshardAsync(4);
 
@@ -62,18 +82,13 @@ public partial class TreeReshardGrainTests
     }
 
     [Test]
-    public async Task ReshardAsync_treats_a_count_abandoned_under_topology_churn_as_non_empty()
+    public async Task ReshardAsync_treats_a_faulting_probe_as_non_empty()
     {
-        // CountAsync throws exactly this once it exhausts MaxScanRetries
-        // against a shard map that keeps changing. It must not fail the
-        // reshard: the churn that caused it is itself proof of live keys.
+        // An inconclusive probe must never fail initiation outright.
         var (grain, state, grainFactory, _) = CreateGrain(physicalShardCount: 2);
 
-        var churningLattice = Substitute.For<ILattice>();
-        churningLattice.CountAsync().Returns(Task.FromException<int>(new InvalidOperationException(
-            "CountAsync exceeded 3 retries while topology kept changing.")));
-        churningLattice.IsResizeCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ILattice>(TreeId).Returns(churningLattice);
+        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(
+            Task.FromException<bool>(new InvalidOperationException("shard unavailable"))));
 
         await grain.ReshardAsync(4);
 
@@ -81,19 +96,32 @@ public partial class TreeReshardGrainTests
     }
 
     [Test]
-    public async Task ReshardAsync_still_takes_the_empty_tree_fast_path_when_the_probe_answers_in_budget()
+    public async Task ReshardAsync_treats_a_single_non_empty_shard_as_non_empty()
     {
-        // The guard must not cost the fast path: a genuinely empty tree has
-        // no split churn, so it answers immediately and still repins without
-        // activating the coordinator.
+        // The OR must be genuine: one shard holding keys disqualifies the fast
+        // path even when the other reports empty. A fast path taken here would
+        // repin the shard map while live keys existed.
+        var (grain, state, grainFactory, _) = CreateGrain(physicalShardCount: 2);
+
+        var probes = 0;
+        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(
+            _ => Task.FromResult(Interlocked.Increment(ref probes) > 1)));
+
+        await grain.ReshardAsync(4);
+
+        AssertTookNormalCoordinatorPath(state, 4);
+    }
+
+    [Test]
+    public async Task ReshardAsync_takes_the_empty_tree_fast_path_when_every_shard_reports_empty()
+    {
+        // The guard must not cost the fast path: an empty tree has no split
+        // churn, answers immediately, and still repins without a coordinator.
         var (grain, state, grainFactory, _) = CreateGrain(
             physicalShardCount: 2,
-            reshardEmptyProbeBudget: TimeSpan.FromMilliseconds(50));
+            emptyTreeProbeBudget: TimeSpan.FromMilliseconds(50));
 
-        var emptyLattice = Substitute.For<ILattice>();
-        emptyLattice.CountAsync().Returns(Task.FromResult(0));
-        emptyLattice.IsResizeCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ILattice>(TreeId).Returns(emptyLattice);
+        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(Task.FromResult(false)));
 
         await grain.ReshardAsync(4);
 
@@ -104,16 +132,13 @@ public partial class TreeReshardGrainTests
     [Test]
     public async Task ReshardAsync_probe_waits_without_a_budget_when_configured_infinite()
     {
-        // Timeout.InfiniteTimeSpan restores the historical unbounded probe.
-        // A prompt answer must still be honoured on that path.
+        // Timeout.InfiniteTimeSpan restores an unbounded probe; a prompt answer
+        // must still be honoured on that path.
         var (grain, state, grainFactory, _) = CreateGrain(
             physicalShardCount: 2,
-            reshardEmptyProbeBudget: Timeout.InfiniteTimeSpan);
+            emptyTreeProbeBudget: Timeout.InfiniteTimeSpan);
 
-        var emptyLattice = Substitute.For<ILattice>();
-        emptyLattice.CountAsync().Returns(Task.FromResult(0));
-        emptyLattice.IsResizeCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ILattice>(TreeId).Returns(emptyLattice);
+        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(Task.FromResult(false)));
 
         await grain.ReshardAsync(4);
 

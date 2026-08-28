@@ -1330,6 +1330,34 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
+    public async Task<bool> AnyAsync()
+    {
+        await PrepareForOperationAsync();
+        RecordRead();
+
+        if (state.State.RootNodeId is null)
+            return false;
+
+        var leafId = await GetLeftmostLeafIdAsync();
+        if (leafId is null) return false;
+
+        // Short-circuit at the first non-empty leaf. A non-empty shard - the
+        // overwhelmingly common case - costs a single leaf call instead of the
+        // full chain walk CountAsync pays, and an empty shard's chain is
+        // correspondingly short.
+        var currentId = leafId.Value;
+        while (true)
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
+            if (await leaf.CountAsync(null, null) > 0) return true;
+
+            var next = await leaf.GetNextSiblingAsync();
+            if (next is null) return false;
+            currentId = next.Value;
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<ShardCountResult> CountWithMovedAwayAsync()
     {
         await PrepareForOperationAsync();
