@@ -109,4 +109,158 @@ public class CrdtBufferOwnershipTests
         Assert.That(ReferenceEquals(receiver.Value, peer.Value), Is.False,
             "a fold must not leave the receiver aliased to the peer's buffer");
     }
+
+    [Test]
+    public void Rga_MergeFrom_copies_the_adopted_node_value_from_a_peer()
+    {
+        // The fold leg of the same contract BoundedRegister honours above: a
+        // state merge that adopts a node the receiver has not seen must copy the
+        // peer's value bytes, or the two sequences share a live buffer and a
+        // later mutation on either side bleeds into the other's durable state.
+        var peer = new Rga();
+        peer.InsertAfter(Rga.Root, "peer", Bytes(1, 2, 3));
+
+        var receiver = new Rga();
+        receiver.MergeFrom(peer);
+
+        var adopted = receiver.Nodes.Single(n => n.Dot.Equals(peer.Nodes[0].Dot));
+        Assert.That(ReferenceEquals(adopted.Value, peer.Nodes[0].Value), Is.False,
+            "a state-merge fold must not leave the receiver aliased to the peer's node buffer");
+
+        peer.Nodes[0].Value[0] = 99;
+        Assert.That(receiver.ToList().Single().Value[0], Is.EqualTo(1),
+            "mutating the peer's buffer after the fold must not change the receiver");
+    }
+
+    [Test]
+    public void Rga_MergeFrom_copies_the_winning_value_on_a_same_dot_collision()
+    {
+        // Two replicas independently authored the same dot with different values.
+        // The merge deterministically keeps the lexicographically larger value;
+        // it must keep a copy, not a live handle on the peer's array.
+        var receiver = new Rga();
+        receiver.InsertAfter(Rga.Root, "R", Bytes(1));
+
+        var peer = new Rga();
+        peer.InsertAfter(Rga.Root, "R", Bytes(2));
+
+        receiver.MergeFrom(peer);
+
+        var node = receiver.Nodes.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Value, Is.EqualTo(Bytes(2)).AsCollection,
+                "the larger value wins the same-dot collision");
+            Assert.That(ReferenceEquals(node.Value, peer.Nodes[0].Value), Is.False,
+                "the winning value must be copied, not aliased to the peer's buffer");
+        });
+    }
+
+    [Test]
+    public void Rga_MergeDelta_copies_the_adopted_node_value_from_a_delta()
+    {
+        // A producer fans one typed delta out to several receivers (and may pool
+        // the value buffer). Applying it must copy the insert's value, or every
+        // receiver of that delta shares one durable buffer.
+        var value = Bytes(1, 2, 3);
+        var delta = new RgaDelta
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode { ReplicaId = "P", Counter = 1, ParentDot = Rga.Root, Value = value },
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+
+        var receiver = new Rga();
+        receiver.MergeDelta(delta);
+
+        Assert.That(ReferenceEquals(receiver.Nodes.Single().Value, value), Is.False,
+            "applying a delta must copy the insert's value, not adopt the producer's buffer");
+
+        value[0] = 99;
+        Assert.That(receiver.ToList().Single().Value[0], Is.EqualTo(1),
+            "mutating the producer's delta buffer after the apply must not change the receiver");
+    }
+
+    [Test]
+    public void Rga_MergeDelta_copies_the_winning_value_on_a_same_dot_collision()
+    {
+        var receiver = new Rga();
+        receiver.InsertAfter(Rga.Root, "P", Bytes(1));
+
+        var winning = Bytes(2);
+        var delta = new RgaDelta
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode { ReplicaId = "P", Counter = 1, ParentDot = Rga.Root, Value = winning },
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+
+        receiver.MergeDelta(delta);
+
+        var node = receiver.Nodes.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(node.Value, Is.EqualTo(Bytes(2)).AsCollection,
+                "the larger value wins the same-dot collision on delta apply");
+            Assert.That(ReferenceEquals(node.Value, winning), Is.False,
+                "the winning value must be copied, not aliased to the delta's buffer");
+        });
+    }
+
+    [Test]
+    public void Rga_MergeDelta_of_an_empty_insert_reuses_the_empty_singleton()
+    {
+        // The copy-on-fold fix must stay zero-allocation on empty values: an
+        // empty span's ToArray() returns Array.Empty<byte>(), so a tombstone or
+        // empty insert still shares the singleton rather than allocating.
+        var delta = new RgaDelta
+        {
+            Inserts = new[]
+            {
+                new RgaDeltaNode { ReplicaId = "P", Counter = 1, ParentDot = Rga.Root, Value = Array.Empty<byte>() },
+            },
+            Tombstones = Array.Empty<OrSetDot>(),
+        };
+
+        var receiver = new Rga();
+        receiver.MergeDelta(delta);
+
+        Assert.That(ReferenceEquals(receiver.Nodes.Single().Value, Array.Empty<byte>()), Is.True,
+            "an empty insert value must reuse the Array.Empty<byte>() singleton rather than allocate");
+    }
+
+    [Test]
+    public void OrMap_Get_of_a_multi_contributor_Rga_key_does_not_alias_the_maps_durable_state()
+    {
+        // OrMap.Get seeds the accumulator from a clone of the first contributor
+        // but folds every later contributor in via Rga.MergeFrom. If that fold
+        // aliases, the returned sequence shares the map's durable buffers for the
+        // second-and-later contributors, so a caller that mutates the value it
+        // read corrupts the stored map - exactly what Get's contract forbids.
+        var replicaA = new OrMap<string, Rga>();
+        var rgaA = new Rga();
+        rgaA.InsertAfter(Rga.Root, "A", Bytes(1));
+        replicaA.Set("k", "A", rgaA);
+
+        var replicaB = new OrMap<string, Rga>();
+        var rgaB = new Rga();
+        rgaB.InsertAfter(Rga.Root, "B", Bytes(2));
+        replicaB.Set("k", "B", rgaB);
+
+        replicaA.MergeFrom(replicaB);
+
+        var got = replicaA.Get("k")!;
+        foreach (var node in got.Nodes)
+        {
+            node.Value[0] = 99;
+        }
+
+        var reread = replicaA.Get("k")!;
+        Assert.That(reread.ToList().Select(static e => e.Value[0]).ToArray(), Has.None.EqualTo((byte)99),
+            "mutating the value returned by OrMap.Get must not corrupt the map's durable state");
+    }
 }

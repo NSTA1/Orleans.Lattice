@@ -394,11 +394,15 @@ public sealed class Rga : ICrdt<Rga>
                 if (n.IsTombstone) existing.IsTombstone = true;
                 // Same-dot value collision: pick the lexicographically
                 // larger byte sequence so the choice is deterministic
-                // and self-inverse under repeated merges.
+                // and self-inverse under repeated merges. Copy the winning
+                // value: a fold from a peer must not leave the receiver
+                // aliased to the peer's buffer (an empty span's ToArray()
+                // returns the shared Array.Empty<byte>() singleton, so this
+                // stays zero-allocation on empty values).
                 if (!ReferenceEquals(existing.Value, n.Value)
                     && CompareBytes(existing.Value, n.Value) < 0)
                 {
-                    existing.Value = n.Value;
+                    existing.Value = n.Value.AsSpan().ToArray();
                 }
                 // Structural parent reattachment. A tombstone-before-insert
                 // placeholder is recorded with ParentDot == Root (see the
@@ -424,7 +428,9 @@ public sealed class Rga : ICrdt<Rga>
                     ReplicaId = n.ReplicaId,
                     Counter = n.Counter,
                     ParentDot = n.ParentDot,
-                    Value = n.Value,
+                    // Copy the adopted value: a fold from a peer must not leave
+                    // the receiver holding a live handle on the peer's buffer.
+                    Value = n.Value.AsSpan().ToArray(),
                     IsTombstone = n.IsTombstone,
                 };
                 Nodes.Add(added);
@@ -526,7 +532,10 @@ public sealed class Rga : ICrdt<Rga>
                         && !ReferenceEquals(existing.Value, ins.Value)
                         && CompareBytes(existing.Value, ins.Value) < 0)
                     {
-                        existing.Value = ins.Value;
+                        // Copy the winning value: a fold from a delta must not
+                        // adopt the producer's buffer (the delta may be retried
+                        // or fanned out to several peers).
+                        existing.Value = ins.Value.AsSpan().ToArray();
                     }
                 }
                 else
@@ -536,7 +545,11 @@ public sealed class Rga : ICrdt<Rga>
                         ReplicaId = ins.ReplicaId,
                         Counter = ins.Counter,
                         ParentDot = ins.ParentDot,
-                        Value = ins.Value ?? Array.Empty<byte>(),
+                        // Copy the adopted value: a fold from a delta must not
+                        // adopt the producer's buffer. An empty span's ToArray()
+                        // returns the shared Array.Empty<byte>() singleton, so
+                        // an empty insert stays zero-allocation.
+                        Value = ins.Value is null ? Array.Empty<byte>() : ins.Value.AsSpan().ToArray(),
                         IsTombstone = false,
                     };
                     Nodes.Add(node);
