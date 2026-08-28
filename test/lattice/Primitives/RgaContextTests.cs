@@ -104,4 +104,63 @@ public class RgaContextTests
         Assert.That(dot.Counter, Is.EqualTo(4), "next A dot must continue A's run, not collide with an existing dot");
         Assert.That(Dots(local), Is.Unique, "delta apply + insert must not mint a duplicate dot");
     }
+
+    [Test]
+    public void MergeFrom_folds_an_incoming_context_even_when_the_other_side_has_no_nodes()
+    {
+        // Regression for the early return in Rga.MergeFrom that short-circuited
+        // ahead of the Context fold. Context is a second, independent piece of
+        // merge state, and an incoming sequence can carry a populated Context with
+        // no nodes - a decoded wire/storage payload, or any future tombstone GC,
+        // which Context exists precisely to survive. Dropping those maxima lets
+        // the next local insert re-mint an already-authored dot.
+        var local = new Rga();
+        local.InsertAfter(Rga.Root, "A", Bytes(1));
+
+        // A peer that has observed B up to counter 7 but carries no nodes.
+        var peer = new Rga { Context = { ["B"] = 7 } };
+
+        local.MergeFrom(peer);
+
+        Assert.That(local.Context.TryGetValue("B", out var observed), Is.True,
+            "the incoming per-replica maxima must be folded even with no incoming nodes");
+        Assert.That(observed, Is.EqualTo(7));
+
+        var dot = local.InsertAfter(Rga.Root, "B", Bytes(9));
+        Assert.That(dot.Counter, Is.EqualTo(8),
+            "the next B dot must continue past the observed maximum, not collide with it");
+    }
+
+    [Test]
+    public void MergeFrom_with_an_empty_other_still_rebuilds_a_legacy_local_context()
+    {
+        // The Context fold must stay *below* EnsureContextRebuilt: that helper
+        // bails out on a non-empty Context, so folding the incoming side first
+        // would suppress the rebuild of the receiver's own maxima.
+        var local = LegacySequence("A"); // dots (A,1..3); Context cleared
+        var peer = new Rga { Context = { ["B"] = 2 } };
+
+        local.MergeFrom(peer);
+
+        var dot = local.InsertAfter(Rga.Root, "A", Bytes(9));
+
+        Assert.That(dot.Counter, Is.EqualTo(4),
+            "the receiver's own maxima must still be rebuilt when the incoming side folds first");
+        Assert.That(Dots(local), Is.Unique);
+    }
+
+    [Test]
+    public void MergeFrom_of_an_empty_peer_is_still_idempotent()
+    {
+        var local = new Rga();
+        local.InsertAfter(Rga.Root, "A", Bytes(1));
+        var peer = new Rga { Context = { ["B"] = 3 } };
+
+        local.MergeFrom(peer);
+        var afterFirst = local.Context.ToDictionary(static kv => kv.Key, static kv => kv.Value);
+        local.MergeFrom(peer);
+
+        Assert.That(local.Context, Is.EqualTo(afterFirst).AsCollection,
+            "re-folding the same context must be a no-op");
+    }
 }

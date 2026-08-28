@@ -33,11 +33,19 @@ internal static class BoundedRegisterAccessorHelper
     }
 
     /// <summary>Reads and decodes the stored register, or an empty register in the given direction when the key is absent.</summary>
+    /// <remarks>
+    /// The decoded state has its direction re-stamped from <paramref name="isMin"/>
+    /// - the accessor's own direction, which is the registered merge mode for the
+    /// key and the sole authority. A stored payload whose <c>IsMin</c> disagrees
+    /// (hand-authored state written through a raw byte <c>SetAsync</c>, or a
+    /// foreign writer) would otherwise be handed to the caller, and folded,
+    /// backwards; stamping makes it self-heal on read at no allocation cost.
+    /// </remarks>
     public static async Task<BoundedRegister> ReadAsync(ILattice lattice, string key, bool isMin, CancellationToken cancellationToken)
     {
         var bytes = await lattice.GetAsync(key, cancellationToken).ConfigureAwait(false);
         return bytes is null
             ? BoundedRegister.CreateEmpty(isMin)
-            : JsonLatticeSerializer<BoundedRegister>.Default.Deserialize(bytes);
+            : JsonLatticeSerializer<BoundedRegister>.Default.Deserialize(bytes).WithDirection(isMin);
     }
 }

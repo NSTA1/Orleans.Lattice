@@ -38,20 +38,49 @@ public static class LatticeVectorClockContext
     /// Gets or sets the vector-clock frontier on the ambient
     /// <see cref="RequestContext"/>. Setting <c>null</c> removes the key
     /// rather than storing a null value, matching the "empty" default.
+    /// <para>
+    /// <b>The setter takes a defensive copy.</b> A <see cref="VersionVector"/> is
+    /// a mutable CRDT, and the frontier established here is stamped directly onto
+    /// the persisted <see cref="Orleans.Lattice.Primitives.LwwValue{T}.VectorClock"/>
+    /// of every entry written inside the scope. Without the copy, whatever
+    /// instance the caller supplied would become the durable state of many
+    /// entries at once - and on the inbound replication path that instance
+    /// arrives inside an <c>[Immutable]</c> carrier, whose same-silo deep copy
+    /// Orleans <em>elides</em>, so it is the co-located <em>sender's</em> object.
+    /// A later mutation on either side would then silently rewrite the frontier
+    /// of unrelated committed entries, and only when caller and callee share a
+    /// silo, so no cross-silo test would ever show it. Copying here fixes the
+    /// whole class at the single seam where an externally-owned frontier becomes
+    /// platform state, rather than at the many sites that read it back.
+    /// </para>
+    /// <para>
+    /// The cost is one clone per scope, not per write - and none at all on the
+    /// dominant path, since a purely local write leaves the frontier
+    /// <see langword="null"/>. The getter deliberately does <em>not</em> copy, so
+    /// reading the frontier at each write site stays allocation-free; the
+    /// returned instance is platform-owned and must be treated as read-only.
+    /// </para>
     /// </summary>
     public static VersionVector? Current
     {
         get => RequestContext.Get(LatticeEventConstants.VectorClockRequestContextKey) as VersionVector;
-        set
+        set => SetOwned(value?.Clone());
+    }
+
+    /// <summary>
+    /// Stores an already platform-owned frontier without a further copy. Used by
+    /// the scope restore path, whose captured value came out of
+    /// <see cref="Current"/> and was therefore copied on the way in.
+    /// </summary>
+    private static void SetOwned(VersionVector? value)
+    {
+        if (value is null)
         {
-            if (value is null)
-            {
-                RequestContext.Remove(LatticeEventConstants.VectorClockRequestContextKey);
-            }
-            else
-            {
-                RequestContext.Set(LatticeEventConstants.VectorClockRequestContextKey, value);
-            }
+            RequestContext.Remove(LatticeEventConstants.VectorClockRequestContextKey);
+        }
+        else
+        {
+            RequestContext.Set(LatticeEventConstants.VectorClockRequestContextKey, value);
         }
     }
 
@@ -64,6 +93,8 @@ public static class LatticeVectorClockContext
     /// <param name="vectorClock">
     /// The vector-clock frontier to stamp onto mutations authored inside
     /// the scope, or <c>null</c> to explicitly clear the ambient context.
+    /// Copied on entry (see <see cref="Current"/>), so the caller keeps sole
+    /// ownership of the instance it passed and may reuse or mutate it freely.
     /// </param>
     public static IDisposable With(VersionVector? vectorClock)
     {
@@ -84,7 +115,9 @@ public static class LatticeVectorClockContext
             }
 
             _disposed = true;
-            Current = previous;
+            // The captured frontier came out of Current and was copied on the way
+            // in, so restoring it needs no second copy.
+            SetOwned(previous);
         }
     }
 }

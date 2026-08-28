@@ -39,7 +39,7 @@ public partial class BPlusLeafGrainTests
             await grain.SetAsync("k", [1]);
         }
 
-        Assert.That(grain.EntriesForTest["k"].VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(grain.EntriesForTest["k"].VectorClock, vc);
     }
 
     [Test]
@@ -67,7 +67,7 @@ public partial class BPlusLeafGrainTests
         }
 
         var entry = grain.EntriesForTest["k"];
-        Assert.That(entry.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(entry.VectorClock, vc);
         Assert.That(entry.ExpiresAtTicks, Is.EqualTo(expiresAt));
     }
 
@@ -86,7 +86,7 @@ public partial class BPlusLeafGrainTests
 
         var tomb = grain.EntriesForTest["k"];
         Assert.That(tomb.IsTombstone, Is.True);
-        Assert.That(tomb.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(tomb.VectorClock, vc);
     }
 
     [Test]
@@ -107,7 +107,7 @@ public partial class BPlusLeafGrainTests
         foreach (var k in new[] { "a1", "a2", "a3" })
         {
             Assert.That(grain.EntriesForTest[k].IsTombstone, Is.True, k);
-            Assert.That(grain.EntriesForTest[k].VectorClock, Is.SameAs(vc), k);
+            VectorClockAssert.SameFrontier(grain.EntriesForTest[k].VectorClock, vc, k);
         }
     }
 
@@ -124,7 +124,7 @@ public partial class BPlusLeafGrainTests
         }
 
         Assert.That(observer.Mutations, Has.Count.EqualTo(1));
-        Assert.That(observer.Mutations[0].VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(observer.Mutations[0].VectorClock, vc);
     }
 
     [Test]
@@ -144,7 +144,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(observer.Mutations, Has.Count.EqualTo(before + 1));
         Assert.That(observer.Mutations[^1].Kind, Is.EqualTo(MutationKind.Delete));
-        Assert.That(observer.Mutations[^1].VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(observer.Mutations[^1].VectorClock, vc);
     }
 
     [Test]
@@ -168,7 +168,7 @@ public partial class BPlusLeafGrainTests
         });
 
         var stored = grain.EntriesForTest["k"];
-        Assert.That(stored.VectorClock, Is.SameAs(vc),
+        VectorClockAssert.SameFrontier(stored.VectorClock, vc,
             "merge must not strip or re-capture the incoming VectorClock");
         Assert.That(stored.Value, Is.EqualTo(new byte[] { 42 }));
     }
@@ -191,7 +191,7 @@ public partial class BPlusLeafGrainTests
         });
 
         var stored = grain.EntriesForTest["k"];
-        Assert.That(stored.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(stored.VectorClock, vc);
         Assert.That(stored.Value, Is.EqualTo(new byte[] { 7, 8 }));
     }
 }

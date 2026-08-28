@@ -354,7 +354,7 @@ public partial class AtomicWriteGrainTests
         var pre = capturedPreValues.Value!.Single(p => p.Key == "a");
         Assert.That(pre.Existed, Is.True);
         Assert.That(pre.OriginClusterId, Is.EqualTo("origin-peer"));
-        Assert.That(pre.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(pre.VectorClock, vc);
 
         var preB = capturedPreValues.Value!.Single(p => p.Key == "b");
         Assert.That(preB.Existed, Is.False);
@@ -767,7 +767,7 @@ public partial class AtomicWriteGrainTests
             await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2])));
         }
 
-        Assert.That(state.State.VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(state.State.VectorClock, vc);
     }
 
     [Test]
@@ -807,7 +807,7 @@ public partial class AtomicWriteGrainTests
         }
 
         Assert.That(observed, Has.Count.EqualTo(1));
-        Assert.That(observed[0], Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(observed[0], vc);
     }
 
     [Test]
@@ -849,7 +849,7 @@ public partial class AtomicWriteGrainTests
 
         await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
 
-        Assert.That(observedDuringSetB, Is.SameAs(persistedVc));
+        VectorClockAssert.SameFrontier(observedDuringSetB, persistedVc);
         Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
     }
 
@@ -889,6 +889,6 @@ public partial class AtomicWriteGrainTests
             await grain.ReceiveReminder("atomic-write-keepalive", new TickStatus());
         }
 
-        Assert.That(state.State.VectorClock, Is.SameAs(originalVc));
+        VectorClockAssert.SameFrontier(state.State.VectorClock, originalVc);
     }
 }

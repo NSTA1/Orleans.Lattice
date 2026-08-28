@@ -115,3 +115,34 @@ alongside one another. There is nothing to configure per tree for local
 The `replicaId` argument you pass to many of these methods names the writer.
 Give each independent writer (cluster, silo, or logical actor) a stable, distinct
 id so concurrent edits are attributed to different causal lineages.
+
+## Who owns the bytes
+
+Every primitive stores opaque `byte[]` payloads, and the library follows one rule
+for who owns a given array. Ownership is decided by where the array came from,
+not by which type is holding it:
+
+| Seam | Rule | What it means for you |
+|---|---|---|
+| **You hand a value in** (`SetAsync`, `AddAsync`, and the primitives' `Set`/`Add`/`InsertAfter`) | The array is taken over, not copied | Do not keep writing into an array after you pass it in. Author it, hand it over, forget it. |
+| **A peer or a delta is folded in** (`MergeFrom`, `MergeDelta`) | The incoming array is copied | A replica never ends up sharing a buffer with the peer it merged from. |
+| **A value comes back out** (`Clone`, `OrMap.Get`, materialised projections) | The array is copied | A value you read is yours to mutate; doing so can never reach back into stored state. |
+
+The first rule is why writes stay allocation-free on the hot path, and the last
+two are why a read or a merge can never corrupt somebody else's state. If you are
+implementing a CRDT against `ICrdt<TSelf>`, all three legs are part of the
+contract.
+
+## Where a bounded register's direction lives
+
+A `MaxRegister` and a `MinRegister` are the same primitive pointed in opposite
+directions. That direction is owned by the **merge mode registered for the key**
+(`LatticeMergeMode.MaxRegister` or `LatticeMergeMode.MinRegister`), which is what
+the accessor you used selects. The `IsMin` bit you can see on the decoded
+`BoundedRegister` state is a copy of that decision carried on the wire, not a
+second source of truth: every decode re-stamps it from the registered mode.
+
+This matters if you ever write register state as raw bytes rather than through
+`tree.MaxRegister(...)` / `tree.MinRegister(...)` - a hand-authored payload whose
+`IsMin` disagrees with the key's mode is corrected on read rather than silently
+folding the wrong way for the rest of the key's life.

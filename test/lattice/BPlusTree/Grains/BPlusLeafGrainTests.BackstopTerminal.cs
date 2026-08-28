@@ -189,7 +189,7 @@ public partial class BPlusLeafGrainTests
             await grain.ApplyTxTerminalAsync(txid, committed: true, committed);
         }
 
-        Assert.That(grain.EntriesForTest["k"].VectorClock, Is.SameAs(vc));
+        VectorClockAssert.SameFrontier(grain.EntriesForTest["k"].VectorClock, vc);
     }
 
     [Test]

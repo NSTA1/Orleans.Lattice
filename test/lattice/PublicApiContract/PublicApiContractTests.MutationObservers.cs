@@ -259,7 +259,7 @@ public partial class PublicApiContractTests
         vc.Tick("r1");
         using (LatticeVectorClockContext.With(vc))
         {
-            Assert.That(LatticeVectorClockContext.Current, Is.SameAs(vc));
+            VectorClockAssert.SameFrontier(LatticeVectorClockContext.Current, vc);
         }
         Assert.That(LatticeVectorClockContext.Current, Is.Null);
     }

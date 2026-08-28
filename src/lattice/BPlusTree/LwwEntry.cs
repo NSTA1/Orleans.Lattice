@@ -87,7 +87,12 @@ internal readonly record struct LwwEntry
         IsTombstone = lww.IsTombstone;
         ExpiresAtTicks = lww.ExpiresAtTicks;
         OriginClusterId = lww.OriginClusterId;
-        VectorClock = lww.VectorClock;
+        // Egress copy: this entry is an [Immutable] carrier handed to a caller,
+        // so sharing the stored frontier would give that caller a live handle on
+        // the grain's durable state (and, co-located, Orleans elides the copy
+        // that would otherwise hide it). Null on every purely local write, so the
+        // dominant path pays nothing.
+        VectorClock = lww.VectorClock?.Clone();
         MergeMode = mergeMode;
     }
 
