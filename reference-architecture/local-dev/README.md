@@ -246,8 +246,8 @@ The silos seed two demo tenants from [`identities.json`](identities.json)'s
    alongside the bearer token (see
    [Acting as an identity](#acting-as-an-identity)). Three calls show the whole
    behaviour:
-   - No header, as `platform-admin` - `{"tenantId":"default","status":"Active",
-     "isDefault":true}`. No assertion means the reserved `default` tenant.
+   - No header, as `platform-admin` - the reserved default tenant, exactly as
+     before: `{"tenantId":"default","status":"Active","isDefault":true}`.
    - `lattice-active-tenant: acme`, as `platform-admin` (an `acme` admin) -
      `{"tenantId":"acme","status":"Active","isDefault":false}`. The active tenant
      does cross the **split-head** process boundary: the head lifts the header into
@@ -272,13 +272,13 @@ The silos seed two demo tenants from [`identities.json`](identities.json)'s
    disappearing is the visible proof the assertion reached the region filter, and it
    is the check worth running: the filter engages *only* on an asserted tenant, so a
    run without the header exercises none of it and would pass regardless. Be clear
-   about what this harness can show: each head serves exactly **one** region (the compose file sets
-   neither `Mcp:RegionId` nor any `Mcp:Regions` peer, so the current region is the
-   built-in `current` and there are no peers), and the region a caller is talking to
-   is always advertised to it. You see the *annotation* here, not the *pruning* - a
-   peer outside the tenant's allowed-or-resident set dropping out of the list needs a
-   multi-region head, which is the deployed reference architecture's shape rather
-   than this harness's.
+   about what this harness can show: each head serves exactly **one** region (the
+   compose file sets neither `Mcp:RegionId` nor any `Mcp:Regions` peer, so the
+   current region is the built-in `current` and there are no peers), and the region
+   a caller is talking to is always advertised to it. You see the *annotation* here,
+   not the *pruning* - a peer outside the tenant's allowed-or-resident set dropping
+   out of the list needs a multi-region head, which is the deployed reference
+   architecture's shape rather than this harness's.
 
 ## Configuration knobs
 
