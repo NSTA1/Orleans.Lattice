@@ -83,4 +83,35 @@ public sealed class UnregisteredAccessGateZeroCostTests
         Assert.That(await lattice.DeleteAsync("b:1"), Is.True);
         Assert.That(await lattice.GetAsync("b:1"), Is.Null);
     }
+
+    [Test]
+    public async Task With_no_auth_registered_the_metadata_verbs_answer_unchanged_for_an_anonymous_caller()
+    {
+        // The metadata and existence verbs became gated in #1721. Under the
+        // default null gate they must still answer exactly as they did before,
+        // for an anonymous caller with no policy: enforcement short-circuits
+        // before the subject is ever resolved.
+        const string tree = "zerocost-metadata";
+        var lattice = Lattice(tree);
+
+        Assert.That(await lattice.TreeExistsAsync(), Is.False,
+            "an unwritten tree is absent, gate or no gate");
+
+        await lattice.SetAsync("a:1", Bytes("1"));
+        await lattice.SetAsync("a:2", Bytes("2"));
+
+        var report = await lattice.DiagnoseAsync();
+        var usage = await lattice.GetStorageUsageAsync();
+        var retention = await lattice.GetHistoryRetentionAsync();
+        var exists = await lattice.TreeExistsAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exists, Is.True);
+            Assert.That(report.TotalLiveKeys, Is.EqualTo(2));
+            Assert.That(usage.TreeId, Is.EqualTo(tree));
+            Assert.That(usage.LiveKeys, Is.EqualTo(2));
+            Assert.That(retention.Mode, Is.EqualTo(HistoryRetentionMode.MetadataOnly));
+        });
+    }
 }

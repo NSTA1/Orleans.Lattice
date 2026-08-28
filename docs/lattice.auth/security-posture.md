@@ -72,7 +72,19 @@ path:
 - **Existence is hidden on a read-around.** A caller who cannot read a tree's
   source data receives an empty or not-found result from the read and catalog
   surfaces, and cannot distinguish "exists but I cannot read it" from "does not
-  exist". See finding A1.
+  exist". See finding A1. This is enforced on the facade grain itself:
+  `ILattice.TreeExistsAsync` authorizes a whole-tree read and answers `false` for
+  a denied caller, so the guarantee holds for a direct in-cluster grain call and
+  not only for the state-API surfaces layered above it.
+- **Tree metadata is read-authorized, not public.** A tree's volumetric and
+  structural metadata is source data for this purpose, so
+  `ILattice.DiagnoseAsync`, `GetStorageUsageAsync`, and
+  `GetHistoryRetentionAsync` each authorize a whole-tree read before disclosing
+  anything. Because those reports aggregate over every key in the tree, a partial
+  (prefix) grant is refused rather than narrowed: a per-shard key count or byte
+  total cannot be pruned per key without still disclosing the keys it counted.
+  `GetRoutingAsync` remains deliberately ungated - it resolves routing for
+  internal coordinator grains and discloses no user data or volumetrics.
 
 ## Trust boundary for internal grain calls
 

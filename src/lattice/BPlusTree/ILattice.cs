@@ -553,6 +553,13 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> if this tree is registered in the internal tree registry.
     /// A tree is registered on its first write and unregistered when its purge completes.
+    /// <para>
+    /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
+    /// registered access gate. A caller the gate denies is told the tree does not
+    /// exist (<c>false</c>) rather than that it may not look, so existence is never
+    /// disclosed to an unauthorized caller. With no authorization add-on registered
+    /// every caller is allowed, at zero cost.
+    /// </para>
     /// </summary>
     Task<bool> TreeExistsAsync(CancellationToken cancellationToken = default);
 
@@ -620,6 +627,12 @@ public interface ILattice : IGrainWithStringKey
     /// per-tree override, falling back to the documented defaults
     /// (<see cref="HistoryRetentionMode.MetadataOnly"/>, no age bound) when no
     /// override is set.
+    /// <para>
+    /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
+    /// registered access gate, which throws
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the caller is denied.
+    /// With no authorization add-on registered every caller is allowed, at zero cost.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the registry read.</param>
     Task<HistoryRetentionSettings> GetHistoryRetentionAsync(CancellationToken cancellationToken = default);
@@ -739,6 +752,14 @@ public interface ILattice : IGrainWithStringKey
     /// is cached independently of shallow mode; the trade-off is one grain
     /// call per leaf rather than one per shard.
     /// </para>
+    /// <para>
+    /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
+    /// registered access gate, which throws
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the caller is denied.
+    /// The report aggregates counts over every key in the tree, so a partial
+    /// (prefix) grant is refused rather than narrowed. With no authorization
+    /// add-on registered every caller is allowed, at zero cost.
+    /// </para>
     /// </summary>
     /// <param name="deep">Whether to compute tombstone counts (walks the leaf chain per shard).</param>
     /// <param name="cancellationToken">Cancels the diagnostics fan-out before it begins.</param>
@@ -766,6 +787,14 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="TreeStorageUsageReport.Partial"/> is set - the reported
     /// total is then a lower bound. The default in-memory provider and the
     /// Azure Table provider both support byte accounting.
+    /// </para>
+    /// <para>
+    /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
+    /// registered access gate, which throws
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the caller is denied.
+    /// The report aggregates over every key in the tree, so a partial (prefix)
+    /// grant is refused rather than narrowed. With no authorization add-on
+    /// registered every caller is allowed, at zero cost.
     /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the storage-usage fan-out before it begins.</param>

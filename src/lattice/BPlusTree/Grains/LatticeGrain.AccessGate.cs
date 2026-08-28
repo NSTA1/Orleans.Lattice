@@ -216,6 +216,35 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
+    /// Fail-closed authorization check for a <b>whole-tree</b> read that carries
+    /// no key or range and whose result must not disclose that the tree exists
+    /// (<see cref="ILattice.TreeExistsAsync"/>). Returns <c>true</c> when the
+    /// caller may observe the tree at all; a denied caller returns <c>false</c>
+    /// so the surface reports the tree as absent rather than throwing, which is
+    /// what keeps "exists but I cannot read it" indistinguishable from "does not
+    /// exist" (the same not-found-on-deny shape
+    /// <see cref="IsPointReadAllowedAsync"/> uses per key).
+    /// <para>
+    /// A partial (prefix) allow - an allow carrying a
+    /// <see cref="LatticeAccessDecision.KeyFilter"/> - counts as observable: the
+    /// caller demonstrably may read part of the tree, so its existence is not a
+    /// secret from them, and the per-key surfaces still prune the individual keys
+    /// they may not see. This is deliberately weaker than
+    /// <see cref="EnforceWholeTreeAsync"/>, which refuses a filtered allow because
+    /// the volumetric aggregates it guards cannot be narrowed per key.
+    /// </para>
+    /// Inherits the null-gate / system-origin zero-cost short-circuit, so the
+    /// default path returns a synchronously-completed <c>true</c> without
+    /// resolving the subject.
+    /// </summary>
+    private async ValueTask<bool> IsWholeTreeReadAllowedAsync(CancellationToken cancellationToken)
+    {
+        var decision = await AuthorizeAsync(
+            LatticeOperation.Read, key: null, rangeStart: null, rangeEnd: null, cancellationToken);
+        return decision.Allowed;
+    }
+
+    /// <summary>
     /// Fail-closed enforcement for a batch of entry writes, authorizing every
     /// entry's key (plus any <paramref name="additionalDeleteKeys"/>) before any
     /// write is applied. Materializes the key list only when a real gate is

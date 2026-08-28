@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class AccessGateKeyFilterIntegrationTests
+public partial class AccessGateKeyFilterIntegrationTests
 {
     private AccessGateKeyFilterClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;

@@ -252,6 +252,24 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // A direct, unqualified existence oracle: it previously performed no gate
+        // call at all, so any caller able to address the grain could probe whether
+        // an arbitrary tree id is registered - and, because a tenant tree id is a
+        // caller-composable `t/{tenant}/{name}` string, enumerate the tenant roster
+        // and each tenant's tree names by dictionary probing.
+        //
+        // Denial reports the tree as ABSENT rather than throwing: the security
+        // posture guarantees a caller who cannot read a tree's source data cannot
+        // distinguish "exists but I cannot read it" from "does not exist", and
+        // every consumer of this verb already treats false as a clean not-found.
+        // A partial (prefix) allow still reports existence - the caller may read
+        // part of the tree, so its existence is not a secret from them.
+        if (!await IsWholeTreeReadAllowedAsync(cancellationToken))
+        {
+            return false;
+        }
+
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         return await registry.ExistsAsync(TreeId);
     }
@@ -331,6 +349,15 @@ internal sealed partial class LatticeGrain
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Reading the tree's retention policy is a whole-tree registry read that
+        // both discloses configuration and answers existence (an unregistered tree
+        // yields the documented defaults). It is gated exactly as its write-side
+        // sibling SetHistoryRetentionAsync is, and as the external tree-admin
+        // facade already gates the same read, but on Read rather than Admin: this
+        // verb only observes.
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         var entry = await registry.GetEntryAsync(TreeId);
         return new HistoryRetentionSettings
