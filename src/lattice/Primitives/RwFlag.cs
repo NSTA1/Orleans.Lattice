@@ -122,17 +122,20 @@ public sealed class RwFlag : ICrdt<RwFlag>
         Enables.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
         if (Disables.Count == 0) return false;
         var anyAdded = false;
-        if (Tombstones.Count <= DotLinearScanThreshold)
+        if (Tombstones.Count <= DotLinearScanThreshold || Disables.Count <= DotLinearScanThreshold)
         {
-            // Tiny tombstone list (the common 0-1-dot case): a linear
-            // Contains against the growing list beats allocating a HashSet.
+            // Tiny tombstone list (the common 0-1-dot case), or few disable
+            // dots to tombstone: a linear Contains against the growing list
+            // beats allocating a HashSet. A flag is typically disabled once or
+            // twice between enables, so the disable side is the small one even
+            // when the tombstone history is long.
             foreach (var dot in Disables)
             {
                 if (!Tombstones.Contains(dot)) { Tombstones.Add(dot); anyAdded = true; }
             }
             return anyAdded;
         }
-        var tombSet = new HashSet<OrSetDot>(Tombstones);
+        var tombSet = OrSetDotSet.Build(Tombstones);
         foreach (var dot in Disables)
         {
             if (tombSet.Add(dot))
@@ -201,9 +204,11 @@ public sealed class RwFlag : ICrdt<RwFlag>
     {
         if (Disables.Count == 0) return 0;
         if (Tombstones.Count == 0) return Disables.Count;
-        if (Tombstones.Count <= DotLinearScanThreshold)
+        if (Tombstones.Count <= DotLinearScanThreshold || Disables.Count <= DotLinearScanThreshold)
         {
-            // Tiny tombstone list: linear scan beats hashing.
+            // Tiny tombstone list, or few disable dots: linear scan beats
+            // hashing. Disables is the small side on any flag that has been
+            // toggled repeatedly, so this keeps IsSet allocation-free there.
             var liveLinear = 0;
             foreach (var dot in Disables)
             {
@@ -211,7 +216,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
             }
             return liveLinear;
         }
-        var tombSet = new HashSet<OrSetDot>(Tombstones);
+        var tombSet = OrSetDotSet.Build(Tombstones);
         var live = 0;
         foreach (var dot in Disables)
         {
@@ -233,7 +238,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
             }
             return;
         }
-        var seen = new HashSet<OrSetDot>(target);
+        var seen = OrSetDotSet.Build(target, source.Count);
         foreach (var dot in source)
         {
             if (seen.Add(dot)) target.Add(dot);
@@ -252,7 +257,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
             }
             return;
         }
-        var seen = new HashSet<OrSetDot>(target);
+        var seen = OrSetDotSet.Build(target, source.Count);
         for (var i = 0; i < source.Count; i++)
         {
             var dot = source[i];

@@ -101,15 +101,23 @@ public class GSetTests
     public void Values_returns_all_elements_in_ordinal_key_order()
     {
         var set = new GSet();
-        set.Add(B("c"));
-        set.Add(B("a"));
-        set.Add(B("b"));
+        // Base64 keys sort in a different order from the raw bytes: 0xFF is
+        // "/w==", 0x00 is "AA==", 0x34 is "NA==", and '/' (0x2F) sorts before
+        // 'A' (0x41) which sorts before 'N' (0x4E). Order-insensitive
+        // assertions cannot tell the two orderings apart, so the expectation
+        // has to be exact.
+        set.Add([0x00]);
+        set.Add([0x34]);
+        set.Add([0xFF]);
 
-        var values = set.Values().Select(Encoding.UTF8.GetString).ToList();
-        // Ordering is the ordinal sort of the base64 keys, which is stable and
-        // deterministic across replicas.
-        Assert.That(values, Has.Count.EqualTo(3));
-        Assert.That(values, Is.EquivalentTo(new[] { "a", "b", "c" }));
+        var values = set.Values().ToList();
+
+        Assert.That(values, Is.EqualTo(new[]
+        {
+            new byte[] { 0xFF },
+            new byte[] { 0x00 },
+            new byte[] { 0x34 },
+        }));
     }
 
     [Test]

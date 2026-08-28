@@ -22,6 +22,13 @@ namespace Orleans.Lattice;
 /// zero-value of the struct - consumers should either treat <c>null</c>
 /// as empty or assert non-null at the apply boundary.
 /// </para>
+/// <para>
+/// Deliberately <em>not</em> <c>[Immutable]</c>: <see cref="Adds"/> carries
+/// <see cref="OrMapDeltaEntry{TKey, TValue}"/> values whose payload is a mutable
+/// CRDT instance the receiver folds in place, so Orleans must deep-copy the
+/// delta on a same-silo grain call rather than hand the receiver the producer's
+/// own objects.
+/// </para>
 /// </summary>
 /// <typeparam name="TKey">
 /// The map key type. Must support reasonable dictionary equality
@@ -34,7 +41,6 @@ namespace Orleans.Lattice;
 /// </typeparam>
 [GenerateSerializer]
 [Alias(TypeAliases.OrMapDelta)]
-[Immutable]
 public readonly record struct OrMapDelta<TKey, TValue>
     where TKey : notnull
     where TValue : Orleans.Lattice.ICrdt<TValue>, new()

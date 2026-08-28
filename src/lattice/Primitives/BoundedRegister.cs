@@ -101,8 +101,18 @@ public sealed class BoundedRegister : ICrdt<BoundedRegister>
     /// backwards is a no-op. Returns <see langword="true"/> when the register
     /// advanced.
     /// </summary>
-    /// <param name="value">The candidate value bytes. Must not be <see langword="null"/>.</param>
-    /// <param name="orderKey">The candidate's order-preserving total-order key. Must not be <see langword="null"/>.</param>
+    /// <param name="value">
+    /// The candidate value bytes. Must not be <see langword="null"/>. Stored by
+    /// reference: <c>Set</c> is a hand-off, so the register takes ownership of
+    /// the array and the caller must not mutate it afterwards. (The merge and
+    /// delta-apply paths, which read an array the other side still owns, copy
+    /// instead - see <see cref="FoldCandidate"/>.)
+    /// </param>
+    /// <param name="orderKey">
+    /// The candidate's order-preserving total-order key. Must not be
+    /// <see langword="null"/>. Stored by reference on the same hand-off basis as
+    /// <paramref name="value"/>.
+    /// </param>
     public bool Set(byte[] value, byte[] orderKey)
     {
         ArgumentNullException.ThrowIfNull(value);
@@ -147,17 +157,29 @@ public sealed class BoundedRegister : ICrdt<BoundedRegister>
     }
 
     /// <summary>
-    /// Creates a copy of this register. The value and order-key byte arrays are
-    /// referenced as-is, not deep-copied: they are treated as immutable
-    /// throughout this type (<see cref="Set"/> and the delta fold store the
-    /// caller's arrays by reference and never mutate them in place), so sharing
-    /// the references yields an equivalent, independent register without the two
-    /// defensive array allocations a deep copy would cost on every clone / merge.
+    /// Creates a deep, independent copy of this register, per the
+    /// <see cref="ICrdt{TSelf}.Clone"/> contract: the value and order-key byte
+    /// arrays are copied, not shared.
+    /// <para>
+    /// The arrays are treated as immutable <em>inside</em> this type, but that
+    /// invariant stops at its boundary. A caller that reads a register out of an
+    /// <c>OrMap&lt;string, BoundedRegister&gt;</c> gets it through
+    /// <c>OrMap.Get</c>, which hands back <c>Clone()</c>; sharing the arrays
+    /// there gives the caller a live handle on the map's durable state, so a
+    /// write through the returned <c>Value</c> corrupts the stored CRDT without
+    /// going through any mutation API. The two array copies are the price of
+    /// the contract - the same trade
+    /// <see cref="OrMap{TKey, TValue}.Clone"/> already pays for its nested value
+    /// snapshots. They are expressed as span copies rather than
+    /// <see cref="Array.Clone"/>, which allocates identically but goes through
+    /// the non-generic <see cref="Array"/> path and measured roughly 3-4x
+    /// slower on the <c>ordedup</c> microbench suite.
+    /// </para>
     /// </summary>
     public BoundedRegister Clone() => new()
     {
-        Value = Value,
-        OrderKey = OrderKey,
+        Value = Value?.AsSpan().ToArray(),
+        OrderKey = OrderKey?.AsSpan().ToArray(),
         HasValue = HasValue,
         IsMin = IsMin,
     };
@@ -181,12 +203,24 @@ public sealed class BoundedRegister : ICrdt<BoundedRegister>
         FoldCandidate(delta.Value ?? Array.Empty<byte>(), delta.OrderKey ?? Array.Empty<byte>());
     }
 
+    /// <summary>
+    /// Folds a candidate authored by another register or by a delta. The
+    /// candidate advances this register only when it beats the current value
+    /// under the configured direction.
+    /// <para>
+    /// A winning candidate is copied rather than adopted: the array belongs to
+    /// the other side (a peer register that keeps using it, or a delta the
+    /// producer may still hold for retry or fan-out), so retaining it would
+    /// leave this register's durable state aliased to somebody else's buffer.
+    /// A losing candidate allocates nothing.
+    /// </para>
+    /// </summary>
     private void FoldCandidate(byte[] candidateValue, byte[] candidateOrderKey)
     {
         if (!HasValue || Beats(candidateOrderKey, candidateValue, OrderKey!, Value!))
         {
-            Value = candidateValue;
-            OrderKey = candidateOrderKey;
+            Value = candidateValue.AsSpan().ToArray();
+            OrderKey = candidateOrderKey.AsSpan().ToArray();
             HasValue = true;
         }
     }

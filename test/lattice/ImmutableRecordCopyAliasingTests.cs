@@ -242,5 +242,66 @@ public sealed class ImmutableRecordCopyAliasingTests
             "LwwValue.VectorClock is a mutable VersionVector class. Aliasing it across the grain-proxy " +
             "boundary lets a caller mutate the leaf grain's frontier through MergeFrom.");
     }
+
+    [Test]
+    public void MvRegisterEntry_deep_copy_does_not_alias_inner_byte_array()
+    {
+        var bytes = new byte[] { 1, 2, 3 };
+        var original = new MvRegisterEntry { ReplicaId = "r1", Counter = 1, Value = bytes };
+
+        var copy = Copier<MvRegisterEntry>().Copy(original);
+
+        Assert.That(copy.Value, Is.Not.Null);
+        Assert.That(
+            ReferenceEquals(copy.Value, original.Value),
+            Is.False,
+            "MvRegisterEntry carries a mutable byte[] payload and is returned inside MvRegister state " +
+            "across the grain-proxy boundary; aliasing the array lets a caller mutate a stored register value.");
+    }
+
+    [Test]
+    public void OrMapDeltaEntry_deep_copy_does_not_alias_the_inner_value_crdt()
+    {
+        var value = new PnCounter();
+        value.Increment("r1", 5);
+        var original = new OrMapDeltaEntry<string, PnCounter>
+        {
+            Key = "k",
+            ReplicaId = "r1",
+            Counter = 1,
+            Value = value,
+        };
+
+        var copy = Copier<OrMapDeltaEntry<string, PnCounter>>().Copy(original);
+
+        Assert.That(
+            ReferenceEquals(copy.Value, original.Value),
+            Is.False,
+            "OrMapDeltaEntry.Value is a mutable CRDT class the receiver folds in place; aliasing it " +
+            "across the grain-proxy boundary lets an apply rewrite the producer's in-flight delta.");
+    }
+
+    [Test]
+    public void OrMapDelta_deep_copy_does_not_alias_the_adds_collection_or_its_value_crdts()
+    {
+        var value = new PnCounter();
+        value.Increment("r1", 5);
+        var original = new OrMapDelta<string, PnCounter>
+        {
+            Adds = new[]
+            {
+                new OrMapDeltaEntry<string, PnCounter> { Key = "k", ReplicaId = "r1", Counter = 1, Value = value },
+            },
+            Tombstones = Array.Empty<OrMapDeltaTombstone<string>>(),
+        };
+
+        var copy = Copier<OrMapDelta<string, PnCounter>>().Copy(original);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReferenceEquals(copy.Adds, original.Adds), Is.False, "Adds collection");
+            Assert.That(ReferenceEquals(copy.Adds[0].Value, original.Adds[0].Value), Is.False, "Adds[0].Value CRDT");
+        });
+    }
 }
 

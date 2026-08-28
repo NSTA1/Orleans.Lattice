@@ -173,7 +173,11 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     /// </summary>
     /// <param name="key">The key to write under. Must not be <c>null</c>.</param>
     /// <param name="replicaId">The replica authoring the write. Must be non-empty.</param>
-    /// <param name="value">The CRDT value snapshot to attach to the new dot. Must not be <c>null</c>.</param>
+    /// <param name="value">
+    /// The CRDT value snapshot to attach to the new dot. Must not be <c>null</c>.
+    /// Snapshotted on ingress via <see cref="ICrdt{TSelf}.Clone"/>, so the caller
+    /// may keep mutating its own instance without reaching into the map.
+    /// </param>
     public void Set(TKey key, string replicaId, TValue value)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -186,7 +190,11 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             entries = new List<OrMapEntry<TValue>>(1);
             Adds[key] = entries;
         }
-        entries.Add(new OrMapEntry<TValue>(replicaId, counter, value));
+        // Snapshot on ingress. Retaining the caller's instance would leave it a
+        // live handle on the map's durable state: a later same-dot fold folds
+        // into it in place, and a caller that keeps mutating its own object
+        // rewrites committed history.
+        entries.Add(new OrMapEntry<TValue>(replicaId, counter, value.Clone()));
 
         // counter is strictly greater than any prior counter for this
         // replica, so record it as the new per-replica maximum.
@@ -314,7 +322,17 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
 
             foreach (var entry in entries)
             {
-                if (merged is null) merged = new TValue();
+                // Seed from a clone of the first contributor rather than folding
+                // it into a fresh identity. An identity TValue is not neutral for
+                // every value CRDT (a composite adopts the first contributor's
+                // inner state by reference, so the next fold writes through into
+                // the map's own durable entry - a read that mutates what it
+                // reads), and cloning also skips one whole MergeFrom.
+                if (merged is null)
+                {
+                    merged = entry.Value.Clone();
+                    continue;
+                }
                 merged.MergeFrom(entry.Value);
             }
             return merged;
@@ -326,7 +344,11 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             {
                 var dot = new OrSetDot { ReplicaId = entry.ReplicaId, Counter = entry.Counter };
                 if (ListContainsDot(tomb!, dot)) continue;
-                if (merged is null) merged = new TValue();
+                if (merged is null)
+                {
+                    merged = entry.Value.Clone();
+                    continue;
+                }
                 merged.MergeFrom(entry.Value);
             }
             return merged;
@@ -337,16 +359,24 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         foreach (var entry in entries)
         {
             if (tombSet.Contains(new OrSetDot { ReplicaId = entry.ReplicaId, Counter = entry.Counter })) continue;
-            if (merged is null) merged = new TValue();
+            if (merged is null)
+            {
+                merged = entry.Value.Clone();
+                continue;
+            }
             merged.MergeFrom(entry.Value);
         }
         return merged;
     }
 
     /// <summary>
-    /// Enumerates every live key in the map in deterministic order
-    /// (the default ordering for <typeparamref name="TKey"/> via
-    /// <see cref="Comparer{T}"/>).
+    /// Enumerates every live key in the map in deterministic order. String keys
+    /// are ordered with <see cref="StringComparer.Ordinal"/> - matching
+    /// <see cref="GSet.Values"/>, <see cref="OrSet.Elements"/>, and
+    /// <see cref="RwSet.Elements"/> - so two replicas holding the same converged
+    /// map enumerate it identically whatever their ambient
+    /// <see cref="System.Globalization.CultureInfo"/> or ICU version. Any other
+    /// key type is ordered by <see cref="Comparer{T}.Default"/>.
     /// </summary>
     public IEnumerable<TKey> Keys()
     {
@@ -366,8 +396,25 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
             if (LiveEntryCount(key, entries) > 0) live.Add(key);
         }
         if (live.Count == 0) return Array.Empty<TKey>();
-        live.Sort(Comparer<TKey>.Default);
+        SortKeys(live);
         return live;
+    }
+
+    /// <summary>
+    /// Orders the live key list deterministically. <c>Comparer&lt;string&gt;.Default</c>
+    /// resolves to the culture-sensitive <c>String.CompareTo</c>, so two silos
+    /// running under different cultures (or different ICU versions) would
+    /// enumerate the same converged map in different orders. The type test is a
+    /// single reference comparison on a cold path and keeps the method generic.
+    /// </summary>
+    private static void SortKeys(List<TKey> live)
+    {
+        if (typeof(TKey) == typeof(string))
+        {
+            ((List<string>)(object)live).Sort(StringComparer.Ordinal);
+            return;
+        }
+        live.Sort(Comparer<TKey>.Default);
     }
 
     /// <summary>
@@ -386,6 +433,12 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Pure in <paramref name="other"/>: every entry adopted from the other side
+    /// is a fresh <see cref="OrMapEntry{TValue}"/> over a
+    /// <see cref="ICrdt{TSelf}.Clone"/> of its value, so the in-place same-dot
+    /// fold can never reach back into the map that was merged in.
+    /// </remarks>
     public void MergeFrom(OrMap<TKey, TValue> other)
     {
         ArgumentNullException.ThrowIfNull(other);
@@ -431,9 +484,18 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
 
             if (!Adds.TryGetValue(key, out var localEntries))
             {
-                // Copy-by-reference is intentional: callers that need
-                // structural isolation use Clone().
-                Adds[key] = new List<OrMapEntry<TValue>>(otherEntries);
+                // Snapshot the other side's entries. Adopting them by reference
+                // would leave both maps sharing the same nested value CRDTs, and
+                // the same-dot fold below resolves collisions in place - so a
+                // later merge into this map would write straight through into
+                // the map that was merged in. A merge must be pure in its
+                // argument.
+                localEntries = new List<OrMapEntry<TValue>>(otherEntries.Count);
+                foreach (var e in otherEntries)
+                {
+                    localEntries.Add(new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone()));
+                }
+                Adds[key] = localEntries;
                 continue;
             }
 
@@ -456,7 +518,7 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
                     }
                     else
                     {
-                        localEntries.Add(e);
+                        localEntries.Add(new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone()));
                     }
                 }
                 continue;
@@ -478,8 +540,9 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
                 }
                 else
                 {
-                    localEntries.Add(e);
-                    byDot[dot] = e;
+                    var copy = new OrMapEntry<TValue>(e.ReplicaId, e.Counter, e.Value.Clone());
+                    localEntries.Add(copy);
+                    byDot[dot] = copy;
                 }
             }
         }
@@ -522,6 +585,13 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         {
             foreach (var add in adds)
             {
+                // A dot with no replica id carries no causal identity: it cannot
+                // be deduped, tombstoned, or ordered, and BumpContext would fault
+                // the whole batch on a null id. Every local mutation API rejects
+                // it via ArgumentException.ThrowIfNullOrEmpty; the wire path
+                // drops the one unusable dot and keeps applying the rest.
+                if (string.IsNullOrEmpty(add.ReplicaId)) continue;
+
                 BumpContext(add.ReplicaId, add.Counter);
                 if (!Adds.TryGetValue(add.Key, out var entries))
                 {
@@ -540,7 +610,11 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
                 }
                 else
                 {
-                    entries.Add(new OrMapEntry<TValue>(add.ReplicaId, add.Counter, add.Value));
+                    // Snapshot the delta's value. Retaining it would let the
+                    // next same-dot apply fold in place through the alias and
+                    // rewrite a delta the producer may still hold for retry or
+                    // fan-out to another replica.
+                    entries.Add(new OrMapEntry<TValue>(add.ReplicaId, add.Counter, add.Value.Clone()));
                 }
             }
         }
@@ -550,6 +624,8 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
         {
             foreach (var t in tombs)
             {
+                if (string.IsNullOrEmpty(t.ReplicaId)) continue;
+
                 BumpContext(t.ReplicaId, t.Counter);
                 if (!Tombstones.TryGetValue(t.Key, out var existing))
                 {

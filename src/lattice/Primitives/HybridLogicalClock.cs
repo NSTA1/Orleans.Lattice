@@ -19,7 +19,9 @@ public readonly record struct HybridLogicalClock
 
     /// <summary>
     /// Advances the clock for a local event. The returned value is guaranteed
-    /// to be strictly greater than <paramref name="previous"/>.
+    /// to be strictly greater than <paramref name="previous"/>, except at the
+    /// <see cref="int.MaxValue"/> counter ceiling where it saturates (see
+    /// <see cref="BumpCounter"/>).
     /// </summary>
     public static HybridLogicalClock Tick(HybridLogicalClock previous)
     {
@@ -32,15 +34,39 @@ public readonly record struct HybridLogicalClock
         return new HybridLogicalClock
         {
             WallClockTicks = previous.WallClockTicks,
-            Counter = previous.Counter + 1
+            Counter = BumpCounter(previous.Counter)
         };
     }
 
     /// <summary>
-    /// Merges two clock values, returning a value strictly greater than both.
-    /// The result is deterministic given the same inputs (commutative, associative,
-    /// idempotent on ordering). Wall-clock time is incorporated to keep the
-    /// clock advancing, but the merge itself is symmetric.
+    /// Advances a counter by one, saturating at <see cref="int.MaxValue"/>.
+    /// <para>
+    /// An unchecked <c>+ 1</c> at the ceiling wraps to <see cref="int.MinValue"/>,
+    /// which makes the successor compare strictly <em>less</em> than its own
+    /// input and permanently inverts causality for that wall-clock tick: every
+    /// value authored after the wrap is ordered before every value authored
+    /// before it, so an LWW merge resurrects stale writes. Saturation keeps the
+    /// order non-decreasing. The ceiling is only reachable while the wall clock
+    /// is not advancing (a clock pinned at or beyond <c>DateTimeOffset.UtcNow</c>,
+    /// e.g. a hand-authored or corrupted timestamp arriving over the wire), since
+    /// any wall-clock advance resets the counter to zero.
+    /// </para>
+    /// </summary>
+    private static int BumpCounter(int counter) =>
+        counter == int.MaxValue ? int.MaxValue : counter + 1;
+
+    /// <summary>
+    /// Merges two clock values, returning a value greater than or equal to both
+    /// and strictly greater than both except at the <see cref="int.MaxValue"/>
+    /// counter ceiling, where it saturates.
+    /// <para>
+    /// The result is deterministic given the same inputs and the merge itself is
+    /// commutative. It is deliberately <em>not</em> a join: it advances the
+    /// counter past the winning input so the merged clock is a successor of both,
+    /// which means it is neither idempotent (<c>Merge(a, a) != a</c>) nor
+    /// associative (grouping changes how many bumps are applied). Wall-clock time
+    /// is incorporated to keep the clock advancing.
+    /// </para>
     /// </summary>
     public static HybridLogicalClock Merge(HybridLogicalClock local, HybridLogicalClock remote)
     {
@@ -57,15 +83,15 @@ public readonly record struct HybridLogicalClock
         else if (local.WallClockTicks == remote.WallClockTicks)
         {
             // Both share the winning wall clock - bump past the higher counter.
-            counter = Math.Max(local.Counter, remote.Counter) + 1;
+            counter = BumpCounter(Math.Max(local.Counter, remote.Counter));
         }
         else if (local.WallClockTicks > remote.WallClockTicks)
         {
-            counter = local.Counter + 1;
+            counter = BumpCounter(local.Counter);
         }
         else
         {
-            counter = remote.Counter + 1;
+            counter = BumpCounter(remote.Counter);
         }
 
         return new HybridLogicalClock { WallClockTicks = maxWall, Counter = counter };

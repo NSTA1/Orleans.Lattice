@@ -251,4 +251,78 @@ public class VersionVectorTests
             Assert.That(inPlace.Entries[id], Is.EqualTo(clock));
         }
     }
+
+    // A slot at HybridLogicalClock.Zero carries no causal information -
+    // GetClock returns Zero for an absent replica too - so an audit raised
+    // whether Merge materialising such a slot makes IsBottom unstable. It does
+    // not violate any convergence law: Merge is a pointwise-max join over the
+    // union of replica ids, so two replicas holding equal state always agree on
+    // IsBottom, and a Zero slot can only enter through the settable Entries
+    // property, a hand-authored delta, or deserialisation (Tick never yields
+    // Zero). IsBottom is deliberately the structural predicate "no replica is
+    // registered", which the type's remarks document. These pin that decision.
+
+    [Test]
+    public void Merge_over_a_zero_slot_is_commutative()
+    {
+        var withZero = new VersionVector();
+        withZero.Entries["r1"] = HybridLogicalClock.Zero;
+        var empty = new VersionVector();
+
+        var leftFirst = VersionVector.Merge(withZero, empty);
+        var rightFirst = VersionVector.Merge(empty, withZero);
+
+        Assert.That(rightFirst.Entries, Is.EqualTo(leftFirst.Entries));
+    }
+
+    [Test]
+    public void Merge_over_a_zero_slot_is_idempotent()
+    {
+        var withZero = new VersionVector();
+        withZero.Entries["r1"] = HybridLogicalClock.Zero;
+
+        Assert.That(VersionVector.Merge(withZero, withZero).Entries, Is.EqualTo(withZero.Entries));
+    }
+
+    [Test]
+    public void A_zero_slot_and_an_absent_replica_are_mutually_dominating()
+    {
+        var withZero = new VersionVector();
+        withZero.Entries["r1"] = HybridLogicalClock.Zero;
+        var empty = new VersionVector();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withZero.DominatesOrEquals(empty), Is.True);
+            Assert.That(empty.DominatesOrEquals(withZero), Is.True);
+            Assert.That(withZero.IsNewerThan(empty), Is.False);
+            Assert.That(empty.IsNewerThan(withZero), Is.False);
+            Assert.That(empty.GetClock("r1"), Is.EqualTo(withZero.GetClock("r1")));
+        });
+    }
+
+    [Test]
+    public void IsBottom_is_the_structural_no_replica_registered_predicate()
+    {
+        var withZero = new VersionVector();
+        withZero.Entries["r1"] = HybridLogicalClock.Zero;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new VersionVector().IsBottom, Is.True);
+            Assert.That(withZero.IsBottom, Is.False,
+                "documented: a registered replica makes the vector non-bottom even at Zero");
+        });
+    }
+
+    [Test]
+    public void Tick_never_produces_a_zero_slot()
+    {
+        var v = new VersionVector();
+
+        var ticked = v.Tick("r1");
+
+        Assert.That(ticked, Is.Not.EqualTo(HybridLogicalClock.Zero),
+            "no mutation API on the type can author a Zero slot");
+    }
 }

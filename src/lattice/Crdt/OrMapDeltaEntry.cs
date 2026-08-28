@@ -15,10 +15,17 @@ namespace Orleans.Lattice;
 /// (<see cref="ReplicaId"/>, <see cref="Counter"/>) plus the key, not
 /// via record equality.
 /// </para>
+/// <para>
+/// Deliberately <em>not</em> <c>[Immutable]</c>: <see cref="Value"/> is a
+/// mutable CRDT instance that the receiver folds in place
+/// (<c>existing.Value.MergeFrom(add.Value)</c>), so Orleans must deep-copy the
+/// entry on a same-silo grain call. Marking the type immutable elides that copy
+/// and lets an apply on the receiver rewrite a delta the producer may still hold
+/// for retry or fan-out.
+/// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.OrMapDeltaEntry)]
-[Immutable]
 public readonly record struct OrMapDeltaEntry<TKey, TValue>
     where TKey : notnull
     where TValue : Orleans.Lattice.ICrdt<TValue>, new()

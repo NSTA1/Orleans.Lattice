@@ -179,7 +179,7 @@ public sealed class OrSet : ICrdt<OrSet>
                 }
                 return anyAdded;
             }
-            var tombSet = new HashSet<OrSetDot>(tomb);
+            var tombSet = OrSetDotSet.Build(tomb);
             foreach (var dot in dots)
             {
                 if (tombSet.Add(dot))
@@ -435,7 +435,7 @@ public sealed class OrSet : ICrdt<OrSet>
             }
             return live;
         }
-        var tombSet = new HashSet<OrSetDot>(tomb);
+        var tombSet = OrSetDotSet.Build(tomb);
         var n = 0;
         foreach (var d in dots)
         {
@@ -466,7 +466,7 @@ public sealed class OrSet : ICrdt<OrSet>
             // O(n+m) dedup via a transient HashSet - replaces the previous
             // O(n*m) List<>.Contains scan that would degrade quadratically
             // when an element accumulates many concurrent adds.
-            var seen = new HashSet<OrSetDot>(existing);
+            var seen = OrSetDotSet.Build(existing, dots.Count);
             foreach (var d in dots)
             {
                 if (seen.Add(d)) existing.Add(d);
