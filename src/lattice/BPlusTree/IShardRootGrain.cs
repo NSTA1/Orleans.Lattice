@@ -231,6 +231,33 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive);
 
     /// <summary>
+    /// Returns <see langword="true"/> as soon as this shard is found to hold at
+    /// least one live (non-tombstoned) key, short-circuiting at the first
+    /// non-empty leaf rather than walking the whole chain and summing as
+    /// <see cref="CountAsync()"/> does. A non-empty shard therefore costs one
+    /// leaf call in the common case, and an empty shard costs a walk of the
+    /// (correspondingly short) chain.
+    /// <para>
+    /// Liveness is decided by the same per-leaf count this shard's
+    /// <see cref="CountAsync()"/> uses, so TTL expiry, tombstones, pending saga
+    /// outcomes, and the in-progress split boundary are all honoured
+    /// identically by construction.
+    /// </para>
+    /// <para>
+    /// Deliberately does <em>not</em> filter slots that an adaptive split has
+    /// moved away. That filtering exists to stop a <em>count</em> from
+    /// double-counting a migrating key that is briefly present on both the
+    /// source and the destination shard; for an existence question a key seen
+    /// twice is still just "a key exists", and the tree does hold it either
+    /// way. Skipping the filter keeps the answer one-sided in the safe
+    /// direction: this may report a shard non-empty while its last keys are
+    /// migrating away, but it can never report empty while a key exists
+    /// anywhere.
+    /// </para>
+    /// </summary>
+    Task<bool> AnyAsync();
+
+    /// <summary>
     /// Returns a page of live keys in this shard's B+ tree in sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)

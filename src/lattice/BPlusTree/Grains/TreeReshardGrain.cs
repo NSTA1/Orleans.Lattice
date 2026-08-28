@@ -102,15 +102,10 @@ internal sealed class TreeReshardGrain(
         // without activating the coordinator machinery. This also relaxes
         // the grow-only restriction so callers (including test fixtures)
         // can set any desired shard count on a freshly-created tree.
-        if (newShardCount != currentCount)
+        if (newShardCount != currentCount && await IsObservablyEmptyAsync(resolved, currentMap))
         {
-            var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-            var liveCount = await lattice.CountAsync();
-            if (liveCount == 0)
-            {
-                await ApplyEmptyTreeResharAsync(registry, newShardCount, LatticeConstants.DefaultVirtualShardCount);
-                return;
-            }
+            await ApplyEmptyTreeResharAsync(registry, newShardCount, LatticeConstants.DefaultVirtualShardCount);
+            return;
         }
 
         // Idempotent re-pin: a caller asking for the count the tree is
@@ -199,6 +194,48 @@ internal sealed class TreeReshardGrain(
 
         await StartCoordinatorAsync();
     }
+
+    /// <summary>
+    /// Bounded, conservative probe for the empty-tree fast path.
+    /// <para>
+    /// The fast path needs a boolean - "does this tree hold any live key?" -
+    /// but <see cref="ILattice.CountAsync(CancellationToken)"/> answers it with
+    /// a strongly-consistent whole-tree fan-out that discards its result and
+    /// retries whenever the shard map moves under it, then throws once
+    /// <see cref="LatticeOptions.MaxScanRetries"/> is exhausted. Reshard
+    /// initiation is exactly when that map is most likely to be churning - a
+    /// caller may be writing concurrently, and a small leaf fan-out splits
+    /// continuously - so an unbounded probe here can consume the whole
+    /// caller-side response budget and time the reshard out before it has
+    /// started.
+    /// </para>
+    /// <para>
+    /// Both inconclusive outcomes - the budget elapsing, and the count
+    /// abandoning under churn - are reported as "not empty". That is not
+    /// merely the safe direction but the accurate one: the only thing that
+    /// makes this probe slow or unstable is concurrent split churn, and a tree
+    /// whose topology is churning necessarily holds keys. A genuinely empty
+    /// tree has nothing to churn, answers well inside the budget, and still
+    /// takes the fast path.
+    /// </para>
+    /// </summary>
+    /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
+    /// <returns><see langword="true"/> only when the tree was positively observed to be empty.</returns>
+    /// <summary>
+    /// Bounded, one-sided emptiness probe for the empty-tree fast path. See
+    /// <see cref="TreeEmptinessProbe"/> for why this deliberately does not go
+    /// through <see cref="ILattice.CountAsync(CancellationToken)"/>, and why an
+    /// existence question needs no reconciliation against a moving shard map.
+    /// </summary>
+    /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
+    /// <param name="currentMap">The shard map observed by the caller, used to enumerate physical shards.</param>
+    /// <returns><see langword="true"/> only when the tree was positively observed to be empty.</returns>
+    private async Task<bool> IsObservablyEmptyAsync(LatticeOptions resolved, ShardMap currentMap) =>
+        await TreeEmptinessProbe.IsObservablyEmptyAsync(
+            grainFactory,
+            await ResolvePhysicalTreeIdAsync(),
+            currentMap.GetPhysicalShardIndices(),
+            resolved.EmptyTreeProbeBudget);
 
     /// <inheritdoc />
     public async Task RunReshardPassAsync()

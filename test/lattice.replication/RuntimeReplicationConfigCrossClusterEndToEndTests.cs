@@ -106,7 +106,7 @@ public sealed class RuntimeReplicationConfigCrossClusterEndToEndTests
         var preconditions = new LatticeReplicationPreconditionValidator(context);
         var admin = Substitute.For<ILatticeReplicationAdmin>();
         var probe = Substitute.For<ILatticeTreeContentProbe>();
-        probe.CountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(0));
+        probe.HasContentAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
 
         return new LatticeReplicationConfigAuthority(store, preconditions, context, admin, probe);
     }

@@ -134,8 +134,7 @@ internal sealed class LatticeReplicationConfigAuthority(
         var bootstrapRequested = false;
         if (!string.IsNullOrEmpty(bootstrapSourceClusterId))
         {
-            var count = await _treeContentProbe.CountAsync(treeId, cancellationToken).ConfigureAwait(false);
-            if (count > 0)
+            if (await _treeContentProbe.HasContentAsync(treeId, cancellationToken).ConfigureAwait(false))
             {
                 await _admin.RequestSnapshotAsync(treeId, bootstrapSourceClusterId, cancellationToken)
                     .ConfigureAwait(false);

@@ -88,15 +88,14 @@ public partial class TreeReshardGrainTests
     public async Task ReshardAsync_empty_tree_fast_path_increments_initiated_and_completed_in_lockstep()
     {
         using var capture = new MeterCapture();
-        // CreateGrain default models a non-empty tree (CountAsync = 1).
-        // Override to model the empty-tree fast path explicitly so the
-        // reshard takes the ApplyEmptyTreeResharAsync branch which
-        // counts as both initiated and completed.
+        // CreateGrain default models a non-empty tree (every shard reports
+        // AnyAsync = true). Override to model the empty-tree fast path
+        // explicitly so the reshard takes the ApplyEmptyTreeResharAsync
+        // branch which counts as both initiated and completed.
         var (grain, _, grainFactory, _) = CreateGrain();
-        var emptyLattice = Substitute.For<ILattice>();
-        emptyLattice.CountAsync().Returns(Task.FromResult(0));
-        emptyLattice.IsResizeCompleteAsync().Returns(true);
-        grainFactory.GetGrain<ILattice>(TreeId).Returns(emptyLattice);
+        var emptyShard = Substitute.For<IShardRootGrain>();
+        emptyShard.AnyAsync().Returns(Task.FromResult(false));
+        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(emptyShard);
 
         await grain.ReshardAsync(4);
 
