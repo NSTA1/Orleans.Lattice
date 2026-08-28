@@ -44,4 +44,16 @@ public sealed record LatticeRegionDescriptor
     /// </summary>
     [Id(3)] public IReadOnlyList<LatticeRegionGroupReachability> Groups { get; init; }
         = Array.Empty<LatticeRegionGroupReachability>();
+
+    /// <summary>
+    /// The asserting tenant's standing in this region - allowed, resident, and its
+    /// per-region lifecycle status - when the catalog answered a tenant-scoped
+    /// discovery call; <see langword="null"/> otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Optional and additive. It is <see langword="null"/> for an operator call, a
+    /// call that asserts no tenant, and every call in a cluster with no tenancy
+    /// add-on, so a non-tenant catalog answer is byte-for-byte unchanged.
+    /// </remarks>
+    [Id(4)] public LatticeRegionTenantScope? TenantScope { get; init; }
 }

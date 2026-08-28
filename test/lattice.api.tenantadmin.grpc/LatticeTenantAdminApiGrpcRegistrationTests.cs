@@ -215,6 +215,53 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
             "Grpc.AspNetCore resolves the attribute-bearing base type per request");
     }
 
+    /// <summary>
+    /// The region-residency facade is a separate opt-in registration. A host that
+    /// was binding tenant administration before the region RPCs existed registers
+    /// only <c>ILatticeTenantAdmin</c> and <c>ILatticeTenantSelfService</c>, so the
+    /// binding must still compose - a required constructor dependency here would
+    /// turn an additive change into a startup break for every existing deployment.
+    /// </summary>
+    [Test]
+    public void The_service_composes_without_the_optional_region_residency_facade()
+    {
+        var services = HostServices();
+        services.AddLatticeTenantAdminApiGrpc();
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(
+            provider.GetService<ILatticeTenantRegionAdmin>(), Is.Null,
+            "the fixture models a host that never opted the region facade in.");
+        Assert.That(
+            () => provider.GetRequiredService<LatticeTenantAdminGrpcService>(),
+            Throws.Nothing);
+    }
+
+    /// <summary>
+    /// And the three region RPCs then answer honestly rather than faulting: an
+    /// <c>Unimplemented</c> status is what a gRPC caller is specified to receive
+    /// for a method this server does not serve.
+    /// </summary>
+    [Test]
+    public void A_region_rpc_reports_unimplemented_when_the_facade_is_absent()
+    {
+        var services = HostServices();
+        services.AddLatticeTenantAdminApiGrpc();
+
+        using var provider = services.BuildServiceProvider();
+        var service = provider.GetRequiredService<LatticeTenantAdminGrpcService>();
+        var context = new FakeServerCallContext(
+            LatticeTenantAdminGrpcMethods.SetTenantResidencyMethodName);
+
+        var fault = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.SetTenantResidency(
+                new TenantAdminRegionSetRequest { TenantId = "acme", Regions = ["eu"] },
+                context));
+
+        Assert.That(fault!.StatusCode, Is.EqualTo(StatusCode.Unimplemented));
+    }
+
     [Test]
     public void Registration_registers_the_auth_interceptor()
     {
@@ -281,7 +328,7 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.AddedMethods, Is.EqualTo(9));
+            Assert.That(binder.AddedMethods, Is.EqualTo(12));
             Assert.That(binder.BoundHandlers, Is.Zero,
                 "the startup metadata pass binds no handler instance");
         });
@@ -299,15 +346,16 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
             new FakeTenantSelfService(),
             new NullCredentialBridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance,
+            new FakeTenantRegionAdmin());
         var binder = new CountingServiceBinder();
 
         LatticeTenantAdminGrpcServiceBase.BindService(binder, service);
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.AddedMethods, Is.EqualTo(9));
-            Assert.That(binder.BoundHandlers, Is.EqualTo(9));
+            Assert.That(binder.AddedMethods, Is.EqualTo(12));
+            Assert.That(binder.BoundHandlers, Is.EqualTo(12));
         });
     }
 

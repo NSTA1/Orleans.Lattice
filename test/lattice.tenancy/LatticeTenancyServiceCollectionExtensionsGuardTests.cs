@@ -147,6 +147,7 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
         {
             (typeof(ITenantContextResolver), typeof(TenantContextResolver)),
             (typeof(ITenantEnumerationFilter), typeof(TenantEnumerationFilter)),
+            (typeof(ITenantRegionVisibilityResolver), typeof(TenantRegionVisibilityResolver)),
         };
 
         Assert.Multiple(() =>
@@ -179,6 +180,25 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
         var filter = (ITenantEnumerationFilter)Activator.CreateInstance(descriptor.ImplementationType!)!;
 
         Assert.That(filter.IsActive, Is.True);
+    }
+
+    [Test]
+    public void AddLatticeTenancy_registered_region_visibility_resolver_reports_itself_active()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+
+        // Same reasoning as the enumeration filter: the region-discovery surface
+        // short-circuits on IsActive, so a resolver that resolves but reports
+        // itself inactive would silently fail every tenant-scoped call closed.
+        var resolver = (ITenantRegionVisibilityResolver)ActivatorUtilities.CreateInstance(
+            new ServiceCollection()
+                .AddSingleton(Substitute.For<ITenantRegistry>())
+                .BuildServiceProvider(),
+            builder.Services.Single(d => d.ServiceType == typeof(ITenantRegionVisibilityResolver))
+                .ImplementationType!);
+
+        Assert.That(resolver.IsActive, Is.True);
     }
 
     [Test]

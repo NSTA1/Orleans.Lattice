@@ -16,7 +16,10 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// The contract is the transport-agnostic <see cref="ILatticeTenantAdmin"/> facade
 /// surface: the four tenant lifecycle RPCs (<c>CreateTenant</c>,
 /// <c>SuspendTenant</c>, <c>ResumeTenant</c>, <c>DeleteTenant</c>) plus the
-/// unauthenticated auth-scheme discovery RPC (<c>GetAuthScheme</c>).
+/// unauthenticated auth-scheme discovery RPC (<c>GetAuthScheme</c>), the read-only
+/// self-service RPCs, and the three <see cref="ILatticeTenantRegionAdmin"/>
+/// region-residency RPCs (<c>AuthorizeAllowedRegions</c>,
+/// <c>SetTenantResidency</c>, <c>GetTenantRegionStatus</c>).
 /// Contract-versioning policy: fields on the wire messages are additive-only (new
 /// <c>[Id(n)]</c>); aliases and field numbers are never renumbered, so a newer
 /// response decodes cleanly under an older client, and new RPCs are added without
@@ -54,6 +57,15 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only "get tenant status" self-service RPC method name.</summary>
     public const string GetTenantMethodName = "GetTenant";
 
+    /// <summary>The unary operator-only allowed-region-set authorization RPC method name.</summary>
+    public const string AuthorizeAllowedRegionsMethodName = "AuthorizeAllowedRegions";
+
+    /// <summary>The unary tenant-admin residency-set RPC method name.</summary>
+    public const string SetTenantResidencyMethodName = "SetTenantResidency";
+
+    /// <summary>The unary, read-only tenant-admin per-region status RPC method name.</summary>
+    public const string GetTenantRegionStatusMethodName = "GetTenantRegionStatus";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
@@ -69,7 +81,11 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantSelfListRequest> selfListRequestSerializer,
         Serializer<TenantDescriptor> tenantDescriptorSerializer,
         Serializer<TenantSelfDescriptorList> selfDescriptorListSerializer,
-        Serializer<TenantStatusReport> tenantStatusReportSerializer)
+        Serializer<TenantStatusReport> tenantStatusReportSerializer,
+        Serializer<TenantAdminRegionSetRequest> regionSetRequestSerializer,
+        Serializer<TenantRegionAuthorizationResult> regionAuthorizationResultSerializer,
+        Serializer<TenantResidencyChangeResult> residencyChangeResultSerializer,
+        Serializer<TenantRegionStatusReport> regionStatusReportSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
         ArgumentNullException.ThrowIfNull(createRequestSerializer);
@@ -85,6 +101,10 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(tenantDescriptorSerializer);
         ArgumentNullException.ThrowIfNull(selfDescriptorListSerializer);
         ArgumentNullException.ThrowIfNull(tenantStatusReportSerializer);
+        ArgumentNullException.ThrowIfNull(regionSetRequestSerializer);
+        ArgumentNullException.ThrowIfNull(regionAuthorizationResultSerializer);
+        ArgumentNullException.ThrowIfNull(residencyChangeResultSerializer);
+        ArgumentNullException.ThrowIfNull(regionStatusReportSerializer);
 
         CreateTenant = new Method<TenantAdminCreateRequest, TenantCreationResult>(
             type: MethodType.Unary,
@@ -148,6 +168,27 @@ internal sealed class LatticeTenantAdminGrpcMethods
             name: GetTenantMethodName,
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantStatusReportSerializer));
+
+        AuthorizeAllowedRegions = new Method<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: AuthorizeAllowedRegionsMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionSetRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionAuthorizationResultSerializer));
+
+        SetTenantResidency = new Method<TenantAdminRegionSetRequest, TenantResidencyChangeResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: SetTenantResidencyMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionSetRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(residencyChangeResultSerializer));
+
+        GetTenantRegionStatus = new Method<TenantAdminTenantRequest, TenantRegionStatusReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTenantRegionStatusMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionStatusReportSerializer));
     }
 
     /// <summary>The unary tenant-creation RPC.</summary>
@@ -177,6 +218,15 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only "get tenant status" self-service RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantStatusReport> GetTenant { get; }
 
+    /// <summary>The unary operator-only allowed-region-set authorization RPC.</summary>
+    public Method<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult> AuthorizeAllowedRegions { get; }
+
+    /// <summary>The unary tenant-admin residency-set RPC.</summary>
+    public Method<TenantAdminRegionSetRequest, TenantResidencyChangeResult> SetTenantResidency { get; }
+
+    /// <summary>The unary, read-only tenant-admin per-region status RPC.</summary>
+    public Method<TenantAdminTenantRequest, TenantRegionStatusReport> GetTenantRegionStatus { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -200,7 +250,11 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantSelfListRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantDescriptor>>(),
             serializerProvider.GetRequiredService<Serializer<TenantSelfDescriptorList>>(),
-            serializerProvider.GetRequiredService<Serializer<TenantStatusReport>>());
+            serializerProvider.GetRequiredService<Serializer<TenantStatusReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminRegionSetRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantRegionAuthorizationResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantResidencyChangeResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantRegionStatusReport>>());
     }
 }
 

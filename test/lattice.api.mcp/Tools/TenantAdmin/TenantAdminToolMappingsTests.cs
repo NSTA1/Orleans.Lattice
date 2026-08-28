@@ -131,4 +131,133 @@ public sealed class TenantAdminToolMappingsTests
     {
         Assert.That(() => TenantAdminToolMappings.ToMcp((TenantQuotasUpdateResult)null!), Throws.ArgumentNullException);
     }
+
+    // ----- region residency -----
+
+    [Test]
+    public void ToMcp_region_authorization_result_copies_the_allowed_set()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantRegionAuthorizationResult
+        {
+            TenantId = "acme",
+            AllowedRegions = ["eu-west", "ap-south"],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.AllowedRegions, Is.EqualTo(new[] { "eu-west", "ap-south" }));
+        });
+    }
+
+    [Test]
+    public void ToMcp_region_authorization_result_carries_an_empty_allowed_set_through()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantRegionAuthorizationResult
+        {
+            TenantId = "acme",
+            AllowedRegions = [],
+        });
+
+        Assert.That(result.AllowedRegions, Is.Empty,
+            "A full revocation must be reported as an empty set, not as an absent one.");
+    }
+
+    [Test]
+    public void ToMcp_residency_change_result_copies_every_field_and_stringifies_row_status()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantResidencyChangeResult
+        {
+            TenantId = "acme",
+            AddedRegions = ["ap-south"],
+            RemovedRegions = ["eu-west"],
+            Regions =
+            [
+                new TenantRegionStatusDescriptor
+                {
+                    RegionId = "ap-south",
+                    Status = TenantRegionLifecycleStatus.Backfilling,
+                    IsAllowed = true,
+                },
+                new TenantRegionStatusDescriptor
+                {
+                    RegionId = "eu-west",
+                    Status = TenantRegionLifecycleStatus.Draining,
+                    IsAllowed = true,
+                },
+            ],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.AddedRegions, Is.EqualTo(new[] { "ap-south" }));
+            Assert.That(result.RemovedRegions, Is.EqualTo(new[] { "eu-west" }));
+            Assert.That(result.Regions, Has.Count.EqualTo(2));
+            Assert.That(result.Regions[0].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.Backfilling)));
+            Assert.That(result.Regions[1].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.Draining)));
+        });
+    }
+
+    [Test]
+    public void ToMcp_region_status_report_copies_every_row()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantRegionStatusReport
+        {
+            TenantId = "acme",
+            Regions =
+            [
+                new TenantRegionStatusDescriptor
+                {
+                    RegionId = "eu-west",
+                    Status = TenantRegionLifecycleStatus.Online,
+                    IsAllowed = true,
+                },
+                new TenantRegionStatusDescriptor
+                {
+                    RegionId = "ap-south",
+                    Status = TenantRegionLifecycleStatus.None,
+                    IsAllowed = true,
+                },
+            ],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.Regions.Select(r => r.RegionId), Is.EqualTo(new[] { "eu-west", "ap-south" }));
+            Assert.That(result.Regions[0].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.Online)));
+            Assert.That(result.Regions[1].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.None)),
+                "An allowed-but-not-yet-resident region reports None, not an absent status.");
+        });
+    }
+
+    [Test]
+    public void ToMcp_region_status_report_carries_an_empty_row_set_through()
+    {
+        var result = TenantAdminToolMappings.ToMcp(new TenantRegionStatusReport
+        {
+            TenantId = "acme",
+            Regions = [],
+        });
+
+        Assert.That(result.Regions, Is.Empty);
+    }
+
+    [Test]
+    public void ToMcp_rejects_a_null_region_result()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => TenantAdminToolMappings.ToMcp((TenantRegionAuthorizationResult)null!),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => TenantAdminToolMappings.ToMcp((TenantResidencyChangeResult)null!),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => TenantAdminToolMappings.ToMcp((TenantRegionStatusReport)null!),
+                Throws.ArgumentNullException);
+        });
+    }
 }

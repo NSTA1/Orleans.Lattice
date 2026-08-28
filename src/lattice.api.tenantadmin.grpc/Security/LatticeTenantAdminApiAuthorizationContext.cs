@@ -33,6 +33,27 @@ public enum LatticeTenantAdminApiOperation
     /// unmapped call rather than have it silently masquerade as a benign call.
     /// </summary>
     Unknown = 5,
+
+    /// <summary>
+    /// The mutating, <b>operator-only</b> <c>AuthorizeAllowedRegions</c> RPC that
+    /// authors the region set a tenant may place residency in. The facade
+    /// authorizes it as cluster-wide admin on the reserved auth policy tree and
+    /// denies every non-operator caller; this per-operation value lets a host apply
+    /// a coarser transport policy on top.
+    /// </summary>
+    AuthorizeAllowedRegions = 6,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-tenant-admin</b> <c>SetTenantResidency</c> RPC
+    /// that moves a tenant into and out of its allowed regions.
+    /// </summary>
+    SetTenantResidency = 7,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantRegionStatus</c>
+    /// RPC that reports a tenant's per-region residency lifecycle.
+    /// </summary>
+    GetTenantRegionStatus = 8,
 }
 
 /// <summary>

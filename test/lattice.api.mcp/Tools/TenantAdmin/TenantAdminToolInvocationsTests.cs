@@ -221,6 +221,130 @@ public sealed class TenantAdminToolInvocationsTests
             Assert.That(
                 async () => await TenantAdminToolInvocations.SetTenantQuotasAsync(null!, "acme", TenantQuotasDescriptor.Unbounded, CancellationToken.None),
                 Throws.ArgumentNullException);
+            Assert.That(
+                async () => await TenantAdminToolInvocations.AuthorizeAllowedRegionsAsync(null!, "acme", [], CancellationToken.None),
+                Throws.ArgumentNullException);
+            Assert.That(
+                async () => await TenantAdminToolInvocations.SetResidencyAsync(null!, "acme", [], CancellationToken.None),
+                Throws.ArgumentNullException);
+            Assert.That(
+                async () => await TenantAdminToolInvocations.GetTenantRegionStatusAsync(null!, "acme", CancellationToken.None),
+                Throws.ArgumentNullException);
+        });
+    }
+
+    // ----- region residency -----
+
+    [Test]
+    public async Task Authorize_regions_delegates_to_the_region_facade_and_shapes_the_result()
+    {
+        var regionAdmin = Substitute.For<ILatticeTenantRegionAdmin>();
+        regionAdmin.AuthorizeAllowedRegionsAsync("acme", Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new TenantRegionAuthorizationResult
+            {
+                TenantId = "acme",
+                AllowedRegions = ["eu-west", "ap-south"],
+            });
+
+        var result = await TenantAdminToolInvocations.AuthorizeAllowedRegionsAsync(
+            regionAdmin, "acme", ["eu-west", "ap-south"], CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.AllowedRegions, Is.EqualTo(new[] { "eu-west", "ap-south" }));
+        });
+        await regionAdmin.Received(1).AuthorizeAllowedRegionsAsync(
+            "acme", Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Set_residency_delegates_to_the_region_facade_and_stringifies_the_row_status()
+    {
+        var regionAdmin = Substitute.For<ILatticeTenantRegionAdmin>();
+        regionAdmin.SetResidencyAsync("acme", Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new TenantResidencyChangeResult
+            {
+                TenantId = "acme",
+                AddedRegions = ["ap-south"],
+                RemovedRegions = ["eu-west"],
+                Regions =
+                [
+                    new TenantRegionStatusDescriptor
+                    {
+                        RegionId = "ap-south",
+                        Status = TenantRegionLifecycleStatus.Provisioning,
+                        IsAllowed = true,
+                    },
+                ],
+            });
+
+        var result = await TenantAdminToolInvocations.SetResidencyAsync(
+            regionAdmin, "acme", ["ap-south"], CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.AddedRegions, Is.EqualTo(new[] { "ap-south" }));
+            Assert.That(result.RemovedRegions, Is.EqualTo(new[] { "eu-west" }));
+            Assert.That(result.Regions[0].RegionId, Is.EqualTo("ap-south"));
+            Assert.That(result.Regions[0].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.Provisioning)));
+            Assert.That(result.Regions[0].IsAllowed, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Region_status_delegates_to_the_region_facade_and_shapes_the_rows()
+    {
+        var regionAdmin = Substitute.For<ILatticeTenantRegionAdmin>();
+        regionAdmin.GetTenantRegionStatusAsync("acme", Arg.Any<CancellationToken>())
+            .Returns(new TenantRegionStatusReport
+            {
+                TenantId = "acme",
+                Regions =
+                [
+                    new TenantRegionStatusDescriptor
+                    {
+                        RegionId = "eu-west",
+                        Status = TenantRegionLifecycleStatus.Draining,
+                        IsAllowed = false,
+                    },
+                ],
+            });
+
+        var result = await TenantAdminToolInvocations.GetTenantRegionStatusAsync(
+            regionAdmin, "acme", CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.TenantId, Is.EqualTo("acme"));
+            Assert.That(result.Regions[0].Status, Is.EqualTo(nameof(TenantRegionLifecycleStatus.Draining)));
+            Assert.That(result.Regions[0].IsAllowed, Is.False);
+        });
+    }
+
+    [Test]
+    public void Unauthorized_caller_is_denied_fail_closed_on_every_region_operation()
+    {
+        var regionAdmin = Substitute.For<ILatticeTenantRegionAdmin>();
+        regionAdmin.AuthorizeAllowedRegionsAsync(Arg.Any<string>(), Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TenantRegionAuthorizationResult>>(_ => throw new LatticeAuthorizationDeniedException());
+        regionAdmin.SetResidencyAsync(Arg.Any<string>(), Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TenantResidencyChangeResult>>(_ => throw new LatticeAuthorizationDeniedException());
+        regionAdmin.GetTenantRegionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TenantRegionStatusReport>>(_ => throw new LatticeAuthorizationDeniedException());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await TenantAdminToolInvocations.AuthorizeAllowedRegionsAsync(regionAdmin, "acme", [], CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await TenantAdminToolInvocations.SetResidencyAsync(regionAdmin, "acme", [], CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>());
+            Assert.That(
+                async () => await TenantAdminToolInvocations.GetTenantRegionStatusAsync(regionAdmin, "acme", CancellationToken.None),
+                Throws.TypeOf<LatticeAuthorizationDeniedException>(),
+                "The MCP layer adds no authorization path of its own; the facade gate is authoritative.");
         });
     }
 }

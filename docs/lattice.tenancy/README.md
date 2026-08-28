@@ -360,7 +360,25 @@ footprint breach that will not clear on its own.
 ## Region residency
 
 Which regions a tenant lives in is a per-tenant, runtime-mutable choice layered on
-top of the replication topology:
+top of the replication topology.
+
+### The three region sets
+
+Most confusion about region residency comes from collapsing three distinct sets into
+one. They have different owners and different surfaces:
+
+| Set | Who controls it | Surface | What it means |
+|-----|-----------------|---------|---------------|
+| **Physical / routable** | Operator (deployment topology) | `lattice_list_regions` in the [MCP binding](../lattice.api.mcp/tools.md) | Every region the deployment actually has a route to. |
+| **Allowed** | **Operator only** - a tenant admin cannot change it | `ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync` | The regions a tenant is permitted to place residency in. |
+| **Resident** | **Tenant admin**, but only within the allowed set | `ILatticeTenantRegionAdmin.SetResidencyAsync` | The regions the tenant actually replicates to and is served from. |
+
+The union of *allowed* and *resident* is the tenant's **actionable set**: the regions
+it is in, plus the regions it may move into. A tenant admin never needs the physical
+list - `SetResidencyAsync` refuses anything outside the allowed set - so tenant-facing
+surfaces scope discovery to the actionable set rather than the physical topology. See
+[MCP security](../lattice.api.mcp/security.md#3b-tenant-scoped-region-discovery) for
+how that scoping applies to region discovery.
 
 - **Allowed vs resident.** A platform operator authorizes, per tenant, the *allowed*
   region set; the tenant's delegated admin selects its *residency set* (the subset it
@@ -369,19 +387,48 @@ top of the replication topology:
 - **Metadata everywhere, data to the residency set.** Tenant definitions still
   converge to every region, so any region can fail-closed answer "is this tenant
   resident here?"; tenant data replicates only to the residency set.
-- **Observable lifecycle.** Adding a region moves it `Provisioning -> Backfilling ->
-  Online`; it is not served, not counted for quota, and not part of the
-  `GlobalConverged` fold until `Online` (its backfill is complete). Removing a region
-  moves it `Draining -> Offline -> Removed`, and only after its data is confirmed
-  present in the remaining residency set. The last resident region cannot be removed.
 - **Symmetric multi-master.** An `Online` region is a full read-write replica; there
   is no primary or leader. Enforcement ties in at the gate (a tenant not `Online` in
   the serving region is refused) and the replication apply path (a tenant's writes
   never land in a non-resident region).
 
+### Lifecycle states
+
+Adding or removing a region is asynchronous and observable. Each region carries one
+`TenantRegionStatus` per tenant:
+
+| Status | Resident? | Meaning |
+|--------|-----------|---------|
+| `None` | No | No relationship. An *allowed but not yet entered* region reports `None`. |
+| `Provisioning` | Yes | The region has been added and is being prepared. |
+| `Backfilling` | Yes | Existing data is being copied into the region. |
+| `Online` | Yes | A full read-write replica. Served, counted for quota, and part of the `GlobalConverged` fold. |
+| `Draining` | No | The region has been dropped from residency and is shedding data. |
+| `Offline` | No | Drained; data is confirmed present in the remaining residency set. |
+| `Removed` | No | The removal is complete. |
+
+The **resident set** is exactly the rows whose status is `Provisioning`,
+`Backfilling`, or `Online`. A region is not served, not counted for quota, and not
+part of the `GlobalConverged` fold until it reaches `Online`.
+
+### Invariants
+
+Enforced by `ILatticeTenantRegionAdmin` and never bypassed by a transport binding:
+
+- **Residency is always a subset of allowed.** Setting residency to a region outside
+  the allowed set is refused with `TenantRegionNotAllowedException`.
+- **The last resident region can never be removed.** Narrowing residency to the empty
+  set is refused with `TenantLastRegionException`.
+- **A region a tenant is still resident in cannot be revoked.** Drain it with
+  `SetResidencyAsync` first, then revoke it with `AuthorizeAllowedRegionsAsync`.
+- **An unknown tenant fails closed** with `TenantNotFoundException` on every
+  operation.
+
 Region residency is administered through the
-[`ILatticeTenantRegionAdmin`](../lattice.api.tenantadmin/README.md) control-plane
-facade.
+[`ILatticeTenantRegionAdmin`](../lattice.api.tenantadmin/README.md#ilatticetenantregionadmin)
+control-plane facade, which is reachable
+[over gRPC](../lattice.api.tenantadmin.grpc/README.md#region-residency-rpcs) and
+[through MCP tools](../lattice.api.mcp/tools.md#tenant-region-residency-lattice_tenant_authorize_regions-lattice_tenant_set_residency-lattice_tenant_region_status).
 
 ## Observability
 
@@ -490,8 +537,12 @@ without tenancy keeps a byte-for-byte-unchanged UI and tool surface.
   `lattice_tenant_get` (one accessible tenant's lifecycle and per-region residency).
   They are scoped fail-closed to the caller's subject: an anonymous caller lists
   nothing, and an inaccessible tenant is indistinguishable from an absent one. The
-  mutating tenant-admin tools remain separately gated behind
-  `EnableTenantAdminControlTools`. See
+  mutating tenant-admin tools - including the three region-residency tools
+  `lattice_tenant_authorize_regions`, `lattice_tenant_set_residency`, and
+  `lattice_tenant_region_status` - remain separately gated behind
+  `EnableTenantAdminControlTools`. Region discovery is tenant-scoped too:
+  `lattice_list_regions` advertises only the calling tenant's actionable set, annotated
+  with its standing. See
   [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md).
 
 ## Configuration reference

@@ -129,6 +129,9 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTenantAdminGrpcMethods.ResumeTenantMethodName => LatticeTenantAdminApiOperation.ResumeTenant,
             LatticeTenantAdminGrpcMethods.DeleteTenantMethodName => LatticeTenantAdminApiOperation.DeleteTenant,
             LatticeTenantAdminGrpcMethods.SetTenantQuotasMethodName => LatticeTenantAdminApiOperation.SetTenantQuotas,
+            LatticeTenantAdminGrpcMethods.AuthorizeAllowedRegionsMethodName => LatticeTenantAdminApiOperation.AuthorizeAllowedRegions,
+            LatticeTenantAdminGrpcMethods.SetTenantResidencyMethodName => LatticeTenantAdminApiOperation.SetTenantResidency,
+            LatticeTenantAdminGrpcMethods.GetTenantRegionStatusMethodName => LatticeTenantAdminApiOperation.GetTenantRegionStatus,
             _ => LatticeTenantAdminApiOperation.Unknown,
         };
 
@@ -137,6 +140,7 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             TenantAdminTenantRequest t => t.TenantId,
             TenantAdminCreateRequest c => c.TenantId,
             TenantAdminSetQuotasRequest q => q.TenantId,
+            TenantAdminRegionSetRequest r => r.TenantId,
             _ => null,
         };
 

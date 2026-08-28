@@ -228,6 +228,12 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.TryAddSingleton<ITenantContextResolver, NullTenantContextResolver>();
         builder.Services.TryAddSingleton<ITenantAdmissionController, NullTenantAdmissionController>();
         builder.Services.TryAddSingleton<ITenantEnumerationFilter, NullTenantEnumerationFilter>();
+        // Per-tenant region-standing seam (opt-in): default to the no-op resolver
+        // that reports IsActive == false, so a region-discovery surface never calls
+        // it and advertises the full routing topology exactly as before. The tenancy
+        // package replaces it with the registry-backed resolver that reports a
+        // tenant's allowed and resident regions.
+        builder.Services.TryAddSingleton<ITenantRegionVisibilityResolver, NullTenantRegionVisibilityResolver>();
         // Physical tree-placement seam (opt-in): default to the pass-through no-op
         // so a cluster with no tenancy add-on seeds every tree with the baseline WAL
         // placement (the catalog's default provider key, no override) - byte-for-byte

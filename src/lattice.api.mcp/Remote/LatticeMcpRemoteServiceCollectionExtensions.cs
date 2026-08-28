@@ -199,6 +199,26 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeTenantAdmin>(sp =>
                 new GrpcLatticeTenantAdmin(LatticeTenantAdminApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, tenantAdmin, static r => r.TenantAdmin), sp)));
+
+            // The region-residency facade rides the same tenant endpoint as the
+            // lifecycle facade above, so it is registered whenever that endpoint is
+            // present. Its three tools stay behind the same EnableTenantControl
+            // opt-in as the rest of the mutating group.
+            services.TryAddSingleton<ILatticeTenantRegionAdmin>(sp =>
+                new GrpcLatticeTenantRegionAdmin(LatticeTenantAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, tenantAdmin, static r => r.TenantAdmin), sp)));
+
+            // A remote head has no in-process tenancy registry to read a tenant's
+            // region standing from, so it resolves it over the same facade. Without
+            // this the region catalog would fail closed to the current region alone
+            // for every tenant-asserted call, which is safe but would hide the
+            // regions a tenant is actually resident in. Replace (not TryAdd)
+            // deterministically supersedes the core null default when the head also
+            // ran AddLattice.
+            services.Replace(ServiceDescriptor.Singleton<ITenantRegionVisibilityResolver>(
+                sp => new GrpcTenantRegionVisibilityResolver(
+                    sp.GetRequiredService<ILatticeTenantRegionAdmin>())));
+
             services.AddTenantAdminTools(options.EnableTenantControl);
         }
 

@@ -47,4 +47,7 @@ public static class GrpcTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantSelfDescriptorList"/>.</summary>
     public const string TenantSelfDescriptorList = "oitng.selftdl";
+
+    /// <summary>Alias for <see cref="TenantAdminRegionSetRequest"/>.</summary>
+    public const string TenantAdminRegionSetRequest = "oitng.rgnset";
 }

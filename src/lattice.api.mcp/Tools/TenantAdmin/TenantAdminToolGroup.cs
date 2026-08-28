@@ -11,15 +11,18 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <summary>
 /// The tenant-admin tool module: an <see cref="ILatticeApiMcpToolGroup"/> for
 /// <see cref="LatticeApiMcpGroup.TenantAdmin"/> whose tools are thin adapters over
-/// the <see cref="ILatticeTenantAdmin"/> control facade. The tenant lifecycle is
-/// all-mutating - there is no read-only inspect operation - so the group
-/// contributes its control tools (<c>lattice_tenant_create</c>,
+/// the <see cref="ILatticeTenantAdmin"/> tenant lifecycle facade and the
+/// <see cref="ILatticeTenantRegionAdmin"/> region-residency facade. The tenant
+/// lifecycle is all-mutating - there is no read-only inspect operation - so the
+/// group contributes its control tools (<c>lattice_tenant_create</c>,
 /// <c>lattice_tenant_suspend</c>, <c>lattice_tenant_resume</c>,
-/// <c>lattice_tenant_delete</c>, <c>lattice_tenant_set_quotas</c>) only when
-/// tenant-admin control is opted in via
-/// <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> or
+/// <c>lattice_tenant_delete</c>, <c>lattice_tenant_set_quotas</c>,
+/// <c>lattice_tenant_authorize_regions</c>, <c>lattice_tenant_set_residency</c>,
+/// <c>lattice_tenant_region_status</c>) only when tenant-admin control is opted in
+/// via <see cref="LatticeApiMcpOptions.EnableTenantAdminControlTools"/> or
 /// <c>AddTenantAdminTools(enableControl: true)</c>. Every tool is annotated
-/// destructive and non-read-only.
+/// destructive and non-read-only except the read-only
+/// <c>lattice_tenant_region_status</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -39,6 +42,14 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <see cref="LatticeOperation.Admin"/> - an agent without the grant is offered no
 /// tenant-admin tools at all - and only when the host has opted the group in, so a
 /// cluster that never calls <c>AddTenantAdminTools</c> exposes nothing.
+/// </para>
+/// <para>
+/// The three region-residency tools keep the facade's <b>two-tier</b>
+/// authorization intact and do not widen either tier:
+/// <c>lattice_tenant_authorize_regions</c> is operator-only, while
+/// <c>lattice_tenant_set_residency</c> and <c>lattice_tenant_region_status</c> are
+/// operator-or-tenant-admin. The group advertises them together so an agent can
+/// discover the whole workflow, but the server decides each call on its own tier.
 /// </para>
 /// </remarks>
 internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
@@ -76,6 +87,9 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
             CreateResumeTool(),
             CreateDeleteTool(),
             CreateSetQuotasTool(),
+            CreateAuthorizeRegionsTool(),
+            CreateSetResidencyTool(),
+            CreateRegionStatusTool(),
         ];
     }
 
@@ -233,6 +247,101 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                     + "Requires tenant-admin control to be enabled on the server.",
                 ReadOnly = false,
                 Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateAuthorizeRegionsTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id whose allowed region set to author. Must be a valid, non-empty tenant id that is registered.")] string tenantId,
+                [Description("The complete desired allowed region set. This is a replacement, not a delta: a currently-allowed region absent from this list is revoked.")] string[] allowedRegions,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
+                return TenantAdminToolInvocations.AuthorizeAllowedRegionsAsync(
+                    regionAdmin, tenantId, allowedRegions ?? [], cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_authorize_regions",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Authorize tenant regions",
+                Description =
+                    "Authors the set of regions a tenant is allowed to place residency in. This is an OPERATOR "
+                    + "action: the server authorizes it as cluster-wide admin on the reserved auth policy tree and "
+                    + "denies every non-operator caller, including a tenant admin, regardless of the data-plane "
+                    + "default effect. allowedRegions is the complete desired set, not a delta - regions absent from "
+                    + "it are revoked. Revoking a region the tenant is still resident in is refused fail-closed "
+                    + "(residency must always stay a subset of the allowed set), so drain the region with "
+                    + "lattice_tenant_set_residency first. Fails closed if the tenant is not registered. Requires "
+                    + "tenant-admin control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetResidencyTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id whose residency to author. Must be a valid, non-empty tenant id that is registered.")] string tenantId,
+                [Description("The complete desired residency set. This is a replacement, not a delta: a currently-resident region absent from this list begins draining. Must not be empty.")] string[] residencyRegions,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
+                return TenantAdminToolInvocations.SetResidencyAsync(
+                    regionAdmin, tenantId, residencyRegions ?? [], cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_set_residency",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Set tenant residency",
+                Description =
+                    "Moves a tenant into and out of regions within its operator-authorized allowed set. This is a "
+                    + "TENANT-ADMIN action: the server authorizes the caller as the platform operator OR a live admin "
+                    + "subject on the tenant record, independent of the data-plane default effect. residencyRegions is "
+                    + "the complete desired set, not a delta - newly listed regions begin provisioning and backfilling, "
+                    + "and currently-resident regions absent from it begin draining. Transitions are asynchronous, so a "
+                    + "newly added region reports Provisioning here, not Online; poll lattice_tenant_region_status until "
+                    + "it reaches Online before routing traffic there. Every region in the set must already be allowed "
+                    + "(use lattice_tenant_authorize_regions first), and the change may never remove the last resident "
+                    + "region - both are refused fail-closed. Fails closed if the tenant is not registered. Requires "
+                    + "tenant-admin control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateRegionStatusTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The tenant id to report on. Must be a valid, non-empty tenant id that is registered.")] string tenantId,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = StampCredential(context.Services!);
+                var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
+                return TenantAdminToolInvocations.GetTenantRegionStatusAsync(regionAdmin, tenantId, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_tenant_region_status",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Read tenant region status",
+                Description =
+                    "Reads a tenant's per-region residency lifecycle: one row per region that is either in the "
+                    + "tenant's operator-authorized allowed set or carries a non-None status, ordered by region id. "
+                    + "Read-only, and a TENANT-ADMIN action: the server authorizes the caller as the platform operator "
+                    + "OR a live admin subject on the tenant record. Use it to watch a residency change reach Online "
+                    + "after lattice_tenant_set_residency, and to see which regions an operator has authorized but the "
+                    + "tenant has not yet moved into. Fails closed if the tenant is not registered. Requires "
+                    + "tenant-admin control to be enabled on the server.",
+                ReadOnly = true,
+                Destructive = false,
                 UseStructuredContent = true,
             });
 

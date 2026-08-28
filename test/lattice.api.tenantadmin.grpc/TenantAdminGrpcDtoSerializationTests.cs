@@ -263,6 +263,106 @@ public sealed class TenantAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TenantAdminRegionSetRequest_round_trips_its_region_list()
+    {
+        var copy = RoundTrip(new TenantAdminRegionSetRequest
+        {
+            TenantId = "acme",
+            Regions = ["eu-west", "ap-south"],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Regions, Is.EqualTo(new[] { "eu-west", "ap-south" }));
+        });
+    }
+
+    [Test]
+    public void TenantAdminRegionSetRequest_round_trips_an_empty_region_list()
+    {
+        // The empty set is the meaningful "revoke everything" / "drain out of every
+        // region" request, so it must survive the wire as an empty list, not null.
+        var copy = RoundTrip(new TenantAdminRegionSetRequest { TenantId = "acme" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Regions, Is.Not.Null);
+            Assert.That(copy.Regions, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void TenantRegionAuthorizationResult_round_trips()
+    {
+        var copy = RoundTrip(new TenantRegionAuthorizationResult
+        {
+            TenantId = "acme",
+            AllowedRegions = ["eu-west"],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.AllowedRegions, Is.EqualTo(new[] { "eu-west" }));
+        });
+    }
+
+    [Test]
+    public void TenantResidencyChangeResult_round_trips_its_deltas_and_rows()
+    {
+        var copy = RoundTrip(new TenantResidencyChangeResult
+        {
+            TenantId = "acme",
+            AddedRegions = ["ap-south"],
+            RemovedRegions = ["eu-west"],
+            Regions =
+            [
+                new TenantRegionStatusDescriptor
+                {
+                    RegionId = "ap-south",
+                    Status = TenantRegionLifecycleStatus.Provisioning,
+                    IsAllowed = true,
+                },
+            ],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.AddedRegions, Is.EqualTo(new[] { "ap-south" }));
+            Assert.That(copy.RemovedRegions, Is.EqualTo(new[] { "eu-west" }));
+            Assert.That(copy.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Provisioning));
+            Assert.That(copy.Regions[0].IsAllowed, Is.True);
+        });
+    }
+
+    [Test]
+    public void TenantRegionStatusReport_round_trips()
+    {
+        var copy = RoundTrip(new TenantRegionStatusReport
+        {
+            TenantId = "acme",
+            Regions =
+            [
+                new TenantRegionStatusDescriptor
+                {
+                    RegionId = "eu-west",
+                    Status = TenantRegionLifecycleStatus.Draining,
+                    IsAllowed = false,
+                },
+            ],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Regions[0].RegionId, Is.EqualTo("eu-west"));
+            Assert.That(copy.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Draining));
+            Assert.That(copy.Regions[0].IsAllowed, Is.False);
+        });
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

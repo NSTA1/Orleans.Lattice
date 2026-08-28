@@ -7,13 +7,13 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// <summary>
 /// Unit tests for <see cref="TenantAdminToolGroup"/> and its
 /// <c>AddTenantAdminTools</c> registration: proves the group belongs to the
-/// tenant-admin facade group, that the tenant lifecycle is all-mutating so the
-/// group is empty until control is opted in and then exposes exactly the four
-/// lifecycle tools, that every tool carries the destructive / non-read-only
-/// annotation, and that the registration wires the group and the option flags.
-/// This is the enable-gating surface of a fail-closed security control, so the
-/// disabled-by-default behaviour is asserted directly. All deterministic - no
-/// cluster, no ordering assumptions.
+/// tenant-admin facade group, that it is empty until control is opted in and then
+/// exposes exactly the five lifecycle tools plus the three region-residency tools,
+/// that every mutating tool carries the destructive / non-read-only annotation
+/// while the region-status report is read-only, and that the registration wires
+/// the group and the option flags. This is the enable-gating surface of a
+/// fail-closed security control, so the disabled-by-default behaviour is asserted
+/// directly. All deterministic - no cluster, no ordering assumptions.
 /// </summary>
 [TestFixture]
 public sealed class TenantAdminToolGroupTests
@@ -25,6 +25,24 @@ public sealed class TenantAdminToolGroupTests
         "lattice_tenant_resume",
         "lattice_tenant_delete",
         "lattice_tenant_set_quotas",
+        "lattice_tenant_authorize_regions",
+        "lattice_tenant_set_residency",
+        "lattice_tenant_region_status",
+    };
+
+    /// <summary>
+    /// The control tools that mutate cluster state. Every control tool except the
+    /// read-only region-status report is here.
+    /// </summary>
+    private static readonly string[] MutatingToolNames =
+    {
+        "lattice_tenant_create",
+        "lattice_tenant_suspend",
+        "lattice_tenant_resume",
+        "lattice_tenant_delete",
+        "lattice_tenant_set_quotas",
+        "lattice_tenant_authorize_regions",
+        "lattice_tenant_set_residency",
     };
 
     private static TenantAdminToolGroup CreateGroup(bool enableControl)
@@ -48,11 +66,13 @@ public sealed class TenantAdminToolGroupTests
         var group = CreateGroup(enableControl: false);
 
         Assert.That(group.Tools, Is.Empty,
-            "The tenant lifecycle is all-mutating, so with control disabled the group must expose no tools.");
+            "The whole group is gated behind one opt-in, so with control disabled it must expose "
+            + "no tools at all - including the read-only region-status report, which reveals a "
+            + "tenant's region footprint.");
     }
 
     [Test]
-    public void Control_enabled_offers_exactly_the_five_lifecycle_tools()
+    public void Control_enabled_offers_exactly_the_lifecycle_and_region_tools()
     {
         var group = CreateGroup(enableControl: true);
 
@@ -60,18 +80,32 @@ public sealed class TenantAdminToolGroupTests
     }
 
     [Test]
-    public void Control_tools_are_annotated_destructive_and_not_read_only()
+    public void Mutating_tools_are_annotated_destructive_and_not_read_only()
     {
         var group = CreateGroup(enableControl: true);
 
         Assert.Multiple(() =>
         {
-            foreach (var name in ControlToolNames)
+            foreach (var name in MutatingToolNames)
             {
                 var annotations = Tool(group, name).ProtocolTool.Annotations;
                 Assert.That(annotations?.DestructiveHint, Is.True, $"{name} must be destructive.");
                 Assert.That(annotations?.ReadOnlyHint, Is.False, $"{name} must not be read-only.");
             }
+        });
+    }
+
+    [Test]
+    public void The_region_status_report_is_annotated_read_only_and_not_destructive()
+    {
+        var annotations = Tool(CreateGroup(enableControl: true), "lattice_tenant_region_status")
+            .ProtocolTool.Annotations;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(annotations?.ReadOnlyHint, Is.True,
+                "Reading a tenant's per-region standing changes nothing.");
+            Assert.That(annotations?.DestructiveHint, Is.False);
         });
     }
 
@@ -91,11 +125,21 @@ public sealed class TenantAdminToolGroupTests
     /// quota dimensions was mandatory despite each being documented "null for
     /// unbounded".
     /// </summary>
+    /// <remarks>
+    /// The inverse also matters: the two region-set tools take a <b>complete
+    /// replacement</b> set, so an omitted list would silently mean "revoke
+    /// everything". Those parameters are deliberately mandatory, and this test
+    /// pins that too - the rule is "required exactly when genuinely mandatory",
+    /// not "required as rarely as possible".
+    /// </remarks>
     [TestCase("lattice_tenant_create", "tenantId")]
     [TestCase("lattice_tenant_suspend", "tenantId")]
     [TestCase("lattice_tenant_resume", "tenantId")]
     [TestCase("lattice_tenant_delete", "tenantId")]
     [TestCase("lattice_tenant_set_quotas", "tenantId")]
+    [TestCase("lattice_tenant_authorize_regions", "tenantId,allowedRegions")]
+    [TestCase("lattice_tenant_set_residency", "tenantId,residencyRegions")]
+    [TestCase("lattice_tenant_region_status", "tenantId")]
     public void Control_tool_schemas_require_only_genuinely_mandatory_parameters(
         string toolName, string expectedRequired)
     {
@@ -106,7 +150,7 @@ public sealed class TenantAdminToolGroupTests
             ? node.EnumerateArray().Select(e => e.GetString()!).ToArray()
             : [];
 
-        Assert.That(required, Is.EquivalentTo(new[] { expectedRequired }),
+        Assert.That(required, Is.EquivalentTo(expectedRequired.Split(',')),
             $"{toolName} must mark only genuinely mandatory parameters required; "
             + $"got [{string.Join(", ", required)}].");
     }
@@ -144,6 +188,60 @@ public sealed class TenantAdminToolGroupTests
         });
     }
 
+    /// <summary>
+    /// Both region-set tools take the <b>complete desired set</b>, so an omitted
+    /// list is indistinguishable from "revoke everything". The parameter is
+    /// therefore mandatory: an agent must state the set it wants rather than
+    /// wiping a tenant's standing by forgetting an argument.
+    /// </summary>
+    [Test]
+    public void Region_set_tools_demand_the_complete_region_list()
+    {
+        var group = CreateGroup(enableControl: true);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var (toolName, parameterName) in new[]
+                     {
+                         ("lattice_tenant_authorize_regions", "allowedRegions"),
+                         ("lattice_tenant_set_residency", "residencyRegions"),
+                     })
+            {
+                var schema = Tool(group, toolName).ProtocolTool.InputSchema;
+
+                Assert.That(
+                    schema.GetProperty("properties").TryGetProperty(parameterName, out _),
+                    Is.True, $"{toolName} must offer {parameterName}.");
+                Assert.That(
+                    schema.GetProperty("required").EnumerateArray()
+                        .Select(e => e.GetString()).ToArray(),
+                    Does.Contain(parameterName),
+                    $"{toolName} must demand {parameterName} - omitting a replacement "
+                    + "set would silently mean full revocation.");
+            }
+        });
+    }
+
+    [Test]
+    public void The_region_tool_descriptions_state_their_authorization_tier()
+    {
+        var group = CreateGroup(enableControl: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Tool(group, "lattice_tenant_authorize_regions").ProtocolTool.Description,
+                Does.Contain("OPERATOR"),
+                "The allowed set is operator-only; an agent must not be led to try it as a tenant admin.");
+            Assert.That(
+                Tool(group, "lattice_tenant_set_residency").ProtocolTool.Description,
+                Does.Contain("TENANT-ADMIN"));
+            Assert.That(
+                Tool(group, "lattice_tenant_region_status").ProtocolTool.Description,
+                Does.Contain("TENANT-ADMIN"));
+        });
+    }
+
     [Test]
     public void AddTenantAdminTools_rejects_null_services()
     {
@@ -170,7 +268,7 @@ public sealed class TenantAdminToolGroupTests
     }
 
     [Test]
-    public void AddTenantAdminTools_with_control_registers_a_group_with_all_five_tools()
+    public void AddTenantAdminTools_with_control_registers_a_group_with_every_control_tool()
     {
         var provider = new ServiceCollection().AddTenantAdminTools(enableControl: true).BuildServiceProvider();
 

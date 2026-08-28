@@ -123,8 +123,10 @@ in the [binding](../lattice.api.tenantadmin.grpc/README.md).
 
 ### `ILatticeTenantRegionAdmin`
 
-The per-tenant region-residency surface. Residency is always a subset of the allowed
-set; the last resident region can never be removed.
+The per-tenant region-residency surface. It authors two of the
+[three region sets](../lattice.tenancy/README.md#the-three-region-sets): the
+operator-owned **allowed** set and the tenant-owned **resident** set. Residency is
+always a subset of the allowed set; the last resident region can never be removed.
 
 | Method | Signature |
 |---|---|
@@ -132,8 +134,34 @@ set; the last resident region can never be removed.
 | `SetResidencyAsync` | `Task<TenantResidencyChangeResult> SetResidencyAsync(string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)` |
 | `GetTenantRegionStatusAsync` | `Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)` |
 
-`AuthorizeAllowedRegionsAsync` is an **operator** action; `SetResidencyAsync` and
-`GetTenantRegionStatusAsync` are **tenant-admin** actions.
+Each of the three sets is a **replacement, not a delta**: the supplied collection
+becomes the whole set, so a currently-allowed or currently-resident region absent from
+it is revoked or drained.
+
+#### Authorization tiers
+
+| Operation | Tier | Who may call it |
+|---|---|---|
+| `AuthorizeAllowedRegionsAsync` | **Operator only** | Cluster-wide `Admin` on the reserved auth policy tree. A tenant admin is denied - the allowed set is the operator's containment boundary and a tenant must not be able to widen it. |
+| `SetResidencyAsync` | **Operator or tenant admin** | That operator, or a live admin subject on the tenant record. |
+| `GetTenantRegionStatusAsync` | **Operator or tenant admin** | Same as above. Read-only. |
+
+Both tiers are independent of the data-plane `DefaultEffect`, so an unmatched request
+resolves to deny even under `DefaultEffect = Allow`. Every transport binding inherits
+this gate rather than re-implementing it, so neither tier can be widened by reaching
+the facade over the wire.
+
+#### Domain exceptions
+
+Each failure mode is a distinct exception type so a transport binding can map it to a
+specific status rather than an opaque fault:
+
+| Exception | Raised when |
+|---|---|
+| `TenantNotFoundException` | The tenant is not registered. |
+| `TenantRegionNotAllowedException` | Residency was set to a region outside the allowed set, or an allowed region a tenant is still resident in was revoked. |
+| `TenantLastRegionException` | The change would remove the tenant's last resident region. |
+| `LatticeAuthorizationDeniedException` | The caller does not hold the required tier. |
 
 ### `ILatticeTenantSelfService`
 

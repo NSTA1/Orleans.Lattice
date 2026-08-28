@@ -84,6 +84,14 @@ app.MapLatticeMcp();
 
 The region list `lattice_list_regions` reports, and the routing a `region` argument drives, are both built once at startup from this single configuration, so discovery and routing can never disagree. A region serves a facade group only when that group's per-region endpoint is set; an unset group is reported unavailable for the region and is not routable there (fail-closed discovery). A cross-region call forwards the same caller credential to the target region's gRPC binding via the same interceptor described below, so the target authorizes it independently. See [Tools](tools.md#region-targeting) for the caller-facing surface.
 
+### Region targeting interacts with tenant residency
+
+On a cluster running the tenancy add-on, the configured topology above is the **physical** region set. It is not what a tenant caller may target. A tenant is served only from the regions it is resident in and `Online`, so:
+
+- **A region a tenant is not online in refuses the call.** Targeting it with a `region` argument reaches the peer, and the peer's residency gate refuses it. Configuration reachability and tenant reachability are different questions, and only the data owner can answer the second.
+- **`lattice_list_regions` scopes what it advertises** to the calling tenant's actionable set (`allowed` union `resident`) plus the current region, annotating each with the tenant's standing, so an agent is not pointed at destinations it would be refused at. An `isResident: false` entry is a valid `lattice_tenant_set_residency` destination but not yet a valid routing destination. See [Tools](tools.md#tenant-scoped-region-discovery).
+- **A remote head needs the tenant-admin endpoint to scope discovery.** Set `RemoteOptions.TenantAdmin` and the composition wires `GrpcTenantRegionVisibilityResolver`, which resolves the caller's standing over the region-residency RPC. Without it a tenant-asserted `lattice_list_regions` fails closed to the current region alone rather than disclosing the peer topology. The lookup is made only when a call asserts a non-default tenant, so an operator call and a tenancy-off head never pay the round trip.
+
 ## Region targeting behind a global load balancer
 
 Region targeting is **deterministic** - a `region` selector must reach that exact region. That is fundamentally at odds with a global anycast load balancer (for example Azure Front Door), whose job is to *hide* which region serves a request by latency-routing to the nearest healthy origin. So a peer region must be addressed by its **own, region-pinned endpoint** (its silo's direct gRPC FQDN), never a shared Front Door endpoint. Point a region at an anycast endpoint and a call targeting it lands on whichever region the load balancer picks, and the served-region annotation becomes untrustworthy.
