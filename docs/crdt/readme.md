@@ -133,6 +133,20 @@ two are why a read or a merge can never corrupt somebody else's state. If you ar
 implementing a CRDT against `ICrdt<TSelf>`, all three legs are part of the
 contract.
 
+Two things keep the cost of the copying legs down. An empty or tombstoned payload
+reuses the shared `Array.Empty<byte>()` singleton, so it never allocates - which
+matters because an aged sequence is mostly tombstones. And the set primitives
+(`GSet`, `OrSet`, `RwSet`) never retain a caller's array at all: an element is
+encoded to a string key on the way in and decoded fresh on the way out, so they
+satisfy all three legs by construction.
+
+The rule is enforced structurally rather than by review. A contract test walks
+every registered CRDT's object graph and compares `byte[]` instances by reference
+identity across a clone, a state fold, a delta fold, and each public projection.
+It also fails when a CRDT type has no specimen registered, or grows a new public
+`byte[]`-bearing projection that nothing covers - so a new primitive cannot join
+the family without picking up the contract.
+
 ## Where a bounded register's direction lives
 
 A `MaxRegister` and a `MinRegister` are the same primitive pointed in opposite

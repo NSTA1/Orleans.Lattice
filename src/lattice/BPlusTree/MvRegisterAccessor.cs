@@ -69,7 +69,9 @@ public readonly record struct MvRegisterAccessor<T>
         var register = await GetAsync(cancellationToken).ConfigureAwait(false);
         if (register.IsEmpty) return Array.Empty<T>();
         var values = new T[register.Entries.Count];
-        var raw = register.Values();
+        // ValuesShared, not Values: every value is deserialised into T on the
+        // next line, so the egress copy Values pays would be discarded.
+        var raw = register.ValuesShared();
         for (var i = 0; i < raw.Count; i++)
         {
             values[i] = _serializer.Deserialize(raw[i]);

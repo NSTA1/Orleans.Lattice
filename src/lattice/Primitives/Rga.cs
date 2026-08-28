@@ -77,11 +77,18 @@ public sealed class Rga : ICrdt<Rga>
     public Dictionary<string, long> Context { get; set; } = [];
 
     /// <summary>
-    /// Transient cache of the last <see cref="ToList"/> materialisation.
-    /// Never serialized (no <c>[Id]</c>): a deserialized or cloned
-    /// sequence starts with a <c>null</c> cache and rebuilds it on first
+    /// Transient cache of the last <see cref="MaterializeShared"/>
+    /// materialisation. Never serialized (no <c>[Id]</c>): a deserialized or
+    /// cloned sequence starts with a <c>null</c> cache and rebuilds it on first
     /// read. Set to <c>null</c> by every mutation path so the next read
     /// re-materialises.
+    /// <para>
+    /// The cached tuples alias the live <see cref="RgaNode.Value"/> buffers,
+    /// which is why the cache backs the internal
+    /// <see cref="MaterializeShared"/> view and never the public
+    /// <see cref="ToList"/> projection - see the buffer-ownership remarks on
+    /// <see cref="ICrdt{TSelf}"/>.
+    /// </para>
     /// </summary>
     [NonSerialized]
     private IReadOnlyList<(OrSetDot Dot, byte[] Value)>? _materializedCache;
@@ -227,12 +234,53 @@ public sealed class Rga : ICrdt<Rga>
     /// Tuple element <c>Dot</c> is the stable cursor identity that
     /// callers can use as a parent for subsequent
     /// <see cref="InsertAfter(OrSetDot, string, byte[])"/> calls.
-    /// The projection is a read-only view: the cached list is wrapped so a
-    /// caller that downcasts the declared <see cref="IReadOnlyList{T}"/> cannot
-    /// mutate the sequence's cached state behind its back (nothing would
-    /// invalidate the cache, so every later read would observe the corruption).
+    /// <para>
+    /// Each returned value array is a <em>copy</em>: this is the
+    /// materialised-projection egress seam of the buffer-ownership rule
+    /// documented on <see cref="ICrdt{TSelf}"/>. Sharing the live
+    /// <see cref="RgaNode.Value"/> buffers here would let a caller write
+    /// straight into the sequence's nodes without passing any mutation API -
+    /// and because the resolved order is cached and nothing would invalidate
+    /// it, every later read would observe the corruption. A tombstone or empty
+    /// value costs nothing (an empty span's <c>ToArray</c> returns the shared
+    /// <see cref="Array.Empty{T}"/> singleton), and the expensive part of the
+    /// projection - the traversal and sibling sort - is still cached across
+    /// reads by <see cref="MaterializeShared"/>, so a repeat read pays only the
+    /// per-value copy.
+    /// </para>
     /// </returns>
     public IReadOnlyList<(OrSetDot Dot, byte[] Value)> ToList()
+    {
+        var shared = MaterializeShared();
+        var count = shared.Count;
+        if (count == 0) return shared;
+
+        // A fresh array per call, so a caller that downcasts it mutates only
+        // its own copy. Presized exactly; no List + AsReadOnly wrapper needed.
+        var copy = new (OrSetDot, byte[])[count];
+        for (var i = 0; i < count; i++)
+        {
+            var (dot, value) = shared[i];
+            copy[i] = (dot, value.AsSpan().ToArray());
+        }
+        return copy;
+    }
+
+    /// <summary>
+    /// The ordering-only view behind <see cref="ToList"/>: the same
+    /// insertion-resolved projection, cached across reads, but sharing the live
+    /// <see cref="RgaNode.Value"/> buffers rather than copying them.
+    /// <para>
+    /// Internal by design. The returned arrays are this sequence's own durable
+    /// buffers, so a caller must treat them as read-only and must not let one
+    /// escape to an external caller - that is exactly what the public
+    /// <see cref="ToList"/> copy exists to prevent. It is offered so an internal
+    /// consumer that only reads the dots (resolving a visible index to a parent)
+    /// or immediately deserialises each value (the typed <c>RgaAccessor</c>)
+    /// does not pay a copy it would discard on the next line.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyList<(OrSetDot Dot, byte[] Value)> MaterializeShared()
     {
         if (_materializedCache is { } cached) return cached;
         var nodes = Nodes;
@@ -315,8 +363,9 @@ public sealed class Rga : ICrdt<Rga>
         }
         // AsReadOnly wraps rather than copies: one small wrapper allocation on a
         // cache rebuild (not per read - the wrapper itself is what is cached),
-        // in exchange for the caller never holding a mutable handle on the
-        // cached projection.
+        // in exchange for an internal caller never holding a mutable handle on
+        // the cached projection's list shape. The value buffers are still the
+        // live node arrays; ToList is what copies those on the way out.
         return _materializedCache = result.AsReadOnly();
     }
 

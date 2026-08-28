@@ -16,9 +16,12 @@ Document these properties in the `<summary>` of every merge method.
 
 ## Namespace Placement
 
-Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `GCounter`, `GSet`, `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrFlag`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, `RwFlag`, and `VersionVector`. The `Rga` sequence's typed replication delta DTOs `RgaDelta` and `RgaDeltaNode`, the `OrFlag` flag's typed delta DTO `OrFlagDelta`, the `RwFlag` flag's typed delta DTO `RwFlagDelta`, the `GCounter`'s typed delta DTO `GCounterDelta`, and the `GSet`'s typed delta DTO `GSetDelta`, live under `Crdt/` (in the same `Orleans.Lattice` namespace) alongside the other `*Delta` types.
-Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrFlag`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, `RwFlag`, `RwSet`, and `VersionVector`. The `Rga` sequence's typed replication delta DTOs `RgaDelta` and `RgaDeltaNode`, the `OrFlag` flag's typed delta DTO `OrFlagDelta`, the `RwFlag` flag's typed delta DTO `RwFlagDelta`, and the `RwSet` set's typed delta DTO `RwSetDelta`, live under `Crdt/` (in the same `Orleans.Lattice` namespace) alongside the other `*Delta` types.
-Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrFlag`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, `RwFlag`, `BoundedRegister`, and `VersionVector`. The `Rga` sequence's typed replication delta DTOs `RgaDelta` and `RgaDeltaNode`, the `OrFlag` flag's typed delta DTO `OrFlagDelta`, the `RwFlag` flag's typed delta DTO `RwFlagDelta`, and the `BoundedRegister`'s typed delta DTO `BoundedRegisterDelta`, live under `Crdt/` (in the same `Orleans.Lattice` namespace) alongside the other `*Delta` types.
+Although these types live in the `Primitives/` folder, **public** CRDT primitives declare `namespace Orleans.Lattice` (not `Orleans.Lattice.Primitives`) so the whole public surface sits behind a single `using Orleans.Lattice;` - the repo convention that public API lives in the root namespace. The public primitives are `BoundedRegister`, `GCounter`, `GSet`, `HybridLogicalClock`, `ICrdt<TSelf>`, `MvRegister`, `MvRegisterEntry`, `OrFlag`, `OrMap`, `OrMapEntry`, `OrSet`, `OrSetDot`, `PnCounter`, `Rga`, `RgaNode`, `RwFlag`, `RwSet`, and `VersionVector`. Every typed replication delta DTO lives under `Crdt/` (in the same `Orleans.Lattice` namespace) rather than here: `BoundedRegisterDelta`, `GCounterDelta`, `GSetDelta`, `LwwRegisterDelta`, `MvRegisterDelta`, `OrFlagDelta`, `OrMapDelta` (with `OrMapDeltaEntry` and `OrMapDeltaTombstone`), `OrSetDelta` (with `OrSetDeltaDot`), `PnCounterDelta`, `RgaDelta` (with `RgaDeltaNode`), `RwFlagDelta`, `RwSetDelta`, and `VersionVectorDelta`.
+
+> Keep the list above as **one** paragraph. It previously existed as three
+> near-identical copies, each added by a different change and each naming a
+> different subset of the primitives, so all three were wrong. Edit this
+> paragraph in place when a primitive is added; do not append another copy.
 
 Area-internal helpers in the same folder (`LwwValue<T>`, `LeafDeliveryCursor`, `SplitState`, `SplitStateExtensions`, `StateDelta`) stay `internal` in `namespace Orleans.Lattice.Primitives`.
 
@@ -54,7 +57,7 @@ public sealed class MyAggregate
 
 ## Buffer Ownership (`byte[]` payloads)
 
-Every primitive stores opaque `byte[]` payloads. Who owns a given array is decided by its **provenance**, not by the type holding it. All three legs are mandatory - this is the rule `ICrdt<TSelf>` documents, and the one `BoundedRegister` and `Rga` are the reference implementations of.
+Every primitive stores opaque `byte[]` payloads. Who owns a given array is decided by its **provenance**, not by the type holding it. All three legs are mandatory - this is the rule `ICrdt<TSelf>` documents, and the one `BoundedRegister`, `Rga` and `MvRegister` are the reference implementations of.
 
 | Seam | Rule | Why |
 |---|---|---|
@@ -64,7 +67,17 @@ Every primitive stores opaque `byte[]` payloads. Who owns a given array is decid
 
 Copy with a span copy (`value.AsSpan().ToArray()`), never `Array.Clone` - the two allocate identically, but `Array.Clone` goes through the non-generic `Array` path and measured roughly 3-4x slower on the `ordedup` microbench suite. An empty span's `ToArray()` returns the shared `Array.Empty<T>()` singleton, so empty and tombstoned payloads cost nothing.
 
-The egress leg is the one that has actually drawn blood: `OrMap.Clone` (#1705), `OrMap.Get` (#1709), and `Rga.Clone` (#1724) were each a returned value aliasing durable state.
+Copy only what the seam actually requires:
+
+- **Only a winning candidate.** A fold that keeps the local side must allocate nothing, which is what keeps the steady-state (idempotent, duplicate-delivery) replication merge free.
+- **Keep the expensive part cached, copy the cheap part.** Where a projection is cached (`Rga.ToList`, `MvRegister.Values`), cache the *ordering* - the traversal and the sort - and pay only the per-value copy on the way out. Caching the buffers instead is not a valid substitute for copying: a cached shared buffer lets one reader corrupt every later read, and nothing invalidates the cache.
+- **Give internal consumers a shared view rather than skipping the copy.** When a call site inside the assembly immediately consumes the bytes (deserialising them, or reading only the dots), expose an `internal` aliasing view next to the public projection - `Rga.MaterializeShared`, `MvRegister.ValuesShared` - and route it there. The public seam stays contract-pure; the internal hot path pays nothing. Never widen such a view to `public`, and never let one escape to an external caller.
+
+The **set primitives are payload-free** and must stay that way: `GSet`, `OrSet` and `RwSet` encode each element to a base64 string key on ingress and decode a fresh array on egress, so they retain no caller buffer and satisfy all three legs by construction. `CrdtBufferOwnershipContractTests` pins this, so a change to raw `byte[]` element storage fails until the three legs are implemented explicitly.
+
+Both legs have drawn blood, each time in a different primitive. Egress: `OrMap.Clone` (#1705), `OrMap.Get` (#1709), `Rga.Clone` (#1724), then `Rga.ToList`, `MvRegister.Clone` and `MvRegister.Values`. Fold: `Rga.MergeFrom`/`MergeDelta`, then `MvRegister.MergeFrom`/`MergeDelta`.
+
+The pattern is the recurring one: each fix was pinned by a hand-written test for that one type, so the next sibling was free to repeat it, and every violation was justified in a comment by the values being immutable "by convention" or "by every production call site". That reasoning is not accepted - the contract is about ownership, not about current call sites. Enforcement is therefore structural: `CrdtBufferOwnershipContractTestsBase` (in the shared testing library, bound per package) walks each registered CRDT's object graph and compares `byte[]` instances by reference identity across clone, state fold, delta fold, and every public projection. It also fails when a CRDT type in the package has no specimen, or grows a public `byte[]`-bearing projection nothing covers, so a new primitive cannot join the family without picking the contract up. Register a new primitive there in the same change that adds it.
 
 ## Source of Truth for Mode-Carried State
 

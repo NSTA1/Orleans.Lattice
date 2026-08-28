@@ -8,15 +8,23 @@ namespace Orleans.Lattice.Tests.Primitives;
 /// to a caller copies, so no caller and no peer is ever left holding a live
 /// handle on another instance's durable state.
 /// <para>
-/// The egress leg is the one with a history: <c>OrMap.Clone</c> and
-/// <c>OrMap.Get</c> were each fixed for sharing a nested value, and
-/// <see cref="Rga.Clone"/> was the remaining sibling - it duplicated every node
-/// but shared each node's value byte array, so a caller that read a sequence out
-/// of an <c>OrMap</c> could write straight into the map's stored state.
+/// These are the per-type, human-readable regressions - each one names the exact
+/// leg and the exact way it used to leak. The structural, family-wide audit lives
+/// in <c>CrdtBufferOwnershipContractTests</c>, which walks every registered CRDT's
+/// object graph and fails when a new primitive or projection is not covered at
+/// all; the two are complements, not duplicates.
+/// </para>
+/// <para>
+/// Both legs have a history. Egress: <c>OrMap.Clone</c>, <c>OrMap.Get</c>,
+/// <see cref="Rga.Clone"/>, <see cref="Rga.ToList"/>, <see cref="MvRegister.Clone"/>
+/// and <see cref="MvRegister.Values"/> each handed back a value aliasing durable
+/// state. Fold: <see cref="Rga.MergeFrom"/>/<see cref="Rga.MergeDelta"/> and
+/// <see cref="MvRegister.MergeFrom"/>/<see cref="MvRegister.MergeDelta"/> each
+/// adopted somebody else's buffer.
 /// </para>
 /// </summary>
 [TestFixture]
-public class CrdtBufferOwnershipTests
+public partial class CrdtBufferOwnershipTests
 {
     private static byte[] Bytes(params byte[] values) => values;
 
