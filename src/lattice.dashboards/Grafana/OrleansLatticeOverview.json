@@ -138,6 +138,7 @@
       "id": 1,
       "title": "Cluster throughput (ops/s)",
       "type": "timeseries",
+      "description": "Cluster-wide read and write OPERATION rate. Both series count operations, not records: a batched or bulk write counts once regardless of entry count. See 'Per-tree write throughput (operations/s and records/s)' for the record rate.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -175,8 +176,9 @@
     },
     {
       "id": 2,
-      "title": "Per-tree write throughput",
+      "title": "Per-tree write throughput (operations/s and records/s)",
       "type": "timeseries",
+      "description": "Two distinct semantics, deliberately plotted together. 'ops' is orleans_lattice_shard_writes, incremented once per write OPERATION: a batched or bulk operation (SetManyAsync, MergeManyAsync, DeleteRangeAsync, BulkLoadAsync, BulkLoadRawAsync, BulkAppendAsync) counts once regardless of entry count. 'records' is orleans_lattice_shard_records_written, incremented by the entry count of each operation. On OLTP-style single-key traffic the two lines coincide; a bulk import shows a large records spike against an almost flat ops line, and the ratio between them is the effective batch size. Reading 'ops' alone under-represents bulk ingestion.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -189,7 +191,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops"
+          "unit": "cps"
         },
         "overrides": []
       },
@@ -197,7 +199,12 @@
         {
           "refId": "A",
           "expr": "sum by (tree) (rate(orleans_lattice_shard_writes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1m]))",
-          "legendFormat": "{{tree}}"
+          "legendFormat": "{{tree}} ops/s"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree) (rate(orleans_lattice_shard_records_written_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[1m]))",
+          "legendFormat": "{{tree}} records/s"
         }
       ]
     },

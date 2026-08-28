@@ -99,7 +99,7 @@ internal static class ScalingSignalGaugeRegistry
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.StorageRebalanceRecommendationsName,
                 static () => Volatile.Read(ref _rebalanceRecommendations),
-                unit: "{recommendation}",
+                unit: "1",
                 description: "1 when a WAL rebalance is recommended, otherwise 0.");
 
             Volatile.Write(ref _registered, true);

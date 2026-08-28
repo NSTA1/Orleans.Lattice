@@ -111,6 +111,64 @@ public partial class LatticeMetricsIntegrationTests
     }
 
     [Test]
+    public async Task SetManyAsync_advances_the_write_counter_once_per_shard_but_records_every_entry()
+    {
+        // Regression for issue #1648: orleans.lattice.shard.writes is a
+        // per-OPERATION counter, so a batched write advances it once per shard
+        // touched regardless of entry count. The companion per-RECORD counter
+        // orleans.lattice.shard.records_written must account for every entry, so
+        // bulk and batch ingestion is observable rather than silently
+        // under-represented on the throughput panels.
+        using var recorder = new MetricRecorder();
+        var treeId = $"metrics-setmany-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        const int entryCount = 50;
+        var entries = new List<KeyValuePair<string, byte[]>>(entryCount);
+        for (var i = 0; i < entryCount; i++)
+        {
+            entries.Add(new KeyValuePair<string, byte[]>(
+                $"batch-key-{i:D4}", Encoding.UTF8.GetBytes($"v{i}")));
+        }
+
+        await tree.SetManyAsync(entries);
+
+        var writes = recorder.Sum("orleans.lattice.shard.writes", treeId);
+        var records = recorder.Sum("orleans.lattice.shard.records_written", treeId);
+
+        // Every entry is accounted for, exactly once, across all shards.
+        Assert.That(records, Is.EqualTo(entryCount),
+            "records_written must count every entry the batch carried.");
+
+        // The operation counter advances at most once per shard (the fixture has
+        // four), which is precisely the divergence the companion counter exists
+        // to expose.
+        Assert.That(writes, Is.LessThan(entryCount),
+            "shard.writes is per-operation and must not scale with batch size.");
+        Assert.That(records, Is.GreaterThan(writes));
+    }
+
+    [Test]
+    public async Task SetAsync_records_exactly_one_entry_on_the_records_written_counter()
+    {
+        using var recorder = new MetricRecorder();
+        var treeId = $"metrics-records-{Guid.NewGuid():N}";
+        var tree = await _fixture.CreateTreeAsync(treeId);
+
+        await tree.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
+
+        // On the single-key path the two counters coincide: one operation,
+        // one record.
+        Assert.That(recorder.Sum("orleans.lattice.shard.records_written", treeId),
+            Is.EqualTo(1));
+
+        var shardTagged = recorder.Records.Any(r =>
+            r.Name == "orleans.lattice.shard.records_written" &&
+            r.Tags.Any(t => t.Key == LatticeMetrics.TagShard && t.Value is int));
+        Assert.That(shardTagged, Is.True);
+    }
+
+    [Test]
     public async Task GetAsync_emits_shard_read_counter()
     {
         using var recorder = new MetricRecorder();

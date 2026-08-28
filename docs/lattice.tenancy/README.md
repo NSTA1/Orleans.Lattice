@@ -426,9 +426,12 @@ readings.
 buckets rather than from a published aggregate, so a breach is observed through the
 `ops-per-second` `LatticeQuotaExceededException` rather than a series.
 
-These instruments are not charted by the bundled Grafana dashboards, which cover the
-core and replication meters; subscribe to the `orleans.lattice.tenancy` meter
-directly from your OpenTelemetry exporter.
+These instruments are charted by the bundled **Per-Tenant Observability** Grafana
+dashboard (`LatticeDashboardKind.Tenancy`), which offers a templated `tenant`
+variable so a panel can be scoped to a single tenant or to every tenant. See
+`docs/lattice.dashboards/metrics-to-panel-map.md` for the instrument-to-panel
+mapping. To consume them directly instead, subscribe to the
+`orleans.lattice.tenancy` meter from your OpenTelemetry exporter.
 
 ## Security
 

@@ -470,6 +470,7 @@ public sealed class AutoTrainingCompressionDictionaryProvider
         meter.CreateObservableGauge(
             LatticeMetrics.CompressionDictionaryReservoirFillName,
             static () => ObserveReservoirFill(),
+            unit: "1",
             description: "Auto-training reservoir occupancy, tagged kind=samples|bytes.");
     }
 

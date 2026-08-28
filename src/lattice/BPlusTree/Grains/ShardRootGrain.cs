@@ -585,7 +585,7 @@ internal sealed partial class ShardRootGrain(
         await PrepareForOperationAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
         ThrowIfRejectedForAnyKey(entries);
-        RecordWrite();
+        RecordWrite(entries.Count);
 
         if (entries.Count == 0) return;
 
@@ -885,7 +885,10 @@ internal sealed partial class ShardRootGrain(
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
         ThrowIfRejectedForAnyKey(entries);
-        RecordWrite();
+        // The affected-record count is the guard-passing subset, known only once
+        // the local apply completes, so the operation is counted here and the
+        // record count published on the success path below.
+        RecordWrite(records: 0);
 
         if (entries.Count == 0) return Array.Empty<string>();
 
@@ -926,6 +929,7 @@ internal sealed partial class ShardRootGrain(
                     Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
             }
+            RecordRecordsWritten(written.Count);
             return written;
         }
 
@@ -1215,9 +1219,10 @@ internal sealed partial class ShardRootGrain(
         // the split coordinator restores convergence by re-tombstoning moved-slot entries on T after the swap. No explicit reject check is performed
         // here because the LatticeGrain has already routed the range delete
         // to the correct shard via the current ShardMap.
-        RecordWrite();
-
-        // For online resize, forward the same range delete to the destination
+        // The affected-record count is the number of entries actually tombstoned,
+        // known only once the leaf-chain walk completes, so the operation is
+        // counted here and the record count published just before returning.
+        RecordWrite(records: 0);
         // in parallel - LWW on the destination shard absorbs any interleaving
         // with drain and live forwards. The predicate rides along so the
         // destination filters identically.
@@ -1275,6 +1280,7 @@ internal sealed partial class ShardRootGrain(
 
         await forwardTask;
         await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);
+        RecordRecordsWritten(totalDeleted);
         return totalDeleted;
     }
 
@@ -1738,7 +1744,7 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         await PrepareForOperationAsync();
-        RecordWrite();
+        RecordWrite(entries.Count);
 
         if (entries.Count == 0)
         {

@@ -121,7 +121,7 @@ internal sealed class LatticeAdmissionMetrics : IDisposable
         meter.CreateObservableGauge(
             LatticeMetrics.AdmissionOverAdvisoryName,
             static () => ObserveOverAdvisory(),
-            unit: "{tree}",
+            unit: "1",
             description: "1 when the tree currently exceeds an advisory admission ceiling, else 0.");
 
         meter.CreateObservableGauge(

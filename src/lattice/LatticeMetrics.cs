@@ -212,10 +212,57 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.shard.reads", unit: "{op}",
             description: "Read operations served by a shard root (GetAsync, ExistsAsync, scan, count, etc.).");
 
-    /// <summary>Counter incremented on every write operation observed by a shard root.</summary>
+    /// <summary>
+    /// Counter incremented once per write <b>operation</b> observed by a shard root.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is a per-<b>operation</b> counter, not a per-record one. A batched or
+    /// bulk operation - <c>SetManyAsync</c>, <c>MergeManyAsync</c>,
+    /// <c>SetManyWherePredicateAsync</c>, <c>DeleteRangeAsync</c>,
+    /// <c>BulkLoadAsync</c>, <c>BulkLoadRawAsync</c>, <c>BulkAppendAsync</c> -
+    /// contributes exactly <b>one</b> increment regardless of how many entries it
+    /// carries, so a 5000-record bulk import ticks this counter on the order of
+    /// (shards touched x bulk operations), not 5000.
+    /// </para>
+    /// <para>
+    /// Use <see cref="ShardRecordsWritten"/> when you need the record rate. Plotting
+    /// this instrument as "write throughput" on a batch-heavy or bulk-ingesting
+    /// estate under-represents the real volume; plot both, or label this one
+    /// explicitly as operations per second.
+    /// </para>
+    /// </remarks>
     public static readonly Counter<long> ShardWrites =
         Meter.CreateCounter<long>("orleans.lattice.shard.writes", unit: "{op}",
-            description: "Write operations served by a shard root (SetAsync, DeleteAsync, MergeManyAsync, etc.).");
+            description: "Write operations served by a shard root (SetAsync, DeleteAsync, MergeManyAsync, BulkLoadAsync, etc.). One increment per operation: a batched or bulk operation counts once regardless of entry count - see orleans.lattice.shard.records_written for the per-record rate.");
+
+    /// <summary>
+    /// Counter incremented by the number of individual <b>records</b> each write
+    /// operation carried - the per-record companion to <see cref="ShardWrites"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A single-key write (<c>SetAsync</c>, <c>DeleteAsync</c>,
+    /// <c>SetIfVersionAsync</c>, <c>GetOrSetAsync</c>, <c>ApplyCrdtDeltaAsync</c>)
+    /// contributes 1. A batched or bulk operation contributes its entry count, so a
+    /// 5000-record bulk import contributes 5000 here while
+    /// <see cref="ShardWrites"/> advances by only the number of bulk operations.
+    /// Together the two make both the operation rate and the record rate
+    /// observable, and their ratio is the effective batch size.
+    /// </para>
+    /// <para>
+    /// For the two operations whose affected-record count is only known once the
+    /// operation completes - <c>DeleteRangeAsync</c> and
+    /// <c>SetManyWherePredicateAsync</c> - the increment is the number of records
+    /// actually tombstoned or matched, and is published after the operation
+    /// succeeds. Every other path publishes the entry count it was handed. A write
+    /// that throws before completing contributes to <see cref="ShardWrites"/> but
+    /// not here.
+    /// </para>
+    /// </remarks>
+    public static readonly Counter<long> ShardRecordsWritten =
+        Meter.CreateCounter<long>("orleans.lattice.shard.records_written", unit: "{record}",
+            description: "Individual records written by a shard root, incremented by the entry count of each write operation (1 for a single-key write, the batch size for SetManyAsync / MergeManyAsync / bulk load, the affected count for DeleteRangeAsync / SetManyWherePredicateAsync). The per-record companion to orleans.lattice.shard.writes.");
 
     /// <summary>
     /// Counter incremented once per <c>IShardRootGrain.GetShardProjectionDigestAsync</c>
@@ -2358,7 +2405,7 @@ public static class LatticeMetrics
     /// nothing on the read or write hot paths.
     /// </summary>
     public static readonly Histogram<double> LeafTombstoneRatio =
-        Meter.CreateHistogram<double>("orleans.lattice.leaf.tombstone.ratio", unit: "{ratio}",
+        Meter.CreateHistogram<double>("orleans.lattice.leaf.tombstone.ratio", unit: "1",
             description: "Per-leaf tombstone-to-total ratio sampled inside compaction passes.");
 
     // --- Cached constant tag pairs (allocation-free hot-path helpers) -------

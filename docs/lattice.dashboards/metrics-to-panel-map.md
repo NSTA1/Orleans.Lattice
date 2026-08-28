@@ -10,12 +10,25 @@ The add-on `orleans.lattice.scaling` meter is charted by the bundled Autoscaling
 
 The add-on `orleans.lattice.replication.grpc` meter is charted by the bundled Replication Transport (gRPC) dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Replication.Grpc.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
 
+The add-on `orleans.lattice.tenancy` meter is charted by the bundled Per-Tenant Observability dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Tenancy.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
+
+### Per-operation vs per-record contract
+
+A throughput-style counter measures either **operations** or **records**, and the two diverge sharply on batched and bulk paths. Every such instrument below declares which it is, so a panel title can never imply a semantic the instrument does not deliver:
+
+- **Per-operation** (`{op}`) - one increment per grain call, whatever its payload. A batched or bulk call (`SetManyAsync`, `MergeManyAsync`, `DeleteRangeAsync`, `SetManyWherePredicateAsync`, `BulkLoadAsync`, `BulkLoadRawAsync`, `BulkAppendAsync`) counts **once regardless of entry count**, so a 5000-record import advances the counter by only the number of bulk operations.
+- **Per-record** (`{record}`) - one increment per individual entry the operation carried. The same 5000-record import advances the counter by 5000.
+- **Per-entry sample** - for a histogram, one observation per entry rather than per batch (for example `orleans.lattice.replication.apply.duration`, which contributes N samples for a batch of N).
+
+`orleans.lattice.shard.writes` (operations) and `orleans.lattice.shard.records_written` (records) are the canonical pair: plot both, and their ratio is the effective batch size. Plotting the operation counter alone as "write throughput" under-represents bulk ingestion, which is the defect issue #1648 was raised for.
+
 ## `orleans.lattice` meter
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
 |------------|------|------|-----------|----------|
-| `orleans.lattice.shard.reads` | counter | `tree`, `shard` | Overview | Cluster throughput |
-| `orleans.lattice.shard.writes` | counter | `tree`, `shard` | Overview | Cluster throughput, Per-tree write throughput |
+| `orleans.lattice.shard.reads` | counter (`{op}`, **per-operation**) | `tree`, `shard` | Overview | Cluster throughput (ops/s) |
+| `orleans.lattice.shard.writes` | counter (`{op}`, **per-operation**) | `tree`, `shard` | Overview | Cluster throughput (ops/s), Per-tree write throughput (operations/s and records/s) |
+| `orleans.lattice.shard.records_written` | counter (`{record}`, **per-record**) | `tree`, `shard` | Overview | Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.splits_committed` | counter | `tree`, `shard` | Overview | Splits committed |
 | `orleans.lattice.leaf.write.duration` | histogram (ms) | `tree` | Overview, CommitPath | Leaf write duration percentiles |
 | `orleans.lattice.leaf.scan.duration` | histogram (ms) | `tree`, `operation` | Overview | Leaf scan duration p95 by operation |
@@ -316,3 +329,34 @@ The gRPC replication transport's telemetry. Charted by the Replication Transport
 | Instrument | Type | Tags | Dashboard | Panel(s) |
 |------------|------|------|-----------|----------|
 | `orleans.lattice.replication.grpc.insecure_channel` | counter (`{channel}`) | `peer`, `transport` | Replication Transport (gRPC) | Insecure (plaintext) channels constructed; Insecure channel construction rate by peer and transport |
+
+## `orleans.lattice.tenancy` meter
+
+Per-tenant usage, quota, burst, and metered-overage telemetry published by the opt-in `lattice.tenancy` add-on. Charted by the Per-Tenant Observability dashboard; coverage enforced from `Orleans.Lattice.Tenancy.Tests`.
+
+Every instrument is an **observable gauge** published on a fixed cadence (`TenantObservabilityOptions.PublishInterval`, default 30 seconds) from the last landed metering sample, so these are periodic samples rather than live readings. Every series carries a `tenant` tag except the cluster-aggregate tenant count. A `quota.*` gauge emits a measurement only for a **bounded** dimension - an unbounded ceiling contributes no series at all, so "no series" reads as "unlimited", not "zero". The `overage.*` gauges are grow-only converged sums, not instantaneous readings.
+
+`MaxOpsPerSecond` has no gauge: the rate budget is enforced from silo-local token buckets rather than a published aggregate, so a breach surfaces as an `ops-per-second` `LatticeQuotaExceededException` rather than a series.
+
+| Instrument | Type | Tags | Dashboard | Panel(s) |
+|------------|------|------|-----------|----------|
+| `orleans.lattice.tenancy.tenants` | observable gauge (`{tenant}`) | (none - cluster aggregate) | Per-Tenant Observability | Registered tenants |
+| `orleans.lattice.tenancy.usage.bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Stored bytes by tenant |
+| `orleans.lattice.tenancy.quota.bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Stored bytes by tenant (quota overlay) |
+| `orleans.lattice.tenancy.usage.keys` | observable gauge (`{key}`) | `tenant` | Per-Tenant Observability | Live keys by tenant |
+| `orleans.lattice.tenancy.quota.keys` | observable gauge (`{key}`) | `tenant` | Per-Tenant Observability | Live keys by tenant (quota overlay) |
+| `orleans.lattice.tenancy.usage.memory_bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Resident memory by tenant |
+| `orleans.lattice.tenancy.quota.memory_bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Resident memory by tenant (quota overlay) |
+| `orleans.lattice.tenancy.usage.trees` | observable gauge (`{tree}`) | `tenant` | Per-Tenant Observability | Owned trees by tenant |
+| `orleans.lattice.tenancy.quota.trees` | observable gauge (`{tree}`) | `tenant` | Per-Tenant Observability | Owned trees by tenant (quota overlay) |
+| `orleans.lattice.tenancy.quota.burst_percent` | observable gauge (`%`) | `tenant` | Per-Tenant Observability | Burst headroom by tenant |
+| `orleans.lattice.tenancy.overage.bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Metered byte overage by tenant |
+| `orleans.lattice.tenancy.overage.keys` | observable gauge (`{key}`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (keys) |
+| `orleans.lattice.tenancy.overage.memory_bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (memory) |
+| `orleans.lattice.tenancy.overage.trees` | observable gauge (`{tree}`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (trees) |
+
+### Tenant attributability of the other meters
+
+`orleans.lattice.tenancy` is the only meter whose series carry a `tenant` tag. Every other instrument in this document is attributable to a tenant only **indirectly**, through the `tree` tag: the tenancy add-on encodes the owner inside the tree id itself (`t/{tenantId}/{name}`), and ownership is re-derived from that prefix rather than stored. An instrument with no `tree` tag (cluster-level, silo-level, or per-peer transport telemetry) is not tenant-attributable at all today.
+
+Deriving a tenant by regex over the `tree` label is **not** a safe substitute: legacy pre-tenancy trees keep bare, unprefixed ids and are adopted by the reserved `default` tenant, while platform trees (`_lattice_`, `sys-`) are owned by no tenant, so a single `tree!~"^t/.*"` matcher conflates the default tenant with platform-internal series. Adding a derived `tenant` tag is tracked separately as part of epic #1716.
