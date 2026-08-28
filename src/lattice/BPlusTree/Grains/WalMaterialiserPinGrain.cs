@@ -333,19 +333,8 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// <summary>
     /// The logical tree id this pin shard belongs to, used as the metric tree
     /// tag. The grain key is either the bare <c>{treeName}</c> (single-shard
-    /// layout) or <c>{treeName}#s{shard}</c> (sharded layout); the suffix is
-    /// stripped so every shard of a tree reports under the same tree tag.
+    /// layout) or a shard-suffixed key; the suffix is stripped so every shard of
+    /// a tree reports under the same tree tag.
     /// </summary>
-    private string TreeTag => _treeTag ??= ResolveTreeTag(_context.GrainId.Key.ToString());
-
-    private static string ResolveTreeTag(string? key)
-    {
-        if (string.IsNullOrEmpty(key))
-        {
-            return string.Empty;
-        }
-
-        var idx = key.IndexOf("#s", StringComparison.Ordinal);
-        return idx >= 0 ? key[..idx] : key;
-    }
+    private string TreeTag => _treeTag ??= WalMaterialiserPinRouting.TreeNameFromKey(_context.GrainId.Key.ToString());
 }

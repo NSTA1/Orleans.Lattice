@@ -1,6 +1,7 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Serialization;
 
@@ -36,7 +37,7 @@ public sealed class LatticeTenantAdminGrpcServiceStatusMappingTests
             _selfService,
             new NullCredentialBridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-            NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
     }
 
     [TearDown]
@@ -100,5 +101,39 @@ public sealed class LatticeTenantAdminGrpcServiceStatusMappingTests
             Context(LatticeTenantAdminGrpcMethods.GetTenantMethodName)));
 
         Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Cancelled));
+    }
+
+    [Test]
+    public void A_denied_tenant_assertion_maps_to_permission_denied_not_internal()
+    {
+        // The resolver fails closed by raising this when the caller has no valid
+        // active tenant, or may not act as the one it asserted. Falling through to
+        // the generic handler would report an authorization decision as a server
+        // fault, hiding the actionable reason behind a generic message and
+        // inviting a client to retry a decision that will never change.
+        _selfService.Throw = new LatticeTenantAccessDeniedException();
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await _service.GetCurrentTenant(
+            new TenantSelfCurrentRequest(),
+            Context(LatticeTenantAdminGrpcMethods.GetCurrentTenantMethodName)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(ex.Status.Detail, Does.Contain("active tenant"),
+                "the caller-facing reason must survive the mapping");
+        });
+    }
+
+    [Test]
+    public void A_denied_tenant_assertion_on_the_admin_path_maps_to_permission_denied()
+    {
+        _facade.Throw = new LatticeTenantAccessDeniedException();
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await _service.SuspendTenant(
+            new TenantAdminTenantRequest { TenantId = "acme" },
+            Context(LatticeTenantAdminGrpcMethods.SuspendTenantMethodName)));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
     }
 }

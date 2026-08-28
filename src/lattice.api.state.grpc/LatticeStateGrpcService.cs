@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.State.Grpc;
 
@@ -168,6 +169,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
     private readonly ILatticeStateMetricsObserver _metricsObserver;
     private readonly ILatticeStateApiCredentialBridge _credentialBridge;
     private readonly ILatticeStateApiAuthSchemeSource _authSchemeSource;
+    private readonly IOptions<LatticeStateApiGrpcOptions> _options;
     private readonly ILogger<LatticeStateGrpcService> _logger;
 
     /// <summary>
@@ -186,6 +188,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ILatticeStateMetricsObserver metricsObserver,
         ILatticeStateApiCredentialBridge credentialBridge,
         ILatticeStateApiAuthSchemeSource authSchemeSource,
+        IOptions<LatticeStateApiGrpcOptions> options,
         ILogger<LatticeStateGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
@@ -194,6 +197,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(metricsObserver);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _query = query;
@@ -201,8 +205,24 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         _metricsObserver = metricsObserver;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
+        _options = options;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Lifts the caller's asserted active tenant onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for the duration of the call, so
+    /// this facade's tenant-scoped name resolution sees the caller's tenant rather
+    /// than the reserved default. Returns <see langword="null"/> (no scope, no
+    /// allocation) when no tenant is asserted, so a tenancy-off cluster is
+    /// unchanged. The assertion is re-validated against the caller's own
+    /// membership downstream; this seam only carries it.
+    /// </summary>
+    private IDisposable? StampActiveTenant(ServerCallContext context)
+        => LatticeActiveTenantAssertion.Stamp(
+            context,
+            static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
+            _options.Value.ActiveTenantHeaderName);
 
     /// <summary>
     /// Bridges the caller identity on <paramref name="context"/> into the ambient
@@ -346,6 +366,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -376,6 +397,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.State: gRPC change subscription for tree {TreeId} failed.", request.TreeId);
@@ -394,6 +424,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -416,6 +447,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.State: gRPC metrics subscription failed.");
@@ -430,6 +470,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -446,6 +487,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {
@@ -490,6 +540,7 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -518,6 +569,15 @@ internal sealed class LatticeStateGrpcService : LatticeStateGrpcServiceBase
             throw new RpcException(new Status(
                 StatusCode.ResourceExhausted,
                 "The requested tree is busy (storage back-pressure) and the operation was refused. Retry after a short backoff."));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {

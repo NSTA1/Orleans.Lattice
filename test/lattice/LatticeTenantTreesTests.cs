@@ -233,5 +233,50 @@ public sealed class LatticeTenantTreesTests
 
     [Test]
     public void LocalName_null_throws_argument_null()
-        => Assert.That(() => LatticeTenantTrees.LocalName(null!), Throws.ArgumentNullException);
+        => Assert.That(() => LatticeTenantTrees.LocalName((string)null!), Throws.ArgumentNullException);
+
+    // ----- Allocation behaviour: these run on every read and write -----
+
+    [Test]
+    public void LocalName_span_overload_slices_without_copying()
+    {
+        // The classification paths (is this a view / a tag index / reserved) run
+        // on every data-plane operation, so they must slice the local name rather
+        // than materialise it. Proven structurally: the returned span overlaps the
+        // input's own memory, which a copy could not.
+        const string composed = "t/acme/view-orders";
+        var local = LatticeTenantTrees.LocalName(composed.AsSpan());
+
+        Assert.That(local.ToString(), Is.EqualTo("view-orders"));
+        Assert.That(
+            composed.AsSpan().Overlaps(local),
+            Is.True,
+            "the local name must be a slice of the input, not a copy");
+    }
+
+    [Test]
+    public void LocalName_returns_the_same_reference_for_a_non_tenant_id()
+    {
+        // Every id on a tenancy-off cluster takes this path, so it must not copy.
+        const string bare = "orders";
+
+        Assert.That(LatticeTenantTrees.LocalName(bare), Is.SameAs(bare));
+    }
+
+    [Test]
+    public void Compose_accepts_a_span_so_a_slice_needs_no_intermediate_string()
+    {
+        var composed = "t/acme/view-orders".AsSpan();
+        var local = LatticeTenantTrees.LocalName(composed);
+
+        Assert.That(
+            LatticeTenantTrees.Compose(TenantId.Parse("globex"), local),
+            Is.EqualTo("t/globex/view-orders"));
+    }
+
+    [Test]
+    public void Compose_span_rejects_an_empty_name()
+        => Assert.That(
+            () => LatticeTenantTrees.Compose(TenantId.Parse("acme"), ReadOnlySpan<char>.Empty),
+            Throws.ArgumentException);
 }

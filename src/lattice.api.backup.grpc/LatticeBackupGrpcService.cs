@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 
@@ -171,6 +172,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     private readonly ILatticeBackupControl _control;
     private readonly ILatticeBackupApiCredentialBridge _credentialBridge;
     private readonly ILatticeBackupApiAuthSchemeSource _authSchemeSource;
+    private readonly IOptions<LatticeBackupApiGrpcOptions> _options;
     private readonly ILogger<LatticeBackupGrpcService> _logger;
 
     /// <summary>
@@ -187,19 +189,37 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         ILatticeBackupControl control,
         ILatticeBackupApiCredentialBridge credentialBridge,
         ILatticeBackupApiAuthSchemeSource authSchemeSource,
+        IOptions<LatticeBackupApiGrpcOptions> options,
         ILogger<LatticeBackupGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
+        _options = options;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Lifts the caller's asserted active tenant onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for the duration of the call, so
+    /// this facade's tenant-scoped name resolution sees the caller's tenant rather
+    /// than the reserved default. Returns <see langword="null"/> (no scope, no
+    /// allocation) when no tenant is asserted, so a tenancy-off cluster is
+    /// unchanged. The assertion is re-validated against the caller's own
+    /// membership downstream; this seam only carries it.
+    /// </summary>
+    private IDisposable? StampActiveTenant(ServerCallContext context)
+        => LatticeActiveTenantAssertion.Stamp(
+            context,
+            static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
+            _options.Value.ActiveTenantHeaderName);
 
     /// <summary>
     /// Bridges the caller identity on <paramref name="context"/> into the ambient
@@ -298,6 +318,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -323,6 +344,24 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        // The tenant-scoped backup boundary refusing a tree outside the caller's
+        // namespace is the same authorization outcome by a different name. It
+        // derives from InvalidOperationException and no clause here catches that,
+        // so without this it reads to the caller as an internal fault rather than
+        // the deliberate isolation decision it is.
+        catch (LatticeBackupTenantIsolationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {
@@ -388,6 +427,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -421,6 +461,24 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        // The tenant-scoped backup boundary refusing a tree outside the caller's
+        // namespace is the same authorization outcome by a different name. It
+        // derives from InvalidOperationException and no clause here catches that,
+        // so without this it reads to the caller as an internal fault rather than
+        // the deliberate isolation decision it is.
+        catch (LatticeBackupTenantIsolationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {
@@ -488,6 +546,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
         ArgumentNullException.ThrowIfNull(context);
 
         using var credentialScope = StampCallerCredential(context);
+        using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
@@ -541,6 +600,24 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             throw new RpcException(new Status(
                 StatusCode.Unavailable,
                 $"The backup control-API request failed transiently; retry. (ref: {correlationId})"));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        // The tenant-scoped backup boundary refusing a tree outside the caller's
+        // namespace is the same authorization outcome by a different name. It
+        // derives from InvalidOperationException and no clause here catches that,
+        // so without this it reads to the caller as an internal fault rather than
+        // the deliberate isolation decision it is.
+        catch (LatticeBackupTenantIsolationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -30,6 +31,7 @@ public sealed class LatticeTreeAdminGrpcServiceBindingTests
             Substitute.For<ILatticeTreeAdmin>(),
             Substitute.For<ILatticeTreeAdminApiCredentialBridge>(),
             Substitute.For<ILatticeTreeAdminApiAuthSchemeSource>(),
+            Options.Create(new LatticeTreeAdminApiGrpcOptions()),
             NullLogger<LatticeTreeAdminGrpcService>.Instance);
         var binder = new RecordingServiceBinder();
 

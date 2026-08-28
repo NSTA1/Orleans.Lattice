@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -41,6 +42,7 @@ public sealed class LatticeReplicationApiGrpcClientAuthSchemeTests
             control,
             bridge,
             authSchemeSource,
+            Options.Create(new LatticeReplicationApiGrpcOptions()),
             NullLogger<LatticeReplicationGrpcService>.Instance);
 
         var invoker = new LoopbackCallInvoker(service, _services);

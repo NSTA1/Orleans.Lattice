@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 /// cluster, no timing, no ordering or wall-clock dependence.
 /// </summary>
 [TestFixture]
-public sealed class LatticeTenantSelfServiceTests
+public sealed partial class LatticeTenantSelfServiceTests
 {
     private static HybridLogicalClock Stamp(long ticks) => new() { WallClockTicks = ticks };
 

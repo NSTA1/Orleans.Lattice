@@ -995,6 +995,14 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// read) authority over a scope with no side effects, translating the gate's
     /// throw-on-deny into a boolean.
     /// </summary>
+    /// <remarks>
+    /// Both denial types must be translated, not just the authorization one. The
+    /// tenancy scope refuses a tree outside the active tenant's namespace with
+    /// <see cref="LatticeBackupTenantIsolationException"/>, and letting that escape
+    /// turns a filter into a fault: a single catalogue entry belonging to another
+    /// tenant would fail the caller's entire listing, and the refusal message would
+    /// disclose a tree id the caller is not entitled to see.
+    /// </remarks>
     private async ValueTask<bool> IsBackupAuthorizedAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken)
@@ -1008,6 +1016,10 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
         {
             return false;
         }
+        catch (LatticeBackupTenantIsolationException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -1015,6 +1027,11 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
     /// bulk-load) authority over a scope with no side effects, translating the
     /// gate's throw-on-deny into a boolean.
     /// </summary>
+    /// <remarks>
+    /// Translates the tenancy refusal as well, for the same reason as
+    /// <see cref="IsBackupAuthorizedAsync"/>: this probe reports whether a scope is
+    /// available to the caller, so a tenancy denial is an answer, not a fault.
+    /// </remarks>
     private async ValueTask<bool> IsRestoreAuthorizedAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken)
@@ -1025,6 +1042,10 @@ internal sealed class LatticeBackupControl : ILatticeBackupControl
             return true;
         }
         catch (LatticeAuthorizationDeniedException)
+        {
+            return false;
+        }
+        catch (LatticeBackupTenantIsolationException)
         {
             return false;
         }

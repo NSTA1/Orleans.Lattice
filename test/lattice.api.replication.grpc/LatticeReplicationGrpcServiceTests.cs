@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -50,6 +51,7 @@ public sealed class LatticeReplicationGrpcServiceTests
             control,
             bridge,
             source,
+            Options.Create(new LatticeReplicationApiGrpcOptions()),
             NullLogger<LatticeReplicationGrpcService>.Instance);
     }
 

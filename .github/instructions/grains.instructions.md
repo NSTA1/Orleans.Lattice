@@ -42,6 +42,7 @@ Grain identity is embedded in the string key with `/` as separator:
 | `AtomicWriteGrain` | `{treeId}/{operationId}` | `"my-tree/ab12…"` |
 | `LatticeCrossTreeReceiverGrain` | Length-prefixed `{originClusterId}`+`{operationId}` via `ComputeKey` (storage-safe; see below) | `"16_cluster-eus2op-1"` |
 | `ViewMaintainerGrain` | `{viewName}`, tenant-scoped to `t/{tenant}/{viewName}` when tenancy is on | `"orders-open"` |
+| `WalMaterialiserPinGrain` | `{treeId}` (single shard) or `{treeId}~s{shard}` via `ShardKey` | `"my-tree~s3"` |
 | `LatticeCursorGrain` | `{treeId}/{cursorId}` | `"my-tree/ab12…"` |
 | `TagIndexReconcileGrain` | `{indexName}` | `"by-color"` |
 | `WalMaterialiserPinGrain` | `{treeId}` | `"my-tree"` |
@@ -86,6 +87,16 @@ So when a grain both persists via `[PersistentState]` and is addressed by a
   delimiter that a name could also contain, reserve the delimiter in that
   validation so the composition stays unambiguous - two different inputs must
   never produce one key, or two grain identities collapse onto one state row.
+- **Changing a key shape strands durable state**, so a change needs a self-healing
+  migration rather than a cutover: keep reading the old shape until the state
+  written under it has aged out. `WalMaterialiserPinRouting.EnumerateReadKeys`
+  shows the pattern - the WAL GC reads every shard under both the current and the
+  legacy separator, so a pin written by an earlier build keeps holding the trim
+  floor with no operator action and no stranded segments.
+- **Parse a suffix from the end, and validate its shape.** A key composed as
+  `{name}{separator}{n}` must be parsed with `LastIndexOf` and only accepted when
+  the trailing part actually looks like the suffix (all digits, say); a leading
+  `IndexOf` truncates a name that legitimately contains the separator.
 
 ## State Management
 

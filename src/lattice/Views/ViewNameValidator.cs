@@ -71,6 +71,42 @@ internal static class ViewNameValidator
     }
 
     /// <summary>
+    /// Throws <see cref="ArgumentException"/> when the tenant-local portion of
+    /// <paramref name="viewName"/> is invalid, ignoring a leading
+    /// <c>t/{tenant}/</c> segment the tenancy layer itself composed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Use this at any seam reached <em>after</em> tenant composition. Composition
+    /// introduces the very <c>/</c> this validator rejects, so applying the plain
+    /// <see cref="ThrowIfInvalid(string, string)"/> to a composed name refuses every
+    /// tenant-scoped view outright - the name the caller supplied is legal and the
+    /// separator belongs to the platform (issue #1707).
+    /// </para>
+    /// <para>
+    /// This does not weaken the rule. The caller-supplied name is validated whole,
+    /// before composition, at the facade entry point, which is what stops a caller
+    /// naming a view <c>t/other/orders</c> and having composition plant its tree in
+    /// another tenant's namespace. By the time a name reaches here that check has
+    /// already run, so only the platform's own prefix is being excused. A bare,
+    /// uncomposed name is validated unchanged, so a non-tenancy cluster behaves
+    /// exactly as before.
+    /// </para>
+    /// </remarks>
+    /// <param name="viewName">The possibly tenant-composed view name.</param>
+    /// <param name="paramName">The caller's parameter name, for the thrown exception.</param>
+    /// <exception cref="ArgumentException">The tenant-local name is null, empty, or invalid.</exception>
+    public static void ThrowIfComposedInvalid(string viewName, string paramName = "viewName")
+    {
+        ArgumentException.ThrowIfNullOrEmpty(viewName, paramName);
+
+        var local = LatticeTenantTrees.LocalName(viewName.AsSpan());
+        var localName = local.Length == viewName.Length ? viewName : new string(local);
+
+        ThrowIfInvalid(localName, paramName);
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="viewName"/> is a legal view name;
     /// otherwise <c>false</c> with <paramref name="reason"/> describing the first
     /// violation. Used by the rehydration path, which reports a legacy name rather

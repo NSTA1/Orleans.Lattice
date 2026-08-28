@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Api.TenantAdmin;
 
 namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
@@ -126,6 +127,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     private readonly ILatticeTenantSelfService _selfService;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
+    private readonly IOptions<LatticeTenantAdminApiGrpcOptions> _options;
     private readonly ILogger<LatticeTenantAdminGrpcService> _logger;
 
     /// <summary>
@@ -144,6 +146,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ILatticeTenantSelfService selfService,
         ILatticeTenantAdminApiCredentialBridge credentialBridge,
         ILatticeTenantAdminApiAuthSchemeSource authSchemeSource,
+        IOptions<LatticeTenantAdminApiGrpcOptions> options,
         ILogger<LatticeTenantAdminGrpcService> logger)
     {
         ArgumentNullException.ThrowIfNull(methods);
@@ -151,14 +154,32 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ArgumentNullException.ThrowIfNull(selfService);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
         _selfService = selfService;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
+        _options = options;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Lifts the caller's asserted active tenant onto the ambient
+    /// <see cref="LatticeActiveTenantContext"/> for the duration of the call, so
+    /// the self-service surface reports the tenant the caller is actually acting
+    /// as, and the admin surface sees that scope rather than the reserved default.
+    /// Returns <see langword="null"/> (no scope, no allocation) when no tenant is
+    /// asserted, so a tenancy-off cluster is unchanged. The assertion is
+    /// re-validated against the caller's own membership downstream; this seam only
+    /// carries it.
+    /// </summary>
+    private IDisposable? StampActiveTenant(ServerCallContext context)
+        => LatticeActiveTenantAssertion.Stamp(
+            context,
+            static (ctx, name) => ctx.RequestHeaders?.GetValue(name),
+            _options.Value.ActiveTenantHeaderName);
 
     /// <summary>
     /// Bridges the caller identity on <paramref name="context"/> into the ambient
@@ -232,6 +253,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var activeTenantScope = StampActiveTenant(context);
         using var credentialScope = StampCallerCredential(context);
 
         try
@@ -276,6 +298,15 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
         }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.TenantAdmin: gRPC call to {Method} failed.", context.Method);
@@ -302,6 +333,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
+        using var activeTenantScope = StampActiveTenant(context);
         using var credentialScope = StampCallerCredential(context);
 
         try
@@ -327,6 +359,15 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         catch (ArgumentException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant,
+        // or may not act as the one it asserted. That is an authorization outcome,
+        // not a server fault, so it must not fall through to Internal below - which
+        // would replace the actionable reason with a generic message and invite a
+        // client to retry a decision that will never change.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {

@@ -131,7 +131,7 @@ public sealed class LatticeTenantAdminApiGrpcBindingEdgeCaseTests
             new FakeTenantSelfService(),
             Bridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-            NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
 
         Assert.That(
             async () => await service.SuspendTenant(
@@ -159,7 +159,7 @@ public sealed class LatticeTenantAdminApiGrpcBindingEdgeCaseTests
             new FakeTenantSelfService(),
             Bridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-            NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
 
         Assert.That(
             async () => await service.SuspendTenant(new TenantAdminTenantRequest { TenantId = "acme" }, CallWith()),

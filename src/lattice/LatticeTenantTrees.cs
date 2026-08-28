@@ -42,6 +42,24 @@ public static class LatticeTenantTrees
     /// </exception>
     public static string Compose(TenantId tenant, string name)
     {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return Compose(tenant, name.AsSpan());
+    }
+
+    /// <summary>
+    /// Span overload of <see cref="Compose(TenantId, string)"/>, so a caller
+    /// holding a slice of a larger id composes without first materialising the
+    /// intermediate name.
+    /// </summary>
+    /// <param name="tenant">The owning tenant. Must be an initialised (parsed) tenant id.</param>
+    /// <param name="name">The tenant-local, unqualified tree name. Must not be empty.</param>
+    /// <returns>The fully-qualified, tenant-scoped tree id.</returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="tenant"/> is the uninitialised <c>default(TenantId)</c>
+    /// ("no tenant"), or <paramref name="name"/> is empty.
+    /// </exception>
+    public static string Compose(TenantId tenant, ReadOnlySpan<char> name)
+    {
         if (tenant.Value is null)
         {
             throw new ArgumentException(
@@ -49,8 +67,13 @@ public static class LatticeTenantTrees
                 nameof(tenant));
         }
 
-        ArgumentException.ThrowIfNullOrEmpty(name);
+        if (name.IsEmpty)
+        {
+            throw new ArgumentException("The tenant-local tree name must not be empty.", nameof(name));
+        }
 
+        // Built in a single pass into one exactly-sized buffer rather than by
+        // concatenating intermediate strings.
         return string.Concat(SegmentPrefix, tenant.Value, "/", name);
     }
 
@@ -168,13 +191,37 @@ public static class LatticeTenantTrees
     {
         ArgumentNullException.ThrowIfNull(treeId);
 
-        var span = treeId.AsSpan();
-        if (!span.StartsWith(SegmentPrefix, StringComparison.Ordinal))
+        var local = LocalName(treeId.AsSpan());
+
+        // Only a genuinely scoped id costs a copy; everything else hands back the
+        // caller's own reference.
+        return local.Length == treeId.Length ? treeId : new string(local);
+    }
+
+    /// <summary>
+    /// Span overload of <see cref="LocalName(string)"/>: returns the tenant-local
+    /// slice of <paramref name="treeId"/>, or the whole span when it is not
+    /// tenant-scoped.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Allocation-free, always.</b> This is the overload every classification
+    /// path must use. Deciding "is this a view tree / a tag index / reserved" is
+    /// a prefix test on the tenant-local name, and running it through the string
+    /// overload would allocate a throwaway copy on every read and every write of
+    /// a tenant-scoped tree purely to look at its first few characters.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">The tree id to reduce to its tenant-local name.</param>
+    /// <returns>The tenant-local slice, or the input span unchanged.</returns>
+    public static ReadOnlySpan<char> LocalName(ReadOnlySpan<char> treeId)
+    {
+        if (!treeId.StartsWith(SegmentPrefix, StringComparison.Ordinal))
         {
             return treeId;
         }
 
-        var rest = span[SegmentPrefix.Length..];
+        var rest = treeId[SegmentPrefix.Length..];
         var slash = rest.IndexOf('/');
         if (slash <= 0 || slash >= rest.Length - 1)
         {
@@ -189,7 +236,7 @@ public static class LatticeTenantTrees
             return treeId;
         }
 
-        return new string(rest[(slash + 1)..]);
+        return rest[(slash + 1)..];
     }
 
     /// <summary>

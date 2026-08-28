@@ -92,6 +92,7 @@ public sealed class LatticeBackupApiGrpcBindingUnitTests
             Substitute.For<ILatticeBackupControl>(),
             Substitute.For<ILatticeBackupApiCredentialBridge>(),
             Substitute.For<ILatticeBackupApiAuthSchemeSource>(),
+            Options.Create(new LatticeBackupApiGrpcOptions()),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeBackupGrpcService>>());
         var binder = new CountingServiceBinder();
 

@@ -91,7 +91,26 @@ Server side (an ASP.NET Core host co-located with the silo):
 | `RequireAuthorization` | `true` | Reject any call without an accepted caller credential before it reaches the facade. |
 | `CredentialHeaderName` | `"authorization"` | The request header the caller credential is read from. |
 | `CredentialScheme` | `"Bearer"` | The credential scheme prefix stripped from the header value. |
+| `ActiveTenantHeaderName` | `"lattice-active-tenant"` | The request header carrying the tenant the caller is acting as. Set to an empty string to disable header-based tenant selection. |
 | `AdvertisedAuthSchemes` | (empty) | The credential schemes advertised by the `GetAuthScheme` RPC. |
+
+### Per-tenant selection
+
+On a cluster running the optional tenancy add-on, the caller's *active tenant* is
+what the self-service surface reports and what scopes the tenant-local view of the
+control plane. The binding lifts it from a single request header -
+`lattice-active-tenant` by default, configurable through
+`LatticeTenantAdminApiGrpcOptions.ActiveTenantHeaderName` - and stamps it onto the
+call's ambient scope for the duration of the call.
+
+The header carries only an *assertion*: the tenancy add-on re-validates it against
+the caller's subject membership downstream, exactly as it validates the caller
+credential. An absent, blank, or syntactically invalid header asserts no tenant, and
+the caller resolves the reserved `default` tenant. An assertion the caller may not
+use is refused, and both the self-service and lifecycle verbs surface that as a
+`PermissionDenied` `RpcException` rather than reporting a tenant the caller does not
+hold. Set the option to an empty string to disable header-based tenant selection
+entirely; with no tenancy add-on registered the header is never consulted.
 
 ## Authorization surface
 

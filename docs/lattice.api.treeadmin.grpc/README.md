@@ -126,7 +126,12 @@ app.MapLatticeTreeAdminApiGrpc();
 | `RequireAuthorization` | `bool` | `true` | Whether the interceptor enforces `ILatticeTreeAdminApiAuthorizer` on every inbound call. Set to `false` only when an outer authentication boundary already guards the endpoint. |
 | `CredentialHeaderName` | `string` | `authorization` | The inbound request-header name that carries the caller's credential token, bridged into the ambient Lattice credential. Only consulted when the `Orleans.Lattice.Auth` add-on is registered. |
 | `CredentialScheme` | `string` | `Bearer` | The authentication scheme stamped on the bridged credential. A case-insensitive scheme prefix on the header value (for example `"Bearer "`) is stripped before the remaining token is used. |
+| `ActiveTenantHeaderName` | `string` | `lattice-active-tenant` | The inbound request-header name carrying the tenant the caller is acting as, lifted onto the ambient active-tenant scope for the duration of the call. Set to an empty string to disable header-based tenant selection. Only consulted when the tenancy add-on is registered. |
 | `AdvertisedAuthSchemes` | `IList<AuthSchemeDescriptor>` | empty | The auth schemes the endpoint advertises from its unauthenticated `GetAuthScheme` RPC, in preference order. Each descriptor must carry only public configuration, never a secret. |
+
+### Per-tenant selection
+
+On a cluster running the optional tenancy add-on, the call's *active tenant* scopes the tree namespace every verb addresses, so a tenant-scoped caller administers only trees in its own `t/{tenant}/{name}` namespace. The header carries only an *assertion*: the tenancy add-on re-validates it against the caller's subject membership downstream, exactly as it validates the caller credential. An absent, blank, or syntactically invalid header asserts no tenant, and the resolver applies its own fail-closed rules; a call that cannot be attributed to a valid active tenant is refused and surfaces as a `PermissionDenied` `RpcException`. With no tenancy add-on registered the header is never consulted and the binding behaves exactly as it did before tenancy existed.
 
 ## Authorization surface
 

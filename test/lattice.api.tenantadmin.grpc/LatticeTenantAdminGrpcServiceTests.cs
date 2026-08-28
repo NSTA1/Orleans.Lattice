@@ -1,6 +1,7 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Orleans;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Serialization;
@@ -41,7 +42,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             {
                 Schemes = new[] { new AuthSchemeDescriptor { SchemeId = "basic", DisplayName = "Basic" } },
             }),
-            NullLogger<LatticeTenantAdminGrpcService>.Instance);
+            Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance);
         var invoker = new LoopbackCallInvoker(service, _serializers);
         _client = new LatticeTenantAdminApiGrpcClient(invoker, methods);
         _selfClient = new LatticeTenantSelfServiceApiGrpcClient(invoker, methods);
@@ -262,7 +263,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
             new LatticeTenantAdminGrpcService(
                 methods, _facade, _selfService, new NullCredentialBridge(),
                 new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-                NullLogger<LatticeTenantAdminGrpcService>.Instance),
+                Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance),
             _serializers);
 
         Assert.Multiple(() =>
@@ -288,16 +289,18 @@ public sealed class LatticeTenantAdminGrpcServiceTests
         var methods = LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers);
         var bridge = new NullCredentialBridge();
         var source = new FixedAuthSchemeSource(new AuthSchemeAdvertisement());
+        var options = Options.Create(new LatticeTenantAdminApiGrpcOptions());
         var logger = NullLogger<LatticeTenantAdminGrpcService>.Instance;
 
         Assert.Multiple(() =>
         {
-            Assert.That(() => new LatticeTenantAdminGrpcService(null!, _facade, _selfService, bridge, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, null!, _selfService, bridge, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, null!, bridge, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, null!, source, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, null!, logger), Throws.ArgumentNullException);
-            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, null!), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(null!, _facade, _selfService, bridge, source, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, null!, _selfService, bridge, source, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, null!, bridge, source, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, null!, source, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, null!, options, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, null!, logger), Throws.ArgumentNullException);
+            Assert.That(() => new LatticeTenantAdminGrpcService(methods, _facade, _selfService, bridge, source, options, null!), Throws.ArgumentNullException);
         });
     }
 
@@ -313,7 +316,7 @@ public sealed class LatticeTenantAdminGrpcServiceTests
                 new LatticeTenantAdminGrpcService(
                     LatticeTenantAdminGrpcMethods.FromServiceProvider(_serializers),
                     _facade, _selfService, new NullCredentialBridge(), new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
-                    NullLogger<LatticeTenantAdminGrpcService>.Instance),
+                    Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance),
                 _serializers), null!), Throws.ArgumentNullException);
         });
     }
