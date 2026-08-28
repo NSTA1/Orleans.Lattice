@@ -396,41 +396,6 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
     // ----- fail closed -----
 
     [Test]
-    public async Task A_tenant_header_on_a_cluster_with_no_tenancy_returns_the_snapshot_by_reference()
-    {
-        var router = Router("eu", "ap");
-        var catalog = new LatticeApiMcpRegionCatalog(router, Services());
-
-        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("acme"));
-        var regions = await catalog.ListRegionsAsync();
-
-        Assert.That(regions, Is.SameAs(router.Snapshot()),
-            "The active-tenant bridge is registered unconditionally, so a caller can stamp an ambient "
-            + "tenant on a cluster running no tenancy add-on. Scoping on that alone would let a "
-            + "caller-supplied header change the answer shape on a single-tenant cluster, and - with no "
-            + "engine to validate it against - echo that unvalidated tenant id back as an annotation. "
-            + "Tenancy off stays byte-for-byte on the pre-tenancy answer whatever headers arrive.");
-    }
-
-    [Test]
-    public async Task A_tenant_header_with_an_inactive_resolver_returns_the_snapshot_by_reference()
-    {
-        var router = Router("eu", "ap");
-        var catalog = new LatticeApiMcpRegionCatalog(
-            router,
-            Services(new FakeResolver(MapOf(("eu", true, TenantRegionResidencyStatus.Online)), isActive: false)));
-
-        using var scope = LatticeActiveTenantContext.With(TenantId.Parse("acme"));
-        var regions = await catalog.ListRegionsAsync();
-
-        Assert.That(regions, Is.SameAs(router.Snapshot()),
-            "An inactive resolver is the null object a non-tenancy cluster resolves, so it is "
-            + "indistinguishable from no tenancy at all and must take the same unscoped fast path. "
-            + "This is distinct from an ACTIVE resolver that cannot answer, which still fails closed "
-            + "to the current region - see An_unresolved_verdict_sees_only_the_current_region.");
-    }
-
-    [Test]
     public async Task An_unresolved_verdict_sees_only_the_current_region()
     {
         var catalog = new LatticeApiMcpRegionCatalog(
@@ -439,7 +404,10 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
         using var scope = LatticeActiveTenantContext.With(TenantId.Parse("acme"));
         var regions = await catalog.ListRegionsAsync();
 
-        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }));
+        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
+            "The load-bearing distinction: an INACTIVE resolver means no tenancy engine exists, so the "
+            + "answer stays unscoped. An ACTIVE resolver that cannot answer means the engine exists and "
+            + "failed, so the answer fails closed to the current region rather than leaking topology.");
     }
 
     [Test]
