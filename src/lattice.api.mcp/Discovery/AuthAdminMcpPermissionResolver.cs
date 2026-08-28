@@ -28,9 +28,19 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </para>
 /// <para>
 /// <b>Fail-closed.</b> When the auth facade is not registered, or the
-/// introspection throws, the resolver returns
-/// <see cref="LatticeApiMcpAccessSet.None"/> so the caller is offered no tools
-/// rather than an unscoped set.
+/// introspection returns an authoritative "no grants" answer, the resolver
+/// returns <see cref="LatticeApiMcpAccessSet.None"/> so the caller is offered no
+/// tools rather than an unscoped set.
+/// </para>
+/// <para>
+/// <b>Transient faults are not denials.</b> When the introspection call itself
+/// never lands - a cancelled, deadline-exceeded, unavailable, or internal
+/// transport fault, an Orleans response timeout, or silo churn - the resolver
+/// raises <see cref="LatticeApiMcpDiscoveryUnavailableException"/> instead of
+/// reporting an empty grant set. Reporting one would answer <c>tools/list</c>
+/// <em>successfully</em> with a single meta-tool, which a client cannot
+/// distinguish from having lost its permissions. Nothing extra is advertised on
+/// either branch, so this is no wider than failing closed.
 /// </para>
 /// </remarks>
 internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionResolver
@@ -82,6 +92,24 @@ internal sealed class AuthAdminMcpPermissionResolver : ILatticeApiMcpPermissionR
                 permissions = await admin.EffectivePermissionsAsync(subjectId, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
             }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+            && LatticeApiMcpDiscoveryFaultClassifier.IsTransientBackendFault(ex))
+        {
+            // The backend never answered, so there is no permission set to report.
+            // Failing closed here would advertise an empty - but SUCCESSFUL - tool
+            // list, which a client cannot tell apart from a genuine revocation.
+            // Surface a retryable fault instead; nothing extra is advertised either
+            // way, so the fail-closed guarantee is preserved.
+            _logger.LogWarning(
+                ex,
+                "Resolving MCP facade-group access for subject '{SubjectId}' hit a transient backend fault; "
+                + "surfacing a retryable discovery error rather than a falsely narrow tool set.",
+                subjectId);
+            throw new LatticeApiMcpDiscoveryUnavailableException(
+                "MCP tool discovery could not resolve the caller's effective permissions because the "
+                + "authorization backend was transiently unavailable. Retry the session.",
+                ex);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

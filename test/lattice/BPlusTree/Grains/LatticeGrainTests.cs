@@ -33,6 +33,10 @@ public partial class LatticeGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(callInfo => Task.FromResult(callInfo.Arg<string>()));
+        // The delete verbs answer from the catalogue before they route, so that a
+        // delete against a tree nobody created stays a side-effect-free no-op
+        // rather than provisioning one. Report every tree as registered.
+        registry.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
 
         // Seed the registry pin so the resolver returns the desired

@@ -509,4 +509,45 @@ public sealed class LatticeTreeAdminViewTests
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
         viewFactory.DidNotReceive().DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task DropViewAsync_unknown_view_is_idempotent_and_does_not_dial_the_factory()
+    {
+        // Documented as "Idempotent for an already-absent view", but resolution used
+        // to fault before the (already idempotent) factory delete was ever reached,
+        // so a second drop and a drop of a never-created name both reported NotFound.
+        var factory = Substitute.For<IGrainFactory>();
+        WireRegistry(factory); // empty
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        var facade = Create(factory, viewFactory: viewFactory);
+
+        await facade.DropViewAsync("never-created");
+
+        await viewFactory.DidNotReceive().DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DropViewAsync_is_idempotent_across_repeated_drops_of_the_same_view()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Substitute.For<IViewRegistryGrain>();
+        var remaining = new List<RuntimeViewRegistration> { Registration() };
+        registry.ListAsync().Returns(_ => new List<RuntimeViewRegistration>(remaining));
+        factory.GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey).Returns(registry);
+        var viewFactory = Substitute.For<ILatticeViewFactory>();
+        viewFactory.DeleteAsync(ViewName, Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                remaining.Clear();
+                return Task.CompletedTask;
+            });
+        var facade = Create(factory, viewFactory: viewFactory);
+
+        await facade.DropViewAsync(ViewName);
+        await facade.DropViewAsync(ViewName);
+
+        // The second drop resolves nothing and short-circuits, so the factory is
+        // still only asked to tear the view down once.
+        await viewFactory.Received(1).DeleteAsync(ViewName, Arg.Any<CancellationToken>());
+    }
 }

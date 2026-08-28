@@ -182,6 +182,17 @@ internal sealed class LatticeApiMcpSessionConfigurator
         return true;
     }
 
+    /// <summary>
+    /// Resolves the cluster identity stamped into the capabilities report.
+    /// </summary>
+    /// <remarks>
+    /// A <b>transient</b> backend fault is re-raised: the session plan is being built
+    /// while the cluster is unreachable, so answering with a well-formed advertisement
+    /// would present a permission-scoped tool list assembled from answers that never
+    /// arrived. Any other fault leaves the cluster identity unresolved and is
+    /// best-effort, because that field is decorative and its absence cannot be
+    /// mistaken for a narrower permission set.
+    /// </remarks>
     private async Task<ClusterInfo?> ResolveClusterInfoAsync(
         HttpContext httpContext,
         CancellationToken cancellationToken)
@@ -196,6 +207,18 @@ internal sealed class LatticeApiMcpSessionConfigurator
         try
         {
             return await stateQuery.GetClusterInfoAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException
+            && LatticeApiMcpDiscoveryFaultClassifier.IsTransientBackendFault(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "Resolving cluster info for the MCP capabilities report hit a transient backend fault; "
+                + "surfacing a retryable discovery error rather than a partially resolved session.");
+            throw new LatticeApiMcpDiscoveryUnavailableException(
+                "MCP tool discovery could not reach the cluster while building the session plan. "
+                + "Retry the session.",
+                ex);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -404,6 +404,22 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         await _authorizer.AuthorizeTreeReadAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
+
+        // Probe the catalogue before routing into the tree. Diagnostics and storage
+        // accounting both fan out through the shard roots, and activating those
+        // grains lazily seeds a durable registration for a tree that has none - so
+        // reading the statistics of a name nobody created would create it. An
+        // unregistered (or unreadable) tree reports a zeroed snapshot instead,
+        // which is also what a freshly created empty tree reports.
+        if (!await tree.TreeExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return new TreeStatsReport
+            {
+                TreeId = treeId,
+                SampledAt = DateTimeOffset.UtcNow,
+            };
+        }
+
         var diagnostics = await tree.DiagnoseAsync(deep: false, cancellationToken).ConfigureAwait(false);
         var storage = await tree.GetStorageUsageAsync(cancellationToken).ConfigureAwait(false);
 
@@ -1340,9 +1356,20 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     {
         RequireViews();
         var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
-        var resolved =
-            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
+
+        // Documented as idempotent for an already-absent view, so resolution must
+        // not fault here the way it does for the verbs that report a view's live
+        // state. Nothing is disclosed by succeeding: the existence distinction is
+        // already observable through every other view verb, and a view that IS
+        // present is still authorized against its source before it can be torn
+        // down.
+        var resolved = await TryResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
+        if (resolved is null)
+        {
+            return;
+        }
+
+        await _authorizer.AuthorizeTreeAdminAsync(resolved.Value.SourceTreeId, cancellationToken).ConfigureAwait(false);
 
         await _viewFactory!.DeleteAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
     }
@@ -1518,6 +1545,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         ThrowIfReserved(effectiveTreeId);
+        ThrowIfSystemDataTree(effectiveTreeId);
         await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         var tree = _grainFactory.GetGrain<ILattice>(effectiveTreeId);
@@ -1601,6 +1629,19 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// </summary>
     private async Task<(string SourceTreeId, bool IsAggregation, string? ProviderKey, string? ProjectionVersion)> ResolveViewAsync(
         string viewName, CancellationToken cancellationToken)
+        => await TryResolveViewAsync(viewName, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException(
+                $"No materialised view named '{viewName}' is registered on this cluster.");
+
+    /// <summary>
+    /// The non-throwing half of <see cref="ResolveViewAsync"/>: resolves the view's
+    /// source and projection identity from the silo-local catalog, falling back to
+    /// the cluster-wide runtime-view registry, and returns <c>null</c> when the view
+    /// is registered in neither. Used by the verbs whose contract documents an
+    /// absent view as a routine outcome rather than a fault.
+    /// </summary>
+    private async Task<(string SourceTreeId, bool IsAggregation, string? ProviderKey, string? ProjectionVersion)?> TryResolveViewAsync(
+        string viewName, CancellationToken cancellationToken)
     {
         if (_viewCatalog?.TryGet(viewName) is { } registration)
         {
@@ -1628,8 +1669,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             }
         }
 
-        throw new KeyNotFoundException(
-            $"No materialised view named '{viewName}' is registered on this cluster.");
+        return null;
     }
 
     /// <summary>
@@ -2021,6 +2061,42 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
             + "tenant namespace and is composed internally by the Lattice tenancy layer. Administer a tenant's tree "
             + "through the tenant-scoped tree-administration surface, by its unqualified name.",
             paramName);
+    }
+
+    /// <summary>
+    /// Rejects a reserved <b>system data</b> tree id (the
+    /// <see cref="LatticeConstants.SystemDataTreePrefix"/> namespace, for example
+    /// <c>sys-auth-policy</c> or <c>sys-membership-groups</c>) for the verbs whose
+    /// contract documents that a reserved system tree is refused.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is deliberately narrower than <see cref="ThrowIfReserved"/>, which
+    /// guards the <c>_lattice_</c> control namespace and the structural tenant
+    /// namespace. The <c>sys-</c> trees are ordinary Lattice trees that first-party
+    /// add-ons own as their durable store: an add-on writes to them under a
+    /// system-origin scope, and the data plane already refuses a user-origin write.
+    /// Broadening <see cref="ThrowIfReserved"/> to cover them would change every
+    /// verb that calls it, so the extra guard is applied only where the tool
+    /// contract promises it.
+    /// </para>
+    /// <para>
+    /// The concrete hazard it closes is retention: an operator could bound the
+    /// durable history window of the authorization policy tree, which would age out
+    /// auth history the add-on owns and never asked to have expired.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeId">The (already tenant-composed) tree id to guard.</param>
+    /// <param name="paramName">The name of the facade parameter the id arrived on.</param>
+    private static void ThrowIfSystemDataTree(string treeId, string paramName = "treeId")
+    {
+        if (treeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Tree id '{treeId}' is reserved: the '{LatticeConstants.SystemDataTreePrefix}' namespace holds "
+                + "first-party add-on state and its history retention is managed by the owning add-on.",
+                paramName);
+        }
     }
 
     /// <summary>

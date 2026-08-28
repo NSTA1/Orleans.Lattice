@@ -111,12 +111,31 @@ internal static class EntryHistoryReader
     }
 
     /// <summary>
-    /// Maps a retained write-ahead-log mutation into a public revision record. The
-    /// fallback window carries live value bytes, so the revision is reported as
-    /// <see cref="HistoryRetentionMode.FullValue"/> and the vector-clock frontier is
-    /// preserved (unlike the history-view path, which does not persist it).
+    /// Maps a retained write-ahead-log mutation into a public revision record,
+    /// shaped by the source tree's resolved durable-history retention policy. The
+    /// vector-clock frontier is preserved (unlike the history-view path, which does
+    /// not persist it).
     /// </summary>
-    internal static EntryRevision MapWalMutation(in LatticeMutation mutation, int previewBudget)
+    /// <remarks>
+    /// A tree with no history view is served entirely from this fallback, so the
+    /// retention mode has to be honoured here too. It previously stamped every
+    /// revision <see cref="HistoryRetentionMode.FullValue"/> unconditionally and
+    /// carried the full plaintext preview, which made
+    /// <see cref="HistoryRetentionMode.MetadataOnly"/> - the default - inert: an
+    /// operator who had configured metadata-only retention still had the value
+    /// bytes served back on every history read. Under a mode that does not retain
+    /// the bytes the revision keeps its content hash and byte length, exactly as
+    /// the shaped view rows do.
+    /// </remarks>
+    /// <param name="mutation">The retained write-ahead-log mutation.</param>
+    /// <param name="previewBudget">The per-revision preview byte ceiling.</param>
+    /// <param name="policy">The resolved retention policy for the source tree.</param>
+    /// <param name="nowTicks"><see cref="DateTime.UtcNow"/> ticks captured once for the page.</param>
+    internal static EntryRevision MapWalMutation(
+        in LatticeMutation mutation,
+        int previewBudget,
+        HistoryRetentionPolicy policy,
+        long nowTicks)
     {
         var kind = ClassifyWal(mutation, out var endKey);
 
@@ -134,8 +153,14 @@ internal static class EntryHistoryReader
         {
             var bytes = mutation.Value;
             valueLength = bytes?.Length ?? 0;
-            (preview, truncated) = ClipPreview(bytes, previewBudget);
             valueHash = bytes is null ? 0 : unchecked((long)XxHash64.HashToUInt64(bytes));
+
+            // Metadata (hash and length) is always reported; the bytes themselves
+            // only when the resolved mode retains them.
+            if (HistoryRetentionShaper.KeepsValueBytes(kind, mutation.Timestamp.WallClockTicks, policy, nowTicks))
+            {
+                (preview, truncated) = ClipPreview(bytes, previewBudget);
+            }
         }
 
         return new EntryRevision
@@ -150,7 +175,7 @@ internal static class EntryHistoryReader
             ValueHash = valueHash,
             Delta = delta,
             Mode = mutation.Mode,
-            RetentionShape = HistoryRetentionMode.FullValue,
+            RetentionShape = policy.Mode,
             EndKey = endKey,
             VectorClock = mutation.VectorClock,
         };

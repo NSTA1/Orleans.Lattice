@@ -38,6 +38,13 @@ public class LatticeCursorGrainResilienceTests
         var lattice = Substitute.For<ILattice>();
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
 
+        // A delete-range step answers from the tree catalogue before it probes the
+        // tree, so a step over a tree nobody created stays a side-effect-free
+        // no-op. Report this fixture's tree as registered so the step proceeds.
+        var catalogue = Substitute.For<ILatticeRegistry>();
+        catalogue.ExistsAsync(TreeId).Returns(Task.FromResult(true));
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(catalogue);
+
         var registry = reminderRegistry ?? Substitute.For<IReminderRegistry>();
         if (reminderRegistry is null)
         {

@@ -278,6 +278,59 @@ internal sealed partial class LatticeGrain(
 
     private bool _compactionEnsured;
     private bool _monitorEnsured;
+
+    /// <summary>
+    /// Sticky per-activation memo that the tree carries a catalogue registration.
+    /// Only the positive answer is cached: a tree that exists cannot become
+    /// unregistered while this activation keeps serving mutations for it, whereas a
+    /// negative must stay re-checkable because the very next write creates it.
+    /// </summary>
+    private bool _registrationObserved;
+
+    /// <summary>
+    /// Whether the tree carries a catalogue registration, answered without routing
+    /// into (and therefore without provisioning) the shard roots.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The options resolver seeds a registration for any tree that has none the
+    /// first time a shard root resolves its capacities, so simply routing a verb
+    /// into the tree durably creates it. A verb documented to be a no-op on an
+    /// unknown tree therefore has to answer from the catalogue instead of from the
+    /// data path.
+    /// </para>
+    /// <para>
+    /// This is deliberately an ungated read of the registry rather than
+    /// <see cref="TreeExistsAsync"/>: every caller is past its own operation's
+    /// authorization gate by the time it asks, so the answer discloses nothing the
+    /// caller was not already entitled to observe - whereas the gated verb reports
+    /// a denial as absence, which would silently turn a refused delete into a
+    /// no-op-shaped success.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<bool> IsTreeRegisteredAsync()
+    {
+        if (_registrationObserved)
+        {
+            return true;
+        }
+
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        if (!await registry.ExistsAsync(TreeId))
+        {
+            return false;
+        }
+
+        _registrationObserved = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Drops the sticky registration memo, so the next delete re-reads the
+    /// catalogue. Called by the tree-lifecycle verbs that retire the row.
+    /// </summary>
+    private void InvalidateRegistrationMemo() => _registrationObserved = false;
+
     private string? _physicalTreeId;
     private ShardMap? _shardMap;
     // Per-activation array-keyed cache of resolved IShardRootGrain references
@@ -2421,8 +2474,8 @@ internal sealed partial class LatticeGrain(
         {
             enforce.GetAwaiter().GetResult();
             return LatticeIdempotencyContext.IsActive
-                ? RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
-                : DeleteAsyncCore(key, cancellationToken);
+                ? RunMutationAsync(ct => DeleteRegisteredAsync(key, ct), cancellationToken)
+                : DeleteRegisteredAsync(key, cancellationToken);
         }
         return DeleteEnforcedSlowAsync(enforce, key, cancellationToken);
     }
@@ -2431,9 +2484,36 @@ internal sealed partial class LatticeGrain(
     {
         await enforce;
         return LatticeIdempotencyContext.IsActive
-            ? await RunMutationAsync(ct => DeleteAsyncCore(key, ct), cancellationToken)
-            : await DeleteAsyncCore(key, cancellationToken);
+            ? await RunMutationAsync(ct => DeleteRegisteredAsync(key, ct), cancellationToken)
+            : await DeleteRegisteredAsync(key, cancellationToken);
     }
+
+    /// <summary>
+    /// Runs a caller-originated single-key delete, short-circuiting to the
+    /// documented no-op when the tree carries no catalogue registration.
+    /// </summary>
+    /// <remarks>
+    /// Retracting a key from a tree that was never created is documented to report
+    /// "nothing was deleted", and must stay side-effect free: routing into the
+    /// shard root would lazily register the tree (a durable catalogue row plus a
+    /// full shard configuration) as a side-effect of an operation reporting that
+    /// there was nothing to do. The probe sits behind the delete gate that every
+    /// public entry point applies, so a caller who may not delete is still denied
+    /// rather than quietly told the key was absent. The
+    /// <see cref="ISystemLattice"/> bypass deliberately does not go through here:
+    /// internal trees are not catalogue-registered at all.
+    /// <para>
+    /// Once the memo is warm this is a plain branch that tail-calls the core, so a
+    /// steady-state delete allocates exactly what it did before the probe existed.
+    /// </para>
+    /// </remarks>
+    private Task<bool> DeleteRegisteredAsync(string key, CancellationToken cancellationToken) =>
+        _registrationObserved
+            ? DeleteAsyncCore(key, cancellationToken)
+            : DeleteRegisteredSlowAsync(key, cancellationToken);
+
+    private async Task<bool> DeleteRegisteredSlowAsync(string key, CancellationToken cancellationToken) =>
+        await IsTreeRegisteredAsync() && await DeleteAsyncCore(key, cancellationToken);
 
     async Task<bool> ISystemLattice.DeleteAsync(string key, CancellationToken cancellationToken)
     {
@@ -2445,6 +2525,7 @@ internal sealed partial class LatticeGrain(
     {
         ArgumentNullException.ThrowIfNull(key);
         cancellationToken.ThrowIfCancellationRequested();
+
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -2472,6 +2553,15 @@ internal sealed partial class LatticeGrain(
         ArgumentNullException.ThrowIfNull(endExclusive);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceRangeDeleteAsync(startInclusive, endExclusive, cancellationToken);
+
+        // Behind the range-delete gate, and for the same reason as the single-key
+        // delete: retracting a range from a tree that was never created is a no-op
+        // that must not provision the tree. See IsTreeRegisteredAsync.
+        if (!await IsTreeRegisteredAsync())
+        {
+            return 0;
+        }
+
         LatticeTransactionContext.EnsureCurrent();
         await EnsureCompactionReminderAsync();
         cancellationToken.ThrowIfCancellationRequested();

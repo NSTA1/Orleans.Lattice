@@ -648,6 +648,85 @@ public sealed class LatticeCatalogIntegrationTests
     }
 
     [Test]
+    public void ListIndexTagsAsync_unknown_index_reports_not_found_instead_of_an_empty_page()
+    {
+        // These two verbs used to hand an index handle a name that was never
+        // created and enumerate it, which both answered an empty catalogue and
+        // materialised the backing membership tree - so the very next tag-filtered
+        // scan reported Found-with-zero-entries for an index the caller had only
+        // ever mistyped. They now resolve without materialising and report the same
+        // NotFound the tree-administration tag verbs already do.
+        Assert.That(
+            async () => await _fixture.Query.ListIndexTagsAsync(
+                new CatalogRequest { IndexName = "never-materialised-index" }),
+            Throws.TypeOf<KeyNotFoundException>());
+    }
+
+    [Test]
+    public void ScanTagMembersAsync_unknown_index_reports_not_found_instead_of_an_empty_page()
+    {
+        Assert.That(
+            async () => await _fixture.Query.ScanTagMembersAsync(
+                new TagMemberScanRequest { IndexName = "never-materialised-index", Tag = "open" }),
+            Throws.TypeOf<KeyNotFoundException>());
+    }
+
+    [Test]
+    public async Task An_index_read_of_an_unknown_index_does_not_materialise_it()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 1);
+        const string indexName = "phantom-index";
+
+        // Before: a fresh name is unknown to the tag-filtered scan.
+        var before = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "orders",
+            IndexName = indexName,
+            Tag = "open",
+            PageSize = 10,
+        });
+
+        Assert.That(
+            async () => await _fixture.Query.ListIndexTagsAsync(
+                new CatalogRequest { IndexName = indexName }),
+            Throws.TypeOf<KeyNotFoundException>());
+        Assert.That(
+            async () => await _fixture.Query.ScanTagMembersAsync(
+                new TagMemberScanRequest { IndexName = indexName, Tag = "open" }),
+            Throws.TypeOf<KeyNotFoundException>());
+
+        // After: still unknown. Before the fix the two catalogue reads conjured the
+        // tag-{indexName} membership tree and this second scan reported Found.
+        var after = await _fixture.Query.ScanEntriesAsync(new EntryScanRequest
+        {
+            TreeId = "orders",
+            IndexName = indexName,
+            Tag = "open",
+            PageSize = 10,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Status, Is.EqualTo(StateQueryStatus.IndexNotFound));
+            Assert.That(after.Status, Is.EqualTo(StateQueryStatus.IndexNotFound));
+        });
+    }
+
+    [Test]
+    public async Task ListIndexTagsAsync_still_answers_for_a_real_but_empty_index()
+    {
+        await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 1);
+        var index = _fixture.CreateTagIndex("orders", "empty-but-real");
+        await index.Key("key-00000").AddAsync(["open"]);
+        await index.Key("key-00000").RemoveAsync(["open"]);
+
+        var page = await _fixture.Query.ListIndexTagsAsync(
+            new CatalogRequest { IndexName = "empty-but-real" });
+
+        Assert.That(page.Entries, Is.Empty);
+    }
+
+    [Test]
     public async Task ScanEntriesAsync_with_index_and_tag_returns_only_tagged_rows()
     {
         await _fixture.CreatePopulatedTreeAsync("orders", keyCount: 6);

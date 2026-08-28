@@ -49,6 +49,11 @@ public partial class LatticeCursorGrainTests
         var effectiveRegistry = registry ?? Substitute.For<ITxRegistryGrain>();
         grainFactory.GetGrain<ITxRegistryGrain>(TreeId).Returns(effectiveRegistry);
 
+        // A delete-range step answers from the tree catalogue before it probes the
+        // tree, so a step against a tree nobody created is a no-op that provisions
+        // nothing. Report the cursor's tree as registered so the step proceeds.
+        WireCatalogue(grainFactory);
+
         var reminders = reminderRegistry ?? Substitute.For<IReminderRegistry>();
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult<IGrainReminder?>(Substitute.For<IGrainReminder>()));
@@ -72,6 +77,18 @@ public partial class LatticeCursorGrainTests
     }
 
     /// <summary>
+    /// Reports the cursor's tree as present in the tree catalogue, which the
+    /// delete-range step consults before it probes the tree so that stepping a
+    /// range over a tree nobody created stays a side-effect-free no-op.
+    /// </summary>
+    private static void WireCatalogue(IGrainFactory grainFactory)
+    {
+        var catalogue = Substitute.For<ILatticeRegistry>();
+        catalogue.ExistsAsync(TreeId).Returns(Task.FromResult(true));
+        grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(catalogue);
+    }
+
+    /// <summary>
     /// Builds a cursor grain and returns the substitute <see cref="IGrainFactory"/>
     /// backing it, so snapshot tests can wire per-shard
     /// <see cref="ISnapshotLeafGrain"/> / <see cref="ISnapshotBaselineStorageGrain"/>
@@ -90,6 +107,7 @@ public partial class LatticeCursorGrainTests
         var lattice = Substitute.For<ILattice>();
         grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
         grainFactory.GetGrain<ITxRegistryGrain>(TreeId).Returns(Substitute.For<ITxRegistryGrain>());
+        WireCatalogue(grainFactory);
 
         var reminders = Substitute.For<IReminderRegistry>();
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
