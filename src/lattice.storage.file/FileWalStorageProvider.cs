@@ -307,11 +307,48 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     /// its UTF-8 byte), so distinct tree ids always map to distinct
     /// directories.
     /// </summary>
+    /// <remarks>
+    /// A tree id is an opaque, caller-supplied string, so the encoder is a
+    /// security boundary: the encoded segment must always name a directory
+    /// rather than a relative path token, and two distinct ids must never name
+    /// the same directory. <c>.</c> is in the unreserved set (it is legitimate
+    /// inside a tree name), which on its own would leave two defects:
+    /// <list type="bullet">
+    /// <item>
+    /// <description>
+    /// The ids <c>"."</c> and <c>".."</c> would encode to themselves, and
+    /// <see cref="Path.Combine(string, string, string)"/> performs no
+    /// normalisation, so <c>".."</c> would resolve the shard directory outside
+    /// the operator-configured <see cref="FileWalStorageOptions.RootDirectory"/>
+    /// and write a WAL beyond the ACLs, quotas, and retention policy scoped to
+    /// that root.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// Windows strips trailing dots from a path component, so the ids <c>"a"</c>
+    /// and <c>"a."</c> would both resolve to the directory <c>a</c> - two
+    /// distinct trees silently sharing one WAL directory, each overwriting the
+    /// other's log - while an id such as <c>"a.."</c> would fail the directory
+    /// creation outright. That breaks the injectivity this encoder exists to
+    /// provide, on the platform the library is developed and tested on.
+    /// </description>
+    /// </item>
+    /// </list>
+    /// Escaping the segment's <b>trailing dot run</b> closes both: a segment can
+    /// then neither consist solely of relative-path tokens nor end in a
+    /// character the filesystem will strip. Dots elsewhere are untouched, so
+    /// <c>a.b</c> and <c>..a</c> keep their natural spelling. Injectivity is
+    /// preserved because <c>%</c> is itself always escaped, so a literal
+    /// <c>%2E</c> in a tree id encodes to <c>%252E</c> and no other id can
+    /// encode to a given output.
+    /// </remarks>
     internal static string EncodePathSegment(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         var bytes = Encoding.UTF8.GetBytes(treeId);
         var builder = new StringBuilder(bytes.Length);
+        var trailingDots = 0;
         foreach (var b in bytes)
         {
             var isUnreserved = b is (>= (byte)'A' and <= (byte)'Z')
@@ -320,10 +357,14 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
                 or (byte)'-' or (byte)'.' or (byte)'_';
             if (isUnreserved)
             {
+                // Track the run of dots ending the segment; any other unreserved
+                // byte resets it.
+                trailingDots = b == (byte)'.' ? trailingDots + 1 : 0;
                 builder.Append((char)b);
             }
             else
             {
+                trailingDots = 0;
                 builder.Append('%');
                 builder.Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
             }
@@ -331,7 +372,31 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
 
         // Guard against an empty segment (an empty tree id) so Path.Combine
         // never collapses the directory.
-        return builder.Length == 0 ? "_" : builder.ToString();
+        if (builder.Length == 0)
+        {
+            return "_";
+        }
+
+        // Escape the trailing dot run. This subsumes the all-dot segments
+        // (".", "..", "...") - which are relative path tokens Path.Combine would
+        // let escape the configured WAL root - and the trailing-dot ids ("a.",
+        // "a..") that Windows would otherwise fold onto a sibling tree's
+        // directory or reject outright. Only allocated on this cold path; an
+        // ordinary tree id leaves the fast path untouched.
+        if (trailingDots > 0)
+        {
+            var keep = builder.Length - trailingDots;
+            var escaped = new StringBuilder(keep + (trailingDots * 3));
+            escaped.Append(builder, 0, keep);
+            for (var i = 0; i < trailingDots; i++)
+            {
+                escaped.Append("%2E");
+            }
+
+            return escaped.ToString();
+        }
+
+        return builder.ToString();
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);

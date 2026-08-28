@@ -161,10 +161,15 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions" }));
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities" }),
+                "lattice_capabilities is the only ungated advertisement. lattice_list_regions reports "
+                + "peer-region topology and is useless to a caller who can route nothing, so a caller "
+                + "holding no facade grant must not be offered it.");
             Assert.That(plan.Capabilities.Authenticated, Is.True);
             Assert.That(plan.Capabilities.SubjectId, Is.EqualTo("alice"));
             Assert.That(plan.Instructions, Does.Contain("No facade groups are available"));
+            Assert.That(plan.Instructions, Does.Not.Contain("lattice_list_regions"),
+                "The instructions must not point a caller at a tool it was not offered.");
         });
     }
 
@@ -416,6 +421,70 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task Region_discovery_tool_is_gated_and_wrapped_for_per_invocation_authorization()
+    {
+        // lattice_list_regions reports peer-region ids, cluster ids, and the
+        // per-group gRPC endpoints of every reachable region. It must be gated
+        // exactly like a group tool - by grant AND by the authorizer - and the
+        // advertised instance must re-check the gate on invoke, so it can never
+        // be advertised-but-ungated or hidden-but-callable.
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        var regionTool = plan.Tools.Single(t => t.ProtocolTool.Name == "lattice_list_regions");
+        Assert.Multiple(() =>
+        {
+            Assert.That(regionTool, Is.InstanceOf<AuthorizedMetaTool>(),
+                "The region-discovery tool must carry the invoke-time half of the lock-step gate.");
+            Assert.That(plan.Instructions, Does.Contain("lattice_list_regions"));
+        });
+    }
+
+    [Test]
+    public async Task Region_discovery_tool_is_hidden_from_a_caller_holding_no_facade_grant()
+    {
+        // A caller granted nothing can route nothing, so peer-region topology is
+        // disclosure with no legitimate use. Regression for the ungated
+        // advertisement that offered it to every authenticated caller.
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None,
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(ToolNames(plan.Tools), Does.Not.Contain("lattice_list_regions"));
+    }
+
+    [Test]
+    public async Task Region_discovery_tool_is_hidden_when_the_authorizer_denies_it_by_name()
+    {
+        // Even a caller with a facade grant is refused the tool when the
+        // registered authorizer denies that specific tool name.
+        var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            new FakeAuthorizer(context => context.ToolName != "lattice_list_regions"),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "data_read" }));
+            Assert.That(plan.Instructions, Does.Not.Contain("lattice_list_regions"),
+                "The instructions must not point a caller at a tool it was not offered.");
+        });
+    }
+
+    [Test]
     public async Task Deny_all_authorizer_hides_every_granted_group_tool()
     {
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
@@ -427,8 +496,9 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
-        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions" }),
-            "The default-deny authorizer must hide every facade tool, leaving only the ungated meta-tools.");
+        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities" }),
+            "The default-deny authorizer must hide every facade tool and the region-discovery "
+            + "meta-tool, leaving only the ungated capabilities meta-tool.");
     }
 
     [Test]
@@ -443,8 +513,9 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
 
-        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "lattice_list_regions", "data_get" }),
-            "Only the tool the authorizer permits is advertised; the denied sibling is omitted.");
+        Assert.That(ToolNames(plan.Tools), Is.EquivalentTo(new[] { "lattice_capabilities", "data_get" }),
+            "Only the tool the authorizer permits is advertised; the denied sibling - and the "
+            + "equally denied region-discovery meta-tool - are omitted.");
     }
 
     [Test]
@@ -467,11 +538,14 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(seen, Has.Count.EqualTo(1), "The authorizer is consulted once per candidate group tool.");
+            Assert.That(seen, Has.Count.EqualTo(2),
+                "The authorizer is consulted once for the region-discovery meta-tool and once per candidate group tool.");
             Assert.That(seen[0].Call, Is.SameAs(httpContext),
                 "The authorizer must receive the request context that initiated the session.");
-            Assert.That(seen[0].ToolName, Is.EqualTo("data_read"),
-                "The authorization decision must be scoped to the candidate tool's advertised name.");
+            Assert.That(
+                seen.Select(s => s.ToolName),
+                Is.EquivalentTo(new[] { "lattice_list_regions", "data_read" }),
+                "The authorization decision must be scoped to each candidate tool's advertised name.");
         });
     }
 

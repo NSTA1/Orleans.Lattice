@@ -52,7 +52,20 @@ public sealed class DenyAllMcpAuthorizerEndToEndTests
                 "The authenticated session still receives the ungated capabilities meta-tool.");
             Assert.That(toolNames, Does.Not.Contain("lattice_data_get"),
                 "The default-deny authorizer must hide the granted data tools from discovery.");
+            Assert.That(toolNames, Does.Not.Contain("lattice_list_regions"),
+                "lattice_capabilities is the only ungated advertisement: the region-discovery tool "
+                + "discloses peer-region ids, cluster ids, and per-group endpoints, so the default-deny "
+                + "authorizer must hide it too.");
         });
+
+        // The region-discovery tool is equally unreachable by name: it is gated in
+        // lock-step, so a client that asks for it directly is refused rather than
+        // served cluster topology.
+        Assert.That(
+            () => client.CallToolAsync(
+                "lattice_list_regions",
+                cancellationToken: cts.Token).AsTask(),
+            Throws.InstanceOf<McpException>());
 
         // A direct invocation of a denied data tool is unreachable end to end.
         // Because the gate is lock-step, DenyAll hides lattice_data_get at

@@ -369,6 +369,83 @@ internal sealed class LatticeStateQuery(
     }
 
     /// <summary>
+    /// The <see cref="IReadOnlyCollection{T}"/> overload of
+    /// <see cref="FilterTreeIdsByActiveTenant(IReadOnlyList{string})"/>, for a
+    /// choke point whose source yields an unindexed collection. Materialising the
+    /// list happens only when the seam is actually going to filter, so the
+    /// tenancy-off path still returns the same reference with no allocation.
+    /// </summary>
+    private IReadOnlyCollection<string> FilterTreeIdsByActiveTenant(IReadOnlyCollection<string> treeIds)
+    {
+        var filter = _services.GetService<ITenantEnumerationFilter>();
+        if (filter is not { IsActive: true })
+        {
+            return treeIds;
+        }
+
+        if (LatticeActiveTenantContext.Current is not { } tenant)
+        {
+            return treeIds;
+        }
+
+        return filter.Filter(tenant, treeIds as IReadOnlyList<string> ?? treeIds.ToArray());
+    }
+
+    /// <summary>
+    /// Prunes a view enumeration to the views the ambient active tenant may
+    /// observe, using the same <see cref="ITenantEnumerationFilter"/> seam the
+    /// tree and tag-index catalogs apply.
+    /// </summary>
+    /// <remarks>
+    /// A view's registry key <b>is</b> its (possibly tenant-qualified) name -
+    /// <c>t/{tenant}/{name}</c> for a tenant's view, a bare name for a legacy
+    /// default-tenant one - and the tenant segment is outermost in both the name
+    /// and the composed <c>t/{tenant}/view-{name}</c> tree id, so structural
+    /// ownership resolves identically from either. Filtering the names is
+    /// therefore exactly the tree-catalog decision, applied to the surface that
+    /// enumerates views. Zero cost when tenancy is off: the same reference is
+    /// returned without touching the list.
+    /// </remarks>
+    private IReadOnlyCollection<ViewListing> FilterViewsByActiveTenant(IReadOnlyCollection<ViewListing> views)
+    {
+        var filter = _services.GetService<ITenantEnumerationFilter>();
+        if (filter is not { IsActive: true })
+        {
+            return views;
+        }
+
+        if (LatticeActiveTenantContext.Current is not { } tenant)
+        {
+            return views;
+        }
+
+        var names = new string[views.Count];
+        var next = 0;
+        foreach (var view in views)
+        {
+            names[next++] = view.ViewName;
+        }
+
+        var visibleNames = filter.Filter(tenant, names);
+        if (visibleNames.Count == names.Length)
+        {
+            return views;
+        }
+
+        var allowed = new HashSet<string>(visibleNames, StringComparer.Ordinal);
+        var visible = new List<ViewListing>(visibleNames.Count);
+        foreach (var view in views)
+        {
+            if (allowed.Contains(view.ViewName))
+            {
+                visible.Add(view);
+            }
+        }
+
+        return visible;
+    }
+
+    /// <summary>
     /// Resolves the tree-id prefix the catalog enumeration can safely be narrowed
     /// to, or <c>null</c> to enumerate the whole registry.
     /// </summary>
@@ -562,6 +639,14 @@ internal sealed class LatticeStateQuery(
         {
             registrations = await CollectViewsAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        // Scope the view catalog to the ambient active tenant's views, exactly as
+        // ListTreesAsync and ListTagIndexesAsync scope theirs. Views are
+        // tenant-partitioned, so the registry this enumerates system-origin holds
+        // every tenant's; without this seam a tenant caller read back the whole
+        // cross-tenant view roster (and, through it, the tenant roster itself)
+        // whenever read visibility was off or no auth gate was registered.
+        registrations = FilterViewsByActiveTenant(registrations);
 
         var candidates = registrations
             // Hide system views (those named with the system-data prefix, e.g. the
@@ -872,6 +957,14 @@ internal sealed class LatticeStateQuery(
         }
 
         var pageSize = request.EffectivePageSize;
+        // Scope the covered set to the ambient active tenant's trees, exactly as
+        // ListTreesAsync and ListTagIndexesAsync do. A tag index is addressed by
+        // a cluster-global name, so the ids it covers span every tenant that
+        // tagged into it; without this seam a tenant naming a shared index read
+        // back the other tenants' tree ids whenever read visibility was off or no
+        // auth gate was registered.
+        covered = FilterTreeIdsByActiveTenant(covered);
+
         var entries = new List<string>(Math.Min(pageSize, covered.Count));
         string? nextToken = null;
 
