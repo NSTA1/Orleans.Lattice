@@ -130,8 +130,8 @@ model; no rebuild is needed.
 
 ## Acting as an identity
 
-There is no Entra tenant and no per-identity registration. You choose the identity
-per call:
+There is no Entra tenant and no per-identity registration. You choose the identity -
+and, once tenancy is enabled, the tenant you act as - per call:
 
 - **MCP / gRPC:** set the bearer token to the identity id.
 
@@ -154,6 +154,30 @@ per call:
   back in with any identity id as the **username** (the password is ignored) to see
   that identity's view - a `data-reader` sees only readable trees, an `auditor` sees
   none, and the Access tab reflects the seeded groups and grants.
+
+- **Acting as a tenant (tenancy stack only):** identity and tenant are independent
+  axes. The bearer token says *who you are*; the `lattice-active-tenant` header says
+  *which tenant you are acting as*. Send both:
+
+  ```bash
+  # Act as region-operator, asserting the acme tenant.
+  curl -s http://localhost:9090/ \
+    -H "Authorization: Bearer region-operator" \
+    -H "lattice-active-tenant: acme" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lattice_tenant_current","arguments":{}}}'
+  ```
+
+  The head lifts that header onto the ambient active-tenant context for the tool
+  call, and the credential-forwarding interceptor re-emits it to the silo as gRPC
+  metadata, so the assertion survives the split-head process boundary. It is only an
+  *assertion*: the silo re-validates it against your subject's membership of that
+  tenant (here, the `adminSubjects` seeded from `identities.json`) and fails closed
+  if you are not a member, rather than quietly downgrading you to `default`. Omit
+  the header and the call runs under the reserved `default` tenant. Header lifting
+  is on by default and this harness does not rename it, so `lattice-active-tenant`
+  is the value to send; with `TENANCY_ENABLED` unset the header is inert.
 
 ## Demo 1 - differentiated access (deny-by-default)
 
@@ -206,12 +230,34 @@ The silos seed two demo tenants from [`identities.json`](identities.json)'s
    report; for one it does not, the tenant reads back as `NotFound` - isolation
    does not even leak the tenant's existence to a non-administering subject, the
    same deny-by-default discipline as tree access.
-4. `lattice_tenant_current` returns `default` on every call. This is an honest
-   limitation of the **split-head** topology, not a bug: the MCP head resolves the
-   caller's *authorization* over the wire but there is no active-tenant context
-   forwarded across the process boundary, so the ambient tenant is always the
-   default. Tenant *scoping* is still fully demonstrated by `_list` / `_get`, which
-   derive from the caller's credential.
+4. `lattice_tenant_current` reflects the tenant the call **asserts**, which is a
+   second axis independent of identity: send the `lattice-active-tenant` header
+   alongside the bearer token (see
+   [Acting as an identity](#acting-as-an-identity)). Omit it and the call runs under
+   the reserved `default` tenant. Send `lattice-active-tenant: acme` as
+   `platform-admin` or `region-operator` and it returns `acme`; send that same
+   header as `data-reader`, which does not administer `acme`, and the call is
+   refused rather than quietly downgraded to `default` - the header is an assertion
+   the silo re-validates against the seeded admin subjects, never a claim it trusts.
+   The assertion does cross the **split-head** boundary: the head lifts the header
+   into the ambient tenant context for the tool call and the credential-forwarding
+   interceptor re-emits it to the silo over gRPC. Tenant scoping is therefore
+   demonstrable on both axes - `_list` / `_get` derive from the caller's credential,
+   while the asserted tenant is what scopes the tenant-aware surfaces.
+5. `lattice_list_regions` is scoped by that same assertion. With no
+   `lattice-active-tenant` header the answer is the unscoped topology, byte-for-byte
+   what a single-tenant cluster returns, with no `tenantScope` property on any entry.
+   Re-send it with `lattice-active-tenant: acme` and each entry gains a `tenantScope`
+   object naming the tenant and its standing in that region (`isAllowed`,
+   `isResident`, `status`), so the presence or absence of that property is the
+   visible proof the assertion reached the region filter. Be clear about what this
+   harness can show: each head serves exactly **one** region (the compose file sets
+   neither `Mcp:RegionId` nor any `Mcp:Regions` peer, so the current region is the
+   built-in `current` and there are no peers), and the region a caller is talking to
+   is always advertised to it. You see the *annotation* here, not the *pruning* - a
+   peer outside the tenant's allowed-or-resident set dropping out of the list needs a
+   multi-region head, which is the deployed reference architecture's shape rather
+   than this harness's.
 
 ## Configuration knobs
 
