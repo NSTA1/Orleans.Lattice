@@ -94,17 +94,20 @@ public sealed class OrFlag : ICrdt<OrFlag>
     {
         if (Enables.Count == 0) return false;
         var anyAdded = false;
-        if (Tombstones.Count <= DotLinearScanThreshold)
+        if (Tombstones.Count <= DotLinearScanThreshold || Enables.Count <= DotLinearScanThreshold)
         {
-            // Tiny tombstone list (the common 0-1-dot case): a linear
-            // Contains against the growing list beats allocating a HashSet.
+            // Tiny tombstone list (the common 0-1-dot case), or few enable dots
+            // to tombstone: a linear Contains against the growing list beats
+            // allocating a HashSet. A flag is typically enabled once or twice
+            // between disables, so the enable side is the small one even when
+            // the tombstone history is long.
             foreach (var dot in Enables)
             {
                 if (!Tombstones.Contains(dot)) { Tombstones.Add(dot); anyAdded = true; }
             }
             return anyAdded;
         }
-        var tombSet = new HashSet<OrSetDot>(Tombstones);
+        var tombSet = OrSetDotSet.Build(Tombstones);
         foreach (var dot in Enables)
         {
             if (tombSet.Add(dot))
@@ -168,9 +171,11 @@ public sealed class OrFlag : ICrdt<OrFlag>
     {
         if (Enables.Count == 0) return 0;
         if (Tombstones.Count == 0) return Enables.Count;
-        if (Tombstones.Count <= DotLinearScanThreshold)
+        if (Tombstones.Count <= DotLinearScanThreshold || Enables.Count <= DotLinearScanThreshold)
         {
-            // Tiny tombstone list: linear scan beats hashing.
+            // Tiny tombstone list, or few enable dots: linear scan beats
+            // hashing. Enables is the small side on any flag that has been
+            // toggled repeatedly, so this keeps IsSet allocation-free there.
             var liveLinear = 0;
             foreach (var dot in Enables)
             {
@@ -178,7 +183,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
             }
             return liveLinear;
         }
-        var tombSet = new HashSet<OrSetDot>(Tombstones);
+        var tombSet = OrSetDotSet.Build(Tombstones);
         var live = 0;
         foreach (var dot in Enables)
         {
@@ -200,7 +205,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
             }
             return;
         }
-        var seen = new HashSet<OrSetDot>(target);
+        var seen = OrSetDotSet.Build(target, source.Count);
         foreach (var dot in source)
         {
             if (seen.Add(dot)) target.Add(dot);
@@ -219,7 +224,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
             }
             return;
         }
-        var seen = new HashSet<OrSetDot>(target);
+        var seen = OrSetDotSet.Build(target, source.Count);
         for (var i = 0; i < source.Count; i++)
         {
             var dot = source[i];

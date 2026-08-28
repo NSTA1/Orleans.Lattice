@@ -391,16 +391,18 @@ public sealed class MvRegister : ICrdt<MvRegister>
     // same (replicaId, counter) dot carrying different values. Mirrors
     // Rga.CompareBytes: compare byte-by-byte, then by length, so a shorter
     // prefix sorts before a longer extension of it.
+    // Lexicographic byte-order comparison used to break a same-dot value
+    // collision deterministically (the greater byte sequence wins) so
+    // MergeFrom / MergeDelta stay commutative even when two writes minted the
+    // same (replicaId, counter) dot carrying different values. Mirrors
+    // Rga.CompareBytes: a differing byte decides, otherwise a shorter prefix
+    // sorts before a longer extension of it. Only the sign is load-bearing, so
+    // the vectorized SequenceCompareTo is interchangeable with the scalar loop
+    // it replaced (see Rga.CompareBytes for the measured delta).
     private static int CompareValueBytes(byte[] left, byte[] right)
     {
         if (ReferenceEquals(left, right)) return 0;
-        var min = Math.Min(left.Length, right.Length);
-        for (var i = 0; i < min; i++)
-        {
-            var c = left[i].CompareTo(right[i]);
-            if (c != 0) return c;
-        }
-        return left.Length.CompareTo(right.Length);
+        return ((ReadOnlySpan<byte>)left).SequenceCompareTo(right);
     }
 
     /// <summary>

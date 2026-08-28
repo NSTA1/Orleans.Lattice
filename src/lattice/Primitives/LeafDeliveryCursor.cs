@@ -42,9 +42,17 @@ internal readonly record struct LeafDeliveryCursor
 {
     /// <summary>
     /// Per-activation epoch identifier. Bumped on every leaf
-    /// activation via a process-wide monotonic counter so a cache
-    /// holding a stale cursor across a leaf re-activation falls
-    /// straight back to the full-snapshot delivery path.
+    /// activation from a per-process randomly-seeded monotonic
+    /// counter, so a cache holding a stale cursor across a leaf
+    /// re-activation falls straight back to the full-snapshot delivery
+    /// path. The seed is randomised rather than starting at zero
+    /// because the epoch is compared across processes: a counter
+    /// starting from zero in every silo would hand out the same low
+    /// integers everywhere, and two activations in different processes
+    /// minting the same epoch would suppress exactly the mismatch this
+    /// field exists to signal. The leaf additionally treats a cursor
+    /// whose <see cref="Sequence"/> is ahead of its own as stale, so a
+    /// residual collision still fails safe.
     /// </summary>
     [Id(0)] public long Epoch { get; init; }
 

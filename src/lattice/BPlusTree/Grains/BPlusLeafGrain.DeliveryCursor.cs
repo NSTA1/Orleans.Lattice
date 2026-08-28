@@ -24,8 +24,46 @@ internal sealed partial class BPlusLeafGrain
     /// Incremented on every leaf activation (lazily on first use); a
     /// freshly-activated leaf therefore mismatches every cache's
     /// previously-observed epoch, forcing a full-snapshot refresh.
+    /// <para>
+    /// The seed is randomised per process rather than starting at zero.
+    /// An epoch is compared across processes - a cache outlives the silo
+    /// whose leaf activation minted the cursor it holds - so a counter
+    /// starting from zero in every silo hands out the same low integers
+    /// everywhere and two activations in different processes can mint the
+    /// same epoch. A collision is not benign: it suppresses the
+    /// epoch-mismatch full-snapshot path, so the holding cache never
+    /// resyncs, keeps serving rows that diverged while it was
+    /// disconnected, and - because <c>LeafCacheGrain</c> gates its cache
+    /// eviction on the same epoch flip - keeps serving keys the leaf has
+    /// since deleted. Seeding from a cryptographically-random 64-bit
+    /// value makes a cross-process collision negligible while preserving
+    /// the strict per-activation monotonicity within a process that the
+    /// increment below relies on. The range is clamped away from the low
+    /// integers so a collision cannot be produced by a process that has
+    /// only just started, and <c>0</c> stays reserved for
+    /// <see cref="LeafDeliveryCursor.Empty"/>.
+    /// </para>
     /// </summary>
-    private static long s_deliveryEpochSeed;
+    private static long s_deliveryEpochSeed = InitialDeliveryEpochSeed();
+
+    /// <summary>
+    /// Produces the per-process starting point for
+    /// <see cref="s_deliveryEpochSeed"/>: a random value in
+    /// <c>[1, long.MaxValue / 2]</c>. The upper bound leaves a process
+    /// room to mint activations without overflowing, and the lower bound
+    /// keeps <c>0</c> reserved for <see cref="LeafDeliveryCursor.Empty"/>.
+    /// </summary>
+    private static long InitialDeliveryEpochSeed()
+    {
+        Span<byte> buffer = stackalloc byte[sizeof(long)];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(buffer);
+
+        // Mask off the sign bit before the modulus so the result is always
+        // positive (long.MinValue has no positive counterpart, so negating
+        // it would overflow).
+        var positive = BitConverter.ToInt64(buffer) & long.MaxValue;
+        return (positive % (long.MaxValue / 2)) + 1;
+    }
 
     /// <summary>
     /// Per-activation delivery epoch, lazily assigned on first cursor
@@ -115,7 +153,21 @@ internal sealed partial class BPlusLeafGrain
         // full snapshot of every live entry along with the leaf's
         // current cursor; the cache will adopt the new cursor and
         // resume incremental delivery from there.
-        if (sinceCursor.Epoch != current.Epoch)
+        //
+        // A caller whose sequence is AHEAD of this activation's is
+        // treated the same way, as a fail-safe. The epoch seed is
+        // randomised per process so a cross-process collision is
+        // negligible, but it is not impossible, and the consequence of
+        // trusting one is silent: a fresh activation starts at sequence
+        // 0 while a cache holding entries is at 1 or more, so under a
+        // collided epoch the "already at head" branch below would ship an
+        // empty delta forever, leaving the cache serving rows that
+        // diverged while it was disconnected - and, because the cache
+        // gates its own eviction on the epoch flip, still serving keys
+        // this leaf has since deleted. A sequence ahead of ours cannot
+        // have been issued by this activation, so it can only be a stale
+        // cursor: snapshot instead of trusting it.
+        if (sinceCursor.Epoch != current.Epoch || sinceCursor.Sequence > current.Sequence)
         {
             var snapshot = new Dictionary<string, LwwValue<byte[]>>(
                 Cache.Count,

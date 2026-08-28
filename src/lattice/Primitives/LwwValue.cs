@@ -110,13 +110,27 @@ internal readonly record struct LwwValue<T>
     /// <summary>
     /// Lattice merge: keep the value with the higher timestamp. On an HLC tie
     /// (two replicas authored at the same <see cref="HybridLogicalClock"/>),
-    /// the result is resolved deterministically by a stable total order on
-    /// (<see cref="Timestamp"/>, <see cref="OriginClusterId"/>, 
-    /// <see cref="IsTombstone"/>) so replicas converge regardless of the
-    /// order in which they observe the writes. The winner's
-    /// <see cref="IsMigrated"/> flag rides through verbatim (it is provenance
-    /// metadata that is not part of the identity total order). Commutative,
-    /// associative, idempotent.
+    /// the result is resolved by a stable total order on
+    /// (<see cref="Timestamp"/>, <see cref="OriginClusterId"/>,
+    /// <see cref="IsTombstone"/>, <see cref="ExpiresAtTicks"/>,
+    /// <see cref="Value"/>, <see cref="IsMigrated"/>) so replicas converge
+    /// regardless of the order in which they observe the writes.
+    /// <para>
+    /// Idempotent and associative unconditionally: where the order ties, the
+    /// leftmost operand of the whole expression wins under either grouping.
+    /// Commutative wherever the order is total, which it is for
+    /// <c>LwwValue&lt;byte[]&gt;</c> - the only instantiation the library
+    /// persists - because the <see cref="Value"/> comparison is a lexicographic
+    /// byte compare. For any other <typeparamref name="T"/> there is no ordering
+    /// available without a constraint the type does not carry, so two entries
+    /// that agree on every other ordered field but differ in
+    /// <see cref="Value"/> resolve left-biased, and for that residue alone
+    /// <c>Merge(a, b)</c> and <c>Merge(b, a)</c> disagree.
+    /// <see cref="VectorClock"/> is likewise not ordered (a
+    /// <see cref="VersionVector"/> is a partial order, not a total one) and
+    /// rides through on the winner verbatim; the library does not interpret it,
+    /// so it carries no conflict-resolution information.
+    /// </para>
     /// </summary>
     public static LwwValue<T> Merge(LwwValue<T> left, LwwValue<T> right)
     {
@@ -137,9 +151,46 @@ internal readonly record struct LwwValue<T>
         if (left.IsTombstone != right.IsTombstone)
             return left.IsTombstone ? left : right;
 
-        // Quaternary: indistinguishable on every stable identity field - the values are
-        // for all CRDT purposes equivalent, so picking left is deterministic.
+        // Quaternary and below: still indistinguishable on causal identity, so
+        // the remaining durable fields extend the order. OriginClusterId is null
+        // for every purely local write and HybridLogicalClock carries no node
+        // id, so a (wall, 0) collision between two leaves that first ticked in
+        // the same wall-clock tick is ordinary - without these the merge is
+        // simply left-biased and two replicas that observed the writes in
+        // different orders keep different values forever.
+        var expiryCmp = left.ExpiresAtTicks.CompareTo(right.ExpiresAtTicks);
+        if (expiryCmp != 0) return expiryCmp > 0 ? left : right;
+
+        var valueCmp = CompareValue(left.Value, right.Value);
+        if (valueCmp != 0) return valueCmp > 0 ? left : right;
+
+        // Last: provenance. IsMigrated changes the foreground orphan-drain
+        // decision in BPlusLeafGrain.ApplyTxCommit, so it must not be left to
+        // arrival order either.
+        if (left.IsMigrated != right.IsMigrated)
+            return left.IsMigrated ? left : right;
+
         return left;
+    }
+
+    /// <summary>
+    /// Orders two payloads when every causal field has already tied. Only
+    /// <c>byte[]</c> - the shape the library persists - carries an ordering
+    /// here; the lexicographic span compare is a total order over it. An
+    /// unordered <typeparamref name="T"/> reports "equal", which leaves the
+    /// merge left-biased for that residue (documented on
+    /// <see cref="Merge(LwwValue{T}, LwwValue{T})"/>). The type test resolves to
+    /// a single reference comparison and only ever runs on the tie path.
+    /// </summary>
+    private static int CompareValue(T? left, T? right)
+    {
+        if (left is null) return right is null ? 0 : -1;
+        if (right is null) return 1;
+        if (left is byte[] leftBytes && right is byte[] rightBytes)
+        {
+            return ((ReadOnlySpan<byte>)leftBytes).SequenceCompareTo(rightBytes);
+        }
+        return 0;
     }
 
     public int CompareTo(LwwValue<T> other) => Timestamp.CompareTo(other.Timestamp);

@@ -715,7 +715,18 @@ public sealed class CrdtShape
         }
         foreach (var dot in source)
         {
-            var element = dot.Element is null ? string.Empty : Convert.ToBase64String(dot.Element);
+            // A dot with no element is unmergeable: OrSet.MergeDelta and
+            // RwSet.MergeDelta both skip it. Mapping it onto string.Empty would
+            // give it a legal dedup key - and Convert.ToBase64String([]) IS
+            // string.Empty, so a null-element dot and a legitimately empty-
+            // element dot sharing a (replicaId, counter) would collide and the
+            // second would be dropped, silently losing the empty-element write.
+            // Skip it here the way AppendGSetElements already does.
+            if (dot.Element is null)
+            {
+                continue;
+            }
+            var element = Convert.ToBase64String(dot.Element);
             if (seen.Add((dot.ReplicaId ?? string.Empty, dot.Counter, element)))
             {
                 result.Add(dot);
