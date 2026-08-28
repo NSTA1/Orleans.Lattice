@@ -503,7 +503,20 @@ internal sealed class LeafCacheGrain(
         // ships only entries newer than _deliveryCursor.Sequence.
         var priorCursor = _deliveryCursor;
         var delta = await primaryLeaf.GetDeltaSinceCursorAsync(priorCursor);
-        var epochFlipped = priorCursor.Epoch != delta.DeliveryCursor.Epoch;
+
+        // A full snapshot is signalled either by the epoch changing (the
+        // ordinary re-activation case) or by our sequence having been
+        // ahead of the leaf's, which the leaf treats as a stale cursor and
+        // answers with a snapshot. The second arm matters because the epoch
+        // is compared across processes: if two activations in different
+        // silos ever mint the same epoch, the flip is suppressed, and
+        // without this the cache would merge the leaf's snapshot into its
+        // existing contents WITHOUT the eviction below - leaving keys the
+        // leaf has since deleted visible in the cache's read view. Keep
+        // this condition in lockstep with the leaf-side guard in
+        // BPlusLeafGrain.GetDeltaSinceCursorAsync.
+        var resynced = priorCursor.Epoch != delta.DeliveryCursor.Epoch
+            || priorCursor.Sequence > delta.DeliveryCursor.Sequence;
 
 #if LATTICE_DIAG
         // Compact one-line summary of cache._version vs delta.Version: for each
@@ -525,16 +538,16 @@ internal sealed class LeafCacheGrain(
             }
             return string.Join(",", parts);
         }
-        DiagSink.Write($"[DIAG refresh-delta] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} isEmpty={delta.IsEmpty} entryCount={delta.Entries.Count} splitKey={(delta.SplitKey ?? "<null>")} movedAwaySlotsCount={(delta.MovedAwaySlots?.Length ?? 0)} pendingCount={(pendingKeys?.Count ?? 0)} versions=[{FormatVer(_version, delta.Version)}] cursor=[ours.Ep={priorCursor.Epoch}.Sq={priorCursor.Sequence}->leaf.Ep={delta.DeliveryCursor.Epoch}.Sq={delta.DeliveryCursor.Sequence} epochFlipped={epochFlipped}]");
+        DiagSink.Write($"[DIAG refresh-delta] silo={DiagSiloTag} cache-gid={context.GrainId} primary={primaryId} isEmpty={delta.IsEmpty} entryCount={delta.Entries.Count} splitKey={(delta.SplitKey ?? "<null>")} movedAwaySlotsCount={(delta.MovedAwaySlots?.Length ?? 0)} pendingCount={(pendingKeys?.Count ?? 0)} versions=[{FormatVer(_version, delta.Version)}] cursor=[ours.Ep={priorCursor.Epoch}.Sq={priorCursor.Sequence}->leaf.Ep={delta.DeliveryCursor.Epoch}.Sq={delta.DeliveryCursor.Sequence} resynced={resynced}]");
 #endif
 
-        // Epoch flip means the leaf reactivated (or this is the
-        // first refresh ever): the delta now carries a full snapshot
-        // of every live entry. Clear the local cache so range-
+        // A resync (leaf reactivation, first refresh ever, or a cursor the
+        // leaf rejected as stale) means the delta now carries a full
+        // snapshot of every live entry. Clear the local cache so range-
         // deleted / migrated-away keys that no longer exist on the
         // leaf are evicted; the subsequent merge loop repopulates
         // _cache from the snapshot.
-        if (epochFlipped)
+        if (resynced)
         {
             _cache.Clear();
         }
