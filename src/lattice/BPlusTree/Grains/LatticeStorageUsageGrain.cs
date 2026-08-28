@@ -21,6 +21,16 @@ internal sealed class LatticeStorageUsageGrain(
 
     private TreeStorageUsageReport? _cached;
 
+    /// <summary>
+    /// Whether the WAL surface of <see cref="_cached"/> was fully accounted.
+    /// Tracked separately from <see cref="TreeStorageUsageReport.Partial"/>
+    /// because <c>Partial</c> now also covers a failed shard fan-out, whereas
+    /// the byte-pressure over-threshold gauge is a statement about retained
+    /// <i>WAL</i> bytes alone and must not be silenced by an unrelated shard
+    /// failure.
+    /// </summary>
+    private bool _cachedWalComplete;
+
     /// <inheritdoc />
     public async Task<TreeStorageUsageReport> GetReportAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
@@ -31,13 +41,14 @@ internal sealed class LatticeStorageUsageGrain(
 
         if (!forceRefresh && _cached is { } c && ttl > TimeSpan.Zero && (now - c.SampledAt) < ttl)
         {
-            PublishToMetrics(c, options);
+            PublishToMetrics(c, options, _cachedWalComplete);
             return c;
         }
 
-        var report = await BuildReportAsync(forceRefresh, cancellationToken);
+        var (report, walComplete) = await BuildReportAsync(forceRefresh, options, cancellationToken);
         _cached = report;
-        PublishToMetrics(report, options);
+        _cachedWalComplete = walComplete;
+        PublishToMetrics(report, options, walComplete);
         return report;
     }
 
@@ -46,15 +57,19 @@ internal sealed class LatticeStorageUsageGrain(
     /// subsequent meter scrape reflects it without re-fanning out. When the
     /// byte-pressure policy is enabled for the tree
     /// (<see cref="LatticeOptions.WalMaxRetainedBytes"/> set and positive) and
-    /// the WAL surface is supported (not <see cref="TreeStorageUsageReport.Partial"/>),
-    /// the over-threshold gauge is also updated from the freshly sampled
-    /// retained bytes. A partial or policy-disabled tree leaves the
-    /// over-threshold gauge untouched so it does not publish a misleading zero.
+    /// every WAL partition reported its retained bytes
+    /// (<paramref name="walComplete"/>), the over-threshold gauge is also
+    /// updated from the freshly sampled retained bytes. A tree whose WAL
+    /// surface is unsupported or whose WAL fan-out failed leaves the
+    /// over-threshold gauge untouched so it does not publish a misleading
+    /// zero. A <i>shard</i> fan-out failure also flags the report
+    /// <see cref="TreeStorageUsageReport.Partial"/> but says nothing about
+    /// retained WAL bytes, so it deliberately does not suppress this gauge.
     /// </summary>
-    private void PublishToMetrics(TreeStorageUsageReport report, LatticeOptions options)
+    private void PublishToMetrics(TreeStorageUsageReport report, LatticeOptions options, bool walComplete)
     {
         metrics.Publish(report);
-        if (options.WalMaxRetainedBytes is { } ceiling && ceiling > 0 && !report.Partial)
+        if (options.WalMaxRetainedBytes is { } ceiling && ceiling > 0 && walComplete)
         {
             metrics.PublishOverThreshold(report.TreeId, report.WalRetainedBytes > ceiling);
         }
@@ -79,7 +94,24 @@ internal sealed class LatticeStorageUsageGrain(
         });
     }
 
-    private async Task<TreeStorageUsageReport> BuildReportAsync(bool forceRefresh, CancellationToken cancellationToken)
+    /// <summary>
+    /// Fans out to every physical shard root and WAL partition and assembles the
+    /// report. Returns the report alongside whether the WAL surface was fully
+    /// accounted (see <see cref="_cachedWalComplete"/>).
+    /// <para>
+    /// Both surface kinds share one <see cref="BoundedFanOut"/> gate sized by
+    /// <see cref="LatticeOptions.MaxConcurrentStorageUsageSurfaces"/>, so a wide
+    /// tree never dispatches all of its shard roots at once, and the cluster
+    /// roll-up's own per-tree bound multiplies against a bounded - rather than
+    /// unbounded - inner level. Running both kinds under a single fan-out also
+    /// means every dispatched call is settled by one
+    /// <see cref="Task.WhenAll(Task[])"/>: the previous shape awaited the shard
+    /// batch and the WAL batch in sequence, so a throw from the first abandoned
+    /// the second batch's tasks unobserved.
+    /// </para>
+    /// </summary>
+    private async Task<(TreeStorageUsageReport Report, bool WalComplete)> BuildReportAsync(
+        bool forceRefresh, LatticeOptions options, CancellationToken cancellationToken)
     {
         // Resolve routing (physical tree ID + shard map) via the public
         // entry point so registry-alias resolution is handled uniformly.
@@ -88,50 +120,84 @@ internal sealed class LatticeStorageUsageGrain(
         cancellationToken.ThrowIfCancellationRequested();
 
         var physicalShardIndices = routing.Map.GetPhysicalShardIndices();
+        var shardCount = physicalShardIndices.Count;
 
-        // Shard fan-out: leaf-state + snapshot bytes per shard root.
-        var shardTasks = new Task<ShardStorageUsage>[physicalShardIndices.Count];
-        for (var i = 0; i < physicalShardIndices.Count; i++)
-        {
-            var shardIndex = physicalShardIndices[i];
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
-            shardTasks[i] = GetShardUsageAsync(shard, shardIndex, forceRefresh, cancellationToken);
-        }
-
-        // WAL fan-out: retained bytes per partition. The WAL grain key is
-        // {physicalTreeId}/{partition}; a single partition is the default.
+        // The WAL grain key is {physicalTreeId}/{partition}; a single partition
+        // is the default.
         var walPartitions = await optionsResolver.GetWalPartitionsAsync(routing.PhysicalTreeId);
-        var walTasks = new Task<long>[walPartitions];
-        for (var partition = 0; partition < walPartitions; partition++)
-        {
-            var wal = grainFactory.GetGrain<IWalShardGrain>($"{routing.PhysicalTreeId}/{partition}");
-            walTasks[partition] = GetWalRetainedBytesAsync(wal, partition, cancellationToken);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var shardUsages = await Task.WhenAll(shardTasks);
-        var walRetained = await Task.WhenAll(walTasks);
+        // A null slot means "this shard did not answer" - distinct from a shard
+        // that genuinely holds nothing, which answers with zeroes.
+        var shardUsages = new ShardStorageUsage?[shardCount];
+
+        // Seeded with the -1 "did not answer" sentinel rather than left at the
+        // default 0, which would read as a genuine "zero bytes retained". The
+        // fan-out only returns normally once every slot has settled, so today a
+        // partly-filled array is never read; seeding makes that safety a
+        // property of the array itself rather than of the caller's control
+        // flow, matching how the nullable shard slots above fail safe.
+        var walRetained = new long[walPartitions];
+        Array.Fill(walRetained, -1L);
+
+        // Slots [0, shardCount) are shard roots; the remainder are WAL
+        // partitions. One gate covers both so the per-tree ceiling is a ceiling
+        // on outstanding usage reads of any kind.
+        await BoundedFanOut.RunAsync(
+            shardCount + walPartitions,
+            options.MaxConcurrentStorageUsageSurfaces,
+            async slot =>
+            {
+                if (slot < shardCount)
+                {
+                    var shardIndex = physicalShardIndices[slot];
+                    var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
+                    shardUsages[slot] = await GetShardUsageAsync(shard, shardIndex, forceRefresh, cancellationToken);
+                }
+                else
+                {
+                    var partition = slot - shardCount;
+                    var wal = grainFactory.GetGrain<IWalShardGrain>($"{routing.PhysicalTreeId}/{partition}");
+                    walRetained[partition] = await GetWalRetainedBytesAsync(wal, partition, cancellationToken);
+                }
+            },
+            cancellationToken);
+
         cancellationToken.ThrowIfCancellationRequested();
 
         long leafStateBytes = 0;
         long snapshotBytes = 0;
         long liveKeys = 0;
+        var shardsComplete = true;
         foreach (var usage in shardUsages)
         {
-            leafStateBytes += usage.LeafStateBytes;
-            snapshotBytes += usage.SnapshotBytes;
-            liveKeys += usage.LiveKeys;
+            if (usage is not { } u)
+            {
+                // The shard did not answer. Contributing its zeroes would
+                // understate the tree's real footprint while still presenting
+                // the report as complete - a silently wrong answer, which is
+                // worse than a flagged one. Contribute nothing and flag the
+                // report Partial instead, exactly as the WAL surface does.
+                shardsComplete = false;
+                continue;
+            }
+
+            leafStateBytes += u.LeafStateBytes;
+            snapshotBytes += u.SnapshotBytes;
+            liveKeys += u.LiveKeys;
         }
 
         long walRetainedBytes = 0;
-        var partial = false;
+        var walComplete = true;
         foreach (var bytes in walRetained)
         {
             if (bytes < 0)
             {
                 // -1 sentinel: the provider does not support byte
-                // accounting. The surface contributes 0 and the report is
-                // flagged Partial so a consumer renders it as "no data".
-                partial = true;
+                // accounting, or the fan-out to it failed. The surface
+                // contributes 0 and the report is flagged Partial so a
+                // consumer renders it as "no data".
+                walComplete = false;
             }
             else
             {
@@ -141,20 +207,28 @@ internal sealed class LatticeStorageUsageGrain(
 
         var total = walRetainedBytes + snapshotBytes + leafStateBytes;
 
-        return new TreeStorageUsageReport
+        var report = new TreeStorageUsageReport
         {
             TreeId = TreeId,
             WalRetainedBytes = walRetainedBytes,
             SnapshotBytes = snapshotBytes,
             LeafStateBytes = leafStateBytes,
             TotalBytes = total,
-            Partial = partial,
+            Partial = !walComplete || !shardsComplete,
             SampledAt = DateTimeOffset.UtcNow,
             LiveKeys = liveKeys,
         };
+
+        return (report, walComplete);
     }
 
-    private async Task<ShardStorageUsage> GetShardUsageAsync(IShardRootGrain shard, int shardIndex, bool forceRefresh, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads one shard root's byte roll-up. Returns <see langword="null"/> when
+    /// the shard did not answer, which the caller turns into
+    /// <see cref="TreeStorageUsageReport.Partial"/> rather than a silent zero
+    /// contribution. One bad shard still never aborts the whole tree.
+    /// </summary>
+    private async Task<ShardStorageUsage?> GetShardUsageAsync(IShardRootGrain shard, int shardIndex, bool forceRefresh, CancellationToken cancellationToken)
     {
         try
         {
@@ -162,10 +236,17 @@ internal sealed class LatticeStorageUsageGrain(
                 ? await shard.RefreshLeafByteFootprintsAsync(cancellationToken)
                 : await shard.GetStorageUsageAsync(cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller asked to stop. Propagate so the fan-out aborts promptly
+            // and no report is assembled at all, rather than returning a total
+            // that silently omits every shard cancellation raced past.
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Storage-usage fan-out failed for shard {ShardIndex} in tree {TreeId}", shardIndex, TreeId);
-            return default;
+            return null;
         }
     }
 
@@ -174,6 +255,10 @@ internal sealed class LatticeStorageUsageGrain(
         try
         {
             return await wal.GetRetainedByteSizeAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

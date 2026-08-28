@@ -155,6 +155,23 @@ public class LatticeOptionsResolverPropagationGuardTests
             "AtomicActionRetention",
             "MaxAtomicActionSteps",
             "MaxAtomicActionArgsBytes",
+
+            // Cluster storage-usage roll-up tree fan-out bound (issue #1728):
+            // LatticeAdminGrain reads this directly from
+            // IOptionsMonitor<LatticeOptions>.Get(Options.DefaultName). The admin
+            // grain is a cluster singleton that bounds how many *trees* a roll-up
+            // samples at once, so it is not keyed by tree id and has no per-tree
+            // meaning - a "which tree's value wins" question with no sensible
+            // answer. The inner, genuinely per-tree half of the same fan-out
+            // (MaxConcurrentStorageUsageSurfaces) does flow through the resolver,
+            // exactly like MaxConcurrentSnapshotCaptures.
+            "MaxConcurrentStorageUsageTrees",
+
+            // StorageUsageRollupBudget is cluster-scoped for the same reason:
+            // it bounds the wall-clock time one cluster-wide roll-up may spend
+            // sampling trees, and that roll-up is driven by the same admin
+            // singleton, so there is no tree whose override could sensibly win.
+            "StorageUsageRollupBudget",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

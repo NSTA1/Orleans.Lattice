@@ -789,6 +789,17 @@ public interface ILattice : IGrainWithStringKey
     /// Azure Table provider both support byte accounting.
     /// </para>
     /// <para>
+    /// A shard root or WAL partition that fails or times out during the
+    /// fan-out likewise contributes nothing and sets
+    /// <see cref="TreeStorageUsageReport.Partial"/>, rather than contributing
+    /// zeroes that would understate the tree while still presenting the total
+    /// as complete. One failing surface never aborts the whole report. The
+    /// fan-out is bounded by
+    /// <see cref="LatticeOptions.MaxConcurrentStorageUsageSurfaces"/>, so a
+    /// wide tree queries its shard roots in waves rather than all at once; the
+    /// assembled figures are identical under any bound.
+    /// </para>
+    /// <para>
     /// Authorized as a whole-tree <see cref="LatticeOperation.Read"/> through the
     /// registered access gate, which throws
     /// <see cref="LatticeAuthorizationDeniedException"/> when the caller is denied.

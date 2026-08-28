@@ -36,7 +36,10 @@ public readonly record struct ClusterStorageUsageReport
     /// <summary>
     /// <c>true</c> when at least one tree's report was
     /// <see cref="TreeStorageUsageReport.Partial"/>, meaning the cluster
-    /// total is a lower bound rather than an exact figure.
+    /// total is a lower bound rather than an exact figure. A tree whose whole
+    /// report could not be fetched also contributes a partial zero rather than
+    /// aborting the roll-up, so a single unreachable tree flags the cluster
+    /// report instead of failing it.
     /// </summary>
     [Id(5)] public bool Partial { get; init; }
 

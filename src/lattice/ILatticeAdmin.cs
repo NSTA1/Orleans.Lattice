@@ -27,8 +27,21 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// (<see cref="LatticeOptions.StorageUsageCacheTtl"/>).
     /// <para>
     /// <see cref="ClusterStorageUsageReport.Partial"/> is set when at least
-    /// one tree's report was partial (for example a WAL provider without byte
-    /// accounting); the cluster total is then a lower bound.
+    /// one tree's report was partial - a WAL provider without byte accounting,
+    /// a shard root or WAL partition that did not answer, or a tree whose whole
+    /// report could not be fetched; the cluster total is then a lower bound.
+    /// A failing tree contributes a partial zero rather than aborting the
+    /// roll-up.
+    /// </para>
+    /// <para>
+    /// The fan-out is bounded by
+    /// <see cref="LatticeOptions.MaxConcurrentStorageUsageTrees"/> (and, within
+    /// each tree, by
+    /// <see cref="LatticeOptions.MaxConcurrentStorageUsageSurfaces"/>), so a
+    /// large cluster's roll-up degrades in latency rather than dispatching one
+    /// burst of <c>trees x (shards + WAL partitions)</c> calls that all race a
+    /// single response deadline. Per-tree ordering follows the registry's sort
+    /// order regardless of the bound.
     /// </para>
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>: the call is a
