@@ -48,6 +48,37 @@ internal sealed class TenantUsageMeteringService : IHostedService
     private readonly CancellationTokenSource _stopping = new();
     private Task? _loop;
 
+    /// <summary>
+    /// Last-known good per-tree usage sample, keyed by tenant and then tree id.
+    /// <para>
+    /// A tree that fails to sample must not silently vanish from the roll-up.
+    /// <see cref="TenantUsagePublisher.RollUpAndPublishAsync"/> sums exactly the
+    /// samples it is handed and <i>replaces</i> the tenant's published slot with
+    /// that sum, so an omitted tree does not read as "unknown" - it reads as
+    /// "zero", and the tenant's measured footprint drops by that tree's entire
+    /// contribution. The quota ceiling then effectively rises by the same amount,
+    /// and if every tree fails at once (the shape a storage-subsystem overload
+    /// takes) the tenant's usage rolls up to nothing and its quota stops binding
+    /// altogether - fail-open, precisely when the tenant is pushing enough volume
+    /// to break metering in the first place. Retaining the last-known figure keeps
+    /// the roll-up conservative instead.
+    /// </para>
+    /// <para>
+    /// Deliberately <b>not</b> aged out. Retention is the fail-closed direction
+    /// (it keeps a tenant's accounted usage up, so quotas keep binding), and a TTL
+    /// would reintroduce the very fail-open this closes. A tree that is genuinely
+    /// gone stops being enumerated and is dropped from the cache by the rebuild
+    /// below, so retention cannot outlive the tree it describes.
+    /// </para>
+    /// <para>
+    /// Access is single-threaded: the metering loop awaits one cycle at a time and
+    /// each cycle walks tenants sequentially, so a plain dictionary is sufficient
+    /// and avoids the concurrent-collection overhead.
+    /// </para>
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<string, TreeUsageSample>> _lastKnownByTenant =
+        new(StringComparer.Ordinal);
+
     /// <summary>Initializes the metering service over its registry, publisher, and schedule inputs.</summary>
     /// <param name="registry">The tenant registry supplying the tenants to meter. Must not be <c>null</c>.</param>
     /// <param name="publisher">The usage publisher each roll-up is handed to. Must not be <c>null</c>.</param>
@@ -157,6 +188,8 @@ internal sealed class TenantUsageMeteringService : IHostedService
         using var origin = LatticeSystemOrigin.Enter();
         using var noTenant = LatticeActiveTenantContext.With(null);
 
+        var seenTenants = new HashSet<string>(StringComparer.Ordinal);
+
         await foreach (var record in _registry.ListAsync(cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -169,11 +202,18 @@ internal sealed class TenantUsageMeteringService : IHostedService
                 continue;
             }
 
+            seenTenants.Add(tenant.Value);
+
             var samples = await SampleTenantTreesAsync(tenant, cancellationToken).ConfigureAwait(false);
             await _publisher
                 .RollUpAndPublishAsync(tenant, samples, HybridLogicalClock.Tick(HybridLogicalClock.Zero), cancellationToken)
                 .ConfigureAwait(false);
         }
+
+        // Only after a complete pass: a cycle that faulted part-way has not proved
+        // a tenant absent, and pruning on that evidence would discard retained
+        // footprints the next cycle still needs.
+        PruneRetainedTenants(seenTenants);
     }
 
     private async Task<IReadOnlyCollection<TreeUsageSample>> SampleTenantTreesAsync(
@@ -188,7 +228,15 @@ internal sealed class TenantUsageMeteringService : IHostedService
             .GetAllTreeIdsAsync(LatticeTenantTrees.ComposePrefix(tenant))
             .ConfigureAwait(false);
 
+        _lastKnownByTenant.TryGetValue(tenant.Value, out var lastKnown);
+
+        // The rebuilt cache doubles as the pruning mechanism: it is populated only
+        // from the trees this cycle actually enumerated and still owns, so a tree
+        // that was deleted or reassigned drops out without a separate sweep and
+        // the cache stays bounded by the tenant's live tree count.
+        var current = new Dictionary<string, TreeUsageSample>(treeIds.Count, StringComparer.Ordinal);
         var samples = new List<TreeUsageSample>(treeIds.Count);
+        var retained = 0;
         foreach (var treeId in treeIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -225,15 +273,29 @@ internal sealed class TenantUsageMeteringService : IHostedService
                         .ConfigureAwait(false);
                 }
 
-                samples.Add(new TreeUsageSample(
+                var sample = new TreeUsageSample(
                     bytes: usage.TotalBytes,
                     keys: usage.LiveKeys,
-                    memoryBytes: usage.LeafStateBytes));
+                    memoryBytes: usage.LeafStateBytes);
+                samples.Add(sample);
+                current[treeId] = sample;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // One unreadable tree must not abandon the whole tenant's roll-up;
-                // it simply contributes nothing until the next cycle.
+                // One unreadable tree must not abandon the whole tenant's roll-up.
+                // It contributes its last-known figure rather than nothing, so an
+                // unreadable tree cannot quietly shrink the tenant's accounted
+                // footprint and lift its quota ceiling (see _lastKnownByTenant).
+                // A tree that has never been sampled has nothing to retain and is
+                // the one case that still contributes nothing - it has no footprint
+                // on record to under-count.
+                if (lastKnown is not null && lastKnown.TryGetValue(treeId, out var previous))
+                {
+                    samples.Add(previous);
+                    current[treeId] = previous;
+                    retained++;
+                }
+
                 _logger.LogDebug(
                     ex,
                     "Tenant usage metering could not sample tree '{TreeId}' for tenant '{Tenant}'.",
@@ -242,7 +304,40 @@ internal sealed class TenantUsageMeteringService : IHostedService
             }
         }
 
+        _lastKnownByTenant[tenant.Value] = current;
+
+        if (retained > 0)
+        {
+            // Summarised once per tenant per cycle rather than once per tree, so a
+            // broad storage-subsystem failure does not itself become a log flood.
+            _logger.LogWarning(
+                "Tenant usage metering retained the last-known footprint for {RetainedCount} of "
+                + "{TreeCount} tree(s) for tenant '{Tenant}' because they could not be sampled; "
+                + "the published usage may be stale but is not under-counted.",
+                retained,
+                current.Count,
+                tenant);
+        }
+
         return samples;
+    }
+
+    /// <summary>
+    /// Drops retained samples for tenants that are no longer registered, so a
+    /// deleted tenant cannot pin its footprint in memory indefinitely. Mirrors the
+    /// per-tree pruning that rebuilding each tenant's map already performs.
+    /// </summary>
+    private void PruneRetainedTenants(HashSet<string> seenTenants)
+    {
+        if (_lastKnownByTenant.Count == seenTenants.Count)
+        {
+            return;
+        }
+
+        foreach (var key in _lastKnownByTenant.Keys.Where(k => !seenTenants.Contains(k)).ToList())
+        {
+            _lastKnownByTenant.Remove(key);
+        }
     }
 
     /// <summary>
