@@ -160,24 +160,35 @@ and, once tenancy is enabled, the tenant you act as - per call:
   *which tenant you are acting as*. Send both:
 
   ```bash
-  # Act as region-operator, asserting the acme tenant.
+  # Act as platform-admin, asserting the acme tenant.
   curl -s http://localhost:9090/ \
-    -H "Authorization: Bearer region-operator" \
+    -H "Authorization: Bearer platform-admin" \
     -H "lattice-active-tenant: acme" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lattice_tenant_current","arguments":{}}}'
   ```
 
-  The head lifts that header onto the ambient active-tenant context for the tool
-  call, and the credential-forwarding interceptor re-emits it to the silo as gRPC
-  metadata, so the assertion survives the split-head process boundary. It is only an
-  *assertion*: the silo re-validates it against your subject's membership of that
-  tenant (here, the `adminSubjects` seeded from `identities.json`) and fails closed
-  if you are not a member, rather than quietly downgrading you to `default`. Omit
-  the header and the call runs under the reserved `default` tenant. Header lifting
-  is on by default and this harness does not rename it, so `lattice-active-tenant`
-  is the value to send; with `TENANCY_ENABLED` unset the header is inert.
+  That answers `{"tenantId":"acme","status":"Active","isDefault":false}`. Drop the
+  `lattice-active-tenant` header and the same call answers
+  `{"tenantId":"default","status":"Active","isDefault":true}` - no header means the
+  reserved `default` tenant, not a failure. The head lifts the header onto the
+  ambient active-tenant context for the tool call and the credential-forwarding
+  interceptor re-emits it to the silo as gRPC metadata, so the assertion does cross
+  the split-head process boundary.
+
+  **The tenant is validated, not trusted.** This harness takes the bearer token as
+  an identity verbatim, but it does not extend that trust to the tenant: the silo
+  authenticates the identity from the token and then *independently* checks the
+  asserted tenant against that identity's seeded `adminSubjects` (the `tenants`
+  section of [`identities.json`](identities.json)). `data-reader` administers
+  `globex` but not `acme`, so asserting `globex` answers
+  `{"tenantId":"globex","status":"Active","isDefault":false}` while asserting `acme`
+  is refused fail-closed with `PermissionDenied` - *"The operation was denied: no
+  valid active tenant is present for the caller."* - rather than being quietly
+  downgraded to `default`. Header lifting is on by default and this harness does not
+  rename it, so `lattice-active-tenant` is the value to send; with `TENANCY_ENABLED`
+  unset the header is inert.
 
 ## Demo 1 - differentiated access (deny-by-default)
 
@@ -233,25 +244,35 @@ The silos seed two demo tenants from [`identities.json`](identities.json)'s
 4. `lattice_tenant_current` reflects the tenant the call **asserts**, which is a
    second axis independent of identity: send the `lattice-active-tenant` header
    alongside the bearer token (see
-   [Acting as an identity](#acting-as-an-identity)). Omit it and the call runs under
-   the reserved `default` tenant. Send `lattice-active-tenant: acme` as
-   `platform-admin` or `region-operator` and it returns `acme`; send that same
-   header as `data-reader`, which does not administer `acme`, and the call is
-   refused rather than quietly downgraded to `default` - the header is an assertion
-   the silo re-validates against the seeded admin subjects, never a claim it trusts.
-   The assertion does cross the **split-head** boundary: the head lifts the header
-   into the ambient tenant context for the tool call and the credential-forwarding
-   interceptor re-emits it to the silo over gRPC. Tenant scoping is therefore
-   demonstrable on both axes - `_list` / `_get` derive from the caller's credential,
-   while the asserted tenant is what scopes the tenant-aware surfaces.
-5. `lattice_list_regions` is scoped by that same assertion. With no
-   `lattice-active-tenant` header the answer is the unscoped topology, byte-for-byte
-   what a single-tenant cluster returns, with no `tenantScope` property on any entry.
-   Re-send it with `lattice-active-tenant: acme` and each entry gains a `tenantScope`
-   object naming the tenant and its standing in that region (`isAllowed`,
-   `isResident`, `status`), so the presence or absence of that property is the
-   visible proof the assertion reached the region filter. Be clear about what this
-   harness can show: each head serves exactly **one** region (the compose file sets
+   [Acting as an identity](#acting-as-an-identity)). Three calls show the whole
+   behaviour:
+   - No header, as `platform-admin` - `{"tenantId":"default","status":"Active",
+     "isDefault":true}`. No assertion means the reserved `default` tenant.
+   - `lattice-active-tenant: acme`, as `platform-admin` (an `acme` admin) -
+     `{"tenantId":"acme","status":"Active","isDefault":false}`. The active tenant
+     does cross the **split-head** process boundary: the head lifts the header into
+     the ambient tenant context and the credential-forwarding interceptor re-emits
+     it to the silo over gRPC.
+   - `lattice-active-tenant: acme`, as `data-reader` (a `globex` admin, **not** an
+     `acme` one) - refused fail-closed with `PermissionDenied`, *"The operation was
+     denied: no valid active tenant is present for the caller."* The same identity
+     asserting `globex` succeeds, so the refusal is membership, not a broken header.
+
+   The assertion is therefore validated rather than trusted: a caller cannot act as
+   a tenant it does not administer, and a bad assertion is refused rather than
+   quietly downgraded to `default`. Tenant scoping is demonstrable on both axes -
+   `_list` / `_get` derive from the caller's credential, while the asserted tenant
+   scopes the tenant-aware surfaces.
+5. `lattice_list_regions` is scoped by that same assertion, so call it twice.
+   Without the `lattice-active-tenant` header the answer is the unscoped topology,
+   byte-for-byte what a single-tenant cluster returns, and no entry carries a
+   `tenantScope` property at all. Re-send it with `lattice-active-tenant: acme` and
+   each entry gains a `tenantScope` object naming the tenant and its standing in
+   that region (`isAllowed`, `isResident`, `status`). That property appearing and
+   disappearing is the visible proof the assertion reached the region filter, and it
+   is the check worth running: the filter engages *only* on an asserted tenant, so a
+   run without the header exercises none of it and would pass regardless. Be clear
+   about what this harness can show: each head serves exactly **one** region (the compose file sets
    neither `Mcp:RegionId` nor any `Mcp:Regions` peer, so the current region is the
    built-in `current` and there are no peers), and the region a caller is talking to
    is always advertised to it. You see the *annotation* here, not the *pruning* - a
