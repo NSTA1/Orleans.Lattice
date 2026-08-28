@@ -28,7 +28,7 @@ public static partial class LatticeMcpServiceCollectionExtensions
     /// bearer challenge with a <c>resource_metadata</c> hint when
     /// <see cref="LatticeApiMcpOptions.ProtectedResourceMetadata"/> is set. The
     /// filter is inert (a single per-request null check) when the option is
-    /// unset. Idempotent - <c>TryAddEnumerable</c> dedupes by type.
+    /// unset. Idempotent - <see cref="TryAddEnumerable"/> dedupes by type.
     /// </summary>
     private static void AddProtectedResourceMetadataChallenge(IServiceCollection services)
     {

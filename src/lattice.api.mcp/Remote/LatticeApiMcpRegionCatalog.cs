@@ -57,10 +57,9 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
         var verifier = _services.GetService<ILatticeApiMcpRegionIdentityVerifier>();
         var needsEnrichment = NeedsClusterIdEnrichment(snapshot);
 
-        // Cheapest possible tenancy probe: one ambient-context read, no service
-        // resolution and no allocation. Nothing stamps an active tenant in a
-        // cluster with no tenancy add-on, so this is always null there.
-        var scopedTenant = ResolveScopedTenant();
+        // Cheapest possible tenancy probe: one ambient-context read first, and a
+        // single singleton lookup only if something actually asserted a tenant.
+        var scopedTenant = ResolveScopedTenant(out var resolver);
 
         // Fast path: no verification configured, every cluster id already known and
         // no tenant asserted, so return the frozen snapshot verbatim with no
@@ -80,7 +79,7 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
         // region alone rather than the full topology.
         var visibility = scopedTenant is null
             ? null
-            : await ResolveVisibilityAsync(scopedTenant.Value, cancellationToken).ConfigureAwait(false);
+            : await ResolveVisibilityAsync(resolver!, scopedTenant.Value, cancellationToken).ConfigureAwait(false);
         var tenantId = scopedTenant?.Value;
 
         var result = new List<LatticeRegionDescriptor>(snapshot.Count);
@@ -132,12 +131,29 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
     /// <summary>
     /// Returns the tenant the catalog must scope to, or <see langword="null"/> when
     /// the answer is the unscoped topology: nothing asserted a tenant (the normal
-    /// case, including every operator call and every call in a cluster with no
-    /// tenancy add-on), or the asserted tenant is the reserved legacy-adoption
-    /// default, which names the pre-tenancy behaviour by definition.
+    /// case, including every operator call), the asserted tenant is the reserved
+    /// legacy-adoption default (which names the pre-tenancy behaviour by
+    /// definition), or the cluster has no tenancy engine at all.
     /// </summary>
-    private static TenantId? ResolveScopedTenant()
+    /// <remarks>
+    /// The last case is load-bearing and not merely defensive. The MCP head's
+    /// active-tenant bridge is registered unconditionally, so a caller can put a
+    /// <c>lattice-active-tenant</c> header on a cluster running <b>no tenancy
+    /// add-on</b> and still stamp an ambient tenant. Scoping on that alone would
+    /// change the response shape on a single-tenant cluster purely because a header
+    /// was present, and - since there is no tenancy engine to validate the
+    /// assertion against - would echo the caller's own unvalidated header value back
+    /// as a <c>tenantScope</c> annotation. Requiring a live
+    /// <see cref="ITenantRegionVisibilityResolver"/> keeps a tenancy-off cluster
+    /// byte-for-byte on its pre-tenancy answer whatever headers the caller sends,
+    /// while preserving the fail-closed behaviour when tenancy IS on and the engine
+    /// merely cannot answer (which resolves to
+    /// <see cref="TenantRegionVisibilityMap.Unresolved"/> and prunes).
+    /// </remarks>
+    private TenantId? ResolveScopedTenant(out ITenantRegionVisibilityResolver? resolver)
     {
+        resolver = null;
+
         if (!LatticeActiveTenantContext.IsActive)
         {
             return null;
@@ -149,25 +165,23 @@ internal sealed class LatticeApiMcpRegionCatalog : ILatticeRegionCatalog
             return null;
         }
 
+        var candidate = _services.GetService<ITenantRegionVisibilityResolver>();
+        if (candidate is not { IsActive: true })
+        {
+            return null;
+        }
+
+        resolver = candidate;
         return asserted;
     }
 
     /// <summary>
     /// Resolves the asserted tenant's per-region standing, falling back to the
-    /// fail-closed unresolved verdict when no tenancy engine is wired in (a remote
-    /// head with no tenancy binding) or the engine reports it cannot answer.
+    /// fail-closed unresolved verdict when the engine reports it cannot answer.
     /// </summary>
-    private async ValueTask<TenantRegionVisibilityMap> ResolveVisibilityAsync(
-        TenantId tenant, CancellationToken cancellationToken)
-    {
-        var resolver = _services.GetService<ITenantRegionVisibilityResolver>();
-        if (resolver is not { IsActive: true })
-        {
-            return TenantRegionVisibilityMap.Unresolved;
-        }
-
-        return await resolver.ResolveAsync(tenant, cancellationToken).ConfigureAwait(false);
-    }
+    private static async ValueTask<TenantRegionVisibilityMap> ResolveVisibilityAsync(
+        ITenantRegionVisibilityResolver resolver, TenantId tenant, CancellationToken cancellationToken) =>
+        await resolver.ResolveAsync(tenant, cancellationToken).ConfigureAwait(false);
 
     private static bool IsVisible(TenantRegionVisibilityMap visibility, string regionId) =>
         visibility.TryGet(regionId, out var standing) && standing.IsVisible;

@@ -99,6 +99,73 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
     }
 
     [Test]
+    public async Task An_asserted_tenant_with_an_inactive_resolver_returns_the_snapshot_by_reference()
+    {
+        // The deployed tenancy-off shape, and the one the sibling test above does
+        // NOT cover: it asserts no tenant, so it exercises inactive-resolver
+        // WITHOUT an assertion. The MCP head's active-tenant bridge is registered
+        // unconditionally (TryAddSingleton, no opt-in), so a caller can stamp an
+        // ambient tenant on a cluster running no tenancy add-on at all. Scoping on
+        // that alone changed the response shape purely because a header was
+        // present. Verified against the local-dev harness with TENANCY_ENABLED
+        // unset, where it emitted a tenantScope for `acme`.
+        var router = Router("eu", "ap");
+        var resolver = new FakeResolver(TenantRegionVisibilityMap.Empty, isActive: false);
+        var catalog = new LatticeApiMcpRegionCatalog(router, Services(resolver));
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("acme")))
+        {
+            var regions = await catalog.ListRegionsAsync();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(regions, Is.SameAs(router.Snapshot()),
+                    "With no tenancy engine the answer must stay byte-for-byte the pre-tenancy one, "
+                    + "whatever header the caller sends.");
+                Assert.That(resolver.Calls, Is.Zero,
+                    "An inactive resolver must never be consulted.");
+            });
+        }
+    }
+
+    [Test]
+    public async Task An_asserted_tenant_with_no_resolver_registered_returns_the_snapshot_by_reference()
+    {
+        // The same shape with the resolver absent entirely rather than inactive -
+        // a remote head with no tenancy binding at all.
+        var router = Router("eu", "ap");
+        var catalog = new LatticeApiMcpRegionCatalog(router, Services());
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("acme")))
+        {
+            var regions = await catalog.ListRegionsAsync();
+
+            Assert.That(regions, Is.SameAs(router.Snapshot()),
+                "No resolver registered is the same answer as an inactive one: unscoped topology.");
+        }
+    }
+
+    [Test]
+    public async Task An_asserted_tenant_with_no_tenancy_engine_carries_no_tenant_annotation()
+    {
+        // The disclosure half of the same defect: with no engine to validate the
+        // assertion against, annotating echoed the caller's own unvalidated header
+        // value back as a tenantScope. Live, a nonsense tenant id was reflected
+        // verbatim, so this pins the annotation's absence explicitly rather than
+        // relying on reference identity alone.
+        var catalog = new LatticeApiMcpRegionCatalog(
+            Router("eu"), Services(resolver: new FakeResolver(TenantRegionVisibilityMap.Empty, isActive: false)));
+
+        using (LatticeActiveTenantContext.With(TenantId.Parse("does-not-exist")))
+        {
+            var regions = await catalog.ListRegionsAsync();
+
+            Assert.That(regions.Select(r => r.TenantScope), Is.All.Null,
+                "A cluster with no tenancy engine must never echo a caller-supplied tenant id back.");
+        }
+    }
+
+    [Test]
     public async Task The_default_tenant_returns_the_router_snapshot_by_reference()
     {
         var router = Router("eu", "ap");
@@ -329,30 +396,38 @@ public sealed class LatticeApiMcpRegionCatalogTenantScopeTests
     // ----- fail closed -----
 
     [Test]
-    public async Task A_tenant_call_with_no_resolver_registered_sees_only_the_current_region()
+    public async Task A_tenant_header_on_a_cluster_with_no_tenancy_returns_the_snapshot_by_reference()
     {
-        var catalog = new LatticeApiMcpRegionCatalog(Router("eu", "ap"), Services());
+        var router = Router("eu", "ap");
+        var catalog = new LatticeApiMcpRegionCatalog(router, Services());
 
         using var scope = LatticeActiveTenantContext.With(TenantId.Parse("acme"));
         var regions = await catalog.ListRegionsAsync();
 
-        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
-            "Fail closed: an unresolvable standing yields the tenant-scoped minimal answer, "
-            + "never a fallback to the full topology.");
+        Assert.That(regions, Is.SameAs(router.Snapshot()),
+            "The active-tenant bridge is registered unconditionally, so a caller can stamp an ambient "
+            + "tenant on a cluster running no tenancy add-on. Scoping on that alone would let a "
+            + "caller-supplied header change the answer shape on a single-tenant cluster, and - with no "
+            + "engine to validate it against - echo that unvalidated tenant id back as an annotation. "
+            + "Tenancy off stays byte-for-byte on the pre-tenancy answer whatever headers arrive.");
     }
 
     [Test]
-    public async Task A_tenant_call_with_an_inactive_resolver_sees_only_the_current_region()
+    public async Task A_tenant_header_with_an_inactive_resolver_returns_the_snapshot_by_reference()
     {
+        var router = Router("eu", "ap");
         var catalog = new LatticeApiMcpRegionCatalog(
-            Router("eu", "ap"),
+            router,
             Services(new FakeResolver(MapOf(("eu", true, TenantRegionResidencyStatus.Online)), isActive: false)));
 
         using var scope = LatticeActiveTenantContext.With(TenantId.Parse("acme"));
         var regions = await catalog.ListRegionsAsync();
 
-        Assert.That(regions.Select(r => r.RegionId), Is.EqualTo(new[] { "us" }),
-            "An inactive resolver is not consulted, so the standing is unresolved and the answer fails closed.");
+        Assert.That(regions, Is.SameAs(router.Snapshot()),
+            "An inactive resolver is the null object a non-tenancy cluster resolves, so it is "
+            + "indistinguishable from no tenancy at all and must take the same unscoped fast path. "
+            + "This is distinct from an ACTIVE resolver that cannot answer, which still fails closed "
+            + "to the current region - see An_unresolved_verdict_sees_only_the_current_region.");
     }
 
     [Test]

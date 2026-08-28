@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// fault-translation concern - the fail-closed replication access gate lives in
 /// the facade, the caller credential is stamped on the ambient context by the
 /// tool delegate before the method runs, and any escaping fault is translated to
-/// an actionable <c>McpException</c> at the shared
+/// an actionable <see cref="McpException"/> at the shared
 /// <see cref="CredentialStampingTool"/> invocation seam - so they are directly
 /// unit-testable against a fake facade.
 /// </summary>
