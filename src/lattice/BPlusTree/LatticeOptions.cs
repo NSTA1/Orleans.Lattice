@@ -1596,6 +1596,39 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultShardForwardTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// Ceiling on the emptiness probe that reshard initiation runs before
+    /// taking its empty-tree fast path.
+    /// <para>
+    /// <see cref="Orleans.Lattice.ILattice.ReshardAsync(int, System.Threading.CancellationToken)"/>
+    /// only needs a boolean - "does this tree hold any live key?" - but the
+    /// count that answers it is a strongly-consistent whole-tree fan-out that
+    /// restarts whenever the shard map moves under it (see
+    /// <see cref="MaxScanRetries"/>). Reshard initiation is precisely when
+    /// that map is most likely to be churning: a caller may be writing
+    /// concurrently, and a small leaf fan-out splits continuously. Unbounded,
+    /// the probe can burn the whole caller-side response budget and time the
+    /// reshard out before it has even started.
+    /// </para>
+    /// <para>
+    /// An inconclusive probe is treated as "not empty", which is not merely
+    /// the safe direction but the accurate one: the only thing that makes the
+    /// probe slow is concurrent split churn, and a tree whose topology is
+    /// churning necessarily holds keys. A genuinely empty tree has nothing to
+    /// churn, answers well inside the budget, and still takes the fast path.
+    /// Defaults to <see cref="DefaultReshardEmptyProbeBudget"/> (10 seconds) -
+    /// comfortably above a cold fan-out's activation-retry envelope, yet well
+    /// below the caller-side budget. Set to
+    /// <see cref="Timeout.InfiniteTimeSpan"/> to restore the historical
+    /// unbounded-probe behaviour; the registered options validator rejects any
+    /// other non-positive value at first-resolve time.
+    /// </para>
+    /// </summary>
+    public TimeSpan ReshardEmptyProbeBudget { get; set; } = DefaultReshardEmptyProbeBudget;
+
+    /// <summary>Default value for <see cref="ReshardEmptyProbeBudget"/> (10 seconds).</summary>
+    public static readonly TimeSpan DefaultReshardEmptyProbeBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// Hard ceiling on how long a <c>ShardRootGrain</c>'s one-time
     /// activation-readiness seed (the cross-grain awaits a brand-new or
     /// freshly-reactivated shard runs the first time it prepares for an

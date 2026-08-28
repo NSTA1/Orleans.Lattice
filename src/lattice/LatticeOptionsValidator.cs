@@ -143,6 +143,13 @@ if (options.ActivationReadyTimeout <= TimeSpan.Zero
         $"{nameof(LatticeOptions.ActivationReadyTimeout)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the shard-root activation-readiness seed deadline that prevents a parked first-activation RPC from wedging the write pipeline).");
 }
+if (options.ReshardEmptyProbeBudget <= TimeSpan.Zero
+    && options.ReshardEmptyProbeBudget != Timeout.InfiniteTimeSpan)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.ReshardEmptyProbeBudget)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+        + "(the reshard-initiation emptiness-probe ceiling that stops a strongly-consistent count from timing the reshard out under concurrent split churn).");
+}
 if (options.DigestPublishTimeout <= TimeSpan.Zero
     && options.DigestPublishTimeout != Timeout.InfiniteTimeSpan)
 {

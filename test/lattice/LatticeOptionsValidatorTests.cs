@@ -468,6 +468,43 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
+    public void ReshardEmptyProbeBudget_default_is_ten_seconds()
+    {
+        Assert.That(new LatticeOptions().ReshardEmptyProbeBudget, Is.EqualTo(TimeSpan.FromSeconds(10)));
+        Assert.That(LatticeOptions.DefaultReshardEmptyProbeBudget, Is.EqualTo(TimeSpan.FromSeconds(10)));
+    }
+
+    [Test]
+    public void ReshardEmptyProbeBudget_positive_passes()
+    {
+        var result = Validate(o => o.ReshardEmptyProbeBudget = TimeSpan.FromSeconds(5));
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void ReshardEmptyProbeBudget_infinite_passes()
+    {
+        var result = Validate(o => o.ReshardEmptyProbeBudget = Timeout.InfiniteTimeSpan);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void ReshardEmptyProbeBudget_zero_fails()
+    {
+        var result = Validate(o => o.ReshardEmptyProbeBudget = TimeSpan.Zero);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ReshardEmptyProbeBudget)));
+    }
+
+    [Test]
+    public void ReshardEmptyProbeBudget_negative_fails()
+    {
+        var result = Validate(o => o.ReshardEmptyProbeBudget = TimeSpan.FromSeconds(-1));
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.ReshardEmptyProbeBudget)));
+    }
+
+    [Test]
     public void ActivationReadyTimeout_default_is_fifteen_seconds()
     {
         Assert.That(new LatticeOptions().ActivationReadyTimeout, Is.EqualTo(TimeSpan.FromSeconds(15)));

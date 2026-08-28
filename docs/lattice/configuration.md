@@ -108,6 +108,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`QueueCapacity`](queues.md) | `int?` | `null` (unbounded) | Yes |
 | [`RetryPolicy`](retry-policy.md) | `ILatticeRetryPolicy?` | `null` (no retry) | Yes |
 | [`ShardForwardTimeout`](#shardforwardtimeout) | `TimeSpan` | 15 seconds | Yes (on next forward) |
+| [`ReshardEmptyProbeBudget`](#reshardemptyprobebudget) | `TimeSpan` | 10 seconds | Yes (on next reshard) |
 | [`ShedSnapshotOpensWhenSaturated`](#shedsnapshotopenswhensaturated) | `bool` | `true` | Yes |
 | [`SnapshotBaselineTtl`](snapshot-cursors.md#baseline-ttl-leak-guard) | `TimeSpan` | 6 hours | Yes |
 | [`SnapshotLeafIdleTtl`](snapshot-cursors.md) | `TimeSpan` | 30 minutes | Yes |
@@ -582,6 +583,18 @@ Hard ceiling on how long a single outbound shard-to-shard write forward may run 
 During a reshard swap the destination shard's ownership is changing, and Orleans can reject the outbound forward message and leave the caller-side `await` neither completing nor faulting. Without a ceiling the forwarding turn never returns, the lattice grain's per-shard fan-out saturates at its in-flight limit, and the whole write pipeline wedges with no fault and no activation recycle. With the ceiling the parked forward is abandoned and the turn faults cleanly with a `TimeoutException`, which the existing transient-exception retry envelope on every mutation path catches and re-runs against refreshed routing once the swap has settled. Abandoning a forward never loses data: convergence on the destination shard is independently guaranteed by last-writer-wins plus the split coordinator's authoritative leaf-chain drain (the Drain phase and the Complete-phase final drain).
 
 Set to `InfiniteTimeSpan` to disable the ceiling and restore the historical unbounded-await behaviour; the options validator rejects any other non-positive value.
+
+### `ReshardEmptyProbeBudget`
+
+Ceiling on the emptiness probe that reshard initiation runs before taking its empty-tree fast path (default: 10 seconds).
+
+`ReshardAsync` only needs a boolean - "does this tree hold any live key?" - to decide whether it can repin the shard map directly instead of starting the migration coordinator. The count that answers it is a strongly-consistent whole-tree fan-out that discards its result and retries whenever the shard map moves under it, and gives up once [`MaxScanRetries`](#maxscanretries) is exhausted. Reshard initiation is exactly when that map is most likely to be churning: a caller may be writing concurrently, and a small leaf fan-out splits continuously. Unbounded, the probe can consume the caller's whole response budget and time the reshard out before it has started.
+
+Both inconclusive outcomes - the budget elapsing, and the count abandoning under churn - are treated as "not empty", so initiation proceeds down the normal coordinator path. That is not merely the safe direction but the accurate one: the only thing that makes this probe slow or unstable is concurrent split churn, and a tree whose topology is churning necessarily holds keys. A genuinely empty tree has nothing to churn, answers well inside the budget, and still takes the fast path.
+
+Set to `InfiniteTimeSpan` to restore the historical unbounded-probe behaviour; the options validator rejects any other non-positive value.
+
+This option can be changed freely at any time. The new value takes effect on the next reshard.
 
 ### `ActivationReadyTimeout`
 

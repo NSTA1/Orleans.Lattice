@@ -23,10 +23,17 @@ public partial class TreeReshardGrainTests
         int physicalShardCount = 2,
         ShardMap? existingMap = null,
         FakePersistentState<TreeReshardState>? existingState = null,
-        int maxConcurrentMigrations = 4)
+        int maxConcurrentMigrations = 4,
+        TimeSpan? reshardEmptyProbeBudget = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("reshard", TreeId));
+        // Let the normal coordinator path run to completion: StartCoordinatorAsync
+        // registers the keepalive reminder (already substituted) and then starts
+        // the phase timer, which resolves ITimerRegistry from ActivationServices.
+        context.ActivationServices
+            .GetService(typeof(Orleans.Timers.ITimerRegistry))
+            .Returns(Substitute.For<Orleans.Timers.ITimerRegistry>());
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
@@ -34,6 +41,8 @@ public partial class TreeReshardGrainTests
         var opts = new LatticeOptions
         {
             MaxConcurrentMigrations = maxConcurrentMigrations,
+            ReshardEmptyProbeBudget =
+                reshardEmptyProbeBudget ?? LatticeOptions.DefaultReshardEmptyProbeBudget,
         };
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
