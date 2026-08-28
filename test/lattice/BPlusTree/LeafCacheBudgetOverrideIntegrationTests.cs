@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Integration coverage for the runtime <see cref="LatticeOptions.MaxCacheValueBytes"/>
 /// override applied through the control-plane
 /// <see cref="ILatticeRegistry.SetMaxCacheValueBytesAsync"/> seam and honoured
-/// by <see cref="Grains.LeafCacheGrain"/> on a warm activation.
+/// by <see cref="Orleans.Lattice.BPlusTree.Grains.LeafCacheGrain"/> on a warm activation.
 /// <para>
 /// The read-through cache re-resolves its payload budget on every refresh, so a
 /// per-tree override established at runtime takes effect on the next read

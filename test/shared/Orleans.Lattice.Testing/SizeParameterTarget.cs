@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Testing;
 /// size- or limit-like <see cref="int"/> parameter, paired with that parameter.
 /// One target is produced per such parameter, so a method with two size
 /// parameters yields two targets. Drives the table-style public-API size
-/// contract guard exercised by <see cref="PublicApiSizeContractTestsBase"/>.
+/// contract guard exercised by <see cref="PublicApiSizeContractTestsBase{TSelf}"/>.
 /// </summary>
 /// <param name="ApiType">The interface or class the method was discovered on.</param>
 /// <param name="Method">The public method under audit.</param>

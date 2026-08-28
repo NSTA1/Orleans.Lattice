@@ -9,9 +9,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Unit tests for the operator-tooling seams on
 /// <see cref="BPlusLeafGrain"/>: the read-only checkpoint accessor
-/// (<see cref="IBPlusLeafGrain.GetProjectionCheckpointOffsetAsync"/>)
+/// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetProjectionCheckpointOffsetAsync"/>)
 /// and the destructive projection-rebuild path
-/// (<see cref="IBPlusLeafGrain.RebuildProjectionFromWalAsync"/>).
+/// (<see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.RebuildProjectionFromWalAsync"/>).
 /// </summary>
 public partial class BPlusLeafGrainTests
 {

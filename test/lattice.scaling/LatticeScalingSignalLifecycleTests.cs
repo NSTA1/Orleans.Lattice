@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Scaling.Tests;
 /// immediate first sample); <see cref="LatticeScalingSignal.StopAsync"/> cancels
 /// the loop and drains it without throwing. Fully deterministic: the loop's
 /// first sample runs to completion through synchronous fakes, and the periodic
-/// tick never fires because <see cref="StopAsync"/> cancels before the interval
+/// tick never fires because <see cref="LatticeScalingSignal.StopAsync"/> cancels before the interval
 /// elapses.
 /// </summary>
 [TestFixture]

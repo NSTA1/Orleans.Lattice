@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Scaling;
 /// invoke on a readiness-probe cadence. Registered under the name
 /// <see cref="LatticeScalingHealthCheckOptions.DefaultName"/> unless the caller
 /// overrides it via
-/// <see cref="LatticeScalingServiceCollectionExtensions.AddLatticeScalingHealthCheck(IHealthChecksBuilder, string, HealthStatus?, IEnumerable{string})"/>.
+/// <see cref="LatticeScalingServiceCollectionExtensions.AddLatticeScalingHealthCheck"/>.
 /// </remarks>
 internal sealed class LatticeScalingHealthCheck(
     ILatticeScalingSignal signal,

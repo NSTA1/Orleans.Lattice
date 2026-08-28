@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// to-end and asserts which combination of
 /// <see cref="IShardRootGrain.SetAsync(string, byte[])"/>,
 /// <see cref="IShardRootGrain.DeleteAsync(string)"/>, and
-/// <see cref="IShardRootGrain.AppendTxTerminalAsync(System.Guid, bool, IReadOnlyDictionary{string, byte[]}?)"/>
+/// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.AppendTxTerminalAsync"/>
 /// the destination received.
 /// </para>
 /// </summary>

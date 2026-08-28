@@ -43,9 +43,10 @@ and its [gRPC binding](../lattice.api.tenantadmin.grpc/README.md).
   tenant-scoped. Cross-tenant access exists only where an explicit grant or a
   platform-operator scope authorizes it.
 - **Hard dependency on identity.** The tenant is a membership attribute, so
-  registering `lattice.tenancy` without both `lattice.auth` and
-  `lattice.membership` is a fail-fast at silo-build time, never a silent downgrade
-  to an unenforced state.
+  `AddLatticeTenancy` is guarded: it throws an `InvalidOperationException` at
+  registration time - not at silo start, and never as a silent downgrade to an
+  unenforced state - unless `AddLattice`, `AddLatticeMembership`, and
+  `AddLatticeAuth` have all already run on the same builder.
 - **Coordination-free multi-cluster.** Tenant definitions converge across clusters
   on the existing system-tree replication path; usage enforcement uses a
   convergent CRDT sum (no locks, no consensus) with bounded, quantified overshoot.
@@ -133,7 +134,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   binding does through the shared `LatticeActiveTenantAssertion` seam. A binding
   that did not would not fault: its facade would resolve the reserved default
   tenant and serve the caller the shared cluster-global namespace, so the
-  behaviour is covered by a contract guard rather than left to review.- **A refused assertion is reported as a refusal, on every surface.** The resolver
+  behaviour is covered by a contract guard rather than left to review.
+- **A refused assertion is reported as a refusal, on every surface.** The resolver
   denies a caller by resolving the uninitialised `default(TenantId)` "no tenant"
   value - a `null` `TenantId.Value`, deliberately distinct from the reserved
   `TenantId.Default`, whose value is `default`. Every surface that reads a
@@ -154,15 +156,20 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   rather than an error, so listing never leaks the cluster-global catalog.
 - **Identity-derived, enforced at the auth gate.** The active tenant is carried in
   the Orleans `RequestContext` under a single well-known key, populated from the
-  caller's membership at the auth seam. The fail-closed `PolicyAccessGate` is made
-  tenant-aware: a request is denied unless the subject's active tenant owns the
-  target tree (prefix match), or an explicit cross-tenant grant or platform-operator
-  scope authorizes it.
-- **Active-tenant assertion.** A subject carries a set of tenant memberships. A
-  subject with exactly one membership gets that tenant as an implicit default; a
-  subject with two or more memberships must assert an active tenant explicitly, and
-  a request that asserts none - or one outside the membership set - is denied, not
-  silently defaulted.
+  caller's membership at the auth seam. The fail-closed access gate behind
+  `ILatticeAccessGate` is made tenant-aware: a request is denied unless the
+  subject's active tenant owns the target tree (prefix match), or an explicit
+  cross-tenant grant or platform-operator scope authorizes it.
+- **Active-tenant assertion.** A subject carries a set of tenant memberships, but
+  the active tenant is always a caller-supplied *assertion*, never inferred from
+  that set - there is no implicit "sole membership" default. Every branch that
+  consumes the assertion re-validates it against the caller's own membership, and
+  it is denied unless the named tenant is registered, `Active`, and lists the
+  caller as an admin subject. A request that asserts *nothing* resolves the
+  reserved `default` tenant, which is what keeps legacy adoption
+  non-destructive; on a tenant-owned (`t/...`) tree that unasserted request is
+  denied instead, because the uninitialised "no tenant" value can never be an
+  active tenant.
 - **Tenant id grammar.** A `TenantId` matches `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
   (lower-case alphanumeric and hyphen, 1-63 chars). This guarantees a tenant id can
   never contain the `/` segment separator and never begins with `_`, so it cannot
@@ -173,8 +180,10 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   labels, and log lines beside real tree ids, and one shadowing a reserved
   namespace is an avoidable confusion trap. The check is applied at create only,
   so a tenant registered before the guard existed stays readable and deletable.
-  The id `default` is reserved for the legacy-adoption tenant and cannot be
-  created, suspended, or deleted. Tenant ids are immutable once created.
+  The id `default` is reserved for the legacy-adoption tenant: it can never be
+  suspended, deleted, or given quotas (each fails closed with a
+  `ReservedTenantOperationException`), while a resume of it is an allowed no-op.
+  Tenant ids are immutable once created.
 - **Tenant-scoped tree naming.** `AddLatticeTenancy` replaces the core's no-op
   `ITenantContextResolver` with one that reads the caller's active tenant and
   re-validates it against that caller's own membership before it is allowed to
@@ -183,9 +192,11 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   as `acme` and `t/globex/orders` for one acting as `globex`, rather than handing
   both the same physical tree. **Every external API facade does the same**: the
   data, state, tree-administration, schema, replication, and backup facades resolve
-  the caller-supplied name through `ITenantContextResolver.ResolveEffectiveTreeIdAsync`
-  at their entry point and use that one effective id for **both** the authorization
-  check and the operation, so a verb can never authorize one tree and act on
+  the caller-supplied name through the `ResolveEffectiveTreeIdAsync` extension
+  `LatticeTenantExtensions` adds over `ITenantContextResolver` (the interface
+  itself carries only `ResolveCurrentAsync`) at their entry point and use that one
+  effective id for **both** the authorization check and the operation, so a verb
+  can never authorize one tree and act on
   another. Without that, an external caller had no route into its own namespace at
   all: an unqualified name stayed a shared default-tenant tree, and a directly
   supplied `t/{tenant}/...` id is (correctly) refused by the reserved-namespace
@@ -195,8 +206,8 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   uninitialised "no tenant" value, which fails closed with a
   `LatticeTenantAccessDeniedException` rather than silently defaulting. Because the
   effective id is tenant-owned, usage metering and quota admission attribute the
-  traffic to the acting tenant - the two only line up once the name is actually
-  scoped.
+  traffic to the acting tenant - attribution only lines up with the acting tenant once
+  the name is actually scoped.
 - **Enumeration pruning.** `AddLatticeTenancy` likewise replaces the core's no-op
   `ITenantEnumerationFilter`, so a tree-id enumeration (the cluster-state tree
   catalog, the tag-index catalog, the in-cluster all-tree-ids read) is pruned to
@@ -220,7 +231,7 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   switch already drops). The prefix is a **performance hint, never an
   authorization boundary**: it can only ever return a subset of what the caller
   could already enumerate, and the pruning filter and per-entry authorization check
-  both still run unchanged.
+  still run unchanged.
 - **Registry-store read isolation.** The `sys-tenant-*` registry, usage, and
   overage trees hold the cross-tenant registry itself - every tenant's admin
   subjects, quotas, region residency, and cross-tenant grants. They live in the
@@ -253,8 +264,9 @@ operator sets them, so opt-in never suddenly throttles an existing workload.
 
 - **Compiled quota policy.** Steady-state enforcement uses a compiled policy
   snapshot with a monotonic epoch, refreshed off the `sys-tenant-*` change feed and
-  evaluated synchronously in-memory with no I/O once warm - mirroring the auth
-  `PolicyAccessGate` / `ILatticeDecisionEngine`.
+  evaluated synchronously in-memory with no I/O once warm - mirroring how the auth
+  package answers `ILatticeDecisionEngine` from a compiled snapshot behind its own
+  fail-closed access gate.
 - **Burst and metering.** Usage at or below the steady-state cap is ordinary; usage
   above the cap and at or below `cap x (1 + burst%)` is admitted and **metered as
   overage** - a first-class, billing-ready signal distinct from ordinary usage;
@@ -326,14 +338,14 @@ supplies the default for new tenants):
   `limit x clusters`. Selectable per tenant for operators who prefer hard-partitioned,
   zero-telemetry-cost capacity.
 
-There is no cross-cluster coordination or consensus in either scope -
+No enforcement scope introduces cross-cluster coordination or consensus -
 `GlobalConverged` reads a convergent CRDT sum, it never locks or votes.
 
 ### Rate limiting
 
-The `ops/sec` limit is always enforced **per-cluster** in both scopes (a rate window
-is too short relative to replication lag for a converged global count to be
-meaningful). It is enforced by silo-local, in-process token buckets - a per-silo
+The `ops/sec` limit is always enforced **per-cluster**, whichever enforcement scope a
+tenant is on (a rate window is too short relative to replication lag for a
+converged global count to be meaningful). It is enforced by silo-local, in-process token buckets - a per-silo
 singleton limiter (not a grain) the data-plane entry path consults with a lock-free
 token decrement - so the per-op hot path takes zero grain hops. A low-frequency
 per-`(tenant, cluster)` budget coordinator divides the cluster rate across the live
@@ -344,7 +356,10 @@ enforcement stays lock-free:
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
-| `LeaseInterval` | `TimeSpan` | `5s` | How often the coordinator re-apportions each tenant's cluster rate across the live silos. Must be strictly positive. A longer interval lowers coordination cost but widens the transient overshoot bound (lease interval times cluster rate). |
+| `LeaseInterval` | `TimeSpan` | `30s` | How often the coordinator re-apportions each tenant's cluster rate across the live silos. A longer interval lowers coordination cost but widens the transient overshoot bound (lease interval times cluster rate); the default is sized for work backed by a whole-tree registry scan. A non-positive value falls back to the default. |
+| `LeaseCycleTimeout` | `TimeSpan` | `20s` | The bound on a single lease cycle. A cycle that exceeds it is cancelled and retried on a later tick, so a stalled tenant-registry read can never occupy the loop for longer than one interval. Clamped down to `LeaseInterval` if set at or above it, so the duty cycle stays bounded. A non-positive value falls back to the default. |
+| `MaxLeaseBackoff` | `TimeSpan` | `5m` | The ceiling the lease interval backs off to after consecutive cycle failures. The effective interval doubles per consecutive failure and resets to `LeaseInterval` on the first success, so a persistently unhealthy registry is probed at a decaying rate rather than hammered every tick. A value below `LeaseInterval` disables backoff; a non-positive value falls back to the default. |
+| `RateSnapshotTtl` | `TimeSpan` | `2m` | How long a read of the registry's configured rates stays usable before the next cycle re-reads it. Configured rates change at administrative cadence, so caching them decouples the frequent re-apportionment of token buckets from the expensive whole-tree registry scan. The snapshot is stale-if-error, so a failed refresh apportions from the previous snapshot rather than pruning every tenant's bucket. A non-positive value falls back to the default. |
 | `Apportionment` | `TenantRateApportionmentStrategy` | `Demand` | `Demand` leases demand-proportionally and degrades to static-even when no cluster-wide demand aggregate is available; `StaticEven` is the zero-coordination fallback that splits the rate evenly. |
 | `DemandReserveFraction` | `double` | `0.2` | The fraction of the cluster rate that demand-proportional leasing reserves and splits evenly, guaranteeing an idle silo a non-zero floor so it can never be starved out of building demand. In `[0, 1]`; ignored under `StaticEven`. |
 
@@ -362,10 +377,11 @@ footprint breach that will not clear on its own.
 Which regions a tenant lives in is a per-tenant, runtime-mutable choice layered on
 top of the replication topology.
 
-### The three region sets
+### The region sets
 
-Most confusion about region residency comes from collapsing three distinct sets into
-one. They have different owners and different surfaces:
+Most confusion about region residency comes from collapsing distinct sets into a
+single notion of "where a tenant is". Each has a different owner and a different
+surface:
 
 | Set | Who controls it | Surface | What it means |
 |-----|-----------------|---------|---------------|
@@ -483,7 +499,7 @@ mapping. To consume them directly instead, subscribe to the
 ## Security
 
 - **Fail-closed everywhere.** Every enforcement seam denies on an unmatched request.
-  Tenant data isolation and tenant lifecycle administration are both independent of
+  Tenant data isolation and tenant lifecycle administration are each independent of
   the data-plane `DefaultEffect`, so an unmatched request always resolves to deny
   even under `DefaultEffect = Allow`.
 - **Registry confidentiality.** The `sys-tenant-*` registry, usage, and overage
@@ -531,30 +547,67 @@ without tenancy keeps a byte-for-byte-unchanged UI and tool surface.
   anonymous caller or a non-tenancy deployment, and every switch is authorized
   fail-closed through the operator gate. See
   [`Orleans.Lattice.Explorer`](../lattice.explorer/README.md).
-- **MCP.** When tenancy is wired, the MCP server contributes three read-only tenant
-  self-awareness tools - `lattice_tenant_current` (the tenant the caller is operating
-  as), `lattice_tenant_list` (the tenants the caller may access), and
+- **MCP.** When tenancy is wired, the MCP server contributes a read-only tenant
+  self-awareness tool group - `lattice_tenant_current` (the tenant the caller is
+  operating as), `lattice_tenant_list` (the tenants the caller may access), and
   `lattice_tenant_get` (one accessible tenant's lifecycle and per-region residency).
-  They are scoped fail-closed to the caller's subject: an anonymous caller lists
+  Each is scoped fail-closed to the caller's subject: an anonymous caller lists
   nothing, and an inaccessible tenant is indistinguishable from an absent one. The
-  mutating tenant-admin tools - including the three region-residency tools
-  `lattice_tenant_authorize_regions`, `lattice_tenant_set_residency`, and
-  `lattice_tenant_region_status` - remain separately gated behind
-  `EnableTenantAdminControlTools`. Region discovery is tenant-scoped too:
+  tenant-admin control tools - the lifecycle and quota tools
+  `lattice_tenant_create`, `lattice_tenant_suspend`, `lattice_tenant_resume`,
+  `lattice_tenant_delete`, and `lattice_tenant_set_quotas`, plus the
+  region-residency tools `lattice_tenant_authorize_regions`,
+  `lattice_tenant_set_residency`, and `lattice_tenant_region_status` - remain
+  separately gated behind `EnableTenantAdminControlTools`. Every tool in that
+  group is annotated destructive and non-read-only except
+  `lattice_tenant_region_status`, which is a read. Region discovery is
+  tenant-scoped too:
   `lattice_list_regions` advertises only the calling tenant's actionable set, annotated
   with its standing. See
   [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md).
 
 ## Configuration reference
 
+Only `LatticeTenancyOptions` is bound by the registration delegate:
+`AddLatticeTenancy(Action<LatticeTenancyOptions>?)` and
+`ConfigureLatticeTenancy(Action<LatticeTenancyOptions>)` each accept that type and no
+other. Every other options type below is a plain registered option, so configure it on
+the service collection directly - for example
+`services.Configure<TenantUsageAccountingOptions>(o => o.MeterInterval = TimeSpan.FromSeconds(10))`.
+
 ### `LatticeTenancyOptions`
 
-| Property | Default | Meaning |
-|---|---|---|
-| `HistoryRetentionMode` | `MetadataOnly` | Retention mode for the durable per-key history captured on the `sys-tenant-*` trees. History is never disabled by default. |
-| `HistoryRetentionWindow` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
-| `EnableDurableHistoryView` | `true` | Whether to create the durable history materialised view over the registry trees. |
-| `SeedDefaultTenant` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `HistoryRetentionMode` | `HistoryRetentionMode` | `MetadataOnly` | Retention mode for the durable per-key history captured on the `sys-tenant-*` trees. History is never disabled by default. |
+| `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
+| `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view over the registry trees. |
+| `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
+
+### `TenantUsageAccountingOptions`
+
+Governs usage metering and the quota-enforcement scope new tenants inherit.
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `DefaultEnforcementScope` | `TenantEnforcementScope` | `GlobalConverged` | The [enforcement scope](#enforcement-scope-multi-cluster) a newly created tenant starts with. |
+| `PublishMinAbsoluteDelta` | `long` | `65536` (`64 * 1024`) | Absolute movement, in the sampled unit, below which a usage republish is damped. A tenant's *first* publish is never damped. |
+| `PublishMinRelativeDelta` | `double` | `0.05` | Relative movement below which a usage republish is damped. Applied together with the absolute floor. |
+| `MeterInterval` | `TimeSpan` | `30s` | The per-silo metering cycle that samples each tenant's footprint and rolls it into that tenant's per-cluster usage slot. Zero or a negative value disables metering entirely, which pins quota admission in its documented fail-open branch so an authored quota never binds. |
+
+### `TenantObservabilityOptions`
+
+Governs the per-tenant gauges described under [Observability](#observability).
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `PublishGauges` | `bool` | `true` | Whether to publish the per-tenant observable gauges on the `orleans.lattice.tenancy` meter. `false` leaves the meter inert and skips the periodic overage scan. |
+| `PublishInterval` | `TimeSpan` | `30s` (`DefaultPublishInterval`) | How often the publisher re-samples the warm usage index and the overage billing seam. A non-positive value is treated as the default. |
+
+### `LatticeTenantRateLimiterOptions`
+
+Governs how a tenant's cluster-wide `MaxOpsPerSecond` is divided across live
+silos. See [Rate limiting](#rate-limiting) for the full table.
 
 ## See also
 

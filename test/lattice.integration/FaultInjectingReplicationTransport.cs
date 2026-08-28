@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Integration.Tests;
 /// the returned <see cref="ReplicationAck"/> carries the receiver-side
 /// high-water-mark, exactly as a real wire transport would. Routing is a
 /// static cluster-id -> <see cref="IServiceProvider"/> map populated by a
-/// per-silo hosted service (<see cref="ClusterServiceProviderRegistrar"/> in
+/// per-silo hosted service (<c>ClusterServiceProviderRegistrar</c> in
 /// the fixture); this static side-channel is the only place fixture identity
 /// crosses into the type-instantiated <c>ISiloConfigurator</c>, and it is
 /// fully cleaned up on cluster teardown / restart.

@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Regression coverage for the etag race that the real-Azure U9g ladder
 /// surfaced. When
 /// <see cref="IShardRootGrain.SetManyAsync"/> is marked
-/// <see cref="AlwaysInterleaveAttribute"/>, two concurrent batches whose
+/// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/>, two concurrent batches whose
 /// leaf returns a non-null <see cref="SplitResult"/> both enter
 /// <c>PromoteRootAsync</c>, both mutate <c>state.State.PendingPromotion</c>,
 /// and both call <c>state.WriteStateAsync()</c>. The second writer observes

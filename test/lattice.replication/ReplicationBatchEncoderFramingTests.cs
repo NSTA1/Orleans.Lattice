@@ -8,8 +8,8 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Pins the default <see cref="IReplicationBatchEncoder.EncodeFraming(in EncodedBatchHeader, ReadOnlyMemory{ArraySegment{byte}}, IBufferWriter{byte})"/>
-/// / <see cref="IReplicationBatchEncoder.TryDecodeFraming(ReadOnlyMemory{byte}, out EncodedBatchHeader, out ReadOnlyMemory{ArraySegment{byte}})"/>
+/// Pins the default <see cref="Orleans.Lattice.Replication.IReplicationBatchEncoder.EncodeFraming"/>
+/// / <see cref="Orleans.Lattice.Replication.IReplicationBatchEncoder.TryDecodeFraming"/>
 /// implementations through the canonical
 /// <see cref="OrleansBinaryReplicationBatchEncoder"/>. The framing
 /// surface is shape-only (no Orleans serializer involvement) so the

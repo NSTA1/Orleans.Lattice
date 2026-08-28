@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit tests for the per-tree runtime cache-value cap control-plane setter on
-/// <see cref="LatticeRegistryGrain"/>:
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain"/>:
 /// <see cref="ILatticeRegistry.SetMaxCacheValueBytesAsync"/>. Mirrors the
 /// projection-digest override tests: it persists / clears the override,
 /// preserves the other registry fields, and enforces the same

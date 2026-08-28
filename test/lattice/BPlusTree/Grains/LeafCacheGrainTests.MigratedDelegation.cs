@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>LwwValue</c> with <c>IsMigrated=true</c> represents a key whose
 /// authoritative ownership has shifted to another physical shard via a
 /// cross-shard migration saga. The destination leaf installs a saga
-/// shadow marker (see <see cref="BPlusLeafGrain.MarkSagaShadowAsync"/>)
+/// shadow marker (see <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.MarkSagaShadowAsync"/>)
 /// for the in-flight window where the migrated entry exists at the
 /// source's pre-saga value but the saga's destination terminal backstop
 /// has not yet landed - that marker is the only place the saga's

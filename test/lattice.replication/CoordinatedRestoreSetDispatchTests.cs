@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// atomic when driven through the <b>real</b> public set-restore entry point
 /// (<see cref="ILatticeBackupRestoreService.RestoreSetAsync"/>), the <b>real</b>
 /// restore saga dispatcher, the <b>real</b>
-/// <see cref="Grains.CrossClusterSagaCoordinatorGrain"/>, and the <b>real</b>
+/// <see cref="Orleans.Lattice.Replication.Grains.CrossClusterSagaCoordinatorGrain"/>, and the <b>real</b>
 /// per-saga participant grain hosting the <b>real</b>
 /// <see cref="RestoreParticipant"/> - not a participant-direct call. This is the
 /// end-to-end drive-through the participant-direct

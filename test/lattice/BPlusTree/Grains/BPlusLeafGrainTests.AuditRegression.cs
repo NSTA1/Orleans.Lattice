@@ -8,12 +8,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <summary>
 /// Regression tests for audit findings:
 /// <list type="bullet">
-///   <item>Bug #3 - <see cref="BPlusTree.Grains.BPlusLeafGrain.MergeEntriesAsync"/> and
-///   <see cref="BPlusTree.Grains.BPlusLeafGrain.MergeManyAsync"/> must advance the local
+///   <item>Bug #3 - <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.MergeEntriesAsync"/> and
+///   <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.MergeManyAsync"/> must advance the local
 ///   <see cref="LeafNodeState.Clock"/> past the highest incoming timestamp, otherwise
 ///   a subsequent local <c>SetAsync</c> produces a stamp that still loses LWW against
 ///   the just-merged (possibly future-dated) entry, causing silent write loss.</item>
-///   <item>Bug #2 - <see cref="BPlusTree.Grains.BPlusLeafGrain.CompactTombstonesAsync"/>
+///   <item>Bug #2 - <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.CompactTombstonesAsync"/>
 ///   must not mark itself as "up-to-date" when tombstones were left behind because they
 ///   were still within the grace period. Doing so causes every subsequent pass to be
 ///   short-circuited, and the tombstones are never swept.</item>

@@ -743,7 +743,7 @@ internal sealed class RepoContextVectorWriter
 
     /// <summary>
     /// Loads the repository's live embedded source identifiers into a set so
-    /// a caller can probe presence with <see cref="IReadOnlySet{T}.Contains(string)"/>.
+    /// a caller can probe presence with <see cref="System.Collections.Generic.IReadOnlySet{T}.Contains(T)"/>.
     /// Presence is an enable-wins flag, so the read decodes each row and keeps only the
     /// enabled ones (a disabled flag still occupies a key until the compactor reclaims
     /// it). The membership tree carries only 16-character source identifiers, never the

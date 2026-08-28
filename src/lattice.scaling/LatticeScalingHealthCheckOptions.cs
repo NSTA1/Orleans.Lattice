@@ -79,7 +79,7 @@ public sealed class LatticeScalingHealthCheckOptions
     /// <summary>
     /// Default registered name for the health check. Hosts that register it
     /// under a different name supply the alternative name to
-    /// <see cref="LatticeScalingServiceCollectionExtensions.AddLatticeScalingHealthCheck(Microsoft.Extensions.Diagnostics.HealthChecks.IHealthChecksBuilder, string, Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus?, System.Collections.Generic.IEnumerable{string})"/>
+    /// <see cref="LatticeScalingServiceCollectionExtensions.AddLatticeScalingHealthCheck"/>
     /// and bind named options under the same name.
     /// </summary>
     public const string DefaultName = "orleans.lattice.scaling";

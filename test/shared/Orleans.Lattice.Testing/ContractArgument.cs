@@ -1,14 +1,14 @@
 namespace Orleans.Lattice.Testing;
 
 /// <summary>
-/// Sentinel values shared between <see cref="PublicApiSizeContractTestsBase"/>
+/// Sentinel values shared between <see cref="PublicApiSizeContractTestsBase{TSelf}"/>
 /// and its subclasses when building the argument array for a reflected call.
 /// </summary>
 public static class ContractArgument
 {
     /// <summary>
     /// Returned from
-    /// <see cref="PublicApiSizeContractTestsBase.ResolveArgumentAsync"/> to tell
+    /// <see cref="PublicApiSizeContractTestsBase{TSelf}.ResolveArgumentAsync"/> to tell
     /// the base to substitute the parameter's own default value (its declared
     /// optional default if any, otherwise the runtime default for its type:
     /// <see langword="null"/> for reference types, the zero value for value

@@ -21,9 +21,9 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// entries (Set/Delete with <c>IsPrepared=true</c>) and terminal
 /// entries (<c>TxCommit</c>/<c>TxAbort</c> ops). The applier's
 /// receiver-side seam routes prepares through
-/// <see cref="IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
-/// <see cref="IReplicationApplyGrain.ApplyPreparedDeleteAsync"/> and
-/// terminals through <see cref="IReplicationApplyGrain.ApplyTxTerminalAsync"/>,
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedSetAsync"/> /
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyPreparedDeleteAsync"/> and
+/// terminals through <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyTxTerminalAsync"/>,
 /// so the full source-to-receiver atomic-visibility pipeline is under
 /// test here without bypassing any production code path.
 /// </para>

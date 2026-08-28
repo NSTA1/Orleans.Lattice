@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests;
 /// order, the zero-observer fast path, and swallow-and-log semantics when an
 /// observer throws. Mirrors the contract of the sibling
 /// <see cref="MutationObserverDispatcher"/> and
-/// <see cref="WalSaturationObserverDispatcher"/>.
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.WalSaturationObserverDispatcher"/>.
 /// </summary>
 [TestFixture]
 public class TreeAliasObserverDispatcherTests

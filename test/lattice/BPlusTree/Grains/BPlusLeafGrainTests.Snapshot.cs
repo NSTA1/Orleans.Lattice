@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit tests for the snapshot-capture seam:
-/// <see cref="IBPlusLeafGrain.CaptureSnapshotAsync"/> copies the
+/// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.CaptureSnapshotAsync"/> copies the
 /// per-activation entry cache into a canonical byte-row
 /// <see cref="LeafSnapshotBlob"/> and routes it through the dedicated
 /// <see cref="ILeafSnapshotStorageGrain"/> keyed by this leaf's grain id.

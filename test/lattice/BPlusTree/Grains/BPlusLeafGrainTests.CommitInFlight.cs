@@ -8,8 +8,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Unit tests for the <see cref="LatticeMetrics.LeafCommitInFlight"/>
 /// histogram (instrument id <c>orleans.lattice.leaf.commit.in_flight</c>).
 /// The histogram snapshots the in-flight commit count on the leaf at
-/// the moment a foreground <see cref="IBPlusLeafGrain.SetAsync(string, byte[])"/>
-/// / <see cref="IBPlusLeafGrain.SetManyAsync"/> enters the commit
+/// the moment a foreground <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetAsync(string, byte[])"/>
+/// / <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.SetManyAsync"/> enters the commit
 /// path. Under the shipping Orleans single-threaded grain scheduling
 /// (neither commit entry point is marked <c>[AlwaysInterleave]</c>)
 /// the snapshot is always <c>0</c>; the tests pin that invariant so

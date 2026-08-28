@@ -67,7 +67,7 @@ public sealed class LatticeWalGcRetentionFallOffTests
     /// <summary>
     /// Seeds three entries: offset 0 acked by the lagging shipper, offsets 1
     /// and 2 authored while the shipper was partitioned (un-acked). All three
-    /// are older than the retention window relative to <see cref="_now"/>.
+    /// are older than the retention window relative to <c>_now</c>.
     /// </summary>
     private static async Task<InMemoryWalStorageProvider> SeededProviderAsync()
     {

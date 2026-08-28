@@ -4,8 +4,11 @@ namespace Orleans.Lattice.Tenancy;
 /// Options controlling the aggregate per-tenant usage-accounting and quota
 /// enforcement layer: the enforcement scope quotas are admitted against, and the
 /// hysteresis band that gates how often a cluster republishes its local usage
-/// sample. Resolved through the standard options system and configured via
-/// <c>AddLatticeTenancy(...)</c> or <c>ConfigureLatticeTenancy(...)</c>.
+/// sample. Resolved through the standard options system. Unlike
+/// <see cref="LatticeTenancyOptions"/>, this type is <b>not</b> bound by the
+/// <c>AddLatticeTenancy(...)</c> / <c>ConfigureLatticeTenancy(...)</c> delegate,
+/// which accepts only <see cref="LatticeTenancyOptions"/>; configure it with
+/// <c>services.Configure&lt;TenantUsageAccountingOptions&gt;(...)</c>.
 /// </summary>
 public sealed class TenantUsageAccountingOptions
 {

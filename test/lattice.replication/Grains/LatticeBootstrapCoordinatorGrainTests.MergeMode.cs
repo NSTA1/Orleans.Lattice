@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 
 /// <summary>
 /// Coverage of the per-tree <see cref="LatticeMergeMode"/> stamping in
-/// <see cref="LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync"/>.
+/// <c>LatticeBootstrapCoordinatorGrain.DrainSnapshotAsync</c>.
 /// The drain previously hardcoded
 /// <see cref="LatticeMergeMode.LwwRegister"/> on every emitted
 /// <see cref="WalRecord"/>; the receiver-side per-tree merge mode now

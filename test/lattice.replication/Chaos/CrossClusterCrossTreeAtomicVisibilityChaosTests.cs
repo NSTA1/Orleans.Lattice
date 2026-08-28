@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// mid-workload. Because each tree's terminal replicates on its own WAL feed,
 /// a receiver can observe one tree's terminal long before the sibling tree's
 /// terminal arrives. The receiver-side cross-tree barrier
-/// (<see cref="ILatticeCrossTreeReceiverGrain"/>) must hold <em>every</em>
+/// (<see cref="Orleans.Lattice.BPlusTree.ILatticeCrossTreeReceiverGrain"/>) must hold <em>every</em>
 /// participating tree invisible until all of the batch's replicated terminals
 /// have arrived, then flip them together.
 /// <para>

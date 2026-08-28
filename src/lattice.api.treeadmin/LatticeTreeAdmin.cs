@@ -2015,7 +2015,7 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     /// Also rejects an id in the structural tenant namespace (<c>t/{tenant}/{name}</c>)
     /// that the ambient active tenant does not own. That namespace is composed
     /// internally - this facade composes it from the caller's unqualified name
-    /// through <see cref="ITenantContextResolver"/>, <see cref="LatticeTenantScopedTreeAdmin"/>
+    /// through <see cref="ITenantContextResolver"/>, <c>LatticeTenantScopedTreeAdmin</c>
     /// composes it under the tenant in scope, and the data plane refuses a direct
     /// user-origin write to a <c>t/</c> id outright - so a caller-supplied id
     /// naming a namespace the caller is not operating in has no legitimate source.

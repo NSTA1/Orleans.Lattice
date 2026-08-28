@@ -5,7 +5,7 @@ using Orleans.Lattice.Testing;
 namespace Orleans.Lattice.Tests.BPlusTree.PublicApiContract;
 
 /// <summary>
-/// Binds the reusable <see cref="PublicApiSizeContractTestsBase"/> guard to the
+/// Binds the reusable <see cref="PublicApiSizeContractTestsBase{TSelf}"/> guard to the
 /// <see cref="ILattice"/> public surface. The base discovers every public
 /// <see cref="ILattice"/> method with a size/limit <see cref="int"/> parameter
 /// (today: <see cref="ILattice.NextKeysAsync"/> /

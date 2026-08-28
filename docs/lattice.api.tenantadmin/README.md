@@ -17,7 +17,7 @@ convention exactly: the contracts live in `Orleans.Lattice.Api.Abstractions` (un
 an MCP `TenantAdmin` tool group. It **composes** the existing TreeAdmin, Schema,
 Backup, and Replication facades rather than reimplementing them.
 
-Four facades are exposed:
+The facades exposed are:
 
 - **`ILatticeTenantAdmin`** - the tenant lifecycle: create, suspend, resume, delete,
   and author per-tenant resource quotas.
@@ -50,8 +50,10 @@ Four facades are exposed:
   `DefaultEffect`, so an unmatched request always resolves to deny even under
   `DefaultEffect = Allow`.
 - **Reserved default tenant.** The well-known legacy-adoption `default` tenant can
-  never be suspended or deleted; those operations fail closed with a
-  `ReservedTenantOperationException`, because it names the cluster's own legacy state.
+  never be suspended, deleted, or given quotas; each fails closed with a
+  `ReservedTenantOperationException`, because it names the cluster's own legacy
+  state. Resuming it is allowed and is an active no-op, since it can never be
+  suspended in the first place.
 - **Idempotent lifecycle.** Suspend/resume report whether they changed anything;
   create is not an idempotent upsert (a duplicate id fails closed with
   `TenantAlreadyExistsException`), so it can never reset or reuse another tenant's
@@ -78,10 +80,14 @@ Four facades are exposed:
   as a dangling grant that whoever later registers that id would inherit. The
   caller-seeded default is not directory-validated - it comes from the
   authenticated caller's own resolved subject, not from the wire.
-- **Authorize, then validate, then write.** Every mutating verb authorizes through
-  the fail-closed gate *before* it inspects its arguments or touches the registry,
-  so a denied caller is refused identically whether or not its arguments are
-  well-formed and cannot use argument validation as an oracle.
+- **Authorize, then validate, then write.** Every mutating verb first parses the
+  tenant id (a purely syntactic step over the caller's own argument, which on create
+  also rejects an id shadowing the `sys-` or `_lattice_` reserved namespaces with
+  an `ArgumentException`), then authorizes through the fail-closed gate, and only
+  then inspects its remaining arguments or touches the registry. So a denied caller
+  learns nothing from the admin-subject list it supplied, from whether the tenant
+  already exists, or from whether it is the reserved `default` tenant: every one of
+  those checks sits behind the gate and cannot be used as an oracle.
 - **Cascading delete.** Deleting a tenant cascades the delete to every tree the
   tenant owns (each `t/{tenantId}/*` tree is soft-deleted) before the registry record
   is removed.
@@ -101,9 +107,29 @@ Register the facade on the silo (it requires the `Orleans.Lattice.Tenancy` packa
 
 - `AddLatticeTenantAdminApi(this ISiloBuilder builder, Action<LatticeApiTenantAdminOptions>? configure = null)` -
   registers `ILatticeTenantAdmin`, `ILatticeTenantRegionAdmin`, and the read-only
-  `ILatticeTenantSelfService`.
+  `ILatticeTenantSelfService`, together with the fail-closed authorizers they
+  consult and the system-driven region backfill/drain promotion driver.
 - `AddLatticeTenantScopedTreeAdminApi(this ISiloBuilder builder)` - registers
   `ILatticeTenantScopedTreeAdmin`.
+
+Each call is **order-guarded at registration time**: a misordered call throws an
+`InvalidOperationException` with an actionable message rather than failing
+obscurely at silo start.
+
+| Call | Must run after | Because |
+|---|---|---|
+| `AddLatticeTenantAdminApi` | `AddLatticeTenancy()` | The facade operates on the tenancy engine's tenant registry, so it would otherwise have no lifecycle store to act on. |
+| `AddLatticeTenantScopedTreeAdminApi` | `AddLatticeTreeAdminApi()` | It delegates the whole-tree lifecycle verbs to that facade. |
+| `AddLatticeTenantScopedTreeAdminApi` | `AddLatticeSchemaEnforcement()` / `AddLatticeSchemaApi()` | It delegates the per-tree schema-policy verbs to that facade. |
+
+Each is idempotent: repeating the call layers any supplied configuration delegate
+but performs the structural wiring only once.
+
+`LatticeApiTenantAdminOptions` currently exposes no settings - it is the reserved
+per-facade options seam, mirroring the sibling control facades - so the `configure`
+delegate can be omitted. The knobs that shape tenancy behaviour live on the
+[`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md#configuration-reference)
+options instead.
 
 ## Facade method signatures
 
@@ -123,10 +149,11 @@ in the [binding](../lattice.api.tenantadmin.grpc/README.md).
 
 ### `ILatticeTenantRegionAdmin`
 
-The per-tenant region-residency surface. It authors two of the
-[three region sets](../lattice.tenancy/README.md#the-three-region-sets): the
-operator-owned **allowed** set and the tenant-owned **resident** set. Residency is
-always a subset of the allowed set; the last resident region can never be removed.
+The per-tenant region-residency surface. Of the
+[region sets](../lattice.tenancy/README.md#the-region-sets) it authors the
+operator-owned **allowed** set and the tenant-owned **resident** set, leaving the
+physical topology to the deployment. Residency is always a subset of the allowed set;
+the last resident region can never be removed.
 
 | Method | Signature |
 |---|---|
@@ -134,7 +161,7 @@ always a subset of the allowed set; the last resident region can never be remove
 | `SetResidencyAsync` | `Task<TenantResidencyChangeResult> SetResidencyAsync(string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)` |
 | `GetTenantRegionStatusAsync` | `Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)` |
 
-Each of the three sets is a **replacement, not a delta**: the supplied collection
+Each authored set is a **replacement, not a delta**: the supplied collection
 becomes the whole set, so a currently-allowed or currently-resident region absent from
 it is revoked or drained.
 
@@ -175,14 +202,19 @@ never creates, suspends, resumes, or deletes a tenant.
 | `ListAccessibleTenantsAsync` | `Task<IReadOnlyList<TenantDescriptor>> ListAccessibleTenantsAsync(CancellationToken cancellationToken = default)` |
 | `GetTenantAsync` | `Task<TenantStatusReport> GetTenantAsync(string tenantId, CancellationToken cancellationToken = default)` |
 
-`GetCurrentTenantAsync` requires no special authorization because it reports only the
-caller's own context; a caller with no tenant in context resolves to the reserved
-`default` tenant. `ListAccessibleTenantsAsync` returns, in ascending tenant-id order,
-the tenants the caller is a registered administrator of plus its own current tenant
-when that is non-default, so an anonymous or non-privileged caller under the default
-tenant gets an empty list. `GetTenantAsync` deliberately unifies "no such tenant" and
-"you may not see this tenant" into a single `TenantNotFoundException`, so no caller
-can probe for the existence of a tenant outside its authority.
+`GetCurrentTenantAsync` needs no administrative tier because it reports only the
+caller's own context, and a caller with no tenant in context resolves to the reserved
+`default` tenant. That is *not* the same as being ungated: `GetCurrentTenantAsync` and
+`ListAccessibleTenantsAsync` each re-run the fail-closed tenant resolution first, so a
+caller whose asserted active tenant was refused gets a `LatticeTenantAccessDeniedException`
+instead of a report for a tenant it does not hold.
+
+`ListAccessibleTenantsAsync` returns, in ascending ordinal tenant-id order, the
+tenants the caller is a registered administrator of plus its own current tenant when
+that is non-default, so an anonymous or non-privileged caller under the default tenant
+gets an empty list. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
+not see this tenant" into a single `TenantNotFoundException`, so no caller can probe
+for the existence of a tenant outside its authority.
 
 ### `ILatticeTenantScopedTreeAdmin`
 
@@ -192,15 +224,20 @@ facade injects the tenant segment.
 
 | Method | Signature |
 |---|---|
-| `CreateTreeAsync` | `Task<TreeCreationResult> CreateTreeAsync(...)` |
-| `CheckTreeExistsAsync` | `Task<TreeExistenceResult> CheckTreeExistsAsync(...)` |
-| `DeleteTreeAsync` | `Task<TreeDeletionStatus> DeleteTreeAsync(...)` |
-| `RecoverTreeAsync` | `Task<TreeDeletionStatus> RecoverTreeAsync(...)` |
-| `PurgeTreeAsync` | `Task<TreeDeletionStatus> PurgeTreeAsync(...)` |
-| `GetTreeDeletionStatusAsync` | `Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(...)` |
-| `SetSchemaPolicyAsync` | `Task SetSchemaPolicyAsync(...)` |
-| `ClearSchemaPolicyAsync` | `Task<bool> ClearSchemaPolicyAsync(...)` |
-| `GetSchemaPolicyAsync` | `Task<LatticeSchemaPolicy?> GetSchemaPolicyAsync(...)` |
+| `CreateTreeAsync` | `Task<TreeCreationResult> CreateTreeAsync(string name, int? shardCount = null, int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default)` |
+| `CheckTreeExistsAsync` | `Task<TreeExistenceResult> CheckTreeExistsAsync(string name, CancellationToken cancellationToken = default)` |
+| `DeleteTreeAsync` | `Task<TreeDeletionStatus> DeleteTreeAsync(string name, CancellationToken cancellationToken = default)` |
+| `RecoverTreeAsync` | `Task<TreeDeletionStatus> RecoverTreeAsync(string name, CancellationToken cancellationToken = default)` |
+| `PurgeTreeAsync` | `Task<TreeDeletionStatus> PurgeTreeAsync(string name, bool confirm, CancellationToken cancellationToken = default)` |
+| `GetTreeDeletionStatusAsync` | `Task<TreeDeletionStatus> GetTreeDeletionStatusAsync(string name, CancellationToken cancellationToken = default)` |
+| `SetSchemaPolicyAsync` | `Task SetSchemaPolicyAsync(string name, LatticeSchemaPolicy policy, CancellationToken cancellationToken = default)` |
+| `ClearSchemaPolicyAsync` | `Task<bool> ClearSchemaPolicyAsync(string name, CancellationToken cancellationToken = default)` |
+| `GetSchemaPolicyAsync` | `Task<LatticeSchemaPolicy?> GetSchemaPolicyAsync(string name, CancellationToken cancellationToken = default)` |
+
+Every method on this facade requires an active tenant. With none in scope the
+call fails closed with a `TenantScopeRequiredException` (declared in this package,
+namespace `Orleans.Lattice.Api.TenantAdmin`) rather than silently operating on the
+cluster-global namespace.
 
 ## Public model types
 
@@ -224,7 +261,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantRegionLifecycleStatus` | enum | `None` / `Provisioning` / `Backfilling` / `Online` / `Draining` / `Offline` / `Removed`. |
 | `TenantNotFoundException` | exception | No tenant with that id is registered. |
 | `TenantAlreadyExistsException` | exception | A tenant with the same id is already registered. |
-| `ReservedTenantOperationException` | exception | Attempted suspend/delete of the reserved `default` tenant. |
+| `ReservedTenantOperationException` | exception | Attempted suspend, delete, or set-quotas on the reserved `default` tenant. |
 | `TenantRegionNotAllowedException` | exception | A residency region is not in the allowed set (or a revoked region is still resident). |
 | `TenantLastRegionException` | exception | The change would remove the last resident region. |
 

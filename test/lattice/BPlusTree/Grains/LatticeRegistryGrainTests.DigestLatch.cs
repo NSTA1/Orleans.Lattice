@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit tests for the projection-digest override and one-way latch
-/// methods on <see cref="LatticeRegistryGrain"/>:
+/// methods on <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeRegistryGrain"/>:
 /// <see cref="ILatticeRegistry.SetMaintainProjectionDigestAsync"/> and
 /// <see cref="ILatticeRegistry.LatchProjectionDigestPermanentlyDisabledAsync"/>.
 /// </summary>

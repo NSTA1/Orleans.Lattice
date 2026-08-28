@@ -22,16 +22,18 @@ namespace Orleans.Lattice.Api.Data.Grpc;
 /// </para>
 /// <para>
 /// <b>Assertion, not fact.</b> The tenant a caller asserts on the wire is only an
-/// assertion: the tenancy add-on's real <c>ITenantContextResolver</c> and the
-/// per-tenant admission controller re-validate it against the caller's
-/// authenticated subject membership downstream. This bridge only lifts the
-/// assertion onto the ambient scope; it performs no authorization of its own.
+/// assertion: the tenancy add-on's real <c>ITenantContextResolver</c> re-validates
+/// it against the caller's authenticated subject membership downstream, and the
+/// access gate authorizes the operation before any per-tenant accounting is
+/// consulted. The per-tenant admission controller is an accounting step that runs
+/// strictly after authorization, not part of that check. This bridge only lifts
+/// the assertion onto the ambient scope; it performs no authorization of its own.
 /// </para>
 /// <para>
 /// <b>Fail-closed.</b> Returning <see langword="null"/> (no asserted tenant, or a
 /// syntactically invalid one) leaves the call with no active tenant asserted, so
-/// the resolver applies its own membership rules (a single-membership subject
-/// defaults implicitly; a multi-membership subject is denied). A missing or
+/// the resolver resolves the reserved default tenant, whatever the caller's
+/// membership set. A missing or
 /// malformed tenant header can never cause a call to be attributed to a tenant
 /// the caller did not assert.
 /// </para>

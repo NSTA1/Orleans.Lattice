@@ -376,7 +376,7 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// invoke off the activation scheduler - which the shared dry-run loop does, since
     /// it enumerates the source with <c>ConfigureAwait(false)</c>. The delegate closes
     /// over local snapshots and the thread-safe singleton registry only, never
-    /// <see cref="state"/>, so it never touches activation services.
+    /// <c>state</c>, so it never touches activation services.
     /// <see cref="SchemaRemediationMode.Transform"/> evaluates the static transform;
     /// <see cref="SchemaRemediationMode.SchemaVersionMigration"/> re-stamps the value to
     /// the target schema version through the registry. The delegate throws

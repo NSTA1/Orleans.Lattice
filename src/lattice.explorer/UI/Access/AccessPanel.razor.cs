@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Explorer.UI.Access;
 /// The Access (membership &amp; access-control) area's interactive panel. Drives
 /// the membership and policy admin services over the auth-admin control plane and
 /// the facade-computed Explain / EffectivePermissions introspection. Every action
-/// is gated on the advisory <see cref="ExplorerCapabilities.AuthAdminAllowed"/>
+/// is gated on the advisory <see cref="Orleans.Lattice.Explorer.Core.Navigation.ExplorerCapabilities.AuthAdminAllowed"/>
 /// flag (rendering disabled, not hidden, when denied) and folds a server denial
 /// into a clean status banner rather than surfacing an unhandled error.
 /// </summary>

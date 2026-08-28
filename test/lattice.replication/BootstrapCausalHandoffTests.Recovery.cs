@@ -148,10 +148,10 @@ public partial class BootstrapCausalHandoffTests
     }
 
     /// <summary>
-    /// Recovery: <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// Recovery: <see cref="Orleans.Lattice.Replication.Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
     /// mutates the per-origin diagonal and the local vector clock but does
     /// NOT drain the causal-apply buffer - drain is triggered solely by a
-    /// successful <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/>.
+    /// successful <see cref="Orleans.Lattice.Replication.Grains.IReplicationHighWaterMarkGrain.TryAdvanceAsync"/>.
     /// Pre-pin parked entries survive the pin overwrite and drain on the
     /// next post-pin successful apply when the pinned frontier satisfies
     /// their declared dependencies. Pins the contract that lets the

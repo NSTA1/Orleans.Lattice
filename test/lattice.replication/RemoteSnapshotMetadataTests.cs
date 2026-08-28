@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// struct is the snapshot cut-point carried across a
 /// <see cref="IRemoteSnapshotTransport.GetMetadataAsync"/> call; mis-set
 /// slots would break the receiver's
-/// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+/// <see cref="Orleans.Lattice.Replication.Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
 /// handoff.
 /// </summary>
 [TestFixture]

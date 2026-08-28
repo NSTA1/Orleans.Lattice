@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Benchmark.Microbench.Profiling;
 /// The dump-then-symbolicate pattern (vs. live event-by-event symbol
 /// resolution) is the documented robust path with TraceEvent: streaming
 /// <see cref="EventPipeEventSource"/> events don't carry resolved stack
-/// frames inline, whereas <see cref="TraceLog.OpenOrConvert(string)"/>
+/// frames inline, whereas <c>TraceLog.OpenOrConvert(string)</c>
 /// produces a fully cross-referenced ETLX with managed-method symbols once
 /// the session's JIT rundown has flushed.
 /// </para>

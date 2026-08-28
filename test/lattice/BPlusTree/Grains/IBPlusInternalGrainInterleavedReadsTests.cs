@@ -18,13 +18,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// every read method on <see cref="IBPlusInternalGrain"/> is a single
 /// synchronous <c>Task.FromResult(state.State.X)</c> expression with
 /// no awaits and no multi-step cross-state-field traversal, so the
-/// U9h-C \"interleaved read across multi-step traversal\" hazard does
+/// U9h-C "interleaved read across multi-step traversal" hazard does
 /// not apply. The one mutation method on the hot path
-/// (<see cref=\"IBPlusInternalGrain.AcceptSplitAsync\"/>) is
+/// (<see cref="Orleans.Lattice.BPlusTree.IBPlusInternalGrain.AcceptSplitAsync"/>) is
 /// <c>[AlwaysInterleave]</c> for routing concurrency but its body is
 /// serialised by a per-activation <c>_splitGate</c>
-/// <see cref=\"SemaphoreSlim\"/> on
-/// <see cref=\"Grains.BPlusInternalGrain\"/>.
+/// <see cref="System.Threading.SemaphoreSlim"/> on
+/// <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusInternalGrain"/>.
 /// </para>
 /// <para>
 /// This is a contract assertion: the attribute is enforced by the
