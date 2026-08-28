@@ -137,14 +137,37 @@ public class RgaCacheTests
     // ── 1212: transient materialisation cache ───────────────────
 
     [Test]
-    public void ToList_returns_the_same_instance_on_repeated_reads()
+    public void MaterializeShared_returns_the_same_instance_on_repeated_reads()
+    {
+        var r = new Rga();
+        r.InsertAfter(Rga.Root, "r1", B("a"));
+
+        // The cache holds the resolved ORDER - the DFS and sibling sort, which
+        // is the expensive part - and that is still reused across reads. It is
+        // reached through the internal aliasing view; the public ToList copies
+        // out of it per read (see ToList_returns_a_fresh_projection_per_read),
+        // because the cached tuples carry the live node buffers.
+        var first = r.MaterializeShared();
+        var second = r.MaterializeShared();
+        Assert.That(second, Is.SameAs(first));
+    }
+
+    [Test]
+    public void ToList_returns_a_fresh_projection_per_read()
     {
         var r = new Rga();
         r.InsertAfter(Rga.Root, "r1", B("a"));
 
         var first = r.ToList();
         var second = r.ToList();
-        Assert.That(second, Is.SameAs(first));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.Not.SameAs(first),
+                "the public projection must not hand two readers the same instance");
+            Assert.That(first.Select(t => S(t.Value)), Is.EqualTo(second.Select(t => S(t.Value))),
+                "though the two reads must agree on content");
+        });
     }
 
     [Test]
@@ -165,10 +188,10 @@ public class RgaCacheTests
     {
         var r = new Rga();
         r.InsertAfter(Rga.Root, "r1", B("a"));
-        var before = r.ToList();
+        var before = r.MaterializeShared();
 
         r.InsertAfter(Rga.Root, "r1", B("b"));
-        var after = r.ToList();
+        var after = r.MaterializeShared();
 
         Assert.Multiple(() =>
         {
@@ -183,10 +206,10 @@ public class RgaCacheTests
         var r = new Rga();
         var d = r.InsertAfter(Rga.Root, "r1", B("a"));
         r.InsertAfter(Rga.Root, "r1", B("b"));
-        var before = r.ToList();
+        var before = r.MaterializeShared();
 
         r.Remove(d);
-        var after = r.ToList();
+        var after = r.MaterializeShared();
 
         Assert.Multiple(() =>
         {
@@ -200,12 +223,12 @@ public class RgaCacheTests
     {
         var r = new Rga();
         r.InsertAfter(Rga.Root, "r1", B("a"));
-        var before = r.ToList();
+        var before = r.MaterializeShared();
 
         var other = new Rga();
         other.InsertAfter(Rga.Root, "r2", B("b"));
         r.MergeFrom(other);
-        var after = r.ToList();
+        var after = r.MaterializeShared();
 
         Assert.Multiple(() =>
         {
@@ -219,7 +242,7 @@ public class RgaCacheTests
     {
         var r = new Rga();
         r.InsertAfter(Rga.Root, "r1", B("a"));
-        var before = r.ToList();
+        var before = r.MaterializeShared();
 
         r.MergeDelta(new RgaDelta
         {
@@ -229,7 +252,7 @@ public class RgaCacheTests
             },
             Tombstones = Array.Empty<OrSetDot>(),
         });
-        var after = r.ToList();
+        var after = r.MaterializeShared();
 
         Assert.Multiple(() =>
         {

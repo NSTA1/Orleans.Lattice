@@ -129,7 +129,11 @@ public sealed class MvRegisterProvenanceDecoder : ICrdtProvenanceDecoder
             var e = ordered[i];
             result.Add(new CrdtMemberValue
             {
-                Element = e.Value ?? Array.Empty<byte>(),
+                // Copy: the projection is handed to an external caller, and
+                // e.Value is the register's own stored buffer (see the
+                // buffer-ownership remarks on ICrdt<TSelf>). An empty value
+                // reuses the shared Array.Empty<byte>() singleton.
+                Element = e.Value is null ? Array.Empty<byte>() : e.Value.AsSpan().ToArray(),
                 ReplicaId = e.ReplicaId,
                 Ordinal = e.Counter,
             });

@@ -88,7 +88,9 @@ public readonly record struct RgaAccessor<T>
     {
         EnsureInitialised();
         var rga = await GetAsync(cancellationToken).ConfigureAwait(false);
-        var snapshot = rga.ToList();
+        // MaterializeShared, not ToList: every value is deserialised into T on
+        // the next line, so the egress copy ToList pays would be discarded.
+        var snapshot = rga.MaterializeShared();
         if (snapshot.Count == 0) return Array.Empty<T>();
         var values = new T[snapshot.Count];
         for (var i = 0; i < snapshot.Count; i++)
@@ -286,7 +288,9 @@ public readonly record struct RgaAccessor<T>
     /// <summary>Resolves the visible <paramref name="index"/> to a dot-explicit insert delta against <paramref name="rga"/>.</summary>
     private static (OrSetDot Dot, RgaDelta Delta) InsertAtMutate(Rga rga, int index, string replicaId, byte[] encoded)
     {
-        var snapshot = rga.ToList();
+        // Only the dots are read here, so take the shared view and skip the
+        // per-value egress copy ToList would pay.
+        var snapshot = rga.MaterializeShared();
         if (index > snapshot.Count)
         {
             throw new ArgumentOutOfRangeException(
@@ -313,7 +317,8 @@ public readonly record struct RgaAccessor<T>
     /// <summary>Resolves the visible <paramref name="index"/> to a tombstone delta against <paramref name="rga"/>.</summary>
     private static RgaDelta RemoveAtMutate(Rga rga, int index)
     {
-        var snapshot = rga.ToList();
+        // Dots only; see InsertAtMutate.
+        var snapshot = rga.MaterializeShared();
         if (index >= snapshot.Count)
         {
             throw new ArgumentOutOfRangeException(

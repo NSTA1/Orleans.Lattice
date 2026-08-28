@@ -204,15 +204,36 @@ public class MvRegisterTests
     }
 
     [Test]
-    public void Values_single_value_reads_reuse_cached_snapshot()
+    public void ValuesShared_single_value_reads_reuse_cached_snapshot()
     {
         var r = new MvRegister();
         r.Set("r1", B("alpha"));
+        var first = r.ValuesShared();
+        var second = r.ValuesShared();
+        // The single-value snapshot is cached and handed to repeated internal
+        // reads between writes, so no fresh array is allocated. It is reached
+        // through the internal aliasing view; the public Values copies out of it
+        // per read (see Values_returns_a_fresh_projection_per_read), because the
+        // cached arrays are the register's own stored buffers.
+        Assert.That(second, Is.SameAs(first));
+    }
+
+    [Test]
+    public void Values_returns_a_fresh_projection_per_read()
+    {
+        var r = new MvRegister();
+        r.Set("r1", B("alpha"));
+
         var first = r.Values();
         var second = r.Values();
-        // The immutable single-value snapshot is cached and handed to
-        // repeated reads between writes, so no fresh array is allocated.
-        Assert.That(second, Is.SameAs(first));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.Not.SameAs(first),
+                "the public projection must not hand two readers the same instance");
+            Assert.That(ValuesAsStrings(r), Is.EqualTo(new[] { "alpha" }),
+                "though the two reads must agree on content");
+        });
     }
 
     [Test]
@@ -220,9 +241,9 @@ public class MvRegisterTests
     {
         var r = new MvRegister();
         r.Set("r1", B("alpha"));
-        var before = r.Values();
+        var before = r.ValuesShared();
         r.Set("r1", B("beta"));
-        var after = r.Values();
+        var after = r.ValuesShared();
         Assert.That(after, Is.Not.SameAs(before));
         Assert.That(ValuesAsStrings(r), Is.EquivalentTo(new[] { "beta" }));
     }
@@ -232,13 +253,13 @@ public class MvRegisterTests
     {
         var a = new MvRegister();
         a.Set("r1", B("alpha"));
-        var before = a.Values();
+        var before = a.ValuesShared();
 
         var b = new MvRegister();
         b.Set("r2", B("beta"));
         a.MergeFrom(b);
 
-        var after = a.Values();
+        var after = a.ValuesShared();
         Assert.That(after, Is.Not.SameAs(before));
         Assert.That(ValuesAsStrings(a), Is.EquivalentTo(new[] { "alpha", "beta" }));
     }
@@ -248,14 +269,14 @@ public class MvRegisterTests
     {
         var local = new MvRegister();
         local.Set("r1", B("a1"));
-        var before = local.Values();
+        var before = local.ValuesShared();
 
         // A later write on r1 the local side has not seen supersedes a1.
         var newer = local.Clone();
         newer.Set("r1", B("a2"));
         local.MergeDelta(DeltaFrom(newer));
 
-        var after = local.Values();
+        var after = local.ValuesShared();
         Assert.That(after, Is.Not.SameAs(before));
         Assert.That(ValuesAsStrings(local), Is.EquivalentTo(new[] { "a2" }));
     }

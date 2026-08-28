@@ -53,14 +53,19 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
     /// <summary>
     /// Cached materialised snapshot of the single-valued read produced by
-    /// <see cref="Values"/>. The register's values are immutable by
-    /// convention, so a steady-state (single-valued) register can hand the
-    /// same one-element list to repeated reads between writes instead of
-    /// allocating a fresh array each call. Reset to <c>null</c> by every
-    /// mutation that can change the live entry (<see cref="Set"/>,
+    /// <see cref="ValuesShared"/>. A steady-state (single-valued) register can
+    /// hand the same one-element list to repeated internal reads between writes
+    /// instead of allocating a fresh array each call. Reset to <c>null</c> by
+    /// every mutation that can change the live entry (<see cref="Set"/>,
     /// <see cref="MergeFrom"/>, <see cref="MergeDelta"/>). Not serialised
     /// (no <c>[Id]</c>): it is derived state that rebuilds lazily on the
     /// next read after a copy or deserialize.
+    /// <para>
+    /// The cached arrays alias the live <see cref="Entries"/> buffers, which is
+    /// why the cache backs the internal <see cref="ValuesShared"/> view and never
+    /// the public <see cref="Values"/> projection - see the buffer-ownership
+    /// remarks on <see cref="ICrdt{TSelf}"/>.
+    /// </para>
     /// </summary>
     [NonSerialized]
     private IReadOnlyList<byte[]>? _singleValueSnapshot;
@@ -154,8 +159,44 @@ public sealed class MvRegister : ICrdt<MvRegister>
     /// single-valued register returns exactly one element; a
     /// concurrently-written register returns the conflicting
     /// candidates.
+    /// <para>
+    /// This is the <em>egress</em> seam of the buffer-ownership rule documented
+    /// on <see cref="ICrdt{TSelf}"/>: each returned array is a copy, so a caller
+    /// that writes through a returned value cannot reach this register's stored
+    /// entries. An empty value costs nothing (an empty span's <c>ToArray</c>
+    /// returns the shared <see cref="Array.Empty{T}"/> singleton). Call sites
+    /// inside this assembly that immediately consume the bytes (deserialising
+    /// them, say) should use <see cref="ValuesShared"/> instead and skip the copy.
+    /// </para>
     /// </summary>
     public IReadOnlyList<byte[]> Values()
+    {
+        var shared = ValuesShared();
+        var count = shared.Count;
+        if (count == 0) return Array.Empty<byte[]>();
+
+        // Reuse the cached ordering (the sort is the expensive part) and pay
+        // only the per-value copy the egress contract requires.
+        var copy = new byte[count][];
+        for (var i = 0; i < count; i++) copy[i] = shared[i].AsSpan().ToArray();
+        return copy;
+    }
+
+    /// <summary>
+    /// The ordering-only view behind <see cref="Values"/>: the same
+    /// deterministically-ordered live values, but sharing the stored
+    /// <see cref="MvRegisterEntry.Value"/> buffers rather than copying them.
+    /// <para>
+    /// Internal by design. The returned arrays are the register's own durable
+    /// buffers, so a caller must treat them as read-only and must not let one
+    /// escape to an external caller - that is exactly what the public
+    /// <see cref="Values"/> copy exists to prevent. It is offered so an internal
+    /// consumer that immediately deserialises each value (the typed
+    /// <c>MvRegisterAccessor</c>) does not pay a copy it would discard on the
+    /// next line.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyList<byte[]> ValuesShared()
     {
         var count = Entries.Count;
         if (count == 0) return Array.Empty<byte[]>();
@@ -163,9 +204,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // Steady-state fast path: a single-valued register needs neither a
         // sort nor a LINQ pipeline - the lone value is already "ordered".
         // The one-element snapshot is cached and reused across repeated reads
-        // between writes (the values are immutable by convention), so a
-        // read-heavy single-valued register allocates the array once rather
-        // than on every read. Any mutation resets the cache.
+        // between writes. Any mutation resets the cache.
         if (count == 1) return _singleValueSnapshot ??= new[] { Entries[0].Value };
 
         // Multi-value (transient concurrent-write) path: copy the entries
@@ -259,13 +298,16 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // same dot (so it has not been superseded there) or has never
         // observed it. When both sides still carry the same dot but disagree
         // on the value under it, keep the deterministically-greater value so
-        // the merge stays commutative (see FindDot / CompareValueBytes).
+        // the merge stays commutative (see FindDot / CompareValueBytes). A
+        // winning other-side value is Adopt-ed (copied): a fold from a peer must
+        // not leave this register aliased to the peer's buffer. Keeping the
+        // local entry copies nothing.
         for (var i = 0; i < localCount; i++)
         {
             var entry = localEntries[i];
             if (FindDot(otherEntries, entry.ReplicaId, entry.Counter) is { } dup)
             {
-                var kept = CompareValueBytes(dup.Value, entry.Value) > 0 ? dup : entry;
+                var kept = CompareValueBytes(dup.Value, entry.Value) > 0 ? Adopt(dup) : entry;
                 if (survivors is not null)
                 {
                     survivors.Add(kept);
@@ -293,7 +335,8 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Add an other-side entry iff we have not already taken its
         // dot from the local side and we (the local side) have not
-        // observed-and-superseded it.
+        // observed-and-superseded it. The adopted entry's value is copied - it
+        // belongs to a peer that keeps using it.
         foreach (var entry in otherEntries)
         {
             if (ContainsDot(localEntries, entry.ReplicaId, entry.Counter)) continue;
@@ -307,7 +350,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
                 survivors.AddRange(localEntries);
             }
 
-            survivors.Add(entry);
+            survivors.Add(Adopt(entry));
         }
 
         // Pointwise-max of the two contexts.
@@ -331,22 +374,48 @@ public sealed class MvRegister : ICrdt<MvRegister>
     }
 
     /// <summary>Creates a deep copy of this register.</summary>
-    public MvRegister Clone() =>
-        // Bulk-copy both backing stores through their collection copy
-        // constructors (a single Array.Copy each, presized exactly), matching
-        // VersionVector/OrSet/PnCounter.Clone and replacing the previous
-        // presize + entry-by-entry Add loop (N capacity checks + N list-version
-        // bumps). The entry value bytes are treated as immutable by every
-        // production call site, so the shallow per-entry copy is a deep copy;
-        // ReplicaId/Counter are interned strings / value types.
-        new(
-            new List<MvRegisterEntry>(Entries),
+    /// <remarks>
+    /// The <em>egress</em> seam of the buffer-ownership rule documented on
+    /// <see cref="ICrdt{TSelf}"/>: every entry's value bytes are copied, not
+    /// shared, so a caller that mutates a value reached through the clone cannot
+    /// write back into this register. Composites lean on exactly this -
+    /// <c>OrMap.Get</c> hands back <c>Clone()</c> precisely so the caller may
+    /// mutate what it read - so a shallow entry copy here would re-open the leak
+    /// one level up. The copy is a span copy rather than <see cref="Array.Clone"/>
+    /// (identical allocation, roughly 3-4x faster on the <c>ordedup</c>
+    /// microbench), and an empty span's <c>ToArray</c> returns the shared
+    /// <see cref="Array.Empty{T}"/> singleton, so an empty value costs nothing.
+    /// </remarks>
+    public MvRegister Clone()
+    {
+        // Presize exactly and fill in one pass: the entry list must be rebuilt
+        // per-entry (rather than bulk-copied through the List copy constructor)
+        // because each entry's value buffer is copied on the way out.
+        var entries = new List<MvRegisterEntry>(Entries.Count);
+        foreach (var entry in Entries) entries.Add(Adopt(entry));
+        return new(
+            entries,
             // Copy the dot-context through its own comparer so the Dictionary
             // copy constructor bulk-copies the backing store instead of
             // rehashing every replica key. A fresh StringComparer.Ordinal is
             // ordinally identical but reference-distinct from the source
             // comparer, defeating that fast path. Mirrors Rga.Clone.
             new Dictionary<string, long>(Context, Context.Comparer));
+    }
+
+    /// <summary>
+    /// Returns <paramref name="entry"/> with its value bytes copied, for use
+    /// wherever an entry authored by somebody else (a peer register, a delta) is
+    /// taken into this register's durable state, or handed back out to a caller.
+    /// <para>
+    /// This is the buffer-ownership rule on <see cref="ICrdt{TSelf}"/> applied at
+    /// its two non-ingress seams. Only an <em>adopted</em> entry is copied, so a
+    /// fold that keeps the local side allocates nothing, and an empty value
+    /// reuses the shared <see cref="Array.Empty{T}"/> singleton.
+    /// </para>
+    /// </summary>
+    private static MvRegisterEntry Adopt(MvRegisterEntry entry) =>
+        entry with { Value = entry.Value.AsSpan().ToArray() };
 
     private long NextCounter(string replicaId) =>
         Context.TryGetValue(replicaId, out var current) ? current + 1 : 1;
@@ -456,14 +525,17 @@ public sealed class MvRegister : ICrdt<MvRegister>
         // has not been superseded there) or the delta's context has never
         // observed it. A same-dot value disagreement is resolved by the same
         // deterministic max rule MergeFrom uses, so a delta fold agrees with
-        // the equivalent full-state merge and is commutative.
+        // the equivalent full-state merge and is commutative. A winning delta
+        // value is Adopt-ed (copied): the producer may retry the delta or fan it
+        // out to other receivers, so adopting its buffer would leave them all
+        // sharing one array.
         for (var i = 0; i < localCount; i++)
         {
             var entry = localEntries[i];
             var dup = hasEntries ? FindDot(otherEntries!, entry.ReplicaId, entry.Counter) : null;
             if (dup is { } match)
             {
-                var kept = CompareValueBytes(match.Value, entry.Value) > 0 ? match : entry;
+                var kept = CompareValueBytes(match.Value, entry.Value) > 0 ? Adopt(match) : entry;
                 if (survivors is not null)
                 {
                     survivors.Add(kept);
@@ -489,6 +561,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
 
         // Add a delta entry iff we have not already taken its dot from the
         // local side and the local context has not observed-and-superseded it.
+        // The adopted entry's value is copied, for the same reason.
         for (var i = 0; i < otherCount; i++)
         {
             var entry = otherEntries![i];
@@ -503,7 +576,7 @@ public sealed class MvRegister : ICrdt<MvRegister>
                 survivors.AddRange(localEntries);
             }
 
-            survivors.Add(entry);
+            survivors.Add(Adopt(entry));
         }
 
         // Pointwise-max of the delta context into the local context.

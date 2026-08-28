@@ -67,10 +67,31 @@ namespace Orleans.Lattice;
 /// <see cref="Clone"/>, a composite's <c>Get</c>, or a materialised projection
 /// - must share no buffer with the retained state, or a caller can write
 /// through the returned value into durable state without passing any mutation
-/// API.
+/// API. Two successive reads must not share a buffer either: a cached
+/// projection that hands out the same array lets one reader corrupt every later
+/// read, and nothing invalidates the cache.
 /// </description>
 /// </item>
 /// </list>
+/// <para>
+/// The legs are cheap where it matters. Only a <em>winning</em> fold candidate is
+/// copied, so the idempotent steady-state merge allocates nothing, and an empty or
+/// tombstoned payload reuses the shared <see cref="Array.Empty{T}"/> singleton. A
+/// cached projection caches the <em>ordering</em> (the expensive part) and pays
+/// only the per-value copy, and a call site inside the assembly that immediately
+/// consumes the bytes uses the matching <c>internal</c> aliasing view
+/// (<c>Rga.MaterializeShared</c>, <c>MvRegister.ValuesShared</c>) rather than
+/// skipping the contract.
+/// </para>
+/// <para>
+/// Implementers are audited structurally, not by review: a contract test walks
+/// every registered CRDT's object graph and compares <see cref="byte"/>[]
+/// instances by reference identity across all three legs, and fails when a CRDT
+/// type is unregistered or grows an uncovered projection. The set primitives
+/// (<see cref="GSet"/>, <see cref="OrSet"/>, <see cref="RwSet"/>) satisfy every
+/// leg by construction: an element is encoded to a string key on ingress and
+/// decoded fresh on egress, so no caller array is ever retained.
+/// </para>
 /// </remarks>
 public interface ICrdt<TSelf> where TSelf : ICrdt<TSelf>
 {
