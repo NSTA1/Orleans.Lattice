@@ -2,27 +2,36 @@ using Grpc.Core;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Access;
 
 /// <summary>
 /// The default <see cref="IAuthAdminCapabilityService"/>. Drives the
-/// <see cref="IAuthAdminClient"/> probe surface and republishes a merged
-/// <see cref="ExplorerCapabilities"/> into the <see cref="IExplorerCapabilityStore"/>.
-/// A genuine authorization denial falls back to a silent deny (the area greys
-/// out); a probe that fails because the connection is <em>unauthenticated</em>
-/// is surfaced distinctly via
-/// <see cref="ExplorerCapabilities.AuthAdminAuthenticationRequired"/> so the shell
-/// can prompt a (re-)sign-in rather than collapse both into the same silent deny.
+/// <see cref="IAuthAdminClient"/> probe surface. A genuine authorization denial
+/// resolves to <see cref="ExplorerPluginAccess.Denied"/> (the area greys out);
+/// a probe that fails because the connection is <em>unauthenticated</em>
+/// resolves to <see cref="ExplorerPluginAccess.AuthenticationRequired"/> so the
+/// shell can prompt a (re-)sign-in rather than collapse both into the same
+/// silent deny.
 /// </summary>
 public sealed class AuthAdminCapabilityService(
     IAuthAdminClient client,
-    IExplorerCapabilityStore store,
+    IExplorerPluginAccessStore store,
     IExplorerAuthSession session) : IAuthAdminCapabilityService
 {
     private readonly IAuthAdminClient _client = client ?? throw new ArgumentNullException(nameof(client));
-    private readonly IExplorerCapabilityStore _store = store ?? throw new ArgumentNullException(nameof(store));
+
+    private readonly IExplorerPluginAccessStore _store =
+        store ?? throw new ArgumentNullException(nameof(store));
+
     private readonly IExplorerAuthSession _session = session ?? throw new ArgumentNullException(nameof(session));
+
+    // Advisory display state, not an access decision, so it is the plugin's own
+    // field rather than a store entry. An int-sized enum field is written and
+    // read atomically, so a probe completing on the thread pool never publishes
+    // a torn value to a reader on the render path.
+    private ExplorerAccessAuthenticationMode _authenticationMode = ExplorerAccessAuthenticationMode.Unknown;
 
     /// <summary>
     /// The classification of the coarse administrator probe: the connection is
@@ -43,20 +52,34 @@ public sealed class AuthAdminCapabilityService(
     }
 
     /// <inheritdoc />
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    public ExplorerAccessAuthenticationMode AuthenticationMode => _authenticationMode;
+
+    /// <inheritdoc />
+    public async ValueTask<ExplorerPluginAccess> ProbeAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken = default)
     {
-        var snapshot = await ProbeAsync(cancellationToken).ConfigureAwait(false);
-        var current = _store.Current;
-        _store.Set(current with
+        ArgumentNullException.ThrowIfNull(context);
+
+        var snapshot = await ProbeInternalAsync(cancellationToken).ConfigureAwait(false);
+
+        _authenticationMode = snapshot.AuthenticationMode;
+        _store.Set(
+            AccessPluginKeys.PluginId,
+            AccessPluginKeys.DirectoryScope,
+            snapshot.DirectoryAvailable ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Denied);
+
+        if (snapshot.Allowed)
         {
-            AuthAdminAllowed = snapshot.Allowed,
-            AuthAdminAuthenticationRequired = snapshot.AuthenticationRequired,
-            AuthDirectoryAvailable = snapshot.DirectoryAvailable,
-            AuthAuthenticationMode = snapshot.AuthenticationMode,
-        });
+            return ExplorerPluginAccess.Allowed;
+        }
+
+        return snapshot.AuthenticationRequired
+            ? ExplorerPluginAccess.AuthenticationRequired
+            : ExplorerPluginAccess.Denied;
     }
 
-    private async Task<AccessCapabilitySnapshot> ProbeAsync(CancellationToken cancellationToken)
+    private async Task<AccessCapabilitySnapshot> ProbeInternalAsync(CancellationToken cancellationToken)
     {
         var outcome = await ProbeAdminAsync(cancellationToken).ConfigureAwait(false);
         if (outcome != AdminProbeOutcome.Allowed)
@@ -135,15 +158,15 @@ public sealed class AuthAdminCapabilityService(
         }
         catch (LatticeAuthorizationDeniedException)
         {
-            return new AccessCapabilitySnapshot(true, false, false, ExplorerAccessAuthenticationMode.Unknown);
+            return AccessCapabilitySnapshot.AdminWithoutModel;
         }
         catch (RpcException)
         {
-            return new AccessCapabilitySnapshot(true, false, false, ExplorerAccessAuthenticationMode.Unknown);
+            return AccessCapabilitySnapshot.AdminWithoutModel;
         }
         catch (InvalidOperationException)
         {
-            return new AccessCapabilitySnapshot(true, false, false, ExplorerAccessAuthenticationMode.Unknown);
+            return AccessCapabilitySnapshot.AdminWithoutModel;
         }
     }
 
@@ -174,5 +197,9 @@ public sealed class AuthAdminCapabilityService(
         /// <summary>The snapshot published when the probe failed because the connection is unauthenticated.</summary>
         public static AccessCapabilitySnapshot Unauthenticated { get; } =
             new(false, true, false, ExplorerAccessAuthenticationMode.Unknown);
+
+        /// <summary>The snapshot published when the caller is an administrator but the access model could not be read.</summary>
+        public static AccessCapabilitySnapshot AdminWithoutModel { get; } =
+            new(true, false, false, ExplorerAccessAuthenticationMode.Unknown);
     }
 }

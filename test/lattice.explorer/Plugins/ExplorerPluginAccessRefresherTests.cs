@@ -254,6 +254,8 @@ public sealed class ExplorerPluginAccessRefresherTests
 
         public IReadOnlyList<IExplorerPlugin> ForSurface(ExplorerPluginSurface surface) => plugins;
 
+        public IReadOnlyList<IExplorerPlugin> ForSelection(ExplorerPluginSelectionKind kind) => plugins;
+
         public IExplorerPlugin? Find(string pluginId) => null;
     }
 

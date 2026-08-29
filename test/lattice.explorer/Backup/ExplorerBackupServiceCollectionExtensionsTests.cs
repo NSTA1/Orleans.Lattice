@@ -5,7 +5,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Backup;
 
@@ -27,7 +27,7 @@ public class ExplorerBackupServiceCollectionExtensionsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerCapabilityStore)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerPluginAccessStore)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IBackupControlClient)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IBackupCatalogReader)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IBackupCapabilityService)), Is.True);
@@ -41,7 +41,7 @@ public class ExplorerBackupServiceCollectionExtensionsTests
         services.AddExplorerBackup();
         await using var provider = services.BuildServiceProvider();
 
-        Assert.That(provider.GetRequiredService<IExplorerCapabilityStore>(), Is.InstanceOf<ExplorerCapabilityStore>());
+        Assert.That(provider.GetRequiredService<IExplorerPluginAccessStore>(), Is.InstanceOf<ExplorerPluginAccessStore>());
     }
 
     [Test]

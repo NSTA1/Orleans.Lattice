@@ -17,6 +17,7 @@ using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
+using Orleans.Lattice.Explorer.UI.Plugins;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -54,13 +55,18 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         configure?.Invoke(options);
         services.TryAddSingleton(options);
 
-        // Surface only the areas this head opts into. Every area stays registered
-        // in AppAreas.Ordered and its services below stay wired; the switcher just
-        // hides an opt-in area (the Schema area is withheld by default).
-        services.TryAddSingleton(new ExplorerNavigationOptions
-        {
-            EnableSchemaArea = options.EnableSchemaArea,
-        });
+        // The plugin host and the two adapters that publish the Explorer's own
+        // selection, connection, tenant and preference state onto the plugin
+        // contract. Which areas the shell surfaces is decided further down, by
+        // which area plugins this head registers.
+        services.AddExplorerPluginAdapters();
+
+        // The per-selection tier: the metrics, topology, data and dead-letter
+        // surfaces a tree or view resolves to, and the tag-index browser a
+        // tag-index selection resolves to. Registered as ordinary plugins, so
+        // the detail panel enumerates and gates them exactly as the shell does
+        // the area tier.
+        services.AddExplorerSelectionPlugins();
 
         // The web head is Blazor Server: the server process holds the gRPC channel
         // to the cluster's state API and the browser renders over the SignalR
@@ -119,18 +125,27 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         services.AddExplorerAuth();
 
         // The Backups management area: the backup control-API client, its catalog
-        // reader, and the capability probe that gates the area and its actions.
+        // reader, and the access gate that gates the area and its per-scope
+        // actions, plus the plugin registration that surfaces it in the shell.
         services.AddExplorerBackup();
+        services.AddExplorerBackupsPlugin();
 
         // The Access (membership & access-control) management area: the auth-admin
-        // control-API client, its membership and policy services, and the
-        // capability probe that gates the area.
+        // control-API client, its membership and policy services, and the access
+        // gate that gates the area, plus the plugin registration that surfaces it.
         services.AddExplorerAccess();
+        services.AddExplorerAccessPlugin();
 
         // The Schema management area: the schema control-API client, its policy,
-        // versioning, and compliance services, and the capability probe that gates
-        // the area.
+        // versioning, and compliance services, and the access gate that gates the
+        // area. The head opts the area into the shell by registering its plugin,
+        // so withholding it renders no Schema tab at all - the services stay wired
+        // either way, so it can be surfaced without new plumbing.
         services.AddExplorerSchema();
+        if (options.EnableSchemaArea)
+        {
+            services.AddExplorerSchemaPlugin();
+        }
 
         return services;
     }

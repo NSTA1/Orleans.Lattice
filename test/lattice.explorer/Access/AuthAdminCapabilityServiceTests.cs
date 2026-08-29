@@ -4,20 +4,31 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Tests.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Access;
 
+/// <summary>
+/// The Access plugin's own access gate. It reproduces the coarse auth-admin gate
+/// the area used to read from the shared capability record - including its
+/// distinction between a genuine denial and an unauthenticated connection, which
+/// is now the four-state model's
+/// <see cref="ExplorerPluginAccessState.AuthenticationRequired"/> - plus the
+/// directory-availability sub-capability, now a scoped key.
+/// </summary>
 [TestFixture]
 public class AuthAdminCapabilityServiceTests
 {
-    private static (AuthAdminCapabilityService Service, ExplorerCapabilityStore Store) Create(
+    private static readonly IExplorerPluginHostContext Context =
+        PluginTestHost.Context(AccessPluginKeys.PluginId);
+
+    private static (AuthAdminCapabilityService Service, ExplorerPluginAccessStore Store) Create(
         FakeAuthAdminClient client,
         bool signedIn = true)
     {
-        var store = new ExplorerCapabilityStore();
-        var session = Substitute.For<IExplorerAuthSession>();
-        session.IsAuthenticated.Returns(signedIn);
-        return (new AuthAdminCapabilityService(client, store, session), store);
+        var store = new ExplorerPluginAccessStore();
+        return (new AuthAdminCapabilityService(client, store, SignedIn(signedIn)), store);
     }
 
     private static IExplorerAuthSession SignedIn(bool value)
@@ -31,7 +42,7 @@ public class AuthAdminCapabilityServiceTests
     public void Constructor_null_client_throws()
     {
         Assert.That(
-            () => new AuthAdminCapabilityService(null!, new ExplorerCapabilityStore(), SignedIn(true)),
+            () => new AuthAdminCapabilityService(null!, new ExplorerPluginAccessStore(), SignedIn(true)),
             Throws.ArgumentNullException);
     }
 
@@ -47,193 +58,185 @@ public class AuthAdminCapabilityServiceTests
     public void Constructor_null_session_throws()
     {
         Assert.That(
-            () => new AuthAdminCapabilityService(new FakeAuthAdminClient(), new ExplorerCapabilityStore(), null!),
+            () => new AuthAdminCapabilityService(new FakeAuthAdminClient(), new ExplorerPluginAccessStore(), null!),
             Throws.ArgumentNullException);
     }
 
     [Test]
-    public async Task RefreshAsync_probe_reachable_sets_coarse_allowed()
+    public void ProbeAsync_null_context_throws()
+    {
+        var (service, _) = Create(new FakeAuthAdminClient());
+
+        Assert.That(async () => await service.ProbeAsync(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task ProbeAsync_probe_reachable_allows_the_plugin()
     {
         var client = new FakeAuthAdminClient { GroupsResult = new AuthGroupPage() };
-        var (service, store) = Create(client);
+        var (service, _) = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAdminAllowed, Is.True);
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
             Assert.That(client.LastGroupsRequest!.PageSize, Is.EqualTo(1));
         });
     }
 
     [Test]
-    public async Task RefreshAsync_denied_leaves_coarse_disabled()
+    public async Task ProbeAsync_denied_while_signed_in_stays_an_advisory_deny()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new LatticeAuthorizationDeniedException("denied"),
         };
-        var (service, store) = Create(client);
+        var (service, _) = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAdminAllowed, Is.False);
             Assert.That(
-                store.Current.AuthAdminAuthenticationRequired,
-                Is.False,
+                access.State,
+                Is.EqualTo(ExplorerPluginAccessState.Denied),
                 "an authenticated caller denied admin must stay an advisory deny, not a sign-in prompt");
+            Assert.That(access.IsVisible, Is.True, "a denial greys out rather than hides");
         });
     }
 
     [Test]
-    public async Task RefreshAsync_denied_while_signed_out_maps_to_authentication_required()
+    public async Task ProbeAsync_denied_while_signed_out_maps_to_authentication_required()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new LatticeAuthorizationDeniedException("denied"),
         };
-        var (service, store) = Create(client, signedIn: false);
+        var (service, _) = Create(client, signedIn: false);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(store.Current.AuthAdminAllowed, Is.False);
-            Assert.That(
-                store.Current.AuthAdminAuthenticationRequired,
-                Is.True,
-                "a denial while no sign-in is applied means the connection is anonymous, so a sign-in is required");
-        });
+        Assert.That(
+            access.State,
+            Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired),
+            "a denial while no sign-in is applied means the connection is anonymous, so a sign-in is required");
     }
 
     [Test]
-    public async Task RefreshAsync_unauthenticated_status_maps_to_authentication_required()
+    public async Task ProbeAsync_unauthenticated_status_maps_to_authentication_required()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new RpcException(new Status(StatusCode.Unauthenticated, "no token")),
         };
-        var (service, store) = Create(client, signedIn: true);
+        var (service, _) = Create(client, signedIn: true);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(store.Current.AuthAdminAllowed, Is.False);
-            Assert.That(
-                store.Current.AuthAdminAuthenticationRequired,
-                Is.True,
-                "gRPC Unauthenticated is an unambiguous unauthenticated-connection signal");
-        });
+        Assert.That(
+            access.State,
+            Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired),
+            "gRPC Unauthenticated is an unambiguous unauthenticated-connection signal");
     }
 
     [Test]
-    public async Task RefreshAsync_permission_denied_while_signed_out_maps_to_authentication_required()
+    public async Task ProbeAsync_permission_denied_while_signed_out_maps_to_authentication_required()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new RpcException(new Status(StatusCode.PermissionDenied, "access denied")),
         };
-        var (service, store) = Create(client, signedIn: false);
+        var (service, _) = Create(client, signedIn: false);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.That(store.Current.AuthAdminAuthenticationRequired, Is.True);
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
     }
 
     [Test]
-    public async Task RefreshAsync_permission_denied_while_signed_in_stays_advisory_deny()
+    public async Task ProbeAsync_permission_denied_while_signed_in_stays_advisory_deny()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new RpcException(new Status(StatusCode.PermissionDenied, "access denied")),
         };
-        var (service, store) = Create(client, signedIn: true);
+        var (service, _) = Create(client, signedIn: true);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(store.Current.AuthAdminAllowed, Is.False);
-            Assert.That(store.Current.AuthAdminAuthenticationRequired, Is.False);
-        });
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
     }
 
     [Test]
-    public async Task RefreshAsync_reachable_clears_authentication_required()
+    public async Task A_reachable_re_probe_clears_a_previously_required_sign_in()
     {
-        var store = new ExplorerCapabilityStore();
-        store.Set(ExplorerCapabilities.Empty with { AuthAdminAuthenticationRequired = true });
-        var session = Substitute.For<IExplorerAuthSession>();
-        session.IsAuthenticated.Returns(true);
-        var service = new AuthAdminCapabilityService(
-            new FakeAuthAdminClient { GroupsResult = new AuthGroupPage() }, store, session);
+        var client = new FakeAuthAdminClient
+        {
+            ListThrows = new RpcException(new Status(StatusCode.Unauthenticated, "no token")),
+        };
+        var (service, _) = Create(client, signedIn: true);
+        var before = await service.ProbeAsync(Context);
 
-        await service.RefreshAsync();
+        client.ListThrows = null;
+        client.GroupsResult = new AuthGroupPage();
+        var after = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAdminAllowed, Is.True);
-            Assert.That(store.Current.AuthAdminAuthenticationRequired, Is.False);
+            Assert.That(before.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
+            Assert.That(after.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
         });
     }
 
     [Test]
-    public async Task RefreshAsync_transport_failure_leaves_coarse_disabled()
+    public async Task ProbeAsync_transport_failure_denies_without_prompting_a_sign_in()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
         };
-        var (service, store) = Create(client);
+        var (service, _) = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(store.Current.AuthAdminAllowed, Is.False);
-            Assert.That(
-                store.Current.AuthAdminAuthenticationRequired,
-                Is.False,
-                "a transport failure is not an authentication signal");
-        });
+        Assert.That(
+            access.State,
+            Is.EqualTo(ExplorerPluginAccessState.Denied),
+            "a transport failure is not an authentication signal");
     }
 
     [Test]
-    public async Task RefreshAsync_unconfigured_session_leaves_coarse_disabled()
+    public async Task ProbeAsync_unconfigured_session_denies_the_plugin()
     {
         var client = new FakeAuthAdminClient
         {
             ListThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
         };
-        var (service, store) = Create(client);
+        var (service, _) = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.That(store.Current.AuthAdminAllowed, Is.False);
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
     }
 
     [Test]
-    public async Task RefreshAsync_preserves_other_capability_fields()
+    public async Task ProbeAsync_never_touches_another_plugins_keys()
     {
-        var client = new FakeAuthAdminClient();
-        var store = new ExplorerCapabilityStore();
-        store.Set(ExplorerCapabilities.Empty with { BackupListAllowed = true });
-        var service = new AuthAdminCapabilityService(client, store, SignedIn(true));
+        var client = new FakeAuthAdminClient { GroupsResult = new AuthGroupPage() };
+        var (service, store) = Create(client);
+        store.Set("some.other.plugin", ExplorerPluginAccess.Allowed);
 
-        await service.RefreshAsync();
+        await service.ProbeAsync(Context);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(store.Current.AuthAdminAllowed, Is.True);
-            Assert.That(store.Current.BackupListAllowed, Is.True);
-        });
+        Assert.That(
+            store.Get("some.other.plugin").IsAllowed,
+            Is.True,
+            "the keyed store is what stops one plugin's probe overwriting another's decision");
     }
 
     [Test]
-    public async Task RefreshAsync_reports_directory_availability_and_auth_mode()
+    public async Task ProbeAsync_reports_directory_availability_and_auth_mode()
     {
         var client = new FakeAuthAdminClient
         {
@@ -248,18 +251,18 @@ public class AuthAdminCapabilityServiceTests
         };
         var (service, store) = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAdminAllowed, Is.True);
-            Assert.That(store.Current.AuthDirectoryAvailable, Is.True);
-            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Claims));
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
+            Assert.That(Directory(store), Is.True);
+            Assert.That(service.AuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Claims));
         });
     }
 
     [Test]
-    public async Task RefreshAsync_maps_basic_auth_mode()
+    public async Task ProbeAsync_maps_basic_auth_mode()
     {
         var client = new FakeAuthAdminClient
         {
@@ -273,17 +276,45 @@ public class AuthAdminCapabilityServiceTests
         };
         var (service, store) = Create(client);
 
-        await service.RefreshAsync();
+        await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Basic));
-            Assert.That(store.Current.AuthDirectoryAvailable, Is.False);
+            Assert.That(service.AuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Basic));
+            Assert.That(Directory(store), Is.False);
         });
     }
 
     [Test]
-    public async Task RefreshAsync_denied_skips_the_access_model_probe_and_reports_unknown()
+    public async Task ProbeAsync_maps_anonymous_auth_mode()
+    {
+        var client = new FakeAuthAdminClient
+        {
+            AccessModelResult = new AccessModelDescriptor
+            {
+                AuthenticationMode = AccessAuthenticationMode.Anonymous,
+                DirectoryAvailable = false,
+                DirectoryProviderId = "null",
+                DirectoryExplanation = string.Empty,
+            },
+        };
+        var (service, _) = Create(client);
+
+        await service.ProbeAsync(Context);
+
+        Assert.That(service.AuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Anonymous));
+    }
+
+    [Test]
+    public void AuthenticationMode_is_unknown_before_any_probe()
+    {
+        var (service, _) = Create(new FakeAuthAdminClient());
+
+        Assert.That(service.AuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
+    }
+
+    [Test]
+    public async Task ProbeAsync_denied_skips_the_access_model_probe_and_reports_unknown()
     {
         var client = new FakeAuthAdminClient
         {
@@ -291,19 +322,21 @@ public class AuthAdminCapabilityServiceTests
         };
         var (service, store) = Create(client);
 
-        await service.RefreshAsync();
+        await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAdminAllowed, Is.False);
-            Assert.That(store.Current.AuthDirectoryAvailable, Is.False);
-            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
-            Assert.That(client.GetAccessModelCallCount, Is.EqualTo(0), "a denied caller must not trigger a second admin probe");
+            Assert.That(Directory(store), Is.False);
+            Assert.That(service.AuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
+            Assert.That(
+                client.GetAccessModelCallCount,
+                Is.EqualTo(0),
+                "a denied caller must not trigger a second admin probe");
         });
     }
 
     [Test]
-    public async Task RefreshAsync_access_model_probe_failure_yields_safe_snapshot()
+    public async Task ProbeAsync_access_model_probe_failure_yields_safe_snapshot()
     {
         var client = new FakeAuthAdminClient
         {
@@ -312,13 +345,16 @@ public class AuthAdminCapabilityServiceTests
         };
         var (service, store) = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.AuthAdminAllowed, Is.True, "the coarse gate still passed");
-            Assert.That(store.Current.AuthDirectoryAvailable, Is.False);
-            Assert.That(store.Current.AuthAuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed), "the coarse gate still passed");
+            Assert.That(Directory(store), Is.False);
+            Assert.That(service.AuthenticationMode, Is.EqualTo(ExplorerAccessAuthenticationMode.Unknown));
         });
     }
+
+    private static bool Directory(ExplorerPluginAccessStore store) =>
+        store.Get(AccessPluginKeys.PluginId, AccessPluginKeys.DirectoryScope).IsAllowed;
 }

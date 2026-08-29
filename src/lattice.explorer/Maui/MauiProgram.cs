@@ -13,6 +13,7 @@ using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
+using Orleans.Lattice.Explorer.UI.Plugins;
 
 namespace Orleans.Lattice.Explorer;
 
@@ -79,13 +80,26 @@ public static class MauiProgram
         builder.Services.AddSingleton(new ExplorerAuthUiOptions { UseServerFormPost = false });
         builder.Services.AddExplorerAuth();
 
+        // The plugin host and the adapters that publish the Explorer's own
+        // selection, connection, tenant and preference state onto the plugin
+        // contract. Which areas the shell surfaces is decided by which area
+        // plugins this head registers below.
+        builder.Services.AddExplorerPluginAdapters();
+
+        // The per-selection tier (see the web head for the rationale).
+        builder.Services.AddExplorerSelectionPlugins();
+
         // The Backups management area (see the web head for the rationale).
         builder.Services.AddExplorerBackup();
+        builder.Services.AddExplorerBackupsPlugin();
 
         // The Access (membership & access-control) area (see the web head).
         builder.Services.AddExplorerAccess();
+        builder.Services.AddExplorerAccessPlugin();
 
-        // The Schema management area (see the web head).
+        // The Schema management area (see the web head). Its services are wired
+        // but its plugin is not registered, so the desktop head renders no Schema
+        // tab - the head opts in by registering the plugin.
         builder.Services.AddExplorerSchema();
 
 #if DEBUG

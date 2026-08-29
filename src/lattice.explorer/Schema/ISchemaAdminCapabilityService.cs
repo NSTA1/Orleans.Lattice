@@ -1,26 +1,23 @@
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Schema;
 
 /// <summary>
-/// Probes the schema control plane and publishes the advisory
-/// <see cref="ExplorerCapabilities.SchemaAllowed"/> gate into the shell's
-/// <see cref="IExplorerCapabilityStore"/>, and answers a per-tree capability probe
-/// the panel uses to grey out individual actions. Probed once after sign-in /
-/// reconnect. The result is a UX affordance only; the server remains the fail-closed
-/// enforcement point, so every schema action must still handle a runtime denial.
+/// The Schema plugin's own access gate. It probes the schema control plane and
+/// answers the plugin-level decision the host files under
+/// <see cref="SchemaPluginKeys.PluginId"/>, and answers the per-tree capability
+/// probe the panel uses to grey out individual actions.
+/// <para>
+/// The gate is owned by the plugin rather than by the shell: the host probes it
+/// through the uniform, fault-isolated
+/// <see cref="IExplorerPluginAccessRefresher"/> path and carries no per-plugin
+/// knowledge. The result is a UX affordance only; the server remains the
+/// fail-closed enforcement point, so every schema action must still handle a
+/// runtime denial.
+/// </para>
 /// </summary>
-public interface ISchemaAdminCapabilityService
+public interface ISchemaAdminCapabilityService : IExplorerPluginAccessGate
 {
-    /// <summary>
-    /// Refreshes the coarse top-level gate for the Schema area by probing whether the
-    /// schema control endpoint is reachable, and publishes the result. An unreachable
-    /// endpoint leaves the area disabled. Never throws for an auth or transport
-    /// failure.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    Task RefreshAsync(CancellationToken cancellationToken = default);
-
     /// <summary>
     /// Probes which schema-management operations the caller may perform over
     /// <paramref name="treeId"/>. Fails closed to <see cref="SchemaCapabilitySnapshot.None"/>

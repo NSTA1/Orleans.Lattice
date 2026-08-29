@@ -7,6 +7,7 @@ using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.Telemetry;
 using Orleans.Lattice.Api.Mcp.Telemetry.Azure;
+using Orleans.Lattice.Api.Telemetry;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;
 using Orleans.Lattice.ReferenceArchitecture.Mcp;
 

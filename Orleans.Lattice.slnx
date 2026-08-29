@@ -16,6 +16,7 @@
   <Project Path="src/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.csproj" />
   <Project Path="src/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
   <Project Path="src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj" />
+  <Project Path="src/lattice.api.telemetry/Orleans.Lattice.Api.Telemetry.csproj" />
   <Project Path="src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
   <Project Path="src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj" />
   <Project Path="src/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.csproj" />
@@ -39,7 +40,7 @@
   <Project Path="src/lattice.explorer/DesignSystem/Orleans.Lattice.Explorer.DesignSystem.csproj" />
   <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
-  <Project Path="src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Backups/Orleans.Lattice.Explorer.Plugins.Backups.csproj" />
   <Project Path="src/lattice.explorer/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />
@@ -68,6 +69,7 @@
   <Project Path="test/lattice.api.treeadmin/Orleans.Lattice.Api.TreeAdmin.Tests.csproj" />
   <Project Path="test/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.mcp/Orleans.Lattice.Api.Mcp.Tests.csproj" />
+  <Project Path="test/lattice.api.telemetry/Orleans.Lattice.Api.Telemetry.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Tests.csproj" />
