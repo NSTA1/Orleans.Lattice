@@ -1,0 +1,105 @@
+@*
+    The Members surface: the subjects holding tenant-admin authority over this
+    tenant.
+
+    The last-admin-subject invariant is stated at the control, not only in the
+    error that would follow one. The gRPC binding collapses every precondition
+    refusal onto a single status and carries the reason only in the message, so
+    a wire caller never observes LastAdminSubject as a type at all - which is
+    exactly why the surface has to know the invariant itself and say so before
+    the call, and render the server's own words verbatim if it refuses anyway.
+*@
+
+<div class="lxm-surface">
+    @if (State.IsLastAdminSubject)
+    {
+        <p class="lxm-status is-refused" role="status">
+            This tenant has one admin subject left, so it cannot be removed: a tenant must keep at
+            least one, or nobody could administer it. Add the replacement first.
+        </p>
+    }
+
+    <LatticeAdaptiveTable TItem="string"
+                          Items="State.AdminSubjects"
+                          Columns="_columns"
+                          Label="Tenant admin subjects"
+                          KeySelector="RowKey"
+                          EmptyText="No admin subjects were reported for this tenant."
+                          Class="lxm-table" />
+
+    <section class="lxm-section" aria-labelledby="lxm-add-admin-heading">
+        <h3 id="lxm-add-admin-heading" class="lxm-section-heading">Grant admin authority</h3>
+
+        <div class="lxm-form-row">
+            <label class="lxm-field">
+                <span class="lxm-field-label">Subject id</span>
+                <input class="lxm-input"
+                       type="text"
+                       autocomplete="off"
+                       placeholder="user:ada"
+                       disabled="@(State.Busy || !State.Allowed)"
+                       value="@State.NewAdminSubjectId"
+                       @oninput="OnSubjectInput" />
+            </label>
+            <button type="button"
+                    class="explorer-btn lxm-primary-action"
+                    disabled="@(State.Busy || !State.Allowed)"
+                    @onclick="State.AddAdminSubjectAsync">Add</button>
+        </div>
+
+        <p class="lxm-muted">
+            Granting an existing member succeeds and reports no change. The cluster is the
+            enforcement point for every grant and revocation here.
+        </p>
+    </section>
+</div>
+
+@code {
+    // A subject id is already a string, so it is its own stable diffing key and
+    // the delegate is a cached static rather than a per-render lambda.
+    private static readonly Func<string, object> RowKey = static subject => subject;
+
+    private LatticeTableColumn<string>[] _columns = Array.Empty<LatticeTableColumn<string>>();
+    private bool _built;
+
+    /// <summary>The workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (_built)
+        {
+            return;
+        }
+
+        _built = true;
+        _columns = BuildColumns();
+    }
+
+    private void OnSubjectInput(ChangeEventArgs args) =>
+        State.NewAdminSubjectId = args.Value?.ToString() ?? string.Empty;
+
+    private LatticeTableColumn<string>[] BuildColumns()
+    {
+        var subject = new LatticeTableColumn<string>
+        {
+            Header = "Subject",
+            IsPrimary = true,
+            IsNumericOrCode = true,
+            Cell = row =>@<text>@row</text>,
+        };
+
+        var action = new LatticeTableColumn<string>
+        {
+            Header = "",
+            Cell = row =>@<button type="button"
+                                 class="explorer-btn lxm-destructive-action"
+                                 disabled="@(State.Busy || !State.CanRemoveAdminSubject(row))"
+                                 title="@(State.CanRemoveAdminSubject(row) ? null : MyTenantWorkspace.LastAdminSubjectRefusal)"
+                                 @onclick="@(() => State.RemoveAdminSubjectAsync(row))">Remove</button>,
+        };
+
+        return [subject, action];
+    }
+}

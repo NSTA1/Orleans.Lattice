@@ -7,10 +7,12 @@ using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.DesignSystem;
+using Orleans.Lattice.Explorer.MyTenant;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;
@@ -96,6 +98,13 @@ public static class MauiProgram
         // The Access (membership & access-control) area (see the web head).
         builder.Services.AddExplorerAccess();
         builder.Services.AddExplorerAccessPlugin();
+
+        // The My Tenant self-service area (see the web head for the ordering
+        // rationale: AddExplorerTenantView must follow AddExplorerAccess so the
+        // real platform-operator gate wins the TryAdd).
+        builder.Services.AddExplorerTenantView();
+        builder.Services.AddExplorerMyTenant();
+        builder.Services.AddExplorerMyTenantPlugin();
 
         // The Schema management area (see the web head). Its services are wired
         // but its plugin is not registered, so the desktop head renders no Schema

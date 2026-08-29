@@ -1,0 +1,176 @@
+@*
+    The Overview surface: the tenant this area administers, its lifecycle
+    status, and - when the caller administers more than one - the tenants they
+    can switch between.
+
+    It is also where the plugin surfaces its registration-order diagnostic. A
+    head that called AddExplorerTenantView() before AddExplorerAccess() keeps
+    the navigation core's fail-closed placeholder operator gate, so nobody ever
+    validates as a platform operator and every tenant switch quietly changes
+    nothing. Failing closed is right; failing closed in silence is not, so the
+    misordering is said out loud here rather than left to be inferred from a
+    button that does nothing.
+*@
+
+<div class="lxm-surface">
+    @if (State.OperatorGateDiagnostic is { } diagnostic)
+    {
+        <p class="lxm-status is-refused" role="status">@diagnostic</p>
+    }
+
+    <dl class="lxm-facts">
+        <div class="lxm-fact">
+            <dt>Tenant</dt>
+            <dd class="lxm-fact-code">@(State.TenantId ?? "not established")</dd>
+        </div>
+        <div class="lxm-fact">
+            <dt>Status</dt>
+            <dd>
+                @if (State.Tenant is { } tenant)
+                {
+                    <span class="@(tenant.Status == ExplorerTenantLifecycle.Suspended ? "lxm-badge is-warn" : "lxm-badge is-ok")">
+                        @tenant.Status
+                    </span>
+                }
+                else
+                {
+                    <span class="lxm-muted">Not read</span>
+                }
+            </dd>
+        </div>
+        <div class="lxm-fact">
+            <dt>Reserved default tenant</dt>
+            <dd>@(State.Tenant?.IsDefault == true ? "Yes" : "No")</dd>
+        </div>
+        <div class="lxm-fact">
+            <dt>Your credential's tenant</dt>
+            <dd class="lxm-fact-code">
+                @(State.CredentialTenant is { } credential ? credential.TenantId : "unknown")
+            </dd>
+        </div>
+        <div class="lxm-fact">
+            <dt>Visibility</dt>
+            <dd>@VisibilityLabel</dd>
+        </div>
+    </dl>
+
+    @if (State.IsSuspended)
+    {
+        <p class="lxm-status is-refused" role="status">
+            This tenant is suspended, so the cluster is refusing its data-plane operations. Its trees
+            are intact and resume restores them. Only a platform operator can resume a tenant.
+        </p>
+    }
+
+    @if (ShowCredentialNotice)
+    {
+        <p class="lxm-note" role="status">
+            You are viewing <strong>@State.TenantId</strong>, which is not your own credential's tenant.
+            Every surface here is scoped to the tenant you switched to.
+        </p>
+    }
+
+    <section class="lxm-section" aria-labelledby="lxm-tenants-heading">
+        <h3 id="lxm-tenants-heading" class="lxm-section-heading">Tenants you can access</h3>
+
+        @if (State.AccessibleTenants.Count == 0)
+        {
+            <p class="lxm-muted">No accessible tenants were reported for your sign-in.</p>
+        }
+        else
+        {
+            <LatticeAdaptiveTable TItem="ExplorerTenantSummary"
+                                  Items="State.AccessibleTenants"
+                                  Columns="_columns"
+                                  Label="Accessible tenants"
+                                  KeySelector="RowKey"
+                                  EmptyText="No accessible tenants were reported for your sign-in."
+                                  Class="lxm-table" />
+
+            @if (!State.CanSwitchTenant)
+            {
+                <p class="lxm-muted">
+                    You administer one tenant, so there is nothing to switch to.
+                </p>
+            }
+        }
+    </section>
+</div>
+
+@code {
+    // The tenant id is already a string, so using it as the diffing key costs no
+    // boxing, and the delegate is a cached static rather than a lambda rebuilt
+    // on every render.
+    private static readonly Func<ExplorerTenantSummary, object> RowKey = static row => row.TenantId;
+
+    private LatticeTableColumn<ExplorerTenantSummary>[] _columns =
+        Array.Empty<LatticeTableColumn<ExplorerTenantSummary>>();
+
+    private bool _built;
+
+    /// <summary>The workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+
+    private string VisibilityLabel => State.RequestedVisibility == ExplorerTenantVisibility.AllTenants
+        ? "All tenants (operator scope)"
+        : "Your active tenant only";
+
+    private bool ShowCredentialNotice =>
+        State.CredentialTenant is { } credential
+        && State.TenantId is { } active
+        && !string.Equals(credential.TenantId, active, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        // Built once: the cell fragments capture this component, so rebuilding
+        // them per render would allocate a closure per column on every reload.
+        if (_built)
+        {
+            return;
+        }
+
+        _built = true;
+        _columns = BuildColumns();
+    }
+
+    private LatticeTableColumn<ExplorerTenantSummary>[] BuildColumns()
+    {
+        var tenant = new LatticeTableColumn<ExplorerTenantSummary>
+        {
+            Header = "Tenant",
+            IsPrimary = true,
+            IsNumericOrCode = true,
+            Cell = row =>@<text>@row.TenantId</text>,
+        };
+
+        var status = new LatticeTableColumn<ExplorerTenantSummary>
+        {
+            Header = "Status",
+            Cell = row =>@<text>@row.Status</text>,
+        };
+
+        var isDefault = new LatticeTableColumn<ExplorerTenantSummary>
+        {
+            Header = "Default",
+            ShowOnCompact = false,
+            Cell = row =>@<text>@(row.IsDefault ? "Yes" : "No")</text>,
+        };
+
+        var action = new LatticeTableColumn<ExplorerTenantSummary>
+        {
+            Header = "",
+            Cell = row =>@<button type="button"
+                                 class="explorer-btn lxm-switch-action"
+                                 disabled="@(State.Busy || IsActive(row.TenantId))"
+                                 @onclick="@(() => State.SwitchTenantAsync(row.TenantId))">
+                @(IsActive(row.TenantId) ? "Viewing" : "Switch to")
+            </button>,
+        };
+
+        return [tenant, status, isDefault, action];
+    }
+
+    private bool IsActive(string tenantId) =>
+        string.Equals(State.TenantId, tenantId, StringComparison.Ordinal);
+}

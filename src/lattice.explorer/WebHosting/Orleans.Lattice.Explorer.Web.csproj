@@ -47,6 +47,7 @@
       a head takes it directly. Withholding this reference ships no Access area.
     -->
     <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.MyTenant.csproj" />
   </ItemGroup>
 
 </Project>

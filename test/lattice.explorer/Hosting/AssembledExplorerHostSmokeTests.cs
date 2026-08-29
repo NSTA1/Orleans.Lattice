@@ -8,6 +8,7 @@ using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.MyTenant;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
@@ -31,14 +32,19 @@ public class AssembledExplorerHostSmokeTests
     // ---- 1. Navigation: the assembled area switcher --------------------------
 
     [Test]
-    public async Task Assembled_area_plugins_project_to_backups_then_access_in_order()
+    public async Task Assembled_area_plugins_project_to_backups_access_then_my_tenant_in_order()
     {
         await using var provider = BuildAssembledProvider();
         await using var scope = provider.CreateAsyncScope();
 
         var ids = AreaPluginIds(scope.ServiceProvider);
 
-        Assert.That(ids, Is.EqualTo(new[] { BackupsPluginKeys.PluginId, AccessPluginKeys.PluginId }));
+        Assert.That(ids, Is.EqualTo(new[]
+        {
+            BackupsPluginKeys.PluginId,
+            AccessPluginKeys.PluginId,
+            MyTenantPluginKeys.PluginId,
+        }));
     }
 
     [Test]
@@ -73,6 +79,7 @@ public class AssembledExplorerHostSmokeTests
                 BackupsPluginKeys.PluginId,
                 AccessPluginKeys.PluginId,
                 SchemaPluginKeys.PluginId,
+                MyTenantPluginKeys.PluginId,
             }));
     }
 
@@ -172,6 +179,10 @@ public class AssembledExplorerHostSmokeTests
                 store.Get(SchemaPluginKeys.PluginId).IsAllowed,
                 Is.False,
                 "Schema must fail closed with no endpoint");
+            Assert.That(
+                store.Get(MyTenantPluginKeys.PluginId).IsAllowed,
+                Is.False,
+                "My Tenant must fail closed with no endpoint");
         });
     }
 

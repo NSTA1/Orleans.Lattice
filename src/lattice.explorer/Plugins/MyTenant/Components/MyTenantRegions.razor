@@ -1,0 +1,130 @@
+@*
+    The Regions surface: where the tenant is resident, within the regions a
+    platform operator has authorized for it.
+
+    The two-set model is made legible before the server has to refuse anything.
+    The legend states it, every row says which set it is in, and the toggle for
+    a row that would break either invariant is disabled with the reason on it -
+    so "residency is a subset of the allowed set" and "the last resident region
+    can never be removed" are visible at the control rather than discovered
+    through a failed round trip.
+*@
+
+<div class="lxm-surface">
+    <p class="lxm-caption">
+        Your tenant is resident in <strong>@State.Regions.PlannedResidentCount</strong>
+        of the <strong>@State.Regions.AllowedCount</strong> region(s) a platform operator has
+        allowed it. Residency is always a subset of that allowed set: you choose where within it
+        your data lives, and only an operator can widen the set itself. A tenant must stay resident
+        in at least one region, so the last one cannot be removed.
+    </p>
+
+    <LatticeAdaptiveTable TItem="TenantRegionRow"
+                          Items="State.Regions.Rows"
+                          Columns="_columns"
+                          Label="Region residency"
+                          KeySelector="RowKey"
+                          EmptyText="No regions were reported for this tenant."
+                          Class="lxm-table" />
+
+    <div class="lxm-form-row">
+        <button type="button"
+                class="explorer-btn lxm-primary-action"
+                disabled="@(State.Busy || !State.Allowed || !State.HasPendingResidencyChange)"
+                @onclick="State.ApplyResidencyAsync">Apply residency</button>
+        <button type="button"
+                class="explorer-btn"
+                disabled="@(State.Busy || !State.HasPendingResidencyChange)"
+                @onclick="State.RevertResidency">Revert</button>
+        @if (State.HasPendingResidencyChange)
+        {
+            <span class="lxm-pending" role="status">Unapplied residency changes.</span>
+        }
+    </div>
+</div>
+
+@code {
+    private static readonly Func<TenantRegionRow, object> RowKey = static row => row.RegionId;
+
+    private LatticeTableColumn<TenantRegionRow>[] _columns =
+        Array.Empty<LatticeTableColumn<TenantRegionRow>>();
+
+    private bool _built;
+
+    /// <summary>The workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (_built)
+        {
+            return;
+        }
+
+        _built = true;
+        _columns = BuildColumns();
+    }
+
+    private LatticeTableColumn<TenantRegionRow>[] BuildColumns()
+    {
+        var region = new LatticeTableColumn<TenantRegionRow>
+        {
+            Header = "Region",
+            IsPrimary = true,
+            IsNumericOrCode = true,
+            Cell = row =>@<text>@row.RegionId</text>,
+        };
+
+        var allowed = new LatticeTableColumn<TenantRegionRow>
+        {
+            Header = "Allowed",
+            Cell = row =>@<span class="@(row.IsAllowed ? "lxm-badge is-ok" : "lxm-badge is-off")"
+                                title="@(row.IsAllowed
+                                    ? "A platform operator has authorized this region for your tenant."
+                                    : "Outside the operator-authorized allowed set, so you cannot become resident in it.")">
+                @(row.IsAllowed ? "Allowed" : "Not allowed")
+            </span>,
+        };
+
+        var residency = new LatticeTableColumn<TenantRegionRow>
+        {
+            Header = "Residency",
+            Cell = row =>@<span class="@(row.IsPlannedResident ? "lxm-badge is-ok" : "lxm-badge is-off")">
+                @(row.IsPlannedResident ? "Resident" : "Not resident")@(row.IsChanged ? " (pending)" : null)
+            </span>,
+        };
+
+        var status = new LatticeTableColumn<TenantRegionRow>
+        {
+            Header = "Lifecycle",
+            ShowOnCompact = false,
+            Cell = row =>@<text>@row.Status</text>,
+        };
+
+        var action = new LatticeTableColumn<TenantRegionRow>
+        {
+            Header = "",
+            Cell = row =>@<button type="button"
+                                 class="explorer-btn"
+                                 disabled="@(State.Busy || !State.Allowed || !row.CanToggle)"
+                                 title="@RefusalText(row.Refusal)"
+                                 @onclick="@(() => State.ToggleRegion(row.RegionId))">
+                @(row.IsPlannedResident ? "Remove" : "Add")
+            </button>,
+        };
+
+        return [region, allowed, residency, status, action];
+    }
+
+    // The refusal is put on the disabled control itself, so the reason is
+    // available at the moment the caller reaches for it rather than only after
+    // a rejected apply.
+    private static string? RefusalText(TenantResidencyRefusal refusal) => refusal switch
+    {
+        TenantResidencyRefusal.NotAllowed => MyTenantWorkspace.RegionNotAllowedRefusal,
+        TenantResidencyRefusal.ResidentButNoLongerAllowed => MyTenantWorkspace.RegionNoLongerAllowedRefusal,
+        TenantResidencyRefusal.LastRegion => MyTenantWorkspace.LastRegionRefusal,
+        _ => null,
+    };
+}
