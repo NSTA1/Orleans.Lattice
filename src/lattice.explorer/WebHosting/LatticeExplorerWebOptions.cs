@@ -44,17 +44,6 @@ public sealed class LatticeExplorerWebOptions
     public bool UseEnvironmentBootstrap { get; set; } = true;
 
     /// <summary>
-    /// When <see langword="true"/>, the schema-management area plugin is
-    /// registered, so it appears in the Explorer's area switcher. When
-    /// <see langword="false"/> (the default), the plugin is not registered: no
-    /// tab is rendered and the area cannot be activated, though the schema
-    /// control services stay registered so it can be re-surfaced by flipping this
-    /// flag. The area is withheld by default because its versioning UI cannot yet
-    /// express what differs between schema versions.
-    /// </summary>
-    public bool EnableSchemaArea { get; set; }
-
-    /// <summary>
     /// When set, the ASP.NET Data Protection key ring is persisted to this Azure
     /// Blob Storage blob (for example
     /// <c>https://account.blob.core.windows.net/keys/explorer-keyring.xml</c>)

@@ -46,7 +46,23 @@ public readonly record struct CrossTenantGrant
     public TenantGrantOperations Operations { get; init; }
 
     /// <summary>
-    /// Creates a cross-tenant grant.
+    /// The grant's lifecycle state. Only <see cref="TenantGrantState.Active"/>
+    /// authorizes anything; an offered-but-unapproved, declined, or withdrawn
+    /// grant resolves to a denial. Added additively, so a grant persisted before
+    /// this field existed reads back as
+    /// <see cref="TenantGrantState.Active"/> - see the remarks on
+    /// <see cref="TenantGrantState"/> for why that is the safe default.
+    /// </summary>
+    [Id(4)]
+    public TenantGrantState State { get; init; }
+
+    /// <summary>
+    /// Creates a cross-tenant grant that is already in force
+    /// (<see cref="TenantGrantState.Active"/>). This is the pre-existing overload
+    /// and its meaning is unchanged; use
+    /// <see cref="Create(string, TenantGranteeKind, string, TenantGrantOperations, TenantGrantState)"/>
+    /// to offer a grant into <see cref="TenantGrantState.Pending"/> for the
+    /// grantee to approve.
     /// </summary>
     /// <param name="grantee">The subject id or tenant id the grant is issued to. Must not be <c>null</c>.</param>
     /// <param name="granteeKind">Whether <paramref name="grantee"/> is a subject or a tenant.</param>
@@ -58,7 +74,25 @@ public readonly record struct CrossTenantGrant
         string grantee,
         TenantGranteeKind granteeKind,
         string scope,
-        TenantGrantOperations operations)
+        TenantGrantOperations operations) =>
+        Create(grantee, granteeKind, scope, operations, TenantGrantState.Active);
+
+    /// <summary>
+    /// Creates a cross-tenant grant in an explicit lifecycle state.
+    /// </summary>
+    /// <param name="grantee">The subject id or tenant id the grant is issued to. Must not be <c>null</c>.</param>
+    /// <param name="granteeKind">Whether <paramref name="grantee"/> is a subject or a tenant.</param>
+    /// <param name="scope">The scope (tree name or prefix) the grant applies to. Must not be <c>null</c>.</param>
+    /// <param name="operations">The operations the grant authorizes.</param>
+    /// <param name="state">The lifecycle state to create the grant in.</param>
+    /// <returns>The constructed grant.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="grantee"/> or <paramref name="scope"/> is <c>null</c>.</exception>
+    public static CrossTenantGrant Create(
+        string grantee,
+        TenantGranteeKind granteeKind,
+        string scope,
+        TenantGrantOperations operations,
+        TenantGrantState state)
     {
         ArgumentNullException.ThrowIfNull(grantee);
         ArgumentNullException.ThrowIfNull(scope);
@@ -68,6 +102,7 @@ public readonly record struct CrossTenantGrant
             GranteeKind = granteeKind,
             Scope = scope,
             Operations = operations,
+            State = state,
         };
     }
 

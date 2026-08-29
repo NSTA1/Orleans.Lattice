@@ -1,0 +1,45 @@
+@*
+    The compliance concern: a read-only audit of every current value in the tree
+    against its enforcement policy. It never rewrites or dead-letters data, so it
+    is gated on its own scoped decision (compliance.scan) rather than on the
+    policy-management one.
+
+    The non-compliant breakdown is the area's widest data surface, so it renders
+    through the design system's adaptive table: a real table at medium and
+    expanded, and a card list at compact, from one column declaration and with no
+    media query of its own (epic decision D7).
+*@
+
+<div class="lx-schema-advanced">
+    <h3 class="lx-schema-title">Compliance</h3>
+    <p class="lx-schema-note">A read-only scan of every current value against this policy. It never rewrites or dead-letters data.</p>
+    <button type="button" class="lx-schema-btn"
+            disabled="@(!Session.Can(SchemaCapability.ScanCompliance))"
+            @onclick="ScanAsync">Scan compliance</button>
+    @if (_view is { } view)
+    {
+        @if (!view.IsSuccess)
+        {
+            <p class="lx-schema-result @SchemaStatusStyles.For(view.Status)" role="status">@view.Message</p>
+        }
+        else if (!view.Value.HasPolicy)
+        {
+            <p class="lx-schema-empty">Tree '@view.Value.TreeId' is ungoverned (no policy).</p>
+        }
+        else
+        {
+            <p class="lx-schema-compliant">Compliant: @view.Value.CompliantCount</p>
+            <p class="lx-schema-noncompliant">Non-compliant: @view.Value.NonCompliantCount</p>
+            <p class="lx-schema-sub">Scanned: @view.Value.ScannedCount</p>
+            @if (view.Value.RuleBreakdown.Count > 0)
+            {
+                <h4 class="lx-schema-subtitle">Breakdown by reason</h4>
+                <LatticeAdaptiveTable TItem="LatticeSchemaComplianceRuleCount"
+                                      Items="view.Value.RuleBreakdown"
+                                      Columns="BreakdownColumns"
+                                      KeySelector="RowKey"
+                                      Label="Non-compliance breakdown by reason" />
+            }
+        }
+    }
+</div>

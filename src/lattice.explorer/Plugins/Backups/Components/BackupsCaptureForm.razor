@@ -1,0 +1,151 @@
+@*
+    The New Backup tab: pick the trees to capture, name the backup, choose full
+    or incremental (with its base), optionally attach a recurring schedule, and
+    capture.
+
+    The form is a wrapping label/control flow rather than a layout table, so it
+    stacks on a narrow viewport with no width media query and no horizontal
+    scrolling (epic decision D7), and every control carries its own accessible
+    name instead of inferring one from an adjacent table cell.
+*@
+
+<div class="lx-backups-new">
+    <BackupsTreePicker Owner="Owner" />
+
+    <div class="lx-backups-form">
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label" id="lx-backups-name-label">Name</span>
+            <div class="lx-backups-field-control">
+                <input type="text" class="lx-backups-text" value="@Owner.CaptureName"
+                       aria-labelledby="lx-backups-name-label"
+                       @oninput="e => Owner.SetCaptureName(e.Value?.ToString())" placeholder="backup name" />
+            </div>
+        </div>
+
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label" id="lx-backups-included-label">Included in backup</span>
+            <div class="lx-backups-field-control lx-backups-field-stack">
+                @if (Owner.SelectedTrees.Count == 0)
+                {
+                    <p class="lx-backups-empty">Select one or more trees from the list.</p>
+                }
+                else
+                {
+                    <ul class="lx-backups-selected-list" aria-labelledby="lx-backups-included-label">
+                        @foreach (var id in Owner.SelectedTrees)
+                        {
+                            <li @key="id">
+                                <button type="button" class="explorer-btn explorer-btn-icon lx-backups-remove"
+                                        title="Remove tree" aria-label="@($"Remove {id}")"
+                                        disabled="@Owner.Busy"
+                                        @onclick="@(() => Owner.RemoveTreeAsync(id))">x</button>
+                                <span class="lx-backups-selected-id">@id</span>
+                            </li>
+                        }
+                    </ul>
+                    @if (Owner.SelectedTrees.Count > 1)
+                    {
+                        <p class="lx-backups-note">Multiple trees are captured as a cross-tree consistent backup set.</p>
+                    }
+                }
+            </div>
+        </div>
+
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label">Kind</span>
+            <div class="lx-backups-field-control">
+                <fieldset class="lx-backups-kind" aria-label="Backup kind">
+                    <label>
+                        <input type="radio" name="backup-kind" checked="@(Owner.CaptureKind == BackupKind.Full)"
+                               @onchange="@(() => Owner.SetKindAsync(BackupKind.Full))" />
+                        Full
+                    </label>
+                    <label>
+                        <input type="radio" name="backup-kind" checked="@(Owner.CaptureKind == BackupKind.Incremental)"
+                               @onchange="@(() => Owner.SetKindAsync(BackupKind.Incremental))" />
+                        Incremental
+                    </label>
+                </fieldset>
+            </div>
+        </div>
+
+        @if (Owner.CaptureKind == BackupKind.Incremental)
+        {
+            <div class="lx-backups-field">
+                <span class="lx-backups-field-label" id="lx-backups-base-label">Base backup</span>
+                <div class="lx-backups-field-control lx-backups-field-stack">
+                    <select class="lx-backups-select" value="@Owner.IncrementalBaseId"
+                            aria-labelledby="lx-backups-base-label"
+                            @onchange="e => Owner.SetIncrementalBaseId(e.Value?.ToString())"
+                            disabled="@(Owner.IncrementalTree is null || Owner.BaseBackups.Count == 0)">
+                        <option value="">(select a full backup)</option>
+                        @foreach (var full in Owner.BaseBackups)
+                        {
+                            <option value="@full.Id" @key="full.Id">@BackupsPanel.Shorten(full.Id) - @full.Name</option>
+                        }
+                    </select>
+                    @if (Owner.IncrementalTree is { } baseTree && Owner.BaseBackups.Count == 0)
+                    {
+                        <span class="lx-backups-warning" role="alert">
+                            No full backup exists for tree '@baseTree'. Create a full backup first.
+                        </span>
+                    }
+                </div>
+            </div>
+        }
+
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label">Schedule</span>
+            <div class="lx-backups-field-control">
+                <fieldset class="lx-backups-schedule" aria-label="Recurring schedule">
+                    <label title="Also register a recurring backup of the selected tree at the interval below.">
+                        <input type="checkbox" checked="@Owner.ScheduleEnabled"
+                               @onchange="e => Owner.SetScheduleEnabled((bool?)e.Value ?? false)"
+                               disabled="@(!Owner.CanSchedule)" />
+                        Schedule recurring
+                    </label>
+                    <label>
+                        Every
+                        <input type="number" min="0" max="168" value="@Owner.ScheduleHours"
+                               @oninput="e => Owner.SetScheduleHours(e.Value)"
+                               disabled="@(!Owner.ScheduleEnabled || !Owner.CanSchedule)" aria-label="Interval hours" />
+                        h
+                    </label>
+                    <label>
+                        <input type="number" min="0" max="59" value="@Owner.ScheduleMinutes"
+                               @oninput="e => Owner.SetScheduleMinutes(e.Value)"
+                               disabled="@(!Owner.ScheduleEnabled || !Owner.CanSchedule)" aria-label="Interval minutes" />
+                        m
+                    </label>
+                </fieldset>
+            </div>
+        </div>
+
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label"></span>
+            <div class="lx-backups-field-control lx-backups-field-stack">
+                <button type="button" class="explorer-btn explorer-btn-primary"
+                        disabled="@(!Owner.CanBackup)" @onclick="Owner.BackupAsync">Backup</button>
+
+                @if (Owner.ScheduleEnabled && !Owner.CanSchedule)
+                {
+                    <p class="lx-backups-hint">A recurring schedule targets a single tree - select exactly one tree.</p>
+                }
+                else if (Owner.ScheduleEnabled && Owner.ScheduleInterval <= TimeSpan.Zero)
+                {
+                    <p class="lx-backups-hint">Set a schedule interval greater than zero.</p>
+                }
+
+                @if (Owner.CaptureKind == BackupKind.Incremental && Owner.SelectedTrees.Count > 1)
+                {
+                    <p class="lx-backups-hint">An incremental backup targets a single tree - select exactly one tree.</p>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>The Backups panel this form reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+}

@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!--
+      The namespace is unchanged by the move to a plugin project: the Backups
+      types were already Orleans.Lattice.Explorer.Backup, and renaming them
+      would be churn on a conversion whose whole point is that no behaviour
+      moves. The package id follows the plugin layout instead.
+    -->
+    <RootNamespace>Orleans.Lattice.Explorer.Backup</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.Backup</AssemblyName>
+    <PackageId>Orleans.Lattice.Explorer.Backup</PackageId>
+    <Version>9.4.0</Version>
+    <Description>The Backups plugin for the Orleans.Lattice Explorer: a self-contained plugin package carrying its own services, Razor components, and scoped stylesheet. It reaches the backup control API over its own gRPC binding, owns the access gate that files the plugin-level and per-tree backup decisions into the Explorer's keyed plugin access store, and renders its catalogue through the design system's adaptive table so a wide backup list reflows to cards on a narrow viewport. Registered with AddExplorerBackup() and AddExplorerBackupsPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Backup.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    Unlike Explorer.Core (which is walled off to the state-API client), this
+    plugin project is allowed to reference the backup control-API gRPC client,
+    which transitively pulls in the backup engine and core. It is the plugin's
+    own facade binding, exactly as the epic intends: a plugin that needs another
+    facade references that facade's .grpc binding itself. It takes no dependency
+    on the shared UI library, which is what lets that library drop its Backup
+    reference.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+    <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\lattice.api.backup.grpc\Orleans.Lattice.Api.Backup.Grpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,77 @@
+@implements IDisposable
+@inject IExplorerPluginHostContextFactory HostContexts
+@inject IExplorerPluginAccessStore AccessStore
+
+@*
+    The Schema management area's shell. It owns only what the whole area shares -
+    the tree selection, the tab strip, the plugin-level gate, and the one status
+    banner - and delegates each concern to its own component: enforcement policy
+    (with the compliance audit it is scoped to), envelope versioning and
+    remediation, and the strict-mode dead-letter view.
+
+    Gating has two independent layers, both advisory (the server stays the sole
+    enforcement point). The plugin-level decision answers "is the schema control
+    endpoint reachable" and is filed by the host's fault-isolated refresher under
+    this plugin's id. The per-tree, per-action decisions are filed by this
+    plugin's own probe under SCOPED keys (one per tree, per action) and are read
+    straight from the keyed store, so a denied action renders disabled rather
+    than hidden and never inherits the coarse plugin-level admission.
+*@
+
+<section class="lx-schema" aria-label="Schema">
+    <div class="lx-schema-layout">
+        <SchemaTreeSelector Session="_session"
+                            Catalog="_catalog"
+                            IsLoading="_treesLoading"
+                            OnSelect="_selectTree"
+                            OnRefresh="_refreshTrees" />
+
+        <div class="lx-schema-content">
+            <p class="lx-schema-note">
+                Schema governance is opt-in per tree: control how values are validated (Policy) and how their shape evolves over time (Versions).
+            </p>
+            <header class="lx-schema-header">
+                <div class="lx-tabstrip" role="tablist" aria-label="Schema tabs">
+                    @for (var i = 0; i < _tabs.Length; i++)
+                    {
+                        var tab = _tabs[i];
+                        var isActive = tab.Tab == _tab;
+                        <button type="button" role="tab"
+                                class="@(isActive ? ActiveTabClass : TabClass)"
+                                aria-selected="@isActive"
+                                @onclick="tab.Activate">@tab.Label</button>
+                    }
+                </div>
+            </header>
+
+            @if (!_session.IsAllowed)
+            {
+                <p class="lx-schema-result is-denied" role="status">
+                    Schema management is not available: the cluster has no schema control endpoint configured, or it is unreachable.
+                </p>
+            }
+            else if (!_session.HasProbedTree)
+            {
+                <p class="lx-schema-empty">Select a tree from the list to manage its schema.</p>
+            }
+
+            @if (_session.LastResult is { } result)
+            {
+                <p class="lx-schema-result @SchemaStatusStyles.For(result.Status)" role="status">@result.Message</p>
+            }
+
+            @if (_tab == SchemaTab.Policy)
+            {
+                <SchemaPolicyTab Session="_session" />
+            }
+            else if (_tab == SchemaTab.Versions)
+            {
+                <SchemaVersionsTab Session="_session" />
+            }
+            else
+            {
+                <SchemaDeadLettersTab Session="_session" />
+            }
+        </div>
+    </div>
+</section>

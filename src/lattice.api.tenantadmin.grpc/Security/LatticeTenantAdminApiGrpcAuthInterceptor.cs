@@ -136,9 +136,18 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTenantAdminGrpcMethods.ListTenantAdminSubjectsMethodName => LatticeTenantAdminApiOperation.ListTenantAdminSubjects,
             LatticeTenantAdminGrpcMethods.AddTenantAdminSubjectMethodName => LatticeTenantAdminApiOperation.AddTenantAdminSubject,
             LatticeTenantAdminGrpcMethods.RemoveTenantAdminSubjectMethodName => LatticeTenantAdminApiOperation.RemoveTenantAdminSubject,
+            LatticeTenantAdminGrpcMethods.ListCrossTenantGrantsMethodName => LatticeTenantAdminApiOperation.ListCrossTenantGrants,
+            LatticeTenantAdminGrpcMethods.OfferCrossTenantGrantMethodName => LatticeTenantAdminApiOperation.OfferCrossTenantGrant,
+            LatticeTenantAdminGrpcMethods.ApproveCrossTenantGrantMethodName => LatticeTenantAdminApiOperation.ApproveCrossTenantGrant,
+            LatticeTenantAdminGrpcMethods.RejectCrossTenantGrantMethodName => LatticeTenantAdminApiOperation.RejectCrossTenantGrant,
+            LatticeTenantAdminGrpcMethods.RevokeCrossTenantGrantMethodName => LatticeTenantAdminApiOperation.RevokeCrossTenantGrant,
             _ => LatticeTenantAdminApiOperation.Unknown,
         };
 
+        // A grant request names two tenants, so the coarse transport hint reports
+        // the granting tenant - the one whose record holds the grant - uniformly
+        // across all four grant mutations. The authority each one actually
+        // requires is decided fail-closed at the facade, not here.
         var targetId = request switch
         {
             TenantAdminTenantRequest t => t.TenantId,
@@ -146,6 +155,8 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             TenantAdminSetQuotasRequest q => q.TenantId,
             TenantAdminRegionSetRequest r => r.TenantId,
             TenantAdminSubjectRequest s => s.TenantId,
+            TenantAdminGrantRequest g => g.GranterTenantId,
+            TenantAdminGrantOfferRequest o => o.GranterTenantId,
             _ => null,
         };
 

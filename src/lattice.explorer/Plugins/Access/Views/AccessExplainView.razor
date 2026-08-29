@@ -1,0 +1,98 @@
+@using Orleans.Lattice.Auth
+
+@*
+    The Explain sub-surface: the shared tree-selection panel, the query form,
+    and the two result views.
+
+    The area never re-implements a verdict: the verdict rendered here is the
+    facade's Allowed flag, verbatim, and the precedence-ranked matched rules
+    beside it are a presentation aid.
+*@
+
+<div class="lxa-layout">
+    <AccessTreeSelector State="State" />
+    <div class="lxa-content">
+        @if (State.SelectedTreeId is null)
+        {
+            <p class="lxa-empty">Select a tree from the list to explain a decision within it.</p>
+        }
+        <div class="lxa-grid">
+            <div class="lxa-formcol">
+                <h3 class="lxa-title">Explain a decision</h3>
+                @if (State.AccessModel.DirectoryAvailable)
+                {
+                    <p class="lxa-hint">
+                        Explain and Effective compute group membership from the local membership
+                        directory, not the connected directory. A caller's live token or directory
+                        groups may differ, so a real request can resolve to a different set of
+                        groups than shown here.
+                    </p>
+                }
+                <label class="lxa-field">
+                    <span>Subject</span>
+                    <SubjectPicker Domain="State.Domain"
+                                   Kind="State.ExplainSubjectKind"
+                                   KindChanged="OnSubjectKindChanged"
+                                   SubjectId="@State.ExplainSubjectId"
+                                   SubjectIdChanged="OnSubjectIdChanged"
+                                   Disabled="@(State.Busy || !State.Allowed)" />
+                </label>
+                <label class="lxa-field">
+                    <span>Operation</span>
+                    <select value="@State.ExplainOperation" disabled="@(State.Busy || !State.Allowed)"
+                            @onchange="e => State.ExplainOperation = Enum.Parse<LatticeOperation>(e.Value?.ToString() ?? nameof(LatticeOperation.Read))">
+                        @foreach (var op in AccessRuleFormat.Operations)
+                        {
+                            <option value="@op.Flag">@op.Label</option>
+                        }
+                    </select>
+                </label>
+                <label class="lxa-field">
+                    <span>Tree</span>
+                    <span class="lxa-treevalue">
+                        @(State.SelectedTreeId ?? "Select a tree from the list")
+                    </span>
+                </label>
+                <label class="lxa-field">
+                    <span>Scope</span>
+                    <span class="lxa-inline">
+                        <select value="@State.ExplainScopeKind" disabled="@(State.Busy || !State.Allowed)"
+                                @onchange="e => State.ExplainScopeKind = Enum.Parse<LatticeScopeKind>(e.Value?.ToString() ?? nameof(LatticeScopeKind.Tree))">
+                            <option value="@nameof(LatticeScopeKind.Tree)">Whole tree</option>
+                            <option value="@nameof(LatticeScopeKind.Prefix)">Prefix</option>
+                            <option value="@nameof(LatticeScopeKind.Key)">Key</option>
+                        </select>
+                        @if (State.ExplainScopeKind != LatticeScopeKind.Tree)
+                        {
+                            <input type="text" value="@State.ExplainScopeKeyOrPrefix"
+                                   disabled="@(State.Busy || !State.Allowed)"
+                                   @oninput="e => State.ExplainScopeKeyOrPrefix = e.Value?.ToString() ?? string.Empty"
+                                   placeholder="@(State.ExplainScopeKind == LatticeScopeKind.Key ? "key" : "prefix")" />
+                        }
+                    </span>
+                </label>
+                <div class="lxa-actions">
+                    <button type="button" class="explorer-btn"
+                            disabled="@(!State.CanExplain)"
+                            @onclick="State.RunExplainAsync">Explain</button>
+                    <button type="button" class="explorer-btn"
+                            disabled="@(!State.CanListEffective)"
+                            @onclick="State.RunEffectiveAsync">Effective permissions</button>
+                </div>
+            </div>
+            <div class="lxa-formcol">
+                <AccessVerdictView State="State" />
+                <AccessEffectivePermissionsView State="State" />
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>The Access workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+
+    private void OnSubjectKindChanged(LatticeSubjectSelectorKind kind) => State.ExplainSubjectKind = kind;
+
+    private void OnSubjectIdChanged(string id) => State.ExplainSubjectId = id;
+}

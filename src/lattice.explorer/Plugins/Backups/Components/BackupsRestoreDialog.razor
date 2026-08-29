@@ -1,0 +1,73 @@
+@*
+    The restore confirmation. States the point in time a chain restores to, the
+    tree each backup lands in, and what the chosen restore mode does to the
+    target, so a destructive cutover is never a surprise.
+*@
+
+@if (Owner.PendingRestore is { } pending)
+{
+    <div class="explorer-modal-backdrop" role="presentation">
+        <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-restore-title">
+            <h3 id="explorer-restore-title">Restore backup?</h3>
+            @if (pending.IsIncrementalChain)
+            {
+                <p>
+                    This restores the incremental chain
+                    '@pending.Name' as at
+                    <strong>@BackupsPanel.FormatCreated(RestorePointOf(pending))</strong>
+                    into tree <strong>@Owner.RestoreTargetFor(pending.Members[0])</strong>,
+                    @Owner.RestoreModeDescription.
+                </p>
+            }
+            else if (pending.IsSet)
+            {
+                <p>
+                    This restores each of the @pending.Members.Count member backups
+                    of set <code>@BackupsPanel.Shorten(pending.DisplayId)</code>
+                    ('@pending.Name') back into its own tree, @Owner.RestoreModeDescription:
+                </p>
+                <ul>
+                    @foreach (var member in pending.Members)
+                    {
+                        <li @key="member.Id"><code>@BackupsPanel.Shorten(member.Id)</code> into tree <strong>@member.Scope.TreeId</strong></li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <p>
+                    This restores backup <code>@BackupsPanel.Shorten(pending.DisplayId)</code>
+                    ('@pending.Name') into tree
+                    <strong>@Owner.RestoreTargetFor(pending.Members[0])</strong>,
+                    @Owner.RestoreModeDescription.
+                </p>
+            }
+            <div class="explorer-modal-actions">
+                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CancelRestore">Cancel</button>
+                <button type="button" class="explorer-btn explorer-btn-primary" disabled="@Owner.Busy" @onclick="Owner.ConfirmRestoreAsync">Proceed</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>The Backups panel this dialog reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    // The capture time of the chain member the restore would replay to, falling
+    // back to the chain tip when the chosen id is not among the loaded members.
+    private DateTimeOffset RestorePointOf(BackupRow row)
+    {
+        var chosen = Owner.SelectedRestorePoint(row);
+        var members = Owner.ChainMembersNewestFirst(row);
+        for (var i = 0; i < members.Count; i++)
+        {
+            if (string.Equals(members[i].Id, chosen, StringComparison.Ordinal))
+            {
+                return members[i].CreatedAtUtc;
+            }
+        }
+
+        return row.CreatedAtUtc;
+    }
+}
