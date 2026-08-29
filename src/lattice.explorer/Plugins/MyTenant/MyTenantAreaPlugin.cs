@@ -1,8 +1,8 @@
-using Orleans.Lattice.Explorer.MyTenant.Components;
+using Orleans.Lattice.Explorer.Plugins.MyTenant.Components;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The My Tenant area as a plugin: its descriptor, the panel the shell renders

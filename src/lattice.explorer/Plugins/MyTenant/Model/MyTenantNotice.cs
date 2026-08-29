@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// One operation outcome as the surface reports it: the classified status, the

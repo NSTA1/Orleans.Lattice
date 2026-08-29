@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// Registration helpers for the Explorer's My Tenant plugin: the plugin's own

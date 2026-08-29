@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The My Tenant plugin's own access gate: the probe that decides whether the

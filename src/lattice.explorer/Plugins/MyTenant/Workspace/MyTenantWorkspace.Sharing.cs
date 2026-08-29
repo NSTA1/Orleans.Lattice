@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant.Workspace;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 
 /// <summary>
 /// The Sharing surface: this tenant's own side of the two-step cross-tenant

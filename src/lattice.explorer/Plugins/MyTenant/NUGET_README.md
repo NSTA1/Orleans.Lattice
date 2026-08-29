@@ -1,4 +1,4 @@
-# Orleans.Lattice.Explorer.MyTenant
+# Orleans.Lattice.Explorer.Plugins.MyTenant
 
 The **My Tenant** plugin for the [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice)
 Explorer: the self-service area a *tenant administrator* manages their own

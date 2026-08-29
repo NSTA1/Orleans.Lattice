@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The transitions the active tenant may drive on one cross-tenant grant, given

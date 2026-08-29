@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The seam the tenant-metrics section plugs into.

@@ -1,4 +1,4 @@
-using Orleans.Lattice.Explorer.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 namespace Orleans.Lattice.Explorer.Tests.MyTenant;
 

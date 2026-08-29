@@ -5,16 +5,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!--
-      Assembly, root namespace, and package id are the same string, matching the
-      Access and Backups plugin packages: a concrete plugin package is
-      Orleans.Lattice.Explorer.<Area>, and only the shared tenancy seam beneath
-      it carries the Tenancy name.
+      A new Explorer plugin package is Orleans.Lattice.Explorer.Plugins.<Area>.
+      Access, Backup, and Schema predate the plugin model and keep their already
+      shipped ids for consumer compatibility; this one has never shipped, so it
+      takes the current name. AssemblyName is left to default to the project file
+      name, as the other Plugins.* packages do - and it is the assembly name that
+      the scoped stylesheet's _content/ path is derived from.
     -->
-    <RootNamespace>Orleans.Lattice.Explorer.MyTenant</RootNamespace>
-    <AssemblyName>Orleans.Lattice.Explorer.MyTenant</AssemblyName>
-    <PackageId>Orleans.Lattice.Explorer.MyTenant</PackageId>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.MyTenant</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.MyTenant</PackageId>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Version>9.4.0</Version>
-    <Description>The My Tenant plugin for the Orleans.Lattice Explorer: the tenant admin's self-service area. Renders the tenant's own descriptor and status, its admin-subject membership, its consumption against each quota ceiling (unbounded, unmeasured, and measured kept distinct, and captioned with the scope the figures were enforced under), its region residency against the operator-authorized allowed set, and its own side of the two-step cross-tenant grant agreement. Scoped to the caller's active tenant throughout, so a tenant admin can never read or mutate another tenant through it. Registered with AddExplorerMyTenant() and AddExplorerMyTenantPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.MyTenant.</Description>
+    <Description>The My Tenant plugin for the Orleans.Lattice Explorer: the tenant admin's self-service area. Renders the tenant's own descriptor and status, its admin-subject membership, its consumption against each quota ceiling (unbounded, unmeasured, and measured kept distinct, and captioned with the scope the figures were enforced under), its region residency against the operator-authorized allowed set, and its own side of the two-step cross-tenant grant agreement. Scoped to the caller's active tenant throughout, so a tenant admin can never read or mutate another tenant through it. Registered with AddExplorerMyTenant() and AddExplorerMyTenantPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.MyTenant.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

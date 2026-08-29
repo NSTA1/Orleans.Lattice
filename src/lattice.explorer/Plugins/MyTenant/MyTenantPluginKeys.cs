@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The My Tenant plugin's own key vocabulary: the stable id its access decision

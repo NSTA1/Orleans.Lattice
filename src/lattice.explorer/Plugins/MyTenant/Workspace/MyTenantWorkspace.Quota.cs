@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant.Workspace;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 
 /// <summary>
 /// The Quota surface: consumption against each ceiling, qualified by the scope

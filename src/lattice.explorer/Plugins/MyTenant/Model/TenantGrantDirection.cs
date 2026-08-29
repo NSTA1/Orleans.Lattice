@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// Which side of a cross-tenant grant the caller's own tenant is on.

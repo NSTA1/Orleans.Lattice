@@ -1,7 +1,7 @@
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant.Workspace;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 
 /// <summary>
 /// The Overview surface: the tenant's own descriptor and lifecycle status, the

@@ -8,7 +8,7 @@ using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Session;
-using Orleans.Lattice.Explorer.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;

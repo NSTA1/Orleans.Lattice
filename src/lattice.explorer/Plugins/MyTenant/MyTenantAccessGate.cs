@@ -2,7 +2,7 @@ using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The default <see cref="IMyTenantAccessGate"/>: the caller reaches the My

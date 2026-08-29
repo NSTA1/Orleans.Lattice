@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Core.Tenancy;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The plugin's registration-order diagnostic for the Explorer's

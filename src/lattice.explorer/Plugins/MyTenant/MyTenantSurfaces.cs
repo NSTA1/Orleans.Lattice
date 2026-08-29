@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The My Tenant plugin's internal sub-surfaces, and the tab items the design

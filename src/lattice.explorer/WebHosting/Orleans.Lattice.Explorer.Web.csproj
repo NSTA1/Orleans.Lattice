@@ -54,7 +54,7 @@
       no extra package reference, while the area stays absent by default.
     -->
     <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
-    <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.MyTenant.csproj" />
+    <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
   </ItemGroup>
 
 </Project>

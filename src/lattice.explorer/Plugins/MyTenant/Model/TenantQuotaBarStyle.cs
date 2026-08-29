@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.MyTenant;
+namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
 /// The inline width declarations a quota bar's fill uses, pre-composed once for

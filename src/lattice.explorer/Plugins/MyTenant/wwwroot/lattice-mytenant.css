@@ -3,7 +3,7 @@
 
   Everything the My Tenant surface renders is styled here, in the plugin's own
   package, and served at
-  `_content/Orleans.Lattice.Explorer.MyTenant/lattice-mytenant.css`. Nothing in
+  `_content/Orleans.Lattice.Explorer.Plugins.MyTenant/lattice-mytenant.css`. Nothing in
   this file belongs to the shared shell: a head that does not register the My
   Tenant plugin loads none of it (epic decision D5).
 

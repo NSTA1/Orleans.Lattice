@@ -34,7 +34,7 @@
     <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Backups\Orleans.Lattice.Explorer.Backup.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Tenancy\Orleans.Lattice.Explorer.Tenancy.csproj" />
-    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\MyTenant\Orleans.Lattice.Explorer.MyTenant.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\MyTenant\Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\UI\Orleans.Lattice.Explorer.UI.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />

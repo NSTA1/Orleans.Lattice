@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Tenancy;
-using Orleans.Lattice.Explorer.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 namespace Orleans.Lattice.Explorer.Tests.MyTenant;
 
