@@ -326,12 +326,11 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 Title = "Lattice capabilities",
                 Description =
                     "Reports which of the Lattice API facade groups (such as state, data, backup, auth, "
-                    + "replication, and treeadmin) "
+                    + "replication, telemetry, and treeadmin) "
                     + "the current authenticated caller may use, the connected cluster's identity, and "
-                    + "the endpoint each group is served from. The Telemetry group intentionally reports "
-                    + "no endpoint: it is served by a head-local PromQL proxy co-located with this MCP "
-                    + "server, not a per-region gRPC facade, so it has no routable per-region endpoint by "
-                    + "design. Read-only and scoped to the caller's effective permissions.",
+                    + "the endpoint each group is served from. A group served by a routable facade reports "
+                    + "that facade's endpoint; a group co-hosted with this server reports none. Read-only "
+                    + "and scoped to the caller's effective permissions.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,
@@ -348,9 +347,9 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 Description =
                     "Lists the regions this server can route a tool call to: the current cluster plus "
                     + "any reachable, credentialed peer region, each with per-group endpoint availability. "
-                    + "A region with no route or credentials is omitted (fail-closed). The Telemetry group "
-                    + "carries no per-region endpoint by design (it is a head-local PromQL proxy, not a "
-                    + "per-region gRPC facade). Pass a listed "
+                    + "A region with no route or credentials is omitted (fail-closed), and a group a region "
+                    + "does not serve - telemetry included - is reported unavailable for it and rejected "
+                    + "fail-closed when targeted there. Pass a listed "
                     + "region id as the optional 'region' argument of any tool to target that region; "
                     + "omit it to target the current region. Read-only.",
                 ReadOnly = true,
