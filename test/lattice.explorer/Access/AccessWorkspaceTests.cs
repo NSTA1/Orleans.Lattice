@@ -629,48 +629,6 @@ public sealed class AccessWorkspaceTests
     private static IAccessDomain StubDomain(
         IReadOnlyList<AuthGroup>? groups = null,
         IReadOnlyList<string>? trees = null,
-        IReadOnlyList<LatticeAuthorizationRule>? rules = null)
-    {
-        var membership = Substitute.For<IMembershipAdminService>();
-        membership
-            .ListGroupsAsync(Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(new AccessListView<AuthGroup>
-            {
-                Status = AccessOperationStatus.Succeeded,
-                Entries = groups ?? [],
-            });
-        membership
-            .ListDirectMembersAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(new AccessListView<string> { Status = AccessOperationStatus.Succeeded });
-        membership.GetAccessModelAsync(Arg.Any<CancellationToken>()).Returns(new AccessModelView
-        {
-            Status = AccessOperationStatus.Succeeded,
-            DirectoryAvailable = true,
-            RulesEnforced = true,
-            LocalMembershipEffective = true,
-        });
-
-        var policy = Substitute.For<IPolicyAdminService>();
-        policy
-            .ListRulesAsync(Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(new AccessListView<LatticeAuthorizationRule>
-            {
-                Status = AccessOperationStatus.Succeeded,
-                Entries = rules ?? [],
-            });
-
-        var catalog = Substitute.For<ICatalogReader>();
-        catalog.LoadAsync(CatalogKind.Trees, Arg.Any<string?>(), Arg.Any<int>()).Returns(new CatalogPage
-        {
-            Items = [.. (trees ?? []).Select(id => new CatalogItem { Id = id, Kind = CatalogKind.Trees })],
-        });
-
-        var domain = Substitute.For<IAccessDomain>();
-        domain.Membership.Returns(membership);
-        domain.Policy.Returns(policy);
-        domain.Catalog.Returns(catalog);
-        domain.AuthenticationMode.Returns(ExplorerAccessAuthenticationMode.Claims);
-        domain.CreateLabelResolver().Returns(_ => new PrincipalLabelResolver(membership));
-        return domain;
-    }
+        IReadOnlyList<LatticeAuthorizationRule>? rules = null) =>
+        StubAccessDomain.Create(groups, trees, rules);
 }

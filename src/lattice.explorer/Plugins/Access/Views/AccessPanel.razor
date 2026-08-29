@@ -26,12 +26,27 @@
 @if (AdaptiveContext is null)
 {
     @*
-        No shell above us has cascaded a breakpoint, so the plugin supplies its
-        own adaptive root and stays usable at compact on its own. It yields the
-        moment a shell provides one - the other branch renders no second root -
-        so this is a fallback, never a competing owner of the viewport. With no
-        viewport service and no JS runtime the root simply holds the default
-        breakpoint, which is the layout the Explorer already shipped.
+        RETAINED DELIBERATELY, not dead code.
+
+        The Explorer's own MainLayout now hosts LatticeAdaptiveRoot, so in the
+        shipped shell this branch never runs and the plugin owns no viewport -
+        AccessPanelRenderTests pins that: with a cascade present the rendered
+        markup contains no root of ours at all.
+
+        It is kept because this plugin ships as its own package and a head may
+        compose it WITHOUT the shared MainLayout, which is the whole point of a
+        self-contained plugin. Without this, such a head would silently pin every
+        adaptive primitive to the Expanded default and the compact card reflow
+        would never fire - the exact failure that went unnoticed shell-wide until
+        MainLayout adopted the root, because the CSS half of the design system
+        keeps working (media queries need no cascade) while the C#-driven half
+        goes quiet without ever failing.
+
+        It can never become a competing owner: the null check means a shell's
+        root always wins, so adopting one upstream retires this automatically
+        with no edit here. With no viewport service and no JS runtime the root
+        simply holds the default breakpoint, which is the layout the Explorer
+        already shipped.
     *@
     <LatticeAdaptiveRoot Class="lxa-root">
         @_panel
@@ -60,8 +75,11 @@ else
         _render = StateHasChanged;
 
     /// <summary>
-    /// The breakpoint cascaded by a shell-provided adaptive root, when there is
-    /// one. The plugin supplies its own root when this is absent.
+    /// The breakpoint cascaded by a shell-provided adaptive root - the Explorer's
+    /// own <c>MainLayout</c> hosts one, so in the shipped shell this is always
+    /// supplied. The plugin falls back to its own root only when it is absent,
+    /// which is the case for a head that composes this package without that
+    /// layout.
     /// </summary>
     [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
 
