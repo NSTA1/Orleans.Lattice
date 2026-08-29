@@ -45,6 +45,7 @@ public partial class TreeDeletionGrainTests
             shardRoot.MarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.IsDeletedAsync().Returns(Task.FromResult(false));
             shardRoot.PurgeAsync().Returns(Task.CompletedTask);
+            shardRoot.ReseedNodeBindingsAsync().Returns(Task.CompletedTask);
         }
 
         // Set up compaction grain mock.
@@ -364,6 +365,56 @@ public partial class TreeDeletionGrainTests
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             await shard.Received(1).UnmarkDeletedAsync();
         }
+    }
+
+    [Test]
+    public async Task Recover_reseeds_node_bindings_on_all_shards()
+    {
+        var (grain, _, _, grainFactory, _) = CreateGrain();
+        await grain.DeleteTreeAsync();
+
+        await grain.RecoverAsync();
+
+        for (int i = 0; i < ShardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
+            await shard.Received(1).ReseedNodeBindingsAsync();
+        }
+    }
+
+    [Test]
+    public async Task Recover_reseed_failure_propagates()
+    {
+        var (grain, _, _, grainFactory, _) = CreateGrain();
+        await grain.DeleteTreeAsync();
+
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0");
+        shard.ReseedNodeBindingsAsync().Returns(Task.FromException(new Exception("Shard root unavailable")));
+
+        var ex = Assert.ThrowsAsync<Exception>(() => grain.RecoverAsync());
+        Assert.That(ex!.Message, Is.EqualTo("Shard root unavailable"));
+    }
+
+    [Test]
+    public async Task Recover_reseed_failure_leaves_the_tree_deleted_so_a_retry_is_clean()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        await grain.DeleteTreeAsync();
+
+        var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0");
+        shard.ReseedNodeBindingsAsync().Returns(Task.FromException(new Exception("Shard root unavailable")));
+
+        Assert.ThrowsAsync<Exception>(() => grain.RecoverAsync());
+
+        // The re-seed runs before the IsDeleted write, so a failed repair does
+        // not strand the tree: RecoverAsync's own precondition still passes on
+        // the operator's retry rather than throwing "not been deleted".
+        Assert.That(state.State.IsDeleted, Is.True);
+        Assert.That(state.State.DeletedAtUtc, Is.Not.Null);
+
+        shard.ReseedNodeBindingsAsync().Returns(Task.CompletedTask);
+        await grain.RecoverAsync();
+        Assert.That(state.State.IsDeleted, Is.False);
     }
 
     [Test]

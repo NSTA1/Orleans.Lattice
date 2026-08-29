@@ -138,6 +138,30 @@ internal sealed class TreeDeletionGrain(
         }
         await Task.WhenAll(tasks);
 
+        // Re-assert each shard's node bindings before the tree is declared
+        // live again. A purge that died part-way (a grain-call timeout on the
+        // synchronous PurgeNowAsync walk, a storage fault, a silo restart)
+        // clears node state but leaves the owning shard root intact, and the
+        // shard root only ever seeds a node's tree id when it CREATES that node
+        // - a branch guarded by its own RootNodeId. Recovering such a tree
+        // otherwise produces a routable but unseeded leaf: routing delivers the
+        // write, the leaf has no tree id to resolve a CrdtShape from, and every
+        // typed CRDT write to that key range fails permanently, across restarts
+        // (issue #1744). The re-assert is a no-op on a healthy shard.
+        //
+        // Deliberately ordered BEFORE the IsDeleted state write below: a
+        // shard that throws here leaves the tree still marked deleted, so the
+        // operator's retry of RecoverTreeAsync re-runs cleanly. Flipping the
+        // flag first would make the retry throw "Cannot recover a tree that has
+        // not been deleted" and strand the half-repaired topology.
+        var reseeds = new Task[resolved.ShardCount];
+        for (int i = 0; i < resolved.ShardCount; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
+            reseeds[i] = shard.ReseedNodeBindingsAsync();
+        }
+        await Task.WhenAll(reseeds);
+
         // See DeleteTreeAsync for the snapshot/restore rationale. Without
         // this revert, the guarded precondition `if (!state.State.IsDeleted) throw`
         // above would falsely fire on every retry from this activation

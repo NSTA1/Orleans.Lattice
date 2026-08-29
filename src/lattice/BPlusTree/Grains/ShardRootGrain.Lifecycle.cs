@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -165,5 +167,172 @@ internal sealed partial class ShardRootGrain
                 stack.Push(children[i]);
             }
         }
+    }
+
+    /// <summary>
+    /// Upper bound on the number of nodes a single
+    /// <see cref="ReseedNodeBindingsAsync"/> pass will re-assert. The repair
+    /// runs inside one grain call, and an unbounded node walk in one grain call
+    /// is precisely what stranded the topology in the first place - a
+    /// <c>PurgeTreeAsync</c> that blew the grain-call timeout part-way through
+    /// its own walk. A recovery that timed out would be no better than the
+    /// unbound leaf it is trying to repair, so the walk is capped and the
+    /// overrun is reported rather than allowed to run long.
+    /// </summary>
+    private const int MaxReseedNodes = 4096;
+
+    /// <summary>
+    /// Maximum re-assert calls in flight at once inside
+    /// <see cref="ReseedNodeBindingsAsync"/>. Bounded for the reason
+    /// <see cref="BoundedFanOut"/> documents - a burst of one call per node all
+    /// racing a single Orleans response deadline degrades into deadline
+    /// failures rather than latency - but wide enough that the repair does not
+    /// walk the budget one strictly sequential round trip at a time.
+    /// </summary>
+    private const int ReseedFanOutWidth = 16;
+
+    /// <inheritdoc />
+    public async Task ReseedNodeBindingsAsync()
+    {
+        // No topology to re-assert: EnsureRootAsync seeds a fresh root leaf,
+        // binding included, on the first operation after recovery.
+        if (state.State.RootNodeId is null) return;
+
+        var rootIsLeafTyped = RootIsLeafTyped;
+
+        // Probe before walking. PurgeAsync clears the leftmost leaf before any
+        // other node in this shard, so a leftmost leaf that still carries its
+        // tree-id binding proves no node here was cleared: the healthy
+        // delete/recover cycle pays one edge descent plus one RPC and skips the
+        // walk entirely.
+        //
+        // Best-effort: a probe that cannot resolve or reach the leftmost leaf
+        // (a topology whose internal root was itself cleared, a leaf whose silo
+        // is momentarily unreachable) must not fail the recovery that called
+        // it. Recovery succeeds today without this repair, and an unbound node
+        // still surfaces loudly and typed on the write path, so degrading to
+        // "no repair" is strictly no worse than the status quo whereas throwing
+        // would make recovery newly fragile.
+        string? boundTreeId;
+        try
+        {
+            var leftmostLeafId = rootIsLeafTyped
+                ? state.State.RootNodeId!.Value
+                : await TraverseToLeftmostLeafAsync();
+            boundTreeId = await grainFactory.GetGrain<IBPlusLeafGrain>(leftmostLeafId).GetTreeIdAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not probe node bindings for shard {ShardIndex} of tree {TreeId} after recovery; "
+                + "a node left unbound by an interrupted purge would keep rejecting typed CRDT writes to its key range.",
+                MyShardIndex,
+                TreeId);
+            return;
+        }
+
+        // Healthy shard - nothing was torn down, so nothing to re-assert.
+        if (boundTreeId is not null) return;
+
+        var leafIds = new List<GrainId>();
+        var internalIds = new List<GrainId>();
+        var truncated = await CollectBindingTargetsAsync(rootIsLeafTyped, leafIds, internalIds);
+
+        // Leaves first: an unbound leaf is what actually fails the write path,
+        // whereas an unbound internal node only degrades its per-tree options
+        // lookup. Both setters are idempotent, so a node that survived the
+        // interrupted purge with its binding intact costs one short-circuited
+        // RPC and no storage write.
+        await BoundedFanOut.RunAsync(leafIds.Count, ReseedFanOutWidth, async slot =>
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[slot]);
+            await leaf.SetTreeIdAsync(TreeId);
+            await leaf.SetShardIndexAsync(MyShardIndex);
+        });
+
+        await BoundedFanOut.RunAsync(internalIds.Count, ReseedFanOutWidth, slot =>
+            grainFactory.GetGrain<IBPlusInternalGrain>(internalIds[slot]).SetTreeIdAsync(TreeId));
+
+        if (truncated)
+        {
+            logger.LogWarning(
+                "Re-asserted node bindings on the first {NodeCount} nodes of shard {ShardIndex} of tree {TreeId} "
+                + "after an interrupted purge, but the shard has more than the {MaxReseedNodes}-node repair budget; "
+                + "keys routed to the nodes beyond it may still reject typed CRDT writes.",
+                leafIds.Count + internalIds.Count,
+                MyShardIndex,
+                TreeId,
+                MaxReseedNodes);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Re-asserted node bindings on {LeafCount} leaf and {InternalCount} internal node(s) of shard "
+                + "{ShardIndex} of tree {TreeId}: an earlier purge was interrupted after clearing node state but "
+                + "before clearing this shard root, leaving the recovered tree routing writes to unbound nodes.",
+                leafIds.Count,
+                internalIds.Count,
+                MyShardIndex,
+                TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Collects every node this shard still routes to, splitting them into
+    /// leaves and internal nodes, and returns whether the
+    /// <see cref="MaxReseedNodes"/> budget truncated the walk.
+    /// <para>
+    /// Descends through the internal nodes rather than following the leaf
+    /// sibling chain: the chain is exactly what an interrupted purge severs
+    /// (clearing a leaf wipes its sibling pointers), whereas an internal node
+    /// keeps its child ids until the purge reaches the internal sweep - which
+    /// only starts once every leaf has already been cleared. Descending
+    /// therefore reaches precisely the leaves routing can still deliver a write
+    /// to, which is the set that has to be bound for the tree to be writable.
+    /// </para>
+    /// </summary>
+    private async Task<bool> CollectBindingTargetsAsync(
+        bool rootIsLeafTyped,
+        List<GrainId> leafIds,
+        List<GrainId> internalIds)
+    {
+        var rootNodeId = state.State.RootNodeId!.Value;
+        if (rootIsLeafTyped)
+        {
+            leafIds.Add(rootNodeId);
+            return false;
+        }
+
+        var stack = new Stack<GrainId>();
+        stack.Push(rootNodeId);
+
+        while (stack.Count > 0)
+        {
+            if (leafIds.Count + internalIds.Count >= MaxReseedNodes)
+                return true;
+
+            var nodeId = stack.Pop();
+            internalIds.Add(nodeId);
+
+            var node = grainFactory.GetGrain<IBPlusInternalGrain>(nodeId);
+            // A node the purge already cleared reports no children, so the walk
+            // simply stops there: everything below it is unreachable by routing
+            // too, and re-binding an id nothing can route to buys nothing.
+            var childrenAreLeaves = await node.AreChildrenLeavesAsync();
+            var children = await node.GetChildIdsAsync();
+            if (childrenAreLeaves)
+            {
+                leafIds.AddRange(children);
+                continue;
+            }
+
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                stack.Push(children[i]);
+            }
+        }
+
+        return false;
     }
 }
