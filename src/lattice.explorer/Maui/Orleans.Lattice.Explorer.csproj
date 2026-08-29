@@ -70,6 +70,12 @@
     -->
     <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
     <!--
+      The Schema plugin is referenced but deliberately NOT registered (see
+      MauiProgram): the desktop head wires the schema services and renders no
+      Schema tab until it calls AddExplorerSchemaPlugin().
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <!--
       The Tenants plugin, likewise self-contained. It brings the shared tenancy
       seam transitively, so a head that surfaces tenant administration takes
       this one reference. Withholding it ships no Tenants area.

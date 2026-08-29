@@ -48,6 +48,13 @@
     -->
     <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
     <!--
+      The Schema plugin is referenced but deliberately NOT registered: that ships
+      its stylesheet and its registration extension with this head, so a consumer
+      opts the area in with a single services.AddExplorerSchemaPlugin() call and
+      no extra package reference, while the area stays absent by default.
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <!--
       The Tenants plugin, likewise self-contained. It brings the shared tenancy
       seam transitively, so a head that surfaces tenant administration takes
       this one reference. Withholding it ships no Tenants area.

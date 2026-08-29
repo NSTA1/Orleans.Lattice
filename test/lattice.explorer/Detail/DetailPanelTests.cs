@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Plugins.Selection;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;

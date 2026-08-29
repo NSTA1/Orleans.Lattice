@@ -1,0 +1,176 @@
+@*
+    The enforcement-policy concern: what a value written to this tree must
+    satisfy. Read first - the current policy, or a plain-words statement that the
+    tree has none - with the authoring form opening only on an explicit call to
+    action, so the destructive "replace the whole policy" path is never the
+    default state of the screen.
+
+    Every control is gated on the tree's own scoped decision (policy.manage), so
+    a caller who may read but not write sees the policy with the editing controls
+    disabled rather than hidden.
+*@
+
+<div class="lx-schema-grid is-narrow">
+    <div class="lx-schema-listcol">
+        <div class="lx-schema-listhead">
+            <h3 class="lx-schema-title">Current policy</h3>
+            @if (_view is { IsSuccess: true, Value: not null })
+            {
+                <button type="button" class="lx-schema-btn"
+                        disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                        @onclick="OpenEditor">Edit policy</button>
+            }
+        </div>
+        @if (_view is null)
+        {
+            <p class="lx-schema-empty">Select a tree to view its policy.</p>
+        }
+        else if (!_view.IsSuccess)
+        {
+            <p class="lx-schema-result @SchemaStatusStyles.For(_view.Status)" role="status">@_view.Message</p>
+        }
+        else if (_view.Value is null)
+        {
+            <div class="lx-schema-statuscard">
+                <p class="lx-schema-title">This tree has no schema policy</p>
+                <p class="lx-schema-sub">Every value is accepted. Add a policy to validate the shape of each value written to this tree.</p>
+                <div class="lx-schema-actions">
+                    <button type="button" class="lx-schema-btn lx-schema-btn-primary"
+                            disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                            @onclick="OpenEditor">Add a policy</button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <p class="lx-schema-sub">Strict ingest: @(_view.Value.StrictIngest ? "on" : "off")</p>
+            @if (_ruleRows.Count == 0)
+            {
+                <p class="lx-schema-empty">Policy present with no rules (every value accepted).</p>
+            }
+            else
+            {
+                <LatticeAdaptiveTable TItem="SchemaPolicyRuleRow"
+                                      Items="_ruleRows"
+                                      Columns="RuleColumns"
+                                      Label="Policy rules" />
+            }
+        }
+
+        @if (_view is { IsSuccess: true, Value: not null })
+        {
+            <SchemaComplianceSection Session="Session" PolicyRevision="_revision" />
+        }
+    </div>
+    @if (_editorOpen)
+    {
+        <div class="lx-schema-formcol">
+            <h3 class="lx-schema-title">Policy editor</h3>
+            <label class="lx-schema-check">
+                <input type="checkbox" checked="@_draftStrictIngest"
+                       disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                       @onchange="e => _draftStrictIngest = (bool)(e.Value ?? false)" />
+                <span>Strict ingest (dead-letter non-compliant ingested items)</span>
+            </label>
+
+            <h4 class="lx-schema-subtitle">Draft rules</h4>
+            @if (_draftRules.Count == 0)
+            {
+                <p class="lx-schema-empty">No draft rules. An empty policy accepts every value.</p>
+            }
+            else
+            {
+                <ul class="lx-schema-rulelist">
+                    @for (var i = 0; i < _draftRules.Count; i++)
+                    {
+                        var index = i;
+                        var label = _draftRuleLabels[i];
+                        <li>
+                            <button type="button" class="lx-schema-btn lx-schema-btn-icon lx-schema-danger"
+                                    title="Remove rule" aria-label="Remove rule"
+                                    disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                                    @onclick="@(() => RemoveDraftRule(index))">x</button>
+                            <span class="lx-schema-rulelabel">@label</span>
+                        </li>
+                    }
+                </ul>
+            }
+
+            <div class="lx-schema-ruleform">
+                <label class="lx-schema-field">
+                    <span>Rule kind</span>
+                    <select value="@_draftRuleKind" disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                            @onchange="e => { _draftRuleKind = Enum.Parse<SchemaRuleDraftKind>(e.Value?.ToString() ?? nameof(SchemaRuleDraftKind.Utf8)); _ruleBuilderDirty = true; }">
+                        @foreach (var kind in RuleKinds)
+                        {
+                            <option value="@kind">@kind</option>
+                        }
+                    </select>
+                </label>
+                @if (_draftRuleKind == SchemaRuleDraftKind.MaxLength)
+                {
+                    <label class="lx-schema-field">
+                        <span>Max byte length</span>
+                        <input type="number" min="0" value="@_draftRuleMaxLength"
+                               disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                               @oninput="e => { int.TryParse(e.Value?.ToString(), out _draftRuleMaxLength); _ruleBuilderDirty = true; }" />
+                    </label>
+                }
+                @if (_draftRuleKind == SchemaRuleDraftKind.Regex)
+                {
+                    <label class="lx-schema-field">
+                        <span>Pattern</span>
+                        <input type="text" value="@_draftRuleRegex"
+                               disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                               @oninput="e => { _draftRuleRegex = e.Value?.ToString() ?? string.Empty; _ruleBuilderDirty = true; }" placeholder="regex pattern" />
+                    </label>
+                    <label class="lx-schema-field">
+                        <span>Member path</span>
+                        <input type="text" value="@_draftRuleMemberPath"
+                               disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                               @oninput="e => { _draftRuleMemberPath = e.Value?.ToString() ?? string.Empty; _ruleBuilderDirty = true; }" placeholder="optional dotted path" />
+                    </label>
+                }
+                <label class="lx-schema-field">
+                    <span>Description</span>
+                    <input type="text" value="@_draftRuleDescription"
+                           disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                           @oninput="e => { _draftRuleDescription = e.Value?.ToString() ?? string.Empty; _ruleBuilderDirty = true; }" placeholder="optional" />
+                </label>
+                <button type="button" class="lx-schema-btn lx-schema-btn-primary"
+                        disabled="@(!Session.Can(SchemaCapability.ManagePolicy) || !CanAddDraftRule())"
+                        @onclick="AddDraftRule">Add rule</button>
+            </div>
+
+            <div class="lx-schema-actions">
+                <button type="button" class="lx-schema-btn"
+                        disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                        @onclick="SaveAsync">Save changes</button>
+                <button type="button" class="lx-schema-btn" disabled="@Session.IsBusy" @onclick="CancelEditor">Cancel</button>
+                @if (_view is { IsSuccess: true, Value: not null })
+                {
+                    <button type="button" class="lx-schema-btn lx-schema-danger"
+                            disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
+                            @onclick="ClearAsync">Clear policy</button>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@if (_showNoRulesDialog)
+{
+    <div class="lx-schema-modal-backdrop" role="presentation">
+        <div class="lx-schema-modal" role="alertdialog" aria-modal="true" aria-labelledby="lx-schema-norules-title">
+            <h3 id="lx-schema-norules-title">Add at least one rule</h3>
+            <p>
+                A policy must define at least one rule. An empty policy accepts
+                every value, which is the same as having no policy at all.
+                Configure a rule and choose 'Add rule', then save.
+            </p>
+            <div class="lx-schema-modal-actions">
+                <button type="button" class="lx-schema-btn lx-schema-btn-primary" @onclick="DismissNoRulesDialog">OK</button>
+            </div>
+        </div>
+    </div>
+}

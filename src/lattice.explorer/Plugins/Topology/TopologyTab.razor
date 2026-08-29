@@ -1,0 +1,100 @@
+@inherits SelectionPluginViewBase
+@inject ITopologySurface Surface
+@inject IJSRuntime JS
+
+@*
+    The tree-topology surface: a load-coloured radial graph of the selected
+    tree's shard roots and internal nodes. It reaches the cluster only through
+    ITopologySurface - the single domain contract this plugin declares.
+
+    The graph is an SVG with a viewBox, so it scales to whatever width it is
+    given, down to a phone, with no width media query of its own. The toolbar
+    wraps for the same reason (epic decision D7).
+*@
+
+<div class="explorer-topology">
+    <div class="explorer-topology-toolbar">
+        <button type="button"
+                class="explorer-btn explorer-topology-refresh"
+                disabled="@_loading"
+                @onclick="LoadAsync">
+            @(_loading ? "Loading..." : "Refresh")
+        </button>
+        <label class="explorer-topology-toggle">
+            <input type="checkbox" checked="@_showLeaves" @onchange="OnToggleLeaves" />
+            Show leaf nodes
+        </label>
+        @if (_canvasReady)
+        {
+            <button type="button" class="explorer-btn explorer-topology-reset" @onclick="ResetViewAsync">
+                Reset view
+            </button>
+            <span class="explorer-topology-hint">scroll to zoom, drag to pan</span>
+        }
+        @if (_truncated)
+        {
+            <span class="explorer-topology-trunc" title="Depth or node budget reached">truncated</span>
+        }
+        <div class="explorer-topology-legend" aria-hidden="true">
+            <span class="explorer-topology-legend-label">load</span>
+            @for (var b = 0; b < TopologyLayout.LoadBuckets; b++)
+            {
+                <span class="explorer-topo-swatch explorer-topo-load-@b"></span>
+            }
+        </div>
+    </div>
+
+    @if (_loading && _graph is null)
+    {
+        <div class="explorer-topology-state">Loading topology...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="explorer-topology-state explorer-topology-error">
+            <span>@_error</span>
+            <button type="button" class="explorer-btn-link" @onclick="LoadAsync">Try again</button>
+        </div>
+    }
+    else if (_graph is null || _graph.Nodes.Count == 0)
+    {
+        <div class="explorer-topology-state">No structure reported for this id.</div>
+    }
+    else
+    {
+        <div class="explorer-topology-canvas">
+            <svg @ref="_svg"
+                 class="explorer-topo-svg"
+                 viewBox="@_homeViewBox"
+                 preserveAspectRatio="xMidYMid meet"
+                 role="img" aria-label="Tree topology graph">
+                @foreach (var edge in _graph.Edges)
+                {
+                    var from = _points[edge.FromId];
+                    var to = _points[edge.ToId];
+                    <line class="explorer-topo-edge"
+                          x1="@F(from.X)" y1="@F(from.Y)"
+                          x2="@F(to.X)" y2="@F(to.Y)" />
+                }
+                @foreach (var node in _graph.Nodes)
+                {
+                    var p = _points[node.Node.NodeId];
+                    var expandable = node.Node.HasMoreChildren;
+                    <g class="explorer-topo-node @(expandable ? "is-expandable" : null) @(node.Node.SplitInProgress ? "is-splitting" : null)"
+                       transform="@($"translate({F(p.X)},{F(p.Y)})")"
+                       @onclick="@(() => OnNodeClickAsync(node.Node))">
+                        <title>@NodeTooltip(node)</title>
+                        <circle class="explorer-topo-dot explorer-topo-load-@node.LoadBucket" r="@F(RadialLayout.NodeRadius)" />
+                        @if (node.LeafBadge > 0)
+                        {
+                            @((MarkupString)$"<text class=\"explorer-topo-badge\" x=\"0\" y=\"4\">{node.LeafBadge}</text>")
+                        }
+                        @if (expandable)
+                        {
+                            @((MarkupString)$"<text class=\"explorer-topo-expand\" x=\"0\" y=\"{F(RadialLayout.NodeRadius + 12)}\">+</text>")
+                        }
+                    </g>
+                }
+            </svg>
+        </div>
+    }
+</div>

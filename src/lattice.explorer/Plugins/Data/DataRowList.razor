@@ -1,0 +1,94 @@
+@*
+    The page of keys. Rendered through the design system's adaptive table, so the
+    same column declaration is aligned columns at medium and expanded and a card
+    list at compact, with no media query here (epic decision D7).
+
+    The key cell is a button rather than a row click handler, so selection works
+    identically in both presentations and is reachable from the keyboard.
+*@
+<LatticeAdaptiveTable TItem="DataEntry"
+                      Items="Entries"
+                      Columns="_columns"
+                      KeySelector="_rowKey"
+                      Label="Entries"
+                      Class="explorer-data-keytable"
+                      EmptyText="No entries on this page." />
+
+@code {
+    private static readonly IReadOnlyList<DataEntry> NoEntries = Array.Empty<DataEntry>();
+
+    private static readonly Func<DataEntry, object> RowKeySelector = static entry => entry.Key;
+
+    private readonly Func<DataEntry, object> _rowKey = RowKeySelector;
+
+    private LatticeTableColumn<DataEntry>[] _columns = [];
+
+    /// <summary>The entries on the page in view.</summary>
+    [Parameter] public IReadOnlyList<DataEntry> Entries { get; set; } = NoEntries;
+
+    /// <summary>The key currently inspected, or <see langword="null"/>.</summary>
+    [Parameter] public string? SelectedKey { get; set; }
+
+    /// <summary>Invoked with the key the operator selected.</summary>
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnInitialized() =>
+        // Composed once per component rather than per render: the key cell
+        // captures `this`, so the set cannot be static, but it never varies.
+        _columns =
+        [
+            new()
+            {
+                Header = "Key",
+                IsPrimary = true,
+                IsNumericOrCode = true,
+                Cell = entry => builder =>
+                {
+                    builder.OpenElement(0, "button");
+                    builder.AddAttribute(1, "type", "button");
+                    builder.AddAttribute(
+                        2,
+                        "class",
+                        string.Equals(entry.Key, SelectedKey, StringComparison.Ordinal)
+                            ? "explorer-data-key is-selected"
+                            : "explorer-data-key");
+                    builder.AddAttribute(3, "title", entry.Key);
+                    builder.AddAttribute(
+                        4,
+                        "onclick",
+                        EventCallback.Factory.Create(this, () => OnSelect.InvokeAsync(entry.Key)));
+                    builder.AddContent(5, entry.Key);
+                    builder.CloseElement();
+                },
+            },
+            new()
+            {
+                Header = "Size",
+                IsNumericOrCode = true,
+                Cell = static entry => builder => builder.AddContent(0, entry.ValueLength.ToString("N0")),
+            },
+            new()
+            {
+                Header = "Flags",
+                Cell = static entry => builder =>
+                {
+                    if (entry.IsTombstone)
+                    {
+                        builder.OpenElement(0, "span");
+                        builder.AddAttribute(1, "class", "explorer-data-flag explorer-data-flag-tomb");
+                        builder.AddContent(2, "tomb");
+                        builder.CloseElement();
+                    }
+
+                    if (entry.CrdtShape is not null)
+                    {
+                        builder.OpenElement(3, "span");
+                        builder.AddAttribute(4, "class", "explorer-data-flag");
+                        builder.AddContent(5, entry.CrdtShape);
+                        builder.CloseElement();
+                    }
+                },
+            },
+        ];
+}

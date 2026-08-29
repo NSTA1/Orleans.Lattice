@@ -1,0 +1,176 @@
+/*
+  Orleans.Lattice Explorer - tree-topology plugin.
+
+  Every rule here is owned by this package, including the load-bucket palette:
+  the five --topo-load-* colours are the topology graph's alone, so they travel
+  with it rather than sitting in the shell's theme layer. They follow the same
+  data-theme hook the shell uses, so a light-theme head gets the light ramp.
+
+  The surface needs no width media query of its own. The graph is an SVG with a
+  viewBox, so it scales to whatever width the panel gives it, down to a phone,
+  and the toolbar wraps (epic decision D7 - the breakpoint layer is the only
+  place a width may be named).
+*/
+
+:root,
+:root[data-theme="dark"] {
+    --topo-load-0: #3b6ea5;
+    --topo-load-1: #3aa6a0;
+    --topo-load-2: #6fc05a;
+    --topo-load-3: #e0b341;
+    --topo-load-4: #e3603a;
+}
+
+:root[data-theme="light"] {
+    --topo-load-0: #5a86bd;
+    --topo-load-1: #2f9f97;
+    --topo-load-2: #5aa83f;
+    --topo-load-3: #c79420;
+    --topo-load-4: #cc4a28;
+}
+
+.explorer-topology {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    height: 100%;
+}
+
+.explorer-topology-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-6);
+    flex-wrap: wrap;
+}
+
+.explorer-topology-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+    font-size: var(--lx-text-small);
+    color: var(--lx-color-text-muted);
+    cursor: pointer;
+    min-height: var(--lx-target-min);
+}
+
+.explorer-topology-trunc {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-warning);
+}
+
+.explorer-topology-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+    margin-left: auto;
+}
+
+.explorer-topology-legend-label {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+    margin-right: var(--lx-space-1);
+}
+
+.explorer-topo-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: var(--lx-radius-sm);
+    display: inline-block;
+}
+
+.explorer-topo-load-0 { fill: var(--topo-load-0); background: var(--topo-load-0); }
+.explorer-topo-load-1 { fill: var(--topo-load-1); background: var(--topo-load-1); }
+.explorer-topo-load-2 { fill: var(--topo-load-2); background: var(--topo-load-2); }
+.explorer-topo-load-3 { fill: var(--topo-load-3); background: var(--topo-load-3); }
+.explorer-topo-load-4 { fill: var(--topo-load-4); background: var(--topo-load-4); }
+
+.explorer-topology-canvas {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface-sunken);
+}
+
+.explorer-topo-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    touch-action: none;
+}
+
+.explorer-topo-svg.is-panning {
+    cursor: grabbing;
+}
+
+.explorer-topology-reset {
+    padding: var(--lx-space-3) var(--lx-space-5);
+    font-size: var(--lx-text-caption);
+}
+
+.explorer-topology-hint {
+    font-size: var(--lx-text-micro);
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-topo-edge {
+    stroke: var(--lx-color-border-strong);
+    stroke-width: 1.5;
+}
+
+.explorer-topo-node {
+    cursor: default;
+}
+
+.explorer-topo-node.is-expandable {
+    cursor: pointer;
+}
+
+.explorer-topo-dot {
+    stroke: var(--lx-color-surface-sunken);
+    stroke-width: 2;
+}
+
+.explorer-topo-node.is-splitting .explorer-topo-dot {
+    stroke: var(--lx-color-warning);
+    stroke-width: 2.5;
+}
+
+.explorer-topo-node.is-expandable:hover .explorer-topo-dot {
+    stroke: var(--lx-color-accent);
+}
+
+.explorer-topo-badge {
+    fill: var(--lx-color-accent-contrast);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.explorer-topo-expand {
+    fill: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.explorer-topology-state {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-5);
+    padding: var(--lx-space-8);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-body);
+}
+
+.explorer-topology-error {
+    color: var(--lx-color-danger);
+}

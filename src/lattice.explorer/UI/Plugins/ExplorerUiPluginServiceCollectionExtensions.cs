@@ -5,20 +5,20 @@ using Orleans.Lattice.Explorer.Plugins;
 namespace Orleans.Lattice.Explorer.UI.Plugins;
 
 /// <summary>
-/// Registration helpers for the Explorer shell's plugin host: the two adapters
-/// the plugin contract deliberately cannot supply itself, one method per
-/// area plugin the shared UI ships, and the shared UI's own per-selection
-/// plugin set.
+/// Registration helpers for the Explorer shell's plugin host: the adapters the
+/// plugin contract deliberately cannot supply itself.
 /// <para>
-/// A head chooses its plugin set by which of these it calls. There is no
+/// A head chooses its plugin set by which registrations it calls. There is no
 /// per-area option flag and no shared registry to edit: withholding a plugin is
 /// simply not registering it.
 /// </para>
 /// <para>
 /// A plugin that lives in its own package registers itself from that package
-/// instead - <c>AddExplorerBackupsPlugin</c> ships with the Backups plugin and
-/// <c>AddExplorerAccessPlugin</c> with the Access plugin - so this type shrinks
-/// as each remaining area is converted.
+/// instead - <c>AddExplorerBackupsPlugin</c> ships with the Backups plugin,
+/// <c>AddExplorerAccessPlugin</c> with the Access plugin,
+/// <c>AddExplorerSchemaPlugin</c> with the Schema plugin, and each per-selection
+/// surface with its own - so this type now carries only what is genuinely
+/// shell-side.
 /// </para>
 /// </summary>
 public static class ExplorerUiPluginServiceCollectionExtensions
@@ -50,48 +50,5 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         services.TryAddScoped<IExplorerPluginPreferences, ExplorerPluginPreferences>();
 
         return services;
-    }
-
-    /// <summary>
-    /// Registers the Schema area plugin. The Schema feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// A head that does not call this ships no Schema tab at all, which is what
-    /// the retired per-area navigation flag was emulating.
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerSchemaPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<SchemaAreaPlugin>();
-    }
-
-    /// <summary>
-    /// Registers the Explorer's own per-selection plugins - the metrics,
-    /// topology, data and dead-letter surfaces a tree or view resolves to, and
-    /// the tag-index browser a tag-index selection resolves to.
-    /// <para>
-    /// These occupy the <see cref="ExplorerPluginSurface.Selection"/> surface, so
-    /// they are enumerated, ordered and gated by exactly the machinery that
-    /// serves the area tier. A head that wants a subset registers the individual
-    /// plugin types through
-    /// <see cref="ExplorerPluginServiceCollectionExtensions.AddExplorerPlugin{TPlugin}"/>
-    /// instead of calling this; withholding one renders no tab for it, and adds
-    /// no other coupling to remove.
-    /// </para>
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerSelectionPlugins(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-
-        services.AddExplorerPluginAdapters();
-        services.AddExplorerPlugin<MetricsSelectionPlugin>();
-        services.AddExplorerPlugin<TopologySelectionPlugin>();
-        services.AddExplorerPlugin<DataSelectionPlugin>();
-        services.AddExplorerPlugin<DeadLetterSelectionPlugin>();
-        return services.AddExplorerPlugin<TagIndexSelectionPlugin>();
     }
 }

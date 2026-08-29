@@ -1,0 +1,327 @@
+/*
+  Orleans.Lattice Explorer - per-key revision-timeline plugin.
+
+  Every rule here is owned by this package and prefixed with the surface it
+  belongs to, written against the design-system token layer.
+
+  The timeline is a single column of rows whose heads wrap, so it is legible at
+  every width without a media query of its own. The two rules that would
+  otherwise crowd a phone - the origin and the replica id pushed to the trailing
+  edge with `margin-left: auto` - drop that push when the row head wraps, which
+  it does by flow rather than by breakpoint (epic decision D7).
+*/
+
+.explorer-history {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+    padding: var(--lx-space-6);
+    gap: var(--lx-space-5);
+}
+
+.explorer-history-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    flex-wrap: wrap;
+}
+
+.explorer-history-order {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    min-height: var(--lx-target-min);
+}
+
+.explorer-history-head {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    flex-wrap: wrap;
+}
+
+.explorer-history-key {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    color: var(--lx-color-text);
+    word-break: break-all;
+}
+
+.explorer-history-badge {
+    display: inline-block;
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    padding: var(--lx-space-1) var(--lx-space-3);
+}
+
+.explorer-history-badge-retention {
+    color: var(--lx-color-accent);
+    border-color: var(--lx-color-accent);
+}
+
+.explorer-history-badge-bound {
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-history-banner {
+    font-size: var(--lx-text-caption);
+    padding: var(--lx-space-3) var(--lx-space-4);
+    border-radius: var(--lx-radius-sm);
+}
+
+.explorer-history-banner-truncated {
+    color: var(--lx-color-warning);
+    background: var(--lx-color-surface-raised);
+    border: 1px solid var(--lx-color-warning);
+}
+
+.explorer-history-hint {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-history-timeline {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+}
+
+.explorer-history-divider {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-warning);
+    text-align: center;
+    padding: var(--lx-space-1) 0;
+    border-top: 1px dashed var(--lx-color-warning);
+    border-bottom: 1px dashed var(--lx-color-warning);
+}
+
+.explorer-history-row {
+    border: 1px solid var(--lx-color-border);
+    border-left: 3px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    padding: var(--lx-space-4);
+    background: var(--lx-color-surface);
+}
+
+.explorer-history-row-set { border-left-color: var(--lx-color-accent); }
+.explorer-history-row-crdt { border-left-color: var(--lx-color-success); }
+.explorer-history-row-delete,
+.explorer-history-row-range { border-left-color: var(--lx-color-danger); }
+
+.explorer-history-rowhead {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    margin-bottom: var(--lx-space-3);
+}
+
+.explorer-history-kind {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    padding: 0 var(--lx-space-3);
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-history-kind-set { color: var(--lx-color-accent); border-color: var(--lx-color-accent); }
+.explorer-history-kind-crdt { color: var(--lx-color-success); border-color: var(--lx-color-success); }
+.explorer-history-kind-delete,
+.explorer-history-kind-range { color: var(--lx-color-danger); border-color: var(--lx-color-danger-border); }
+
+.explorer-history-time {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text);
+}
+
+.explorer-history-origin {
+    font-size: var(--lx-text-micro);
+    color: var(--lx-color-text-muted);
+    margin-left: auto;
+    font-family: var(--lx-font-mono);
+}
+
+.explorer-history-value,
+.explorer-history-diff {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-caption);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    padding: var(--lx-space-3) var(--lx-space-4);
+    background: var(--lx-color-canvas);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+}
+
+.explorer-history-diff-added { color: var(--lx-color-success); display: block; }
+.explorer-history-diff-removed { color: var(--lx-color-danger); display: block; }
+.explorer-history-diff-unchanged { color: var(--lx-color-text-dim); display: block; }
+
+.explorer-history-note {
+    font-size: var(--lx-text-micro);
+    color: var(--lx-color-warning);
+    margin: var(--lx-space-3) 0 0;
+}
+
+.explorer-history-metaonly {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    margin: 0 0 var(--lx-space-3);
+}
+
+.explorer-history-meta {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--lx-space-1) var(--lx-space-4);
+    font-size: var(--lx-text-caption);
+}
+
+.explorer-history-meta dt {
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-history-meta dd {
+    margin: 0;
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-text);
+    word-break: break-all;
+}
+
+.explorer-history-members {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+}
+
+.explorer-history-member {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    font-size: var(--lx-text-caption);
+}
+
+.explorer-history-member-kind {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    min-width: 4rem;
+}
+
+.explorer-history-member-added .explorer-history-member-kind { color: var(--lx-color-success); }
+.explorer-history-member-removed .explorer-history-member-kind { color: var(--lx-color-danger); }
+
+.explorer-history-member-element {
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-text);
+    word-break: break-all;
+}
+
+.explorer-history-member-replica {
+    color: var(--lx-color-text-muted);
+    margin-left: auto;
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+}
+
+.explorer-history-more {
+    display: flex;
+    justify-content: center;
+    padding: var(--lx-space-3) 0;
+}
+
+.explorer-history-state {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+    padding: var(--lx-space-6) 0;
+}
+
+.explorer-history-error {
+    color: var(--lx-color-danger);
+}
+
+.explorer-history-live {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-history-live-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: var(--lx-radius-pill);
+    flex: 0 0 auto;
+}
+
+.explorer-history-live-dot-on {
+    background: var(--lx-color-success);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--lx-color-success) 25%, transparent);
+}
+
+.explorer-history-live-dot-warn {
+    background: var(--lx-color-warning);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--lx-color-warning) 25%, transparent);
+}
+
+.explorer-history-live-dot-down {
+    background: var(--lx-color-danger);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--lx-color-danger) 25%, transparent);
+}
+
+.explorer-history-live-label {
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-text);
+}
+
+.explorer-history-live-note {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-dim);
+    cursor: help;
+}
+
+.explorer-history-row-live {
+    border-left-style: dashed;
+    border-left-color: var(--lx-color-success);
+    background: color-mix(in srgb, var(--lx-color-surface) 92%, var(--lx-color-success) 8%);
+}
+
+.explorer-history-live-tag {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-success);
+    border: 1px solid var(--lx-color-success);
+    border-radius: var(--lx-radius-sm);
+    padding: 0 var(--lx-space-2);
+}
+
+.explorer-history-livetail {
+    color: var(--lx-color-text-dim);
+    font-style: italic;
+}

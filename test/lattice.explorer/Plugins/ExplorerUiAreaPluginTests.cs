@@ -6,18 +6,18 @@ using Orleans.Lattice.Explorer.Backup.Components;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Schema.Components;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Access.Views;
 using Orleans.Lattice.Explorer.UI.Plugins;
-using Orleans.Lattice.Explorer.UI.Schema;
 
 namespace Orleans.Lattice.Explorer.Tests.Plugins;
 
 /// <summary>
-/// The three area plugins the Explorer ships - Backups and Access from their own
-/// plugin packages, Schema still from the shared UI - and the registration
-/// surface a head uses to choose which of them it surfaces. Withholding an area
-/// is registering nothing, which is what the retired per-area navigation flag
-/// was emulating.
+/// The three area plugins the Explorer ships - Backups, Access and Schema, each
+/// from its own plugin package now - and the registration surface a head uses to
+/// choose which of them it surfaces. Withholding an area is registering nothing,
+/// which is what the retired per-area navigation flag was emulating.
 /// </summary>
 [TestFixture]
 public sealed class ExplorerUiAreaPluginTests
@@ -98,17 +98,22 @@ public sealed class ExplorerUiAreaPluginTests
     }
 
     [Test]
-    public void Only_the_unconverted_area_plugins_still_lack_a_domain_contract()
+    public void Every_area_plugin_now_declares_its_controlled_domain_contract()
     {
-        // Schema still resolves its own feature services from the shared UI
-        // project, so the controlled domain-model seam lands with its conversion.
-        // Backups and Access have been converted and each declares one.
-        var plugins = new IExplorerPlugin[]
-        {
-            new SchemaAreaPlugin(Substitute.For<ISchemaAdminCapabilityService>()),
-        };
+        // All three areas are converted, so each one's reach is a compile-time
+        // fact: the host resolves exactly the declared contract for it and
+        // nothing else. The contract is supplied by IExplorerPlugin<TDomain>, so
+        // it reads through the interface rather than off the concrete type.
+        IExplorerPlugin backups = new BackupsAreaPlugin(Substitute.For<IBackupCapabilityService>());
+        IExplorerPlugin access = new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>());
+        IExplorerPlugin schema = new SchemaAreaPlugin(Substitute.For<ISchemaAdminCapabilityService>());
 
-        Assert.That(plugins.Select(p => p.DomainContract), Has.All.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(backups.DomainContract, Is.Not.Null);
+            Assert.That(access.DomainContract, Is.EqualTo(typeof(IAccessDomain)));
+            Assert.That(schema.DomainContract, Is.EqualTo(typeof(ISchemaPluginDomain)));
+        });
     }
 
     [Test]
