@@ -116,6 +116,24 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
     }
 
     [Test]
+    public void NextPeriod_does_not_clamp_prematurely_at_the_floored_boundary()
+    {
+        // Regression: the backoff compared interval.Ticks against the floored
+        // ceiling.Ticks / multiplier. With ceiling 750 ticks and multiplier 8,
+        // floor(750 / 8) == 93, so an interval of 93 ticks satisfied a '>='
+        // comparison and clamped straight to 750, even though 93 * 8 == 744 is
+        // still below the ceiling. The effective period must be the exact doubled
+        // value in that case, not the ceiling.
+        var options = new LatticeTenantRateLimiterOptions { MaxLeaseBackoff = TimeSpan.FromTicks(750) };
+        var (service, _, _) = Build(Options(options));
+
+        // consecutiveFailures 3 -> multiplier 1 << 3 == 8.
+        Assert.That(
+            service.NextPeriod(TimeSpan.FromTicks(93), 3),
+            Is.EqualTo(TimeSpan.FromTicks(744)));
+    }
+
+    [Test]
     public void NextPeriod_clamps_to_the_configured_ceiling()
     {
         var options = new LatticeTenantRateLimiterOptions { MaxLeaseBackoff = TimeSpan.FromMinutes(5) };
