@@ -1,0 +1,53 @@
+@*
+    The shared card a per-selection surface renders when the selection is a
+    change-history view: its rows are serialized history records that back the
+    revision timeline rather than directly inspectable value data, so every
+    surface routes the operator to the source table with one consistent message
+    and one consistent action.
+
+    It lives in the kernel because two independent plugin packages render it
+    (the value drill-down and the live-metrics surfaces) and neither may
+    reference the other. Navigation is a callback rather than an injected
+    selection service, so the card itself reaches nothing.
+*@
+<div class="lx-selection-guidance">
+    <p class="lx-selection-guidance-title">This is a change-history view.</p>
+    <p class="lx-selection-guidance-body">
+        Its rows are serialized history records that back the
+        <strong>History</strong> timeline, not directly inspectable value
+        data. Inspect its timeline from its source table
+        @if (Selection.SourceTreeId is { Length: > 0 } named)
+        {
+            <code>@named</code>
+        }
+        else
+        {
+            <span>(unknown)</span>
+        }:
+        select the source table, open a key in its <strong>Data</strong>
+        surface, then choose <strong>History</strong>.
+    </p>
+    @if (Selection.SourceTreeId is { Length: > 0 } sourceTreeId)
+    {
+        <button type="button"
+                class="explorer-btn lx-selection-guidance-action"
+                @onclick="@(() => OnGoToSourceTree.InvokeAsync(sourceTreeId))">
+            Go to source table @sourceTreeId
+        </button>
+    }
+</div>
+
+@code {
+    /// <summary>The selected change-history view this guidance describes.</summary>
+    [Parameter]
+    [EditorRequired]
+    public CatalogItem Selection { get; set; } = default!;
+
+    /// <summary>
+    /// Invoked with the source tree id when the operator asks to go there. The
+    /// hosting surface performs the navigation through its own declared domain
+    /// contract, so this card needs no selection service of its own.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnGoToSourceTree { get; set; }
+}

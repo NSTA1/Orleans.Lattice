@@ -40,6 +40,13 @@
   <Project Path="src/lattice.explorer/DesignSystem/Orleans.Lattice.Explorer.DesignSystem.csproj" />
   <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/Selection/Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/Metrics/Orleans.Lattice.Explorer.Plugins.Metrics.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/Topology/Orleans.Lattice.Explorer.Plugins.Topology.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/Data/Orleans.Lattice.Explorer.Plugins.Data.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/History/Orleans.Lattice.Explorer.Plugins.History.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/DeadLetter/Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj" />
+      <Project Path="src/lattice.explorer/Plugins/TagIndex/Orleans.Lattice.Explorer.Plugins.TagIndex.csproj" />
   <Project Path="src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj" />
   <Project Path="src/lattice.explorer/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />

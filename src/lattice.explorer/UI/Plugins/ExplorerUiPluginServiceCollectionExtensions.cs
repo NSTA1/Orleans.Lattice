@@ -1,6 +1,13 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Plugins.Data;
+using Orleans.Lattice.Explorer.Plugins.DeadLetter;
+using Orleans.Lattice.Explorer.Plugins.History;
+using Orleans.Lattice.Explorer.Plugins.Metrics;
+using Orleans.Lattice.Explorer.Plugins.Selection;
+using Orleans.Lattice.Explorer.Plugins.TagIndex;
+using Orleans.Lattice.Explorer.Plugins.Topology;
 
 namespace Orleans.Lattice.Explorer.UI.Plugins;
 
@@ -33,6 +40,10 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddExplorerPluginHost();
+
+        // The per-selection kernel, so the detail tier's nested-surface registry
+        // resolves even on a head that registers no selection plugin at all.
+        services.AddExplorerSelectionPluginHost();
 
         // Registered concretely as well as behind the contract: the adapter owns
         // the deterministic tenant-scope refresh the shell drives alongside the
@@ -88,17 +99,18 @@ public static class ExplorerUiPluginServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the Explorer's own per-selection plugins - the metrics,
-    /// topology, data and dead-letter surfaces a tree or view resolves to, and
-    /// the tag-index browser a tag-index selection resolves to.
+    /// Registers the Explorer's own per-selection surfaces - the metrics,
+    /// topology, data and dead-letter surfaces a tree or view resolves to, the
+    /// tag-index browser a tag-index selection resolves to, and the per-key
+    /// revision timeline the data surface renders inline behind a row's History
+    /// button.
     /// <para>
-    /// These occupy the <see cref="ExplorerPluginSurface.Selection"/> surface, so
-    /// they are enumerated, ordered and gated by exactly the machinery that
-    /// serves the area tier. A head that wants a subset registers the individual
-    /// plugin types through
-    /// <see cref="ExplorerPluginServiceCollectionExtensions.AddExplorerPlugin{TPlugin}"/>
-    /// instead of calling this; withholding one renders no tab for it, and adds
-    /// no other coupling to remove.
+    /// Each is an independent package with its own view, its own scoped
+    /// stylesheet and its own controlled domain contract, and each ships its own
+    /// <c>AddExplorer*</c> method. This is the one-call composite for a head that
+    /// wants the whole tier; a head that wants a subset calls the individual
+    /// methods instead, and withholding one renders no tab for it (or, for the
+    /// timeline, no History button) and adds no other coupling to remove.
     /// </para>
     /// </summary>
     /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
@@ -108,10 +120,11 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddExplorerPluginAdapters();
-        services.AddExplorerPlugin<MetricsSelectionPlugin>();
-        services.AddExplorerPlugin<TopologySelectionPlugin>();
-        services.AddExplorerPlugin<DataSelectionPlugin>();
-        services.AddExplorerPlugin<DeadLetterSelectionPlugin>();
-        return services.AddExplorerPlugin<TagIndexSelectionPlugin>();
+        services.AddExplorerMetricsPlugin();
+        services.AddExplorerTopologyPlugin();
+        services.AddExplorerDataPlugin();
+        services.AddExplorerHistorySurface();
+        services.AddExplorerDeadLetterPlugin();
+        return services.AddExplorerTagIndexPlugin();
     }
 }
