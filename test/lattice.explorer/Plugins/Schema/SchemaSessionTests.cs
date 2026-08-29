@@ -140,4 +140,26 @@ public sealed class SchemaSessionTests
             Assert.That(session.LastResult.Message, Is.EqualTo("not permitted"));
         });
     }
+
+    [Test]
+    public void A_dead_letter_page_carries_the_tree_it_was_read_for()
+    {
+        var view = new SchemaDeadLetterView { Status = SchemaOperationStatus.Succeeded, Count = 3 };
+        var session = new SchemaSession(new FakeSchemaPluginDomain())
+        {
+            DeadLetters = new SchemaDeadLetterPage("orders", view),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(session.DeadLetters!.TreeId, Is.EqualTo("orders"));
+            Assert.That(session.DeadLetters.View, Is.SameAs(view));
+        });
+    }
+
+    [Test]
+    public void A_fresh_session_holds_no_dead_letter_page()
+    {
+        Assert.That(new SchemaSession(new FakeSchemaPluginDomain()).DeadLetters, Is.Null);
+    }
 }

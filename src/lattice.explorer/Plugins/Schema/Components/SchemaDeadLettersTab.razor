@@ -19,19 +19,19 @@
                 @onclick="LoadAsync">Load dead letters</button>
     </div>
     <div class="lx-schema-formcol">
-        @if (_view is null)
+        @if (View is not { } view)
         {
             <p class="lx-schema-empty">Select a tree, then load its dead letters.</p>
         }
-        else if (!_view.IsSuccess)
+        else if (!view.IsSuccess)
         {
-            <p class="lx-schema-result @SchemaStatusStyles.For(_view.Status)" role="status">@_view.Message</p>
+            <p class="lx-schema-result @SchemaStatusStyles.For(view.Status)" role="status">@view.Message</p>
         }
         else
         {
-            <p class="lx-schema-sub">Total: @_view.Count (showing @_view.Entries.Count)</p>
+            <p class="lx-schema-sub">Total: @view.Count (showing @view.Entries.Count)</p>
             <LatticeAdaptiveTable TItem="LatticeSchemaDeadLetterEntry"
-                                  Items="_view.Entries"
+                                  Items="view.Entries"
                                   Columns="EntryColumns"
                                   Label="Dead letters"
                                   EmptyText="No dead letters." />

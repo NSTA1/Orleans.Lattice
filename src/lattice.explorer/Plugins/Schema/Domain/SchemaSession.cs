@@ -53,6 +53,20 @@ public sealed class SchemaSession(ISchemaPluginDomain domain)
     public SchemaOperationResult? LastResult { get; set; }
 
     /// <summary>
+    /// The dead-letter page most recently loaded, or <see langword="null"/> when
+    /// none has been.
+    /// <para>
+    /// It lives on the session rather than inside the dead-letter component
+    /// because that component unmounts whenever the operator visits another
+    /// concern, and the queue is loaded on an explicit action: discarding it on a
+    /// tab round trip would make the operator re-run a read nothing had
+    /// invalidated. The page carries the tree it was read for, so it is shown
+    /// only while that tree is still selected.
+    /// </para>
+    /// </summary>
+    public SchemaDeadLetterPage? DeadLetters { get; set; }
+
+    /// <summary>
     /// <see langword="true"/> when a tree is selected and its scoped grants have
     /// been probed, which is the point at which the area has something to show.
     /// </summary>

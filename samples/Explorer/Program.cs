@@ -10,6 +10,7 @@ using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Explorer.Plugins.Schema;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Membership.Entra;
@@ -287,17 +288,20 @@ builder.Services.AddLatticeSchemaApiGrpc(o =>
 builder.Services.AddLatticeExplorerWeb(o =>
 {
     o.ConfigFilePath = sampleConfigPath;
-
-    // The Schema area is withheld from the Explorer's default UI for the initial
-    // release, so this sample hides it too - matching the shipped experience. A
-    // developer working on the area can bring it back for a run by setting
-    // LATTICE_EXPLORER_ENABLE_SCHEMA=true, with no code change.
-    o.EnableSchemaArea =
-        string.Equals(
-            Environment.GetEnvironmentVariable("LATTICE_EXPLORER_ENABLE_SCHEMA"),
-            "true",
-            StringComparison.OrdinalIgnoreCase);
 });
+
+// The Schema area is withheld from the Explorer's default UI for the initial
+// release, so this sample hides it too - matching the shipped experience.
+// Withholding it is simply not registering its plugin; there is no per-area
+// option flag. A developer working on the area can bring it back for a run by
+// setting LATTICE_EXPLORER_ENABLE_SCHEMA=true, with no code change.
+if (string.Equals(
+        Environment.GetEnvironmentVariable("LATTICE_EXPLORER_ENABLE_SCHEMA"),
+        "true",
+        StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddExplorerSchemaPlugin();
+}
 
 var app = builder.Build();
 

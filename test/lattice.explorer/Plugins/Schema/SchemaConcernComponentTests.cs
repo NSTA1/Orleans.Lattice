@@ -322,8 +322,66 @@ public sealed class SchemaConcernComponentTests
                 harness.Domain.LastDeadLetterPageSize,
                 Is.GreaterThan(0),
                 "a large queue must never pull an unbounded page across the circuit");
+            Assert.That(session.DeadLetters!.TreeId, Is.EqualTo("orders"));
         });
     }
+
+    [Test]
+    public async Task A_loaded_dead_letter_page_survives_a_visit_to_another_concern()
+    {
+        using var harness = SchemaComponentHarness.Create();
+        harness.Domain.Capabilities = new SchemaCapabilitySnapshot { CanViewDeadLetters = true };
+        var session = await harness.SessionAsync("orders");
+
+        var first = await harness.RenderAsync<SchemaDeadLettersTab>((nameof(SchemaDeadLettersTab.Session), session));
+        await harness.Renderer.ClickAsync(
+            harness.Renderer.Buttons(first).Single(b => b.Text == "Load dead letters").ClickHandlerId);
+
+        // Leaving the tab unmounts the component; coming back mounts a fresh one.
+        var second = await harness.RenderAsync<SchemaDeadLettersTab>((nameof(SchemaDeadLettersTab.Session), session));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                harness.Domain.DeadLetterReadCount,
+                Is.EqualTo(1),
+                "nothing invalidated the page, so returning to the tab must not re-run the read");
+            Assert.That(
+                RendersThePage(harness, second),
+                Is.True,
+                "the page the operator explicitly loaded is still in view");
+        });
+    }
+
+    [Test]
+    public async Task A_dead_letter_page_is_never_shown_under_a_different_tree()
+    {
+        using var harness = SchemaComponentHarness.Create();
+        harness.Domain.Capabilities = new SchemaCapabilitySnapshot { CanViewDeadLetters = true };
+        var session = await harness.SessionAsync("orders");
+        var loaded = await harness.RenderAsync<SchemaDeadLettersTab>((nameof(SchemaDeadLettersTab.Session), session));
+        await harness.Renderer.ClickAsync(
+            harness.Renderer.Buttons(loaded).Single(b => b.Text == "Load dead letters").ClickHandlerId);
+
+        session.TreeId = "invoices";
+        session.Grants = await harness.Domain.ProbeTreeAsync("invoices");
+        var switched = await harness.RenderAsync<SchemaDeadLettersTab>(
+            (nameof(SchemaDeadLettersTab.Session), session));
+
+        Assert.That(
+            RendersThePage(harness, switched),
+            Is.False,
+            "one tree's dead letters must never render under another tree's heading");
+    }
+
+    /// <summary>
+    /// Whether the dead-letter tab is currently rendering a loaded page, which it
+    /// does by handing the entries to the design system's adaptive table.
+    /// </summary>
+    private static bool RendersThePage(SchemaComponentHarness harness, int componentId) =>
+        harness.Renderer
+            .ChildComponents(componentId)
+            .Any(child => child.GetType().Name.StartsWith("LatticeAdaptiveTable", StringComparison.Ordinal));
 
     private static SchemaTreeCatalog Catalog(params string[] ids) =>
         SchemaTreeCatalog.Succeeded(ids.Select(id => new SchemaTreeSummary(id, id, null, null)).ToArray());

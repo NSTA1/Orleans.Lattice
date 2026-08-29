@@ -60,29 +60,21 @@ public partial class SchemaDeadLettersTab : ComponentBase
         },
     ];
 
-    private SchemaDeadLetterView? _view;
-    private string? _boundTreeId;
-
     /// <summary>The area's shared state. Must not be <see langword="null"/>.</summary>
     [Parameter]
     [EditorRequired]
     public SchemaSession Session { get; set; } = default!;
 
-    /// <inheritdoc />
-    protected override void OnParametersSet()
-    {
-        // The queue loads on an explicit action, so switching trees discards the
-        // previous tree's page rather than reloading - but it must never leave
-        // one tree's dead letters displayed under another tree's heading.
-        var treeId = Session.Grants.TreeId;
-        if (string.Equals(_boundTreeId, treeId, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _boundTreeId = treeId;
-        _view = null;
-    }
+    /// <summary>
+    /// The page currently in view: the session's loaded page while it still
+    /// belongs to the selected tree, otherwise nothing. Reading it through the
+    /// session is what lets an explicitly loaded queue survive a visit to another
+    /// concern, which unmounts this component.
+    /// </summary>
+    private SchemaDeadLetterView? View =>
+        Session.DeadLetters is { } page && string.Equals(page.TreeId, Session.TreeId, StringComparison.Ordinal)
+            ? page.View
+            : null;
 
     private Task LoadAsync()
     {
@@ -92,6 +84,9 @@ public partial class SchemaDeadLettersTab : ComponentBase
         }
 
         Session.LastResult = null;
-        return Session.RunAsync(async () => _view = await Session.Domain.ListDeadLettersAsync(treeId, PageSize));
+        return Session.RunAsync(async () =>
+            Session.DeadLetters = new SchemaDeadLetterPage(
+                treeId,
+                await Session.Domain.ListDeadLettersAsync(treeId, PageSize)));
     }
 }
