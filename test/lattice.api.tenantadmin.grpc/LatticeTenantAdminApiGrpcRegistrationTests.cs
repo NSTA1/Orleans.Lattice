@@ -328,7 +328,7 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.AddedMethods, Is.EqualTo(12));
+            Assert.That(binder.AddedMethods, Is.EqualTo(15));
             Assert.That(binder.BoundHandlers, Is.Zero,
                 "the startup metadata pass binds no handler instance");
         });
@@ -347,15 +347,16 @@ public sealed class LatticeTenantAdminApiGrpcRegistrationTests
             new NullCredentialBridge(),
             new FixedAuthSchemeSource(new AuthSchemeAdvertisement()),
             Options.Create(new LatticeTenantAdminApiGrpcOptions()), NullLogger<LatticeTenantAdminGrpcService>.Instance,
-            new FakeTenantRegionAdmin());
+            new FakeTenantRegionAdmin(),
+            new FakeTenantAccessAdmin());
         var binder = new CountingServiceBinder();
 
         LatticeTenantAdminGrpcServiceBase.BindService(binder, service);
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.AddedMethods, Is.EqualTo(12));
-            Assert.That(binder.BoundHandlers, Is.EqualTo(12));
+            Assert.That(binder.AddedMethods, Is.EqualTo(15));
+            Assert.That(binder.BoundHandlers, Is.EqualTo(15));
         });
     }
 

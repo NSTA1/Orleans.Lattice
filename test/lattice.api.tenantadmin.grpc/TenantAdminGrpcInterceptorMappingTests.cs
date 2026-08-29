@@ -34,6 +34,59 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
             Assert.That((int)LatticeTenantAdminApiOperation.AuthorizeAllowedRegions, Is.EqualTo(6));
             Assert.That((int)LatticeTenantAdminApiOperation.SetTenantResidency, Is.EqualTo(7));
             Assert.That((int)LatticeTenantAdminApiOperation.GetTenantRegionStatus, Is.EqualTo(8));
+            Assert.That((int)LatticeTenantAdminApiOperation.ListTenantAdminSubjects, Is.EqualTo(9));
+            Assert.That((int)LatticeTenantAdminApiOperation.AddTenantAdminSubject, Is.EqualTo(10));
+            Assert.That((int)LatticeTenantAdminApiOperation.RemoveTenantAdminSubject, Is.EqualTo(11));
+        });
+    }
+
+    [Test]
+    public void DescribeCall_maps_each_admin_subject_rpc_and_decodes_the_target_tenant()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.ListTenantAdminSubjectsMethodName),
+                new TenantAdminTenantRequest { TenantId = "acme" }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.ListTenantAdminSubjects, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.AddTenantAdminSubjectMethodName),
+                new TenantAdminSubjectRequest { TenantId = "acme", SubjectId = "carol@example.com" }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.AddTenantAdminSubject, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.RemoveTenantAdminSubjectMethodName),
+                new TenantAdminSubjectRequest { TenantId = "acme", SubjectId = "carol@example.com" }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.RemoveTenantAdminSubject, "acme")));
+        });
+    }
+
+    [Test]
+    public void No_admin_subject_rpc_is_exempt_from_authorization()
+    {
+        // Admin-subject management is tenant-tier at the facade, but it stays behind
+        // the transport interceptor exactly as the region-residency RPCs do: the
+        // exemption lists cover only auth-scheme discovery and read-only
+        // self-service.
+        Assert.Multiple(() =>
+        {
+            foreach (var method in new[]
+            {
+                LatticeTenantAdminGrpcMethods.ListTenantAdminSubjectsMethodName,
+                LatticeTenantAdminGrpcMethods.AddTenantAdminSubjectMethodName,
+                LatticeTenantAdminGrpcMethods.RemoveTenantAdminSubjectMethodName,
+            })
+            {
+                Assert.That(
+                    LatticeTenantAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(Method(method)),
+                    Is.False,
+                    $"{method} must not be unauthenticated.");
+                Assert.That(
+                    LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(Method(method)),
+                    Is.False,
+                    $"{method} must not be self-service-exempt.");
+            }
         });
     }
 

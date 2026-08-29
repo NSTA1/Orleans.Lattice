@@ -5,8 +5,9 @@ using Orleans.Lattice.Tenancy;
 namespace Orleans.Lattice.Api.TenantAdmin;
 
 /// <summary>
-/// The fail-closed authorization seam for the per-tenant region-residency control
-/// facade. It enforces the spec's two authorization tiers using only the
+/// The fail-closed authorization seam for the <b>tenant-tier</b> control facades -
+/// per-tenant region residency and tenant access (admin-subject) administration.
+/// It enforces the spec's two authorization tiers using only the
 /// integrated access-gate and tenant-registry primitives, and is <b>independent of
 /// the data-plane default effect</b>: an unmatched request always resolves to
 /// deny, even under <c>LatticeAuthOptions.DefaultEffect = Allow</c>.
@@ -100,9 +101,43 @@ public sealed class TenantRegionResidencyAuthorizer
     /// <returns>The authorized tenant's current record.</returns>
     /// <exception cref="TenantNotFoundException">The caller is a platform operator but no tenant with that id is registered.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is neither a platform operator nor a tenant admin (a non-existent tenant is reported as a denial, never a not-found, to a non-operator caller).</exception>
+    public ValueTask<TenantRecord> AuthorizeTenantAdminAsync(
+        TenantId tenant, CancellationToken cancellationToken = default) =>
+        AuthorizeTenantAdminAsync(tenant, RegionResidencyAction, cancellationToken);
+
+    /// <summary>
+    /// The default action description used by the region-residency overload, so the
+    /// denial message names the surface the caller was refused on.
+    /// </summary>
+    private const string RegionResidencyAction = "region residency";
+
+    /// <summary>
+    /// Authorizes a <b>tenant-admin-tier</b> action on <paramref name="tenant"/>,
+    /// naming <paramref name="action"/> in the denial message so each tenant-tier
+    /// surface reports the authority it actually required, and returns the tenant's
+    /// current record so the facade reuses this single read. Identical in every
+    /// other respect to
+    /// <see cref="AuthorizeTenantAdminAsync(TenantId, CancellationToken)"/>: the
+    /// caller is authorized when it is a platform operator or a live admin subject
+    /// on the tenant record, fail-closed and independent of the data-plane default
+    /// effect.
+    /// </summary>
+    /// <param name="tenant">The tenant the action targets.</param>
+    /// <param name="action">
+    /// A short description of the tenant-scoped surface being administered (for
+    /// example <c>"region residency"</c> or <c>"admin subjects"</c>), interpolated
+    /// into the denial message. Must not be <c>null</c>.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>The authorized tenant's current record.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="action"/> is <c>null</c>.</exception>
+    /// <exception cref="TenantNotFoundException">The caller is a platform operator but no tenant with that id is registered.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is neither a platform operator nor a tenant admin (a non-existent tenant is reported as a denial, never a not-found, to a non-operator caller).</exception>
     public async ValueTask<TenantRecord> AuthorizeTenantAdminAsync(
-        TenantId tenant, CancellationToken cancellationToken = default)
+        TenantId tenant, string action, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(action);
+
         if (LatticeSystemOrigin.IsActive)
         {
             return await LoadOrThrowAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -131,7 +166,7 @@ public sealed class TenantRegionResidencyAuthorizer
             tenant.Value,
             LatticeOperation.Admin,
             subject.SubjectId,
-            "Administering a tenant's region residency requires platform-operator or tenant-admin authority.");
+            $"Administering a tenant's {action} requires platform-operator or tenant-admin authority.");
     }
 
     private async ValueTask<bool> IsPlatformOperatorAsync(LatticeSubject subject, CancellationToken cancellationToken)

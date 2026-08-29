@@ -54,6 +54,27 @@ public enum LatticeTenantAdminApiOperation
     /// RPC that reports a tenant's per-region residency lifecycle.
     /// </summary>
     GetTenantRegionStatus = 8,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b>
+    /// <c>ListTenantAdminSubjects</c> RPC that reports which subjects hold
+    /// tenant-admin authority over a tenant.
+    /// </summary>
+    ListTenantAdminSubjects = 9,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-tenant-admin</b> <c>AddTenantAdminSubject</c>
+    /// RPC that grants a subject tenant-admin authority over a tenant.
+    /// </summary>
+    AddTenantAdminSubject = 10,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-tenant-admin</b>
+    /// <c>RemoveTenantAdminSubject</c> RPC that revokes a subject's tenant-admin
+    /// authority over a tenant. The facade refuses the removal of a tenant's last
+    /// admin subject.
+    /// </summary>
+    RemoveTenantAdminSubject = 11,
 }
 
 /// <summary>

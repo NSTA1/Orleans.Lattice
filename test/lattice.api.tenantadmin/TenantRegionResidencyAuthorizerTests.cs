@@ -243,4 +243,59 @@ public sealed class TenantRegionResidencyAuthorizerTests
             },
             Throws.TypeOf<TenantNotFoundException>());
     }
+
+    // ---- the action-describing overload ----------------------------------
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_with_an_action_names_that_action_in_the_denial()
+    {
+        // Every tenant-tier surface reuses this one seam, so the denial must report
+        // the authority the caller actually lacked rather than the region-residency
+        // surface the seam was first written for.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record(adminSubject: "someone-else"));
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("stranger"));
+
+        var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await authorizer.AuthorizeTenantAdminAsync(Acme, "admin subjects", CancellationToken.None));
+
+        Assert.That(ex!.Message, Does.Contain("admin subjects"));
+    }
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_the_default_overload_still_names_region_residency()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record(adminSubject: "someone-else"));
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("stranger"));
+
+        var ex = Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
+            async () => await authorizer.AuthorizeTenantAdminAsync(Acme));
+
+        Assert.That(ex!.Message, Does.Contain("region residency"));
+    }
+
+    [Test]
+    public async Task AuthorizeTenantAdminAsync_with_an_action_authorizes_a_tenant_admin_subject()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record(adminSubject: "tenant-admin"));
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("tenant-admin"));
+
+        var record = await authorizer.AuthorizeTenantAdminAsync(Acme, "admin subjects", CancellationToken.None);
+
+        Assert.That(record.Id, Is.EqualTo(Acme));
+    }
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_a_null_action_throws()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record());
+        var authorizer = Authorizer(new FixedGate(allow: true), registry, new LatticeSubject("op"));
+
+        Assert.That(
+            async () => await authorizer.AuthorizeTenantAdminAsync(Acme, null!, CancellationToken.None),
+            Throws.ArgumentNullException);
+    }
 }
