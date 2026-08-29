@@ -127,14 +127,24 @@ internal sealed class RepoContextGraphService
     /// <summary>
     /// Computes the drift between the stored index and the current workspace by content
     /// digest, without git, and the impacted dependents of the changed files.
+    /// <para>
+    /// The walk is rooted at the repository's <b>indexed</b> root and uses the filters the
+    /// repository was ingested with, both read from the durable index request. That is what
+    /// keeps the comparison meaningful: the stored records are addressed by paths relative to
+    /// the indexed root, so walking a different root (or with different filters) would compare
+    /// two different path spaces and report every scanned file as added and every stored file
+    /// as removed. <paramref name="workspacePath"/> is therefore a <i>scope</i>, not the walk
+    /// root - supply the repository root to compare the whole tree, or a directory inside it to
+    /// restrict the report to that subtree.
+    /// </para>
     /// </summary>
     /// <param name="repoId">The repository whose index is compared. Must not be <see langword="null"/>.</param>
-    /// <param name="workspacePath">The workspace path to walk, resolved through the
-    /// workspace guard. Must not be <see langword="null"/>.</param>
+    /// <param name="workspacePath">The repository root, or a directory inside it to scope the
+    /// report to. Resolved through the workspace guard. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the walk and reads.</param>
     /// <returns>The added, updated, removed, and dependent file lists.</returns>
     /// <exception cref="RepoContextWorkspaceViolationException">The path resolves outside the workspace.</exception>
-    /// <exception cref="ArgumentException">The path is null, empty, or whitespace.</exception>
+    /// <exception cref="ArgumentException">The path is null, empty, or whitespace, or resolves outside the indexed repository root.</exception>
     /// <exception cref="DirectoryNotFoundException">The resolved path is not an existing directory.</exception>
     public async Task<RepoContextChangedResult> ChangedAsync(
         string repoId, string workspacePath, CancellationToken cancellationToken)
@@ -142,24 +152,71 @@ internal sealed class RepoContextGraphService
         ArgumentNullException.ThrowIfNull(repoId);
         ArgumentNullException.ThrowIfNull(workspacePath);
 
-        var resolvedRoot = _workspaceGuard.Resolve(workspacePath);
-        var scanned = RepoTreeWalker.Walk(
-            resolvedRoot,
-            includeGlobs: null,
-            excludeGlobs: null,
-            respectGitignore: true,
-            excludeBinary: true,
-            onProgress: null,
-            cancellationToken);
+        var requestedPath = _workspaceGuard.Resolve(workspacePath);
+
+        // The durable index request is the authority for how this repository was walked.
+        // Without it the caller's path is all we have, so the legacy behaviour (walk the
+        // supplied path as the root, with default filters) is kept for a repository that
+        // was never indexed through the job grain.
+        var indexRequest = await _grainFactory
+            .GetGrain<IRepoIndexJobGrain>(repoId).GetRequestAsync().ConfigureAwait(false);
+
+        var walkRoot = requestedPath;
+        string? scopePrefix = null;
+        IReadOnlyList<string>? includeGlobs = null;
+        IReadOnlyList<string>? excludeGlobs = null;
+        var respectGitignore = true;
+        var excludeBinary = true;
+
+        if (indexRequest is not null && !string.IsNullOrWhiteSpace(indexRequest.RepoRoot))
+        {
+            // Re-resolve the persisted root through the guard rather than trusting it: the
+            // mount may have changed since the repository was indexed, and the walk must stay
+            // inside the workspace boundary regardless of what was persisted.
+            walkRoot = _workspaceGuard.Resolve(indexRequest.RepoRoot);
+            scopePrefix = ResolveScopePrefix(walkRoot, requestedPath);
+            includeGlobs = indexRequest.IncludeGlobs;
+            excludeGlobs = indexRequest.ExcludeGlobs;
+            respectGitignore = indexRequest.RespectGitignore;
+            excludeBinary = indexRequest.ExcludeBinary;
+        }
 
         var stored = await ReadStoredFilesAsync(repoId, cancellationToken).ConfigureAwait(false);
+
+        // Hand the walk the facts already stored per file so an unchanged file is settled by
+        // a stat instead of a full read-and-hash - the same fast path the periodic reconcile
+        // uses. Without it every file in the repository is re-hashed on every call, which is
+        // what makes a whole-repository drift report too slow to answer on a large tree.
+        var knownFiles = new Dictionary<string, StoredFileMeta>(stored.Count, StringComparer.Ordinal);
+        foreach (var (storedPath, entry) in stored)
+        {
+            knownFiles[storedPath] = entry.ToStoredFileMeta();
+        }
+
+        var scanned = RepoTreeWalker.Walk(
+            walkRoot,
+            includeGlobs,
+            excludeGlobs,
+            respectGitignore,
+            excludeBinary,
+            onProgress: null,
+            cancellationToken,
+            knownFiles);
+
         var storedDigests = new Dictionary<string, string>(stored.Count, StringComparer.Ordinal);
         foreach (var (storedPath, entry) in stored)
         {
-            storedDigests[storedPath] = entry.Digest;
+            if (IsInScope(storedPath, scopePrefix))
+            {
+                storedDigests[storedPath] = entry.Digest;
+            }
         }
 
-        var plan = RepoContextBootstrapPlan.Compute(storedDigests, scanned);
+        var scopedScan = scopePrefix is null
+            ? scanned
+            : scanned.Where(entry => IsInScope(entry.RelativePath, scopePrefix)).ToList();
+
+        var plan = RepoContextBootstrapPlan.Compute(storedDigests, scopedScan);
         var added = ToOrderedList(plan.Added.Select(static entry => entry.RelativePath));
         var updated = ToOrderedList(plan.Updated.Select(static entry => entry.RelativePath));
         var removed = ToOrderedList(plan.RemovedPaths);
@@ -182,6 +239,49 @@ internal sealed class RepoContextGraphService
             Dependents = dependents,
         };
     }
+
+    /// <summary>
+    /// Resolves the requested path to a repository-relative POSIX directory prefix, or
+    /// <see langword="null"/> when it is the repository root itself (an unscoped report).
+    /// A path outside the indexed root is refused outright rather than silently compared
+    /// against a path space it does not belong to.
+    /// </summary>
+    private static string? ResolveScopePrefix(string repoRoot, string requestedPath)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        var root = requestedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var indexedRoot = repoRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (root.Equals(indexedRoot, comparison))
+        {
+            return null;
+        }
+
+        if (!root.StartsWith(indexedRoot + Path.DirectorySeparatorChar, comparison))
+        {
+            throw new ArgumentException(
+                $"The path '{requestedPath}' is outside the indexed root of repository '{repoRoot}'. "
+                + "Supply the repository root, or a directory inside it, so the report compares the same path space.",
+                nameof(requestedPath));
+        }
+
+        var relative = root[(indexedRoot.Length + 1)..]
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace('\\', '/')
+            .Trim('/');
+
+        return relative.Length == 0 ? null : relative + "/";
+    }
+
+    /// <summary>
+    /// Reports whether a repository-relative path falls inside the requested scope. An
+    /// unscoped report (a null prefix) admits every path.
+    /// </summary>
+    private static bool IsInScope(string relativePath, string? scopePrefix)
+        => scopePrefix is null || relativePath.StartsWith(scopePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Resolves the structural neighbourhood of one file: its outbound referenced
@@ -467,7 +567,11 @@ internal sealed class RepoContextGraphService
             if (digest is not null)
             {
                 stored[path] = new StoredFileEntry(
-                    digest, DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)));
+                    digest,
+                    DeclaredSymbolNames.Decode(RepoContextValues.ReadString(node.DeclaredSymbols)),
+                    RepoContextValues.ReadString(node.Language) ?? string.Empty,
+                    RepoContextValues.ReadInt64(node.SizeBytes) ?? -1,
+                    RepoContextValues.ReadHlcWallTicks(node.Digest) ?? 0);
             }
         }
 
@@ -487,9 +591,34 @@ internal sealed class RepoContextGraphService
     }
 
     /// <summary>
-    /// The reconcile-relevant facts read for a stored file: its content digest and the
-    /// fully-qualified names of the symbols it declares. Kept minimal so the
+    /// The reconcile-relevant facts read for a stored file: its content digest, the
+    /// fully-qualified names of the symbols it declares, and the three quantities the
+    /// walk's stat fast-path needs to settle the file as unchanged without reading it
+    /// (its stored language, size, and ingest anchor). Kept minimal so the
     /// <c>changed</c> scan reads only what the drift and dependent computation need.
     /// </summary>
-    private readonly record struct StoredFileEntry(string Digest, IReadOnlyList<string> DeclaredSymbols);
+    private readonly record struct StoredFileEntry(
+        string Digest,
+        IReadOnlyList<string> DeclaredSymbols,
+        string Language,
+        long SizeBytes,
+        long IngestWallTicks)
+    {
+        /// <summary>
+        /// Projects the entry onto the walker's fast-path shape. Only the digest, language,
+        /// size, and ingest anchor participate in the stat comparison; the back-fill markers
+        /// are irrelevant to a read-only drift report and are left at their defaults, which
+        /// the walker never consults on this path.
+        /// </summary>
+        public StoredFileMeta ToStoredFileMeta() => new(
+            Digest,
+            Language,
+            SizeBytes,
+            IngestWallTicks,
+            DeclaredSymbols,
+            SymbolsProcessed: true,
+            ContentProcessed: true,
+            TokenCount: -1,
+            CrossReferenced: true);
+    }
 }

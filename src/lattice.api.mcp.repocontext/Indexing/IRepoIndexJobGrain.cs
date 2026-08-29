@@ -37,6 +37,18 @@ internal interface IRepoIndexJobGrain : IGrainWithStringKey
     /// <returns>The point-in-time progress, or an empty snapshot when no job has ever run.</returns>
     Task<RepoIndexProgress> GetProgressAsync();
 
+    /// <summary>
+    /// Returns the durable request the repository was last indexed from - its resolved
+    /// root and the walk filters that decided which files were ingested - so a read-only
+    /// caller can reproduce the index's own view of the tree. This is the authoritative
+    /// record of "what this repository is and how it was walked": the structural records
+    /// are addressed by paths relative to <see cref="RepoIndexJobRequest.RepoRoot"/>, so a
+    /// consumer that walks a different root, or with different filters, is comparing two
+    /// different path spaces.
+    /// </summary>
+    /// <returns>The last persisted request, or <see langword="null"/> when the repository was never indexed.</returns>
+    Task<RepoIndexJobRequest?> GetRequestAsync();
+
     /// <summary>Merges a partial progress delta from the background runner into the durable state.</summary>
     /// <param name="update">The fields that changed.</param>
     Task ReportProgressAsync(RepoIndexProgressUpdate update);
