@@ -2,11 +2,11 @@ using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
+using Orleans.Lattice.Explorer.Backup.Components;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Access;
-using Orleans.Lattice.Explorer.UI.Backup;
 using Orleans.Lattice.Explorer.UI.Plugins;
 using Orleans.Lattice.Explorer.UI.Schema;
 
@@ -97,13 +97,14 @@ public sealed class ExplorerUiAreaPluginTests
     }
 
     [Test]
-    public void No_area_plugin_declares_a_domain_contract_yet()
+    public void Only_the_unconverted_area_plugins_still_lack_a_domain_contract()
     {
-        // The panels still resolve their own feature services; the controlled
-        // domain-model seam lands with their conversion to standalone projects.
+        // Access and Schema still resolve their own feature services from the
+        // shared UI project, so the controlled domain-model seam lands with each
+        // of their conversions. Backups has been converted and declares one; that
+        // is asserted alongside the Backups plugin itself.
         var plugins = new IExplorerPlugin[]
         {
-            new BackupsAreaPlugin(Substitute.For<IBackupCapabilityService>()),
             new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>()),
             new SchemaAreaPlugin(Substitute.For<ISchemaAdminCapabilityService>()),
         };
