@@ -32,9 +32,10 @@
   </ItemGroup>
 
   <!--
-    Published Orleans.Lattice NuGet packages (nuget.org, the released 9.4.x
-    wave), NOT project references into src/. This host is a downstream consumer
-    of the released library, exactly as a real deployment would be.
+    Published Orleans.Lattice NuGet packages (nuget.org, the current released
+    family-lockstep wave), NOT project references into src/. This host is a
+    downstream consumer of the released library, exactly as a real deployment
+    would be.
   -->
   <ItemGroup>
     <PackageReference Include="Orleans.Lattice" Version="9.4.0" />
