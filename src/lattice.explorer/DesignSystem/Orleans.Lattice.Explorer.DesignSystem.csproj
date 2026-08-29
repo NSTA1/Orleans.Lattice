@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Orleans.Lattice.Explorer.DesignSystem</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.DesignSystem</PackageId>
+    <Version>9.4.0</Version>
+    <Description>The Orleans.Lattice Explorer design system: the design-token layer (spacing, type scale, colour, elevation, motion, radius, density, touch targets), the single named breakpoint set (compact / medium / expanded), and the adaptive shell primitives (navigation, tab strip, table-or-card) every Explorer plugin is styled against. It has no project dependencies, so a plugin can consume it without taking on the Explorer core or any feature package. Served by a referencing app at _content/Orleans.Lattice.Explorer.DesignSystem.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+  </ItemGroup>
+
+  <!--
+    Deliberately dependency-free beyond the Blazor component model. Every
+    Explorer plugin references this package to pick up the tokens, the
+    breakpoint set, and the adaptive primitives, so it must never drag in
+    Explorer.Core, a feature package, or a cluster client.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,404 @@
+@*
+    The adaptive navigation primitive. One set of destinations, rendered as the
+    shape the current breakpoint calls for:
+
+      expanded  a persistent sidebar
+      medium    a dismissible drawer behind a toggle
+      compact   a bottom bar holding the first few destinations, with the
+                remainder (and the whole list) in an overflow menu
+
+    The component never measures a viewport and never writes a media query: it
+    takes the breakpoint by name from the cascaded value LatticeAdaptiveRoot
+    supplies, or from an explicit Breakpoint parameter (epic decision D7).
+
+    A destination the caller lacks access to renders disabled-and-visible rather
+    than hidden, matching the Explorer's existing advisory client gate: the
+    server remains the sole enforcement point.
+*@
+
+@if (_breakpoint == LatticeBreakpoint.Compact)
+{
+    <nav class="lx-nav lx-nav-bottom @Class"
+         data-lx-breakpoint="compact"
+         aria-label="@Label">
+        <ul class="lx-nav-bar-list">
+            @for (var i = 0; i < _items.Count; i++)
+            {
+                if (_layout.IsInline(i))
+                {
+                    var item = _items[i];
+                    var isSelected = i == _selectedIndex;
+                    <li class="lx-nav-bar-cell">
+                        <button type="button"
+                                class="@(isSelected ? SelectedBarItemClass : BarItemClass)"
+                                disabled="@(!item.IsEnabled)"
+                                title="@(item.Description ?? item.Label)"
+                                aria-current="@(isSelected ? "page" : null)"
+                                @onclick="@(() => SelectAsync(item))">
+                            @item.CompactLabel
+                        </button>
+                    </li>
+                }
+            }
+            @if (_layout.HasOverflow)
+            {
+                <li class="lx-nav-bar-cell">
+                    <button type="button"
+                            class="lx-nav-bar-item lx-nav-overflow-toggle"
+                            id="@_overflowToggleElementId"
+                            aria-haspopup="menu"
+                            aria-expanded="@(IsOverflowOpen ? "true" : "false")"
+                            aria-controls="@_overflowMenuElementId"
+                            @onclick="ToggleOverflowAsync">
+                        @OverflowLabel
+                    </button>
+                </li>
+            }
+        </ul>
+        @if (IsOverflowOpen && _layout.HasOverflow)
+        {
+            <div class="lx-nav-overflow"
+                 id="@_overflowMenuElementId"
+                 role="menu"
+                 aria-labelledby="@_overflowToggleElementId"
+                 @onkeydown="OnOverflowKeyDown">
+                @for (var i = 0; i < _items.Count; i++)
+                {
+                    var item = _items[i];
+                    var isSelected = i == _selectedIndex;
+                    <button type="button"
+                            class="lx-nav-overflow-item"
+                            role="menuitemradio"
+                            aria-checked="@(isSelected ? "true" : "false")"
+                            disabled="@(!item.IsEnabled)"
+                            title="@(item.Description ?? item.Label)"
+                            @onclick="@(() => SelectFromOverflowAsync(item))">
+                        @item.Label
+                    </button>
+                }
+            </div>
+        }
+        @if (_items.Count == 0)
+        {
+            @EmptyContent
+        }
+    </nav>
+}
+else if (_breakpoint == LatticeBreakpoint.Medium)
+{
+    <div class="lx-nav-drawer-host @Class" data-lx-breakpoint="medium">
+        <button type="button"
+                class="lx-nav-drawer-toggle"
+                id="@_drawerToggleElementId"
+                aria-expanded="@(IsDrawerOpen ? "true" : "false")"
+                aria-controls="@_drawerElementId"
+                @onclick="ToggleDrawerAsync">
+            @DrawerToggleLabel
+        </button>
+        @if (IsDrawerOpen)
+        {
+            <div class="lx-nav-scrim" @onclick="CloseDrawerAsync"></div>
+            <nav class="lx-nav lx-nav-drawer"
+                 id="@_drawerElementId"
+                 data-lx-breakpoint="medium"
+                 aria-label="@Label"
+                 @onkeydown="OnDrawerKeyDown">
+                <div class="lx-nav-drawer-header">
+                    @HeaderContent
+                    <button type="button"
+                            class="lx-nav-drawer-close"
+                            @onclick="CloseDrawerAsync">
+                        <span class="lx-visually-hidden">@DrawerCloseLabel</span>
+                    </button>
+                </div>
+                @RenderDestinationList()
+                @FooterContent
+                @if (_items.Count == 0)
+                {
+                    @EmptyContent
+                }
+            </nav>
+        }
+    </div>
+}
+else
+{
+    <nav class="lx-nav lx-nav-sidebar @Class"
+         data-lx-breakpoint="expanded"
+         aria-label="@Label">
+        @HeaderContent
+        @RenderDestinationList()
+        @FooterContent
+        @if (_items.Count == 0)
+        {
+            @EmptyContent
+        }
+    </nav>
+}
+
+@code {
+    // Class strings are pre-composed literals rather than per-render string
+    // interpolation, so a navigation list of any length allocates no strings
+    // for its classes.
+    private const string ItemClass = "lx-nav-item";
+    private const string SelectedItemClass = "lx-nav-item is-selected";
+    private const string BarItemClass = "lx-nav-bar-item";
+    private const string SelectedBarItemClass = "lx-nav-bar-item is-selected";
+
+    private static readonly IReadOnlyList<LatticeNavItem> NoItems = Array.Empty<LatticeNavItem>();
+
+    private readonly string _instanceId = "lx-nav-" + Guid.NewGuid().ToString("N");
+
+    private IReadOnlyList<LatticeNavItem> _items = NoItems;
+    private LatticeOverflowLayout _layout;
+    private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
+    private string? _elementIdPrefix;
+    private string _drawerElementId = string.Empty;
+    private string _drawerToggleElementId = string.Empty;
+    private string _overflowMenuElementId = string.Empty;
+    private string _overflowToggleElementId = string.Empty;
+    private int _selectedIndex = -1;
+
+    /// <summary>The destinations to render, in display order.</summary>
+    [Parameter] public IReadOnlyList<LatticeNavItem>? Items { get; set; }
+
+    /// <summary>
+    /// The identity of the currently selected destination, or
+    /// <see langword="null"/> when nothing is selected.
+    /// </summary>
+    [Parameter] public string? SelectedId { get; set; }
+
+    /// <summary>
+    /// Invoked with the destination's identity when the caller selects an
+    /// enabled destination. A disabled destination never raises it.
+    /// </summary>
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+
+    /// <summary>
+    /// The accessible name of the navigation landmark. Defaults to
+    /// <c>Navigation</c>.
+    /// </summary>
+    [Parameter] public string Label { get; set; } = "Navigation";
+
+    /// <summary>
+    /// Pins the breakpoint this navigation renders for, overriding the cascaded
+    /// shell context. Leave <see langword="null"/> - the intended path - to
+    /// follow <see cref="LatticeAdaptiveRoot"/>; set it when a surface knows it
+    /// is narrower than the window (a split pane), or to fix the shape in a
+    /// preview or a component test.
+    /// </summary>
+    [Parameter] public LatticeBreakpoint? Breakpoint { get; set; }
+
+    /// <summary>
+    /// The ambient shell context cascaded by <see cref="LatticeAdaptiveRoot"/>.
+    /// Absent when the primitive is rendered standalone, in which case the
+    /// default breakpoint applies.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
+
+    /// <summary>
+    /// Whether the medium-breakpoint drawer is open. Ignored at the other
+    /// breakpoints, where navigation is always present.
+    /// </summary>
+    [Parameter] public bool IsDrawerOpen { get; set; }
+
+    /// <summary>Raised when the drawer opens or closes, for two-way binding.</summary>
+    [Parameter] public EventCallback<bool> IsDrawerOpenChanged { get; set; }
+
+    /// <summary>The label of the control that opens the drawer at the medium breakpoint.</summary>
+    [Parameter] public string DrawerToggleLabel { get; set; } = "Menu";
+
+    /// <summary>The accessible name of the drawer's close control.</summary>
+    [Parameter] public string DrawerCloseLabel { get; set; } = "Close navigation";
+
+    /// <summary>The label of the compact bottom bar's overflow control.</summary>
+    [Parameter] public string OverflowLabel { get; set; } = "More";
+
+    /// <summary>
+    /// Whether the compact bottom bar's overflow menu is open. The component
+    /// toggles this itself when the caller activates the overflow control;
+    /// bind it when a host needs to open or close the menu programmatically.
+    /// Ignored at the breakpoints that render no overflow.
+    /// </summary>
+    [Parameter] public bool IsOverflowOpen { get; set; }
+
+    /// <summary>Raised when the overflow menu opens or closes, for two-way binding.</summary>
+    [Parameter] public EventCallback<bool> IsOverflowOpenChanged { get; set; }
+
+    /// <summary>
+    /// Content rendered above the destination list in the sidebar and the
+    /// drawer, typically a filter or a scope switcher. The compact bottom bar
+    /// has no room for it and omits it.
+    /// </summary>
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+
+    /// <summary>
+    /// Content rendered below the destination list in the sidebar and the
+    /// drawer.
+    /// </summary>
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+
+    /// <summary>
+    /// Content rendered when there are no destinations, for example a loading
+    /// or error state.
+    /// </summary>
+    [Parameter] public RenderFragment? EmptyContent { get; set; }
+
+    /// <summary>
+    /// A stable element-id prefix for the drawer and overflow controls, so a
+    /// host with more than one navigation surface, or a test asserting on
+    /// <c>aria-controls</c>, gets predictable ids. Defaults to a per-instance
+    /// generated value.
+    /// </summary>
+    [Parameter] public string? Id { get; set; }
+
+    /// <summary>Additional CSS classes appended to the navigation element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    private string ElementIdPrefix => Id ?? _instanceId;
+
+    private string DrawerElementId => ElementIdPrefix + "-drawer";
+
+    private string DrawerToggleElementId => ElementIdPrefix + "-drawer-toggle";
+
+    private string OverflowMenuElementId => ElementIdPrefix + "-overflow";
+
+    private string OverflowToggleElementId => ElementIdPrefix + "-overflow-toggle";
+
+    // Element ids are composed once per parameter change rather than on every
+    // render pass, so a navigation list of any length allocates no strings
+    // while rendering.
+    private void RebuildElementIds()
+    {
+        var prefix = ElementIdPrefix;
+        if (string.Equals(prefix, _elementIdPrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _elementIdPrefix = prefix;
+        _drawerElementId = DrawerElementId;
+        _drawerToggleElementId = DrawerToggleElementId;
+        _overflowMenuElementId = OverflowMenuElementId;
+        _overflowToggleElementId = OverflowToggleElementId;
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        _items = Items ?? NoItems;
+        _breakpoint = Breakpoint ?? AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default;
+        _selectedIndex = IndexOfSelected();
+        RebuildElementIds();
+        _layout = LatticeOverflowLayout.Resolve(
+            _items.Count,
+            _selectedIndex,
+            LatticeBreakpoints.NavigationInlineCapacity(_breakpoint));
+    }
+
+    /// <inheritdoc />
+    protected override Task OnParametersSetAsync() =>
+        // An overflow menu left open across a breakpoint change would be
+        // orphaned: the wider shapes render no overflow control to close it.
+        // Routed through the setter so a bound caller is told, rather than
+        // silently diverging from the component's own state.
+        IsOverflowOpen && !_layout.HasOverflow
+            ? SetOverflowOpenAsync(false)
+            : Task.CompletedTask;
+
+    private int IndexOfSelected()
+    {
+        if (SelectedId is null)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < _items.Count; i++)
+        {
+            if (string.Equals(_items[i].Id, SelectedId, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private RenderFragment RenderDestinationList() =>
+    @<ul class="lx-nav-list">
+        @for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            var isSelected = i == _selectedIndex;
+            <li class="lx-nav-row">
+                <button type="button"
+                        class="@(isSelected ? SelectedItemClass : ItemClass)"
+                        disabled="@(!item.IsEnabled)"
+                        title="@(item.Description ?? item.Label)"
+                        aria-current="@(isSelected ? "page" : null)"
+                        @onclick="@(() => SelectAsync(item))">
+                    @item.Label
+                </button>
+            </li>
+        }
+    </ul>;
+
+    private Task SelectAsync(LatticeNavItem item)
+    {
+        if (!item.IsEnabled)
+        {
+            return Task.CompletedTask;
+        }
+
+        return OnSelect.HasDelegate ? OnSelect.InvokeAsync(item.Id) : Task.CompletedTask;
+    }
+
+    private async Task SelectFromOverflowAsync(LatticeNavItem item)
+    {
+        if (!item.IsEnabled)
+        {
+            return;
+        }
+
+        await SetOverflowOpenAsync(false);
+        await SelectAsync(item);
+    }
+
+    private Task ToggleOverflowAsync() => SetOverflowOpenAsync(!IsOverflowOpen);
+
+    private Task OnOverflowKeyDown(KeyboardEventArgs args) =>
+        string.Equals(args.Key, "Escape", StringComparison.Ordinal)
+            ? SetOverflowOpenAsync(false)
+            : Task.CompletedTask;
+
+    private Task SetOverflowOpenAsync(bool isOpen)
+    {
+        if (IsOverflowOpen == isOpen)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsOverflowOpen = isOpen;
+        return IsOverflowOpenChanged.HasDelegate ? IsOverflowOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
+    }
+
+    private Task ToggleDrawerAsync() => SetDrawerOpenAsync(!IsDrawerOpen);
+
+    private Task CloseDrawerAsync() => SetDrawerOpenAsync(false);
+
+    private Task OnDrawerKeyDown(KeyboardEventArgs args) =>
+        string.Equals(args.Key, "Escape", StringComparison.Ordinal)
+            ? SetDrawerOpenAsync(false)
+            : Task.CompletedTask;
+
+    private Task SetDrawerOpenAsync(bool isOpen)
+    {
+        if (IsDrawerOpen == isOpen)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsDrawerOpen = isOpen;
+        return IsDrawerOpenChanged.HasDelegate ? IsDrawerOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
+    }
+}

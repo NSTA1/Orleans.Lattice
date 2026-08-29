@@ -1,0 +1,459 @@
+@*
+    The adaptive tab strip. Keeps the role="tablist" semantics the Explorer
+    already ships and adds the behaviour it lacks: rather than scrolling tabs
+    off-screen as the viewport narrows, the strip keeps what fits inline and
+    moves the remainder into an overflow menu.
+
+    The active tab is always inline - the overflow layout promotes it into the
+    last inline slot when it would otherwise be hidden - so a caller can always
+    see where they are, at every breakpoint.
+
+    Inline capacity comes from the breakpoint token layer
+    (LatticeBreakpoints.TabInlineCapacity), never from a measurement or a media
+    query (epic decision D7). A caller may override it with InlineCapacity when
+    a surface knows better.
+
+    Keyboard support follows the WAI-ARIA tabs pattern: a roving tabindex puts
+    exactly one tab in the tab order, and Left/Right/Home/End move between the
+    enabled tabs.
+*@
+
+<div class="lx-tabstrip-host @Class" data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
+    <div class="lx-tabstrip"
+         role="tablist"
+         aria-label="@Label"
+         aria-orientation="horizontal"
+         @onkeydown="OnKeyDownAsync">
+        @for (var i = 0; i < _tabs.Count; i++)
+        {
+            if (_layout.IsInline(i))
+            {
+                var index = i;
+                var tab = _tabs[index];
+                var isActive = index == _activeIndex;
+                <button type="button"
+                        role="tab"
+                        id="@_tabElementIds[index]"
+                        class="@(isActive ? ActiveTabClass : TabClass)"
+                        aria-selected="@(isActive ? "true" : "false")"
+                        aria-controls="@(ChildContent is null ? null : _panelElementId)"
+                        tabindex="@(index == _rovingIndex ? "0" : "-1")"
+                        disabled="@(!tab.IsEnabled)"
+                        title="@(tab.Description ?? tab.Label)"
+                        @ref="_tabElements[index]"
+                        @onclick="@(() => SelectAsync(tab))">
+                    @tab.Label
+                </button>
+            }
+        }
+    </div>
+    @if (_layout.HasOverflow)
+    {
+        <div class="lx-tabstrip-overflow-host">
+            <button type="button"
+                    class="lx-tabstrip-overflow-toggle"
+                    id="@_overflowToggleElementId"
+                    aria-haspopup="menu"
+                    aria-expanded="@(IsOverflowOpen ? "true" : "false")"
+                    aria-controls="@_overflowMenuElementId"
+                    @onclick="ToggleOverflowAsync">
+                @OverflowLabel
+            </button>
+            @if (IsOverflowOpen)
+            {
+                <div class="lx-tabstrip-overflow"
+                     id="@_overflowMenuElementId"
+                     role="menu"
+                     aria-labelledby="@_overflowToggleElementId"
+                     @onkeydown="OnOverflowKeyDown">
+                    @for (var i = 0; i < _tabs.Count; i++)
+                    {
+                        var tab = _tabs[i];
+                        var isActive = i == _activeIndex;
+                        <button type="button"
+                                class="lx-tabstrip-overflow-item"
+                                role="menuitemradio"
+                                aria-checked="@(isActive ? "true" : "false")"
+                                disabled="@(!tab.IsEnabled)"
+                                title="@(tab.Description ?? tab.Label)"
+                                @onclick="@(() => SelectFromOverflowAsync(tab))">
+                            @tab.Label
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    }
+    @TrailingContent
+</div>
+
+@if (ChildContent is not null)
+{
+    <div class="lx-tabpanel"
+         id="@_panelElementId"
+         role="tabpanel"
+         tabindex="0"
+         aria-labelledby="@(_activeIndex >= 0 ? _tabElementIds[_activeIndex] : null)">
+        @ChildContent
+    </div>
+}
+
+@code {
+    // Pre-composed literals rather than per-render interpolation.
+    private const string TabClass = "lx-tab";
+    private const string ActiveTabClass = "lx-tab is-active";
+
+    private static readonly IReadOnlyList<LatticeTabItem> NoTabs = Array.Empty<LatticeTabItem>();
+
+    private readonly string _instanceId = "lx-tabs-" + Guid.NewGuid().ToString("N");
+
+    private IReadOnlyList<LatticeTabItem> _tabs = NoTabs;
+    private LatticeOverflowLayout _layout;
+
+    // One slot per tab, grown only when the strip gets longer than it has ever
+    // been, so a steady-state render allocates nothing for the references.
+    private ElementReference[] _tabElements = Array.Empty<ElementReference>();
+    private string[] _tabElementIds = Array.Empty<string>();
+    private string? _elementIdPrefix;
+    private string _panelElementId = string.Empty;
+    private string _overflowMenuElementId = string.Empty;
+    private string _overflowToggleElementId = string.Empty;
+    private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
+    private int _activeIndex = -1;
+    private int _rovingIndex = -1;
+    private bool _restoreFocusToActiveTab;
+
+    /// <summary>The tabs to render, in display order.</summary>
+    [Parameter] public IReadOnlyList<LatticeTabItem>? Tabs { get; set; }
+
+    /// <summary>
+    /// The identity of the active tab, or <see langword="null"/> when no tab is
+    /// active.
+    /// </summary>
+    [Parameter] public string? ActiveId { get; set; }
+
+    /// <summary>
+    /// Invoked with the tab's identity when the caller activates an enabled tab.
+    /// A disabled tab never raises it.
+    /// </summary>
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+
+    /// <summary>
+    /// The accessible name of the tab list. Defaults to <c>Tabs</c>.
+    /// </summary>
+    [Parameter] public string Label { get; set; } = "Tabs";
+
+    /// <summary>
+    /// Pins the breakpoint this strip renders for, overriding the cascaded
+    /// shell context. Leave <see langword="null"/> - the intended path - to
+    /// follow <see cref="LatticeAdaptiveRoot"/>; set it when a surface knows it
+    /// is narrower than the window (a split pane), or to fix the shape in a
+    /// preview or a component test.
+    /// </summary>
+    [Parameter] public LatticeBreakpoint? Breakpoint { get; set; }
+
+    /// <summary>
+    /// The ambient shell context cascaded by <see cref="LatticeAdaptiveRoot"/>.
+    /// Absent when the primitive is rendered standalone, in which case the
+    /// default breakpoint applies.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
+
+    /// <summary>
+    /// Overrides the number of tabs rendered inline before the strip overflows.
+    /// Leave <see langword="null"/> to use the breakpoint's token value from
+    /// <see cref="LatticeBreakpoints.TabInlineCapacity"/>, which is the intended
+    /// path; set it only when a surface genuinely knows its strip is narrower or
+    /// wider than the breakpoint implies.
+    /// </summary>
+    [Parameter] public int? InlineCapacity { get; set; }
+
+    /// <summary>The label of the overflow control. Defaults to <c>More</c>.</summary>
+    [Parameter] public string OverflowLabel { get; set; } = "More";
+
+    /// <summary>
+    /// Whether the overflow menu is open. The component toggles this itself
+    /// when the caller activates the overflow control; bind it when a host needs
+    /// to open or close the menu programmatically. Ignored when the whole strip
+    /// fits inline and there is no overflow.
+    /// </summary>
+    [Parameter] public bool IsOverflowOpen { get; set; }
+
+    /// <summary>Raised when the overflow menu opens or closes, for two-way binding.</summary>
+    [Parameter] public EventCallback<bool> IsOverflowOpenChanged { get; set; }
+
+    /// <summary>
+    /// Content rendered after the strip and the overflow control, inside the
+    /// same row - for example the title of the selected object.
+    /// </summary>
+    [Parameter] public RenderFragment? TrailingContent { get; set; }
+
+    /// <summary>
+    /// The active tab's panel content. When supplied it is rendered in a
+    /// <c>role="tabpanel"</c> region labelled by the active tab, completing the
+    /// tabs pattern; omit it to render the strip alone and host the panel
+    /// yourself.
+    /// </summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// A stable element-id prefix for the tabs, the panel, and the overflow
+    /// controls, so a host with more than one strip, or a test asserting on
+    /// <c>aria-controls</c>, gets predictable ids. Defaults to a per-instance
+    /// generated value.
+    /// </summary>
+    [Parameter] public string? Id { get; set; }
+
+    /// <summary>Additional CSS classes appended to the strip's host element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    private string ElementIdPrefix => Id ?? _instanceId;
+
+    private string PanelElementId => ElementIdPrefix + "-panel";
+
+    private string OverflowMenuElementId => ElementIdPrefix + "-overflow";
+
+    private string OverflowToggleElementId => ElementIdPrefix + "-overflow-toggle";
+
+    private string TabElementId(string tabId) => ElementIdPrefix + "-tab-" + tabId;
+
+    // Element ids are composed once per parameter change rather than on every
+    // render pass, so a strip of any length allocates no strings while
+    // rendering.
+    private void RebuildElementIds()
+    {
+        var prefix = ElementIdPrefix;
+        if (!string.Equals(prefix, _elementIdPrefix, StringComparison.Ordinal))
+        {
+            _elementIdPrefix = prefix;
+            _panelElementId = PanelElementId;
+            _overflowMenuElementId = OverflowMenuElementId;
+            _overflowToggleElementId = OverflowToggleElementId;
+        }
+
+        if (_tabElementIds.Length < _tabs.Count)
+        {
+            _tabElementIds = new string[_tabs.Count];
+        }
+
+        // Rebuilt unconditionally rather than guarded on the tab list's
+        // identity: a caller that mutates the list it already handed over would
+        // otherwise leave this cache pointing at ids that no longer belong to
+        // the tabs beside them.
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            _tabElementIds[i] = TabElementId(_tabs[i].Id);
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        _tabs = Tabs ?? NoTabs;
+        _breakpoint = Breakpoint ?? AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default;
+
+        if (_tabElements.Length < _tabs.Count)
+        {
+            _tabElements = new ElementReference[_tabs.Count];
+        }
+
+        RebuildElementIds();
+
+        _activeIndex = IndexOfActive();
+        _layout = LatticeOverflowLayout.Resolve(_tabs.Count, _activeIndex, ResolveInlineCapacity());
+        _rovingIndex = ResolveRovingIndex();
+    }
+
+    /// <inheritdoc />
+    protected override Task OnParametersSetAsync() =>
+        // An overflow menu left open across a breakpoint change would be
+        // orphaned: the wider shapes render no overflow control to close it.
+        // Routed through the setter so a bound caller is told, rather than
+        // silently diverging from the component's own state.
+        IsOverflowOpen && !_layout.HasOverflow
+            ? SetOverflowOpenAsync(false)
+            : Task.CompletedTask;
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_restoreFocusToActiveTab)
+        {
+            return;
+        }
+
+        _restoreFocusToActiveTab = false;
+
+        if (_activeIndex < 0 || _activeIndex >= _tabElements.Length)
+        {
+            return;
+        }
+
+        try
+        {
+            // Keyboard navigation moved the active tab, so move DOM focus with
+            // it. The active tab is guaranteed to be inline (the overflow layout
+            // promotes it), so the reference always points at a rendered
+            // element. Focus is a browser affordance: a host without a JS
+            // runtime simply keeps the caller's focus where it was.
+            await _tabElements[_activeIndex].FocusAsync();
+        }
+        catch (InvalidOperationException)
+        {
+            // No JS runtime on this render path (static or prerendered).
+        }
+        catch (JSException)
+        {
+            // The element went away between render and focus.
+        }
+    }
+
+    private int ResolveInlineCapacity() =>
+        InlineCapacity ?? LatticeBreakpoints.TabInlineCapacity(_breakpoint);
+
+    private int IndexOfActive()
+    {
+        if (ActiveId is null)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            if (string.Equals(_tabs[i].Id, ActiveId, StringComparison.Ordinal))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    // Exactly one tab carries tabindex="0" so the strip is a single tab stop:
+    // the active tab when there is one, otherwise the first inline enabled tab.
+    private int ResolveRovingIndex()
+    {
+        if (_activeIndex >= 0 && _tabs[_activeIndex].IsEnabled)
+        {
+            return _activeIndex;
+        }
+
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            if (_layout.IsInline(i) && _tabs[i].IsEnabled)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private Task SelectAsync(LatticeTabItem tab)
+    {
+        if (!tab.IsEnabled)
+        {
+            return Task.CompletedTask;
+        }
+
+        return OnSelect.HasDelegate ? OnSelect.InvokeAsync(tab.Id) : Task.CompletedTask;
+    }
+
+    private async Task SelectFromOverflowAsync(LatticeTabItem tab)
+    {
+        if (!tab.IsEnabled)
+        {
+            return;
+        }
+
+        await SetOverflowOpenAsync(false);
+        await SelectAsync(tab);
+    }
+
+    private Task ToggleOverflowAsync() => SetOverflowOpenAsync(!IsOverflowOpen);
+
+    private Task OnOverflowKeyDown(KeyboardEventArgs args) =>
+        string.Equals(args.Key, "Escape", StringComparison.Ordinal)
+            ? SetOverflowOpenAsync(false)
+            : Task.CompletedTask;
+
+    private Task SetOverflowOpenAsync(bool isOpen)
+    {
+        if (IsOverflowOpen == isOpen)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsOverflowOpen = isOpen;
+        return IsOverflowOpenChanged.HasDelegate ? IsOverflowOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
+    }
+
+    private Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        var target = args.Key switch
+        {
+            "ArrowRight" or "Right" => NextEnabled(1),
+            "ArrowLeft" or "Left" => NextEnabled(-1),
+            "Home" => FirstEnabled(),
+            "End" => LastEnabled(),
+            _ => -1,
+        };
+
+        if (target < 0 || target == _activeIndex)
+        {
+            return Task.CompletedTask;
+        }
+
+        _restoreFocusToActiveTab = true;
+        return SelectAsync(_tabs[target]);
+    }
+
+    // Walks outward from the current tab in `step` direction, wrapping once, and
+    // returns the first enabled tab. Bounded by the tab count, so a strip of
+    // entirely disabled tabs terminates rather than spinning.
+    private int NextEnabled(int step)
+    {
+        if (_tabs.Count == 0)
+        {
+            return -1;
+        }
+
+        var start = _activeIndex >= 0 ? _activeIndex : (step > 0 ? -1 : 0);
+        for (var offset = 1; offset <= _tabs.Count; offset++)
+        {
+            var candidate = ((start + (step * offset)) % _tabs.Count + _tabs.Count) % _tabs.Count;
+            if (_tabs[candidate].IsEnabled)
+            {
+                return candidate;
+            }
+        }
+
+        return -1;
+    }
+
+    private int FirstEnabled()
+    {
+        for (var i = 0; i < _tabs.Count; i++)
+        {
+            if (_tabs[i].IsEnabled)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private int LastEnabled()
+    {
+        for (var i = _tabs.Count - 1; i >= 0; i--)
+        {
+            if (_tabs[i].IsEnabled)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+}
