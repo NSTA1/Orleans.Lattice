@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.History</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.History</PackageId>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>9.4.0</Version>
+    <Description>The per-key revision-timeline per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: the retention-aware change history of the inspected key, with value diffs, CRDT member changes, retention-transition dividers, and a forward-only live follow mode that appends new revisions as they are emitted. It reaches the cluster only through the IHistorySurface domain contract it declares.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Selection\Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+  </ItemGroup>
+
+</Project>

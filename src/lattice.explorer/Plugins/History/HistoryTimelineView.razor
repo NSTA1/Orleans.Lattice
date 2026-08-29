@@ -1,0 +1,22 @@
+@*
+    The ordered list of revisions, with a retention-transition divider wherever
+    the mode changed between two of them. One row per revision, rendered by
+    HistoryRowView so this file stays the list and that one stays the row.
+*@
+<ol class="explorer-history-timeline">
+    @foreach (var row in Rows)
+    {
+        @if (row.RetentionChange is { } transition)
+        {
+            <li class="explorer-history-divider">@transition.Label()</li>
+        }
+        <HistoryRowView Row="row" />
+    }
+</ol>
+
+@code {
+    private static readonly IReadOnlyList<HistoryRevisionRow> NoRows = Array.Empty<HistoryRevisionRow>();
+
+    /// <summary>The revisions to render, in display order.</summary>
+    [Parameter] public IReadOnlyList<HistoryRevisionRow> Rows { get; set; } = NoRows;
+}

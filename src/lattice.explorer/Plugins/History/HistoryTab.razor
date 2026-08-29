@@ -1,0 +1,118 @@
+@inherits SelectionPluginViewBase
+@inject IHistorySurface Surface
+
+@*
+    The per-key revision-timeline surface. It opens on whichever key the operator
+    last drilled into on the value drill-down surface - the two share one
+    inspected key per tree, which is the whole of the hand-off - and reaches the
+    cluster only through IHistorySurface.
+
+    Live follow mode extends the timeline forward from the moment the surface
+    opens: new revisions arrive on the change feed as metadata-only markers and
+    are upgraded in place once the durable history view records them.
+
+    No width media query: the timeline is a single column of rows that wrap
+    (epic decision D7).
+*@
+
+<div class="explorer-history">
+    <div class="explorer-history-toolbar">
+        @if (_key is not null)
+        {
+            <div class="explorer-history-live">
+                <span class="explorer-history-live-dot explorer-history-live-dot-@HistoryFormat.LiveDotClass(_connectionState)"></span>
+                <span class="explorer-history-live-label">@HistoryFormat.LiveLabel(_connectionState)</span>
+                <span class="explorer-history-live-note"
+                      title="The live feed only carries changes emitted while this surface is open: it extends the timeline forward from now and is not a substitute for durable retention of past changes. New rows show kind, time and origin first, then upgrade to the value diff or CRDT members once the durable backfill arrives.">
+                    forward-only
+                </span>
+            </div>
+
+            <label class="explorer-history-order">
+                <input type="checkbox" checked="@_newestFirst" @onchange="ToggleOrder" disabled="@_loading" />
+                Newest first
+            </label>
+        }
+    </div>
+
+    @if (_liveError is not null)
+    {
+        <div class="explorer-history-hint explorer-history-error">Live updates stopped: @_liveError</div>
+    }
+
+    @if (_key is null)
+    {
+        <div class="explorer-history-state">Select a key in the Data tab to see its revision history.</div>
+    }
+    else if (_loading && _timeline is null)
+    {
+        <div class="explorer-history-state">Loading history...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="explorer-history-state explorer-history-error">
+            <span>@_error</span>
+        </div>
+    }
+    else if (_timeline is null)
+    {
+        <div class="explorer-history-state">No history loaded.</div>
+    }
+    else if (_timeline.Status == StateQueryStatus.TreeNotFound)
+    {
+        <div class="explorer-history-state">Tree not found (it may have been deleted since the catalog was listed).</div>
+    }
+    else if (_timeline.Status == StateQueryStatus.KeyNotFound || !_timeline.HasRows)
+    {
+        <div class="explorer-history-state">No revisions recorded for <code>@_key</code>.</div>
+    }
+    else
+    {
+        var t = _timeline;
+        <div class="explorer-history-head">
+            <code class="explorer-history-key" title="@_key">@_key</code>
+            @if (t.ActiveRetentionMode is { } mode)
+            {
+                <span class="explorer-history-badge explorer-history-badge-retention" title="Active retention mode for this key">
+                    @HistoryFormat.RetentionBadge(mode, t.ActiveValueRetained)
+                </span>
+            }
+            <span class="explorer-history-badge explorer-history-badge-bound">@HistoryFormat.BoundBadge(t.Bound)</span>
+        </div>
+
+        @switch (t.Bound)
+        {
+            case EntryHistoryBound.Truncated:
+                <div class="explorer-history-banner explorer-history-banner-truncated">
+                    History truncated by retention. Older revisions
+                    @if (t.EarliestAvailable.WallClockTicks > 0)
+                    {
+                        @:before @HistoryFormat.FormatAbsolute(t.EarliestAvailable)
+                    }
+                    are no longer available.
+                </div>
+                break;
+            case EntryHistoryBound.WalWindowFallback:
+                <div class="explorer-history-hint">
+                    No durable history view is enabled for this tree; showing only the retained write-ahead-log window.
+                </div>
+                break;
+            default:
+                <div class="explorer-history-hint">
+                    Durable history view, bounded only by the configured retention age.
+                </div>
+                break;
+        }
+
+        <HistoryTimelineView Rows="t.Rows" />
+
+        @if (t.HasMore)
+        {
+            <div class="explorer-history-more">
+                <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadMoreAsync">
+                    @(_loading ? "Loading..." : "Load more revisions")
+                </button>
+            </div>
+        }
+    }
+</div>

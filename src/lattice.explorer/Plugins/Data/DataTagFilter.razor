@@ -1,0 +1,85 @@
+@*
+    The tag-index filter row: which index to filter by, which tag within it, and
+    the hand-off into that index's dedicated browser. Rendered only when the
+    selection is covered by at least one tag index.
+*@
+<div class="explorer-data-toolbar explorer-data-tagfilter">
+    <label class="explorer-data-tagfilter-field">
+        Tag index
+        <select disabled="@Loading" value="@SelectedIndex" @onchange="OnIndexSelected">
+            @foreach (var index in Indexes)
+            {
+                <option value="@index.IndexName" selected="@(index.IndexName == SelectedIndex)">@index.IndexName</option>
+            }
+        </select>
+    </label>
+
+    <label class="explorer-data-tagfilter-field">
+        Tag
+        <select disabled="@(Loading || TagValuesLoading)" value="@TagValue" @onchange="OnTagSelected">
+            <option value="">@(TagValuesLoading ? "Loading..." : "(any)")</option>
+            @foreach (var value in TagValues)
+            {
+                <option value="@value" selected="@(value == TagValue)">@value</option>
+            }
+        </select>
+    </label>
+
+    @if (ActiveFilter is not null)
+    {
+        <span class="explorer-data-tagfilter-active">
+            Showing rows tagged <code>@ActiveFilter.Tag</code> in <code>@ActiveFilter.IndexName</code>
+        </span>
+    }
+
+    @if (!string.IsNullOrEmpty(SelectedIndex))
+    {
+        <button type="button" class="explorer-btn explorer-data-tagfilter-explore"
+                disabled="@Loading"
+                title="@($"Browse the {SelectedIndex} tag index")"
+                @onclick="OnExplore">
+            Explore tag index
+        </button>
+    }
+</div>
+
+@code {
+    private static readonly IReadOnlyList<TagIndexRef> NoIndexes = Array.Empty<TagIndexRef>();
+    private static readonly IReadOnlyList<string> NoValues = Array.Empty<string>();
+
+    /// <summary>The tag indexes covering the selection.</summary>
+    [Parameter] public IReadOnlyList<TagIndexRef> Indexes { get; set; } = NoIndexes;
+
+    /// <summary>The index currently chosen, or <see langword="null"/>.</summary>
+    [Parameter] public string? SelectedIndex { get; set; }
+
+    /// <summary>The distinct tag values of the chosen index.</summary>
+    [Parameter] public IReadOnlyList<string> TagValues { get; set; } = NoValues;
+
+    /// <summary>The tag currently chosen, or empty for "(any)".</summary>
+    [Parameter] public string TagValue { get; set; } = string.Empty;
+
+    /// <summary>Whether a scan is in flight.</summary>
+    [Parameter] public bool Loading { get; set; }
+
+    /// <summary>Whether the tag values for the chosen index are still loading.</summary>
+    [Parameter] public bool TagValuesLoading { get; set; }
+
+    /// <summary>The filter actually applied to the scan, or <see langword="null"/>.</summary>
+    [Parameter] public TagFilter? ActiveFilter { get; set; }
+
+    /// <summary>Invoked with the newly chosen index name.</summary>
+    [Parameter] public EventCallback<string> OnIndexChanged { get; set; }
+
+    /// <summary>Invoked with the newly chosen tag, or empty to clear the filter.</summary>
+    [Parameter] public EventCallback<string> OnTagChanged { get; set; }
+
+    /// <summary>Invoked to open the chosen index's dedicated browser.</summary>
+    [Parameter] public EventCallback OnExplore { get; set; }
+
+    private Task OnIndexSelected(ChangeEventArgs e) =>
+        OnIndexChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty);
+
+    private Task OnTagSelected(ChangeEventArgs e) =>
+        OnTagChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty);
+}

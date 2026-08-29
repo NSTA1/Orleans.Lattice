@@ -1,0 +1,98 @@
+@inherits SelectionPluginViewBase
+@inject IDataSurface Surface
+
+@*
+    The key and value drill-down surface. This file is the shell: it composes the
+    toolbar, the key search, the tag filter, the row list and the entry detail,
+    each its own component, and holds none of their markup.
+
+    The two-pane body stacks into one column at compact width from the cascaded
+    breakpoint, and the row list is the design system's adaptive table, so the
+    surface reflows without writing a media query (epic decision D7).
+*@
+
+@if (Selection.IsHistory)
+{
+    @* A change-history (accumulative) view stores serialized history records,
+       not directly inspectable value / CRDT data, so rendering its rows here
+       would only show opaque bytes. Route the operator to the source table's
+       per-entry history instead, and skip the value scan and live follow loop
+       entirely for this selection (see OnInitializedAsync). *@
+    <div class="explorer-data">
+        <ChangeHistoryGuidance Selection="Selection" OnGoToSourceTree="_goToSourceTree" />
+    </div>
+}
+else
+{
+    <div class="explorer-data">
+        <DataToolbar Loading="_loading"
+                     PageSize="_pageSize"
+                     ScanMode="_scanMode"
+                     PageIndex="@(_pager?.PageIndex ?? 0)"
+                     CanGoPrevious="@(_pager?.CanGoPrevious ?? false)"
+                     CanGoNext="@(_pager?.CanGoNext ?? false)"
+                     OnRefresh="_refresh"
+                     OnPageSizeChanged="_pageSizeChanged"
+                     OnScanModeChanged="_scanModeChanged"
+                     OnPrevious="_previousPage"
+                     OnNext="_nextPage" />
+
+        <DataKeySearch Loading="_loading"
+                       Disabled="@(_activeTagFilter is not null)"
+                       InitialValue="@_keyPrefix"
+                       OnSearch="_keySearch" />
+
+        @if (_tagIndexes.Count > 0)
+        {
+            <DataTagFilter Indexes="_tagIndexes"
+                           SelectedIndex="_selectedIndex"
+                           TagValues="_tagValues"
+                           TagValue="_tagValue"
+                           Loading="_loading"
+                           TagValuesLoading="_tagValuesLoading"
+                           ActiveFilter="_activeTagFilter"
+                           OnIndexChanged="_tagIndexChanged"
+                           OnTagChanged="_tagValueChanged"
+                           OnExplore="_exploreTagIndex" />
+        }
+
+        <div class="explorer-data-body @(IsCompact ? "is-stacked" : null)">
+            <div class="explorer-data-keys">
+                @if (_loading && CurrentEntries.Count == 0)
+                {
+                    <div class="lx-selection-state">Loading entries...</div>
+                }
+                else if (_error is not null)
+                {
+                    <div class="lx-selection-state lx-selection-state-error">
+                        <span>@_error</span>
+                        <button type="button" class="explorer-btn-link" @onclick="_refresh">Try again</button>
+                    </div>
+                }
+                else
+                {
+                    <DataRowList Entries="CurrentEntries"
+                                 SelectedKey="_selectedKey"
+                                 OnSelect="_selectKey" />
+                }
+            </div>
+
+            <div class="explorer-data-detail">
+                <DataEntryDetail SelectedKey="_selectedKey"
+                                 Entry="_detail"
+                                 Rendered="_rendered"
+                                 Loading="_detailLoading"
+                                 Error="_detailError"
+                                 LiveError="_liveError"
+                                 ShowLiveIndicator="_showLiveIndicator"
+                                 ConnectionState="_connectionState"
+                                 HistoryViewType="_historyViewType"
+                                 HistoryParameters="_historyParameters"
+                                 HistoryKey="@_historyKey"
+                                 ShowHistory="_showHistory"
+                                 OnRetry="_retryDetail"
+                                 OnToggleHistory="_toggleHistory" />
+            </div>
+        </div>
+    </div>
+}

@@ -1,0 +1,163 @@
+/*
+  Orleans.Lattice Explorer - tag-index browsing plugin.
+
+  Every rule here is owned by this package and prefixed with the surface it
+  belongs to, written against the design-system token layer.
+
+  No width media query: the three sections stack from the `is-stacked` class the
+  view adds when the cascaded breakpoint is compact, and the member list is the
+  design system's adaptive table (epic decision D7 - the breakpoint layer is the
+  only place a width may be named).
+*/
+
+.explorer-tagindex {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--lx-space-2);
+}
+
+.explorer-tagindex-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    flex-wrap: wrap;
+    padding: var(--lx-space-3) var(--lx-space-1);
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.explorer-tagindex-name {
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+    word-break: break-all;
+}
+
+.explorer-tagindex-stat {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.explorer-tagindex-summary .explorer-btn {
+    margin-left: auto;
+}
+
+.explorer-tagindex-body {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.8fr) minmax(160px, 0.7fr) 1.5fr;
+    gap: var(--lx-space-5);
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* Compact: one column, so the three sections read as a single scroll. */
+.explorer-tagindex-body.is-stacked {
+    grid-template-columns: 1fr;
+}
+
+.explorer-tagindex-section {
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface);
+    padding: var(--lx-space-5);
+    overflow: auto;
+    min-height: 0;
+}
+
+.explorer-tagindex-heading {
+    margin: 0 0 var(--lx-space-4);
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+}
+
+.explorer-tagindex-membertag {
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-accent);
+    text-transform: none;
+    letter-spacing: 0;
+    word-break: break-all;
+}
+
+.explorer-tagindex-empty {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+}
+
+.explorer-tagindex-treelist,
+.explorer-tagindex-taglist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+}
+
+.explorer-tagindex-treelink,
+.explorer-tagindex-tag,
+.explorer-tagindex-memberlink {
+    width: 100%;
+    min-height: var(--lx-target-min);
+    text-align: left;
+    font-family: var(--lx-font-mono);
+    background: var(--lx-color-surface-sunken);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    color: var(--lx-color-text);
+    padding: var(--lx-space-3) var(--lx-space-4);
+    cursor: pointer;
+    word-break: break-all;
+    transition: border-color var(--lx-motion-fast) var(--lx-motion-ease),
+        color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.explorer-tagindex-treelink:hover,
+.explorer-tagindex-tag:hover,
+.explorer-tagindex-memberlink:hover {
+    border-color: var(--lx-color-accent);
+    color: var(--lx-color-accent);
+}
+
+.explorer-tagindex-treelink:focus-visible,
+.explorer-tagindex-tag:focus-visible,
+.explorer-tagindex-memberlink:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.explorer-tagindex-tag.is-active {
+    border-color: var(--lx-color-accent);
+    color: var(--lx-color-accent-contrast);
+    background: var(--lx-color-accent);
+}
+
+.explorer-tagindex-memberlink {
+    border-style: dashed;
+}
+
+.explorer-tagindex-pager {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    margin-bottom: var(--lx-space-4);
+}
+
+.explorer-tagindex-pagenum {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    font-variant-numeric: tabular-nums;
+}

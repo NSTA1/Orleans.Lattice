@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Core.Catalog;
-using Orleans.Lattice.Explorer.UI.Detail;
+using Orleans.Lattice.Explorer.Plugins.Selection;
 
 namespace Orleans.Lattice.Explorer.Tests.Detail;
 

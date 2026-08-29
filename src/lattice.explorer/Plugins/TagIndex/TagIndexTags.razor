@@ -1,0 +1,39 @@
+@*
+    The tags a tag index carries. Selecting one asks the parent to load that
+    tag's members; this component holds no state of its own.
+*@
+<section class="explorer-tagindex-section explorer-tagindex-tags">
+    <h4 class="explorer-tagindex-heading">Tags</h4>
+    @if (Tags.Count == 0)
+    {
+        <p class="explorer-tagindex-empty">This index has no tags yet.</p>
+    }
+    else
+    {
+        <ul class="explorer-tagindex-taglist">
+            @foreach (var tag in Tags)
+            {
+                <li>
+                    <button type="button"
+                            class="explorer-tagindex-tag @(string.Equals(tag, SelectedTag, StringComparison.Ordinal) ? "is-active" : null)"
+                            @onclick="@(() => OnSelectTag.InvokeAsync(tag))">
+                        @(tag.Length == 0 ? "(empty)" : tag)
+                    </button>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    private static readonly IReadOnlyList<string> NoTags = Array.Empty<string>();
+
+    /// <summary>The distinct tags this index carries, in display order.</summary>
+    [Parameter] public IReadOnlyList<string> Tags { get; set; } = NoTags;
+
+    /// <summary>The tag currently selected, or <see langword="null"/> when none is.</summary>
+    [Parameter] public string? SelectedTag { get; set; }
+
+    /// <summary>Invoked with the tag the operator selected.</summary>
+    [Parameter] public EventCallback<string> OnSelectTag { get; set; }
+}

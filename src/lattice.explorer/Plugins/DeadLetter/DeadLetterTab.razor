@@ -1,0 +1,97 @@
+@inherits SelectionPluginViewBase
+@inject IDeadLetterSurface Surface
+
+@*
+    The strict-mode dead-letter surface: a read-only, cursor-paged inspection of
+    the entries this tree rejected, beside a detail pane for the selected one.
+
+    Read-only by construction. Replay / requeue of a corrected item is a
+    deliberate follow-up: the state API exposes no write path, and the domain
+    contract this plugin declares has none either, so the surface cannot mutate
+    or re-apply an entry.
+
+    The list is the design system's adaptive table, so it reflows from aligned
+    columns to a card list at compact width, and the two-pane body stacks from
+    the cascaded breakpoint rather than from a media query (epic decision D7).
+*@
+
+<div class="explorer-deadletter">
+    <div class="explorer-deadletter-toolbar">
+        <button type="button" class="explorer-btn" disabled="@_loading" @onclick="ReloadAsync">
+            @(_loading ? "Loading..." : "Refresh")
+        </button>
+        @if (_count > 0)
+        {
+            <span class="explorer-deadletter-count" title="Dead-lettered items held for this tree">
+                @_count dead-lettered
+            </span>
+        }
+        else if (_loaded)
+        {
+            <span class="explorer-deadletter-count is-empty">Queue empty</span>
+        }
+    </div>
+
+    <div class="explorer-deadletter-body @(IsCompact ? "is-stacked" : null)">
+        <div class="explorer-deadletter-list">
+            @if (_loading && _entries.Count == 0)
+            {
+                <div class="lx-selection-state">Loading dead-letter queue...</div>
+            }
+            else if (_error is not null)
+            {
+                <div class="lx-selection-state lx-selection-state-error">
+                    <span>@_error</span>
+                    <button type="button" class="explorer-btn-link" @onclick="ReloadAsync">Try again</button>
+                </div>
+            }
+            else
+            {
+                <LatticeAdaptiveTable TItem="DeadLetterEntry"
+                                      Items="_entries"
+                                      Columns="_columns"
+                                      KeySelector="_rowKey"
+                                      Label="Dead-lettered entries"
+                                      EmptyText="No dead-lettered items for this tree." />
+
+                @if (_hasMore)
+                {
+                    <div class="lx-selection-state">
+                        <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadMoreAsync">
+                            @(_loading ? "Loading..." : "Load more")
+                        </button>
+                    </div>
+                }
+            }
+        </div>
+
+        <div class="explorer-deadletter-detail">
+            @if (_selected is null)
+            {
+                <div class="lx-selection-state">Select a dead-lettered item to inspect it.</div>
+            }
+            else
+            {
+                <dl class="explorer-deadletter-meta">
+                    <div><dt>Key</dt><dd><code>@_selected.Key</code></dd></div>
+                    <div><dt>Reason</dt><dd>@_selected.Reason</dd></div>
+                    <div><dt>Source</dt><dd>@SourceLabel(_selected.Source)</dd></div>
+                    <div><dt>Timestamp</dt><dd>@_selected.TimestampUtc.UtcDateTime.ToString("u")</dd></div>
+                    <div>
+                        <dt>Value length</dt>
+                        <dd>@_selected.ValueByteLength bytes@(_selected.Truncated ? " (preview truncated)" : null)</dd>
+                    </div>
+                </dl>
+
+                @if (_rendered is not null)
+                {
+                    @if (_rendered.Note is not null)
+                    {
+                        <p class="explorer-deadletter-note">@_rendered.Note</p>
+                    }
+                    <pre class="explorer-deadletter-value">@_rendered.Content</pre>
+                }
+            }
+        </div>
+    </div>
+</div>

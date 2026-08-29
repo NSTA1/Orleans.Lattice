@@ -1,0 +1,134 @@
+@*
+    The live members of the selected tag, cursor-paged.
+
+    The member list is the design system's adaptive table, so it renders as
+    aligned columns at medium and expanded and reflows to a card list at compact
+    width without this package writing a media query (epic decision D7).
+*@
+<section class="explorer-tagindex-section explorer-tagindex-members">
+    <h4 class="explorer-tagindex-heading">
+        Members
+        @if (Tag is not null)
+        {
+            <span class="explorer-tagindex-membertag">@(Tag.Length == 0 ? "(empty)" : Tag)</span>
+        }
+    </h4>
+
+    @if (Tag is null)
+    {
+        <p class="explorer-tagindex-empty">Select a tag to list its members.</p>
+    }
+    else if (Loading && !HasLoadedPage)
+    {
+        <p class="explorer-tagindex-empty">Loading members...</p>
+    }
+    else if (Error is not null)
+    {
+        <p class="explorer-tagindex-empty lx-selection-state-error">
+            <span>@Error</span>
+            <button type="button" class="explorer-btn-link" @onclick="OnRetry">Try again</button>
+        </p>
+    }
+    else
+    {
+        @if (Members.Count > 0)
+        {
+            <div class="explorer-tagindex-pager">
+                <button type="button" class="explorer-btn"
+                        disabled="@(Loading || !CanGoPrevious)"
+                        @onclick="OnPrevious">Prev</button>
+                <span class="explorer-tagindex-pagenum">Page @(PageIndex + 1)</span>
+                <button type="button" class="explorer-btn"
+                        disabled="@(Loading || !CanGoNext)"
+                        @onclick="OnNext">Next</button>
+            </div>
+        }
+
+        <LatticeAdaptiveTable TItem="TagMemberRow"
+                              Items="Members"
+                              Columns="_columns"
+                              KeySelector="_rowKey"
+                              Label="Tag members"
+                              EmptyText="No live members carry this tag." />
+    }
+</section>
+
+@code {
+    private static readonly IReadOnlyList<TagMemberRow> NoMembers = Array.Empty<TagMemberRow>();
+
+    private static readonly Func<TagMemberRow, object> RowKeySelector =
+        static member => string.Concat(member.TreeId, "\u0000", member.Key);
+
+    private readonly Func<TagMemberRow, object> _rowKey = RowKeySelector;
+
+    private LatticeTableColumn<TagMemberRow>[] _columns = [];
+
+    /// <summary>The tag whose members are listed, or <see langword="null"/> when none is selected.</summary>
+    [Parameter] public string? Tag { get; set; }
+
+    /// <summary>The current page of members.</summary>
+    [Parameter] public IReadOnlyList<TagMemberRow> Members { get; set; } = NoMembers;
+
+    /// <summary>Whether a member scan is in flight.</summary>
+    [Parameter] public bool Loading { get; set; }
+
+    /// <summary>Whether at least one page has been loaded, so a spinner is not shown over existing rows.</summary>
+    [Parameter] public bool HasLoadedPage { get; set; }
+
+    /// <summary>The member-scan error to surface, or <see langword="null"/>.</summary>
+    [Parameter] public string? Error { get; set; }
+
+    /// <summary>The zero-based index of the page in view.</summary>
+    [Parameter] public int PageIndex { get; set; }
+
+    /// <summary>Whether a previous page exists.</summary>
+    [Parameter] public bool CanGoPrevious { get; set; }
+
+    /// <summary>Whether a next page exists.</summary>
+    [Parameter] public bool CanGoNext { get; set; }
+
+    /// <summary>Invoked to step back one page.</summary>
+    [Parameter] public EventCallback OnPrevious { get; set; }
+
+    /// <summary>Invoked to step forward one page.</summary>
+    [Parameter] public EventCallback OnNext { get; set; }
+
+    /// <summary>Invoked to retry a failed member scan.</summary>
+    [Parameter] public EventCallback OnRetry { get; set; }
+
+    /// <summary>Invoked with the member the operator asked to open in its tree.</summary>
+    [Parameter] public EventCallback<TagMemberRow> OnOpenMember { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnInitialized() =>
+        // Composed once per component rather than per render: the key cell
+        // captures `this`, so the set cannot be static, but it never varies.
+        _columns =
+        [
+            new()
+            {
+                Header = "Key",
+                IsPrimary = true,
+                IsNumericOrCode = true,
+                Cell = member => builder =>
+                {
+                    builder.OpenElement(0, "button");
+                    builder.AddAttribute(1, "type", "button");
+                    builder.AddAttribute(2, "class", "explorer-tagindex-memberlink");
+                    builder.AddAttribute(3, "title", "Open this key in its tree");
+                    builder.AddAttribute(
+                        4,
+                        "onclick",
+                        EventCallback.Factory.Create(this, () => OnOpenMember.InvokeAsync(member)));
+                    builder.AddContent(5, member.Key);
+                    builder.CloseElement();
+                },
+            },
+            new()
+            {
+                Header = "Tree",
+                IsNumericOrCode = true,
+                Cell = static member => builder => builder.AddContent(0, member.TreeId),
+            },
+        ];
+}

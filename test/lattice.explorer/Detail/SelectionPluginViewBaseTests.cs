@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.UI.Detail;
+using Orleans.Lattice.Explorer.Plugins.Selection;
 using Orleans.Lattice.Explorer.UI.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Detail;
