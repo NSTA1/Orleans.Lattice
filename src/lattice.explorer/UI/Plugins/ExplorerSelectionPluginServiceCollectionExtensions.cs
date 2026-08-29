@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Data;
 using Orleans.Lattice.Explorer.Plugins.DeadLetter;
 using Orleans.Lattice.Explorer.Plugins.History;
