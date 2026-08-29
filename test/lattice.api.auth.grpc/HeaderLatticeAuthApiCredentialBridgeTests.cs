@@ -146,6 +146,22 @@ public sealed class HeaderLatticeAuthApiCredentialBridgeTests
     }
 
     [Test]
+    public void Resolve_with_an_empty_header_name_disables_the_bridge()
+    {
+        // An empty CredentialHeaderName is how a host turns the header bridge
+        // off. It must read as anonymous rather than falling back to a default
+        // header name, which would silently re-enable header-derived identity.
+        var bridge = CreateBridge(new LatticeAuthApiGrpcOptions
+        {
+            CredentialHeaderName = string.Empty,
+        });
+
+        var credential = bridge.Resolve(ContextWith(("authorization", "Bearer alice-token")));
+
+        Assert.That(credential, Is.Null);
+    }
+
+    [Test]
     public void Resolve_throws_on_null_context()
     {
         var bridge = CreateBridge();
