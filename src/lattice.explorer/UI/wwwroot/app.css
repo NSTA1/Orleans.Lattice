@@ -730,6 +730,17 @@ code, .explorer-mono {
     border-bottom: 1px solid var(--border);
 }
 
+/* The detail tab strip is the design system's adaptive strip. The panel header
+   already draws the separating rule and owns the surface, so the strip does not
+   draw its own; everything else about it (overflow, roving tabindex, disabled
+   affordance) is the primitive's. */
+.explorer-detail-tabs {
+    flex: 1;
+    min-width: 0;
+    border-bottom: none;
+    background: transparent;
+}
+
 .explorer-tabstrip {
     display: flex;
     gap: 0.25rem;

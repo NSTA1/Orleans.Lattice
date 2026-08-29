@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Telemetry</PackageId>
     <Version>9.4.0</Version>
-    <Description>Transport-neutral telemetry proxy for Orleans.Lattice. Holds the read-only Prometheus / PromQL-compatible backend client, the dual-credential trust boundary that stamps the configured backend credential and never a caller's Lattice credential, the range and step guardrails, and the fail-closed metric-access allow-list with its conservative PromQL metric-name scanner. Depends on no transport, so every binding (the MCP tool group, the gRPC service, and client heads) adapts over the same machinery instead of forking it.</Description>
+    <Description>Transport-neutral telemetry facade for Orleans.Lattice. Implements the ILatticeTelemetry contract over a curated, server-authored named-query catalogue that is selected by id and never accepts raw PromQL from any caller, scopes every evaluation to a tenant the facade derives server-side from the authenticated caller (honouring a cross-tenant or single-tenant request only after platform-operator validation and otherwise degrading fail-closed), and executes through the read-only Prometheus / PromQL-compatible backend client. Also holds the dual-credential trust boundary that stamps the configured backend credential and never a caller's Lattice credential, the range and step guardrails, and the fail-closed metric-access allow-list. Depends on no transport, so every binding (the MCP tool group, the gRPC service, and client heads) adapts over the same machinery instead of forking it.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -23,6 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" />
   </ItemGroup>

@@ -11,6 +11,16 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 /// expiry. Concurrent callers share a single in-flight acquisition, so a token
 /// rotation never fans out into a burst of duplicate credential calls.
 /// </summary>
+/// <remarks>
+/// The minted token is a <b>backend</b> credential and stays confined to the
+/// backend path: it is held only in this instance's private cache and returned
+/// through <see cref="GetAccessTokenAsync"/> to the telemetry proxy, which stamps
+/// it on the outbound backend request. It is never written back onto
+/// <see cref="LatticeTelemetryOptions"/> (an instance a binding may share with its
+/// own derived options type) and is never conflated with the caller's Lattice
+/// credential. The type is <see langword="internal"/>, so
+/// <see cref="ITelemetryBackendTokenProvider"/> is the only reachable path to it.
+/// </remarks>
 internal sealed class AzureTelemetryBackendTokenProvider
     : ITelemetryBackendTokenProvider, IDisposable
 {

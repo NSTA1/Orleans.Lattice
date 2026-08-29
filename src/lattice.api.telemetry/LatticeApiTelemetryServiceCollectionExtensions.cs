@@ -55,6 +55,60 @@ public static class LatticeApiTelemetryServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Registers the transport-neutral telemetry <b>facade</b>: the compiled
+    /// named-query catalogue, the fail-closed authorization seam, the server-side
+    /// tenant-scope resolver, and <see cref="ILatticeTelemetry"/> over them. Calls
+    /// <see cref="AddLatticeTelemetryBackend"/> for the backend proxy and the
+    /// metric-access policy, so a host opts the whole surface in with one call.
+    /// Idempotent: calling it more than once registers exactly one of each.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The catalogue is a singleton built once from the server-authored definitions
+    /// and the configured metric-access allow-list, so template parsing, metric-name
+    /// extraction, and allow-list evaluation never happen per request.
+    /// </para>
+    /// <para>
+    /// The <c>ILatticeAccessGate</c>, <c>ILatticeMembershipContext</c>, and
+    /// <c>ITenantContextResolver</c> seams are resolved optionally: a host that
+    /// registered the core library supplies all three (the no-op gate and the
+    /// default-tenant resolver when the authorization and tenancy add-ons are
+    /// absent), and a host that did not still gets a working, fail-closed facade
+    /// that pins every query to the reserved default tenant.
+    /// </para>
+    /// </remarks>
+    /// <param name="services">The host's service collection.</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
+    public static IServiceCollection AddLatticeTelemetryApi(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddLatticeTelemetryBackend();
+
+        services.TryAddSingleton(provider => new LatticeTelemetryQueryCatalog(
+            provider.GetRequiredService<TelemetryMetricAccessPolicy>()));
+
+        services.TryAddSingleton(provider => new TelemetryAccessAuthorizer(
+            provider.GetService<ILatticeAccessGate>(),
+            provider.GetService<ILatticeMembershipContext>()));
+
+        services.TryAddSingleton(provider => new TelemetryTenantScopeResolver(
+            provider.GetService<ITenantContextResolver>() ?? NullTelemetryTenantContext.Instance,
+            provider.GetRequiredService<TelemetryAccessAuthorizer>()));
+
+        services.TryAddSingleton<ILatticeTelemetry>(provider => new LatticeTelemetry(
+            provider.GetRequiredService<LatticeTelemetryQueryCatalog>(),
+            provider.GetRequiredService<TelemetryTenantScopeResolver>(),
+            provider.GetRequiredService<TelemetryAccessAuthorizer>(),
+            provider.GetRequiredService<IPrometheusQueryClient>(),
+            provider.GetRequiredService<IOptions<LatticeTelemetryOptions>>(),
+            provider.GetService<TimeProvider>()));
+
+        return services;
+    }
+
     private static void ConfigureBackendClient(IServiceProvider provider, HttpClient client)
     {
         var options = provider.GetRequiredService<IOptions<LatticeTelemetryOptions>>().Value;
