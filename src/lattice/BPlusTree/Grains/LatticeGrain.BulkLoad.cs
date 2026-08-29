@@ -438,26 +438,49 @@ internal sealed partial class LatticeGrain
         }
     }
 
+    /// <remarks>
+    /// Gated on <see cref="LatticeOperation.Read"/>: the verb that
+    /// <em>initiates</em> the corresponding operation enforces Admin or
+    /// TreeLifecycle, but this status verb previously enforced nothing, so an
+    /// unauthorized in-cluster caller could confirm that the tree exists and
+    /// observe its lifecycle state. Read (not Admin) because the verb only
+    /// observes, matching the choice #1722 made for the observe-only metadata
+    /// verbs.
+    /// <para>
+    /// <b>Internal pollers must carry system origin.</b>
+    /// <see cref="HotShardMonitorGrain.RunSamplingPassAsync"/> polls this verb
+    /// (and its three siblings) on a timer with no caller identity, so it opens
+    /// a <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> scope around
+    /// those polls. Without it a deny-by-default tree would deny the monitor and
+    /// its catch-and-warn handler would swallow the denial, silently disabling
+    /// auto-split.
+    /// </para>
+    /// </remarks>
     public async Task<bool> IsMergeCompleteAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
         var merge = grainFactory.GetGrain<ITreeMergeGrain>(TreeId);
         return await merge.IsCompleteAsync();
     }
 
+    /// <inheritdoc cref="IsMergeCompleteAsync" />
     public async Task<bool> IsSnapshotCompleteAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
         return await snapshot.IsIdleAsync();
     }
 
+    /// <inheritdoc cref="IsMergeCompleteAsync" />
     public async Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         return await resize.IsIdleAsync();
     }

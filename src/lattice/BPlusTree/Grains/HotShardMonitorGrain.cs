@@ -196,11 +196,29 @@ internal sealed class HotShardMonitorGrain(
         if (nowUtc - activationUtc < options.AutoSplitMinTreeAge) return;
 
         // Suppress while bulk maintenance is in flight.
+        //
+        // These four status verbs are access-gated (LatticeOperation.Read). This
+        // timer-driven pass runs with no caller identity, so on a deny-by-default
+        // tree the gate would fail closed and deny every poll; the catch-and-warn
+        // handler in OnTimerTickAsync would then swallow that denial as a routine
+        // warning and auto-split would be silently disabled. Enter a system-origin
+        // scope so these internal observations bypass the gate, following the same
+        // precedent as the atomic-write saga's internal write leg (see
+        // AtomicWriteGrain, which enters this scope because an internal leg "runs
+        // without the caller's identity and would otherwise fail-closed").
+        //
+        // The scope is safe to assert here because AccessGateSystemOrigin is a
+        // reserved capability key: LatticeCapabilityStrippingCallFilter strips it
+        // from any genuine external Orleans client, so it cannot be forged inbound
+        // and only ever marks in-silo library machinery such as this monitor.
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        if (!await lattice.IsResizeCompleteAsync()) return;
-        if (!await lattice.IsReshardCompleteAsync()) return;
-        if (!await lattice.IsMergeCompleteAsync()) return;
-        if (!await lattice.IsSnapshotCompleteAsync()) return;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            if (!await lattice.IsResizeCompleteAsync()) return;
+            if (!await lattice.IsReshardCompleteAsync()) return;
+            if (!await lattice.IsMergeCompleteAsync()) return;
+            if (!await lattice.IsSnapshotCompleteAsync()) return;
+        }
 
         // Resolve the current shard map and list of physical shards.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
