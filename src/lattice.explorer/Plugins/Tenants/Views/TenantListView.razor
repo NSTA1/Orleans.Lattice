@@ -1,0 +1,171 @@
+@*
+    The tenant list and its lifecycle operations: one row per tenant with its
+    state, the reserved-default marker, and its headline usage, plus the create
+    form and the per-row lifecycle actions.
+
+    The list renders through the design system's adaptive table, so it is a
+    table at medium and wider and reflows to a card list at compact rather than
+    scrolling sideways off a narrow window. Columns declare their own reflow
+    behaviour once, beside the column, rather than in a stylesheet.
+
+    Suspend and delete never fire from the click that asks for them: both build
+    a confirmation the dialog renders.
+*@
+
+<div class="lxt-list">
+    <header class="lxt-list-header">
+        <p class="lxt-count" role="status">
+            @State.TenantCount @(State.TenantCount == 1 ? "tenant" : "tenants")
+            @if (State.PageCount > 1)
+            {
+                <span class="lxt-page">Page @(State.PageIndex + 1) of @State.PageCount</span>
+            }
+        </p>
+        <button type="button" class="explorer-btn"
+                disabled="@(State.Busy || !State.Allowed)"
+                @onclick="State.OpenCreateForm">New tenant</button>
+    </header>
+
+    @if (State.CreateFormOpen)
+    {
+        <form class="lxt-create" @onsubmit="State.CreateTenantAsync" @onsubmit:preventDefault="true">
+            <h3 class="lxt-create-title">Register a tenant</h3>
+            <label class="lxt-field">
+                <span class="lxt-field-label">Tenant id</span>
+                <input class="lxt-input" type="text" required
+                       value="@State.CreateTenantId"
+                       @onchange="@(e => State.CreateTenantId = e.Value?.ToString() ?? string.Empty)" />
+            </label>
+            <label class="lxt-field">
+                <span class="lxt-field-label">Admin subjects</span>
+                <textarea class="lxt-input lxt-textarea" rows="3"
+                          value="@State.CreateAdminSubjects"
+                          @onchange="@(e => State.CreateAdminSubjects = e.Value?.ToString() ?? string.Empty)"></textarea>
+                <span class="lxt-hint">
+                    One subject id per line, or separated by commas. Left blank the cluster seeds
+                    your own subject, so you can read the tenant back - a tenant with no admin
+                    subjects would be invisible to whoever created it.
+                </span>
+            </label>
+            <div class="lxt-create-actions">
+                <button type="button" class="explorer-btn"
+                        disabled="@State.Busy"
+                        @onclick="State.CloseCreateForm">Cancel</button>
+                <button type="submit" class="explorer-btn lxt-primary" disabled="@State.Busy">Create tenant</button>
+            </div>
+        </form>
+    }
+
+    <LatticeAdaptiveTable TItem="TenantRow"
+                          Items="State.Page"
+                          Columns="_columns"
+                          KeySelector="_key"
+                          Label="Tenants"
+                          Class="lxt-table"
+                          EmptyText="No tenants are visible to your account." />
+
+    @if (State.PageCount > 1)
+    {
+        <nav class="lxt-pager" aria-label="Tenant list pages">
+            <button type="button" class="explorer-btn"
+                    disabled="@(State.Busy || !State.HasPreviousPage)"
+                    @onclick="State.PreviousPageAsync">Previous</button>
+            <button type="button" class="explorer-btn"
+                    disabled="@(State.Busy || !State.HasNextPage)"
+                    @onclick="State.NextPageAsync">Next</button>
+        </nav>
+    }
+</div>
+
+@code {
+    // The row identity is the tenant id, a reference, so diffing a page costs no
+    // boxing per row per render.
+    private static readonly Func<TenantRow, object> _key = static row => row.TenantId;
+
+    private LatticeTableColumn<TenantRow>[] _columns = default!;
+
+    /// <summary>The workspace this view renders.</summary>
+    [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnInitialized() =>
+        // Built once at mount. The column set never varies, and the table
+        // re-renders on every load, page change, and busy transition, so
+        // rebuilding it per render would allocate the array and every cell
+        // template on each of them.
+        _columns =
+        [
+            new LatticeTableColumn<TenantRow>
+            {
+                Header = "Tenant",
+                IsPrimary = true,
+                IsNumericOrCode = true,
+                Cell = row => @<span class="lxt-tenant-id">
+                    @row.TenantId
+                    @if (row.IsDefault)
+                    {
+                        <span class="lxt-badge is-default" title="The reserved default tenant, which owns un-prefixed trees. It cannot be suspended, deleted, or have its admin subjects or grants edited.">@row.DefaultLabel</span>
+                    }
+                </span>,
+            },
+            new LatticeTableColumn<TenantRow>
+            {
+                Header = "Status",
+                Cell = row => @<span class="lxt-badge @(row.IsSuspended ? "is-suspended" : "is-active")">@row.StatusLabel</span>,
+            },
+            new LatticeTableColumn<TenantRow>
+            {
+                Header = "Stored",
+                IsNumericOrCode = true,
+                Cell = row => @<span>@row.StoredText</span>,
+            },
+            new LatticeTableColumn<TenantRow>
+            {
+                Header = "Keys",
+                IsNumericOrCode = true,
+                Cell = row => @<span>@row.KeysText</span>,
+            },
+            new LatticeTableColumn<TenantRow>
+            {
+                Header = "Trees",
+                IsNumericOrCode = true,
+                Cell = row => @<span>
+                    @row.TreesText
+                    @if (row.IsOverQuota)
+                    {
+                        <span class="lxt-badge is-over" title="At least one quota dimension is over its ceiling.">Over quota</span>
+                    }
+                </span>,
+            },
+            new LatticeTableColumn<TenantRow>
+            {
+                Header = "Actions",
+                // A row of buttons is unreadable inside a card, and every action
+                // is reachable from the selected tenant's own surfaces, so the
+                // column stays on the table presentation only.
+                ShowOnCompact = false,
+                Cell = row => @<span class="lxt-row-actions">
+                    <button type="button" class="explorer-btn lxt-row-action"
+                            disabled="@State.Busy"
+                            @onclick="@(() => State.SelectTenantAsync(row.TenantId))">Manage</button>
+                    @if (row.IsSuspended)
+                    {
+                        <button type="button" class="explorer-btn lxt-row-action"
+                                disabled="@(State.Busy || row.IsDefault)"
+                                @onclick="@(() => State.ResumeTenantAsync(row.TenantId))">Resume</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="explorer-btn lxt-row-action"
+                                disabled="@(State.Busy || row.IsDefault)"
+                                title="@(row.IsDefault ? "The reserved default tenant cannot be suspended." : null)"
+                                @onclick="@(() => State.RequestSuspend(row.TenantId))">Suspend</button>
+                    }
+                    <button type="button" class="explorer-btn lxt-row-action lxt-danger"
+                            disabled="@(State.Busy || row.IsDefault)"
+                            title="@(row.IsDefault ? "The reserved default tenant cannot be deleted." : null)"
+                            @onclick="@(() => State.RequestDeleteAsync(row.TenantId))">Delete</button>
+                </span>,
+            },
+        ];
+}

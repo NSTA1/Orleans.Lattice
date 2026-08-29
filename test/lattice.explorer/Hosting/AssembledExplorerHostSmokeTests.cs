@@ -8,8 +8,10 @@ using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Tenants;
 using Orleans.Lattice.Explorer.Web;
 
 namespace Orleans.Lattice.Explorer.Tests.Hosting;
@@ -31,14 +33,36 @@ public class AssembledExplorerHostSmokeTests
     // ---- 1. Navigation: the assembled area switcher --------------------------
 
     [Test]
-    public async Task Assembled_area_plugins_project_to_backups_then_access_in_order()
+    public async Task Assembled_area_plugins_project_to_backups_access_then_tenants_in_order()
     {
         await using var provider = BuildAssembledProvider();
         await using var scope = provider.CreateAsyncScope();
 
         var ids = AreaPluginIds(scope.ServiceProvider);
 
-        Assert.That(ids, Is.EqualTo(new[] { BackupsPluginKeys.PluginId, AccessPluginKeys.PluginId }));
+        Assert.That(ids, Is.EqualTo(new[]
+        {
+            BackupsPluginKeys.PluginId,
+            AccessPluginKeys.PluginId,
+            TenantsPluginKeys.PluginId,
+        }));
+    }
+
+    [Test]
+    public async Task Assembled_web_head_supplies_the_tenants_area_a_real_operator_gate()
+    {
+        // The Tenants area is reserved to platform operators, and the tenant-view
+        // seam registers a fail-closed operator gate with TryAdd. A head that
+        // enabled tenant scoping before registering the surface that supplies the
+        // real gate would ship an area nobody could ever open, so composing the
+        // area at all refuses in that case - which makes this fixture booting the
+        // proof that the assembled head has the order right.
+        await using var provider = BuildAssembledProvider();
+        await using var scope = provider.CreateAsyncScope();
+
+        var gate = scope.ServiceProvider.GetService<IExplorerTenantOperatorGate>();
+
+        Assert.That(gate, Is.Not.Null.And.TypeOf<AccessExplorerTenantOperatorGate>());
     }
 
     [Test]
@@ -73,6 +97,7 @@ public class AssembledExplorerHostSmokeTests
                 BackupsPluginKeys.PluginId,
                 AccessPluginKeys.PluginId,
                 SchemaPluginKeys.PluginId,
+                TenantsPluginKeys.PluginId,
             }));
     }
 

@@ -1,0 +1,563 @@
+/*
+    The Tenants plugin's scoped stylesheet.
+
+    Everything here is namespaced `lxt-` so it cannot collide with another
+    plugin's rules, and every value comes from a design-system token rather than
+    a literal, so the surface follows the shell's theme, density, and motion
+    settings without restating any of them.
+
+    There is not a single media query in this file, by design. The adaptive
+    decisions are made by name: the tenant list renders through
+    LatticeAdaptiveTable, which reflows to cards at compact on its own, and the
+    two places that genuinely need to reshape compose the design system's
+    breakpoint utilities (lx-only-compact / lx-medium-up / lx-expanded-up).
+    Per-component widths are how a responsive layer decays into forty
+    disagreeing opinions (epic decision D7).
+*/
+
+.lxt-root {
+    display: block;
+    block-size: 100%;
+}
+
+.lxt-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    font-family: var(--lx-font-ui);
+    font-size: var(--lx-text-body);
+    color: var(--lx-color-text);
+}
+
+/* ---- Status banners --------------------------------------------------- */
+
+.lxt-status {
+    margin: 0;
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    line-height: var(--lx-leading-normal);
+}
+
+.lxt-status.is-success {
+    border-color: var(--lx-color-success);
+    color: var(--lx-color-success);
+}
+
+.lxt-status.is-denied,
+.lxt-status.is-failed {
+    border-color: var(--lx-color-danger-border);
+    background: var(--lx-color-danger-surface);
+    color: var(--lx-color-danger);
+}
+
+/* A refusal an operator can act on reads differently from one they cannot. */
+.lxt-status.is-refused {
+    border-color: var(--lx-color-warning);
+    color: var(--lx-color-warning);
+}
+
+.lxt-status.is-unavailable {
+    border-color: var(--lx-color-border-strong);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-status-detail {
+    display: block;
+    margin-block-start: var(--lx-space-2);
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-caption {
+    margin: 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    line-height: var(--lx-leading-normal);
+}
+
+.lxt-caption.is-warning {
+    color: var(--lx-color-warning);
+}
+
+.lxt-hint {
+    margin: var(--lx-space-2) 0 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    line-height: var(--lx-leading-normal);
+}
+
+.lxt-empty {
+    margin: 0;
+    padding: var(--lx-space-6);
+    color: var(--lx-color-text-muted);
+    text-align: center;
+}
+
+/* ---- Shared surface furniture ----------------------------------------- */
+
+.lxt-surface-header,
+.lxt-list-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--lx-space-4);
+    margin-block-end: var(--lx-space-5);
+}
+
+.lxt-surface-title,
+.lxt-create-title,
+.lxt-editor-title,
+.lxt-section-title {
+    margin: 0;
+    font-size: var(--lx-text-title);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-tight);
+}
+
+.lxt-section-title {
+    font-size: var(--lx-text-base);
+}
+
+.lxt-subsection-title {
+    margin: var(--lx-space-6) 0 var(--lx-space-3);
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-count {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+}
+
+.lxt-page {
+    margin-inline-start: var(--lx-space-4);
+}
+
+.lxt-tenant-id,
+.lxt-subject-id,
+.lxt-region-id,
+.lxt-code {
+    font-family: var(--lx-font-mono);
+}
+
+/* ---- Badges ------------------------------------------------------------ */
+
+.lxt-badge {
+    display: inline-block;
+    padding: var(--lx-space-1) var(--lx-space-4);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-pill);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-medium);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.lxt-badge + .lxt-badge,
+.lxt-tenant-id .lxt-badge {
+    margin-inline-start: var(--lx-space-4);
+}
+
+.lxt-badge.is-active,
+.lxt-badge.is-online {
+    border-color: var(--lx-color-success);
+    color: var(--lx-color-success);
+}
+
+.lxt-badge.is-suspended,
+.lxt-badge.is-over {
+    border-color: var(--lx-color-danger-border);
+    color: var(--lx-color-danger);
+}
+
+/*
+    A pending grant authorizes nothing, so it is deliberately not styled like
+    an active one: the colour carries the same message as the label.
+*/
+.lxt-badge.is-pending,
+.lxt-badge.is-moving,
+.lxt-badge.is-draining {
+    border-color: var(--lx-color-warning);
+    color: var(--lx-color-warning);
+}
+
+.lxt-badge.is-closed,
+.lxt-badge.is-idle,
+.lxt-badge.is-default {
+    border-color: var(--lx-color-border-strong);
+    color: var(--lx-color-text-muted);
+}
+
+/* ---- Forms ------------------------------------------------------------- */
+
+.lxt-field {
+    display: block;
+    margin-block-end: var(--lx-space-5);
+}
+
+.lxt-field-label {
+    display: block;
+    margin-block-end: var(--lx-space-2);
+    font-size: var(--lx-text-caption);
+    font-weight: var(--lx-weight-medium);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-input {
+    inline-size: 100%;
+    min-block-size: var(--lx-target-min);
+    padding: var(--lx-space-3) var(--lx-space-4);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text);
+    font-family: inherit;
+    font-size: var(--lx-text-body);
+}
+
+.lxt-input:focus-visible {
+    outline: 2px solid var(--lx-color-focus-ring);
+    outline-offset: 1px;
+}
+
+.lxt-textarea {
+    font-family: var(--lx-font-mono);
+    resize: vertical;
+}
+
+.lxt-create,
+.lxt-quota-editor,
+.lxt-offer,
+.lxt-subject-add,
+.lxt-region-add {
+    padding: var(--lx-space-6);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+}
+
+.lxt-create-actions,
+.lxt-editor-actions,
+.lxt-region-actions,
+.lxt-confirm-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    margin-block-start: var(--lx-space-5);
+}
+
+.lxt-confirm-actions {
+    justify-content: flex-end;
+}
+
+.lxt-primary {
+    border-color: var(--lx-color-accent);
+    color: var(--lx-color-accent);
+}
+
+.lxt-danger {
+    border-color: var(--lx-color-danger-border);
+    color: var(--lx-color-danger);
+}
+
+.lxt-row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-3);
+}
+
+.lxt-row-action {
+    font-size: var(--lx-text-caption);
+}
+
+/* ---- Quotas ------------------------------------------------------------ */
+
+.lxt-dimensions {
+    list-style: none;
+    margin: var(--lx-space-5) 0;
+    padding: 0;
+    display: grid;
+    gap: var(--lx-space-5);
+}
+
+.lxt-dimension {
+    padding: var(--lx-space-5);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+}
+
+.lxt-dimension-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--lx-space-4);
+}
+
+.lxt-dimension-label {
+    font-weight: var(--lx-weight-medium);
+}
+
+.lxt-dimension-figures {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+}
+
+.lxt-of {
+    margin-inline: var(--lx-space-3);
+    color: var(--lx-color-text-dim);
+}
+
+/*
+    An absent figure is deliberately dimmed and italic rather than looking like
+    a number: "unlimited" and "not measured" are statements about the reading,
+    not values.
+*/
+.lxt-usage.is-absent,
+.lxt-limit.is-absent {
+    font-family: var(--lx-font-ui);
+    font-style: italic;
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-bar {
+    block-size: var(--lx-space-4);
+    margin-block-start: var(--lx-space-4);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-sunken);
+    overflow: hidden;
+}
+
+.lxt-bar-fill {
+    block-size: 100%;
+    background: var(--lx-color-accent);
+    transition: inline-size var(--lx-motion-medium) var(--lx-motion-ease-out);
+}
+
+.lxt-bar-fill.is-over {
+    background: var(--lx-color-danger);
+}
+
+/* The words that stand where a bar would lie. */
+.lxt-no-bar {
+    margin: var(--lx-space-4) 0 0;
+    font-size: var(--lx-text-caption);
+    font-style: italic;
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-dimension-detail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-6);
+    margin: var(--lx-space-4) 0 0;
+    font-size: var(--lx-text-caption);
+}
+
+.lxt-detail-pair dt {
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-detail-pair dd {
+    margin: 0;
+    font-family: var(--lx-font-mono);
+}
+
+.lxt-detail-pair.is-over dd {
+    color: var(--lx-color-danger);
+}
+
+/* ---- Regions ----------------------------------------------------------- */
+
+.lxt-region-list,
+.lxt-subject-list,
+.lxt-grant-list {
+    list-style: none;
+    margin: 0 0 var(--lx-space-5);
+    padding: 0;
+    display: grid;
+    gap: var(--lx-space-4);
+}
+
+.lxt-region,
+.lxt-subject,
+.lxt-grant {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--lx-space-4);
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+}
+
+.lxt-region.is-changed {
+    border-color: var(--lx-color-accent);
+}
+
+.lxt-region-allow {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+}
+
+.lxt-region-allowed-now {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-region-warning {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-warning);
+}
+
+.lxt-subject {
+    justify-content: space-between;
+}
+
+/* ---- Grants ------------------------------------------------------------ */
+
+.lxt-grant {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--lx-space-3);
+}
+
+.lxt-grant.is-pending {
+    border-color: var(--lx-color-warning);
+}
+
+.lxt-grant.is-closed {
+    opacity: 0.72;
+}
+
+.lxt-grant-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--lx-space-4);
+}
+
+.lxt-grant-parties {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+}
+
+.lxt-grant-arrow {
+    margin-inline: var(--lx-space-3);
+    color: var(--lx-color-text-dim);
+}
+
+.lxt-grant-scope {
+    margin: 0;
+    font-size: var(--lx-text-caption);
+}
+
+/*
+    The one line that says, in words, whether this grant currently permits
+    anything. It is never omitted, so a pending offer cannot read as live
+    access.
+*/
+.lxt-grant-authority {
+    margin: 0;
+    font-size: var(--lx-text-caption);
+}
+
+.lxt-grant-authority.is-live {
+    color: var(--lx-color-success);
+}
+
+.lxt-grant-authority.is-inert {
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-grant-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-3);
+}
+
+.lxt-grant-terminal {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-dim);
+}
+
+/* ---- Pager ------------------------------------------------------------- */
+
+.lxt-pager {
+    display: flex;
+    gap: var(--lx-space-4);
+    margin-block-start: var(--lx-space-5);
+}
+
+/* ---- Confirmation dialog ----------------------------------------------- */
+
+.lxt-confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--lx-layer-dialog);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--lx-space-6);
+    background: var(--lx-color-scrim);
+}
+
+.lxt-confirm {
+    inline-size: min(32rem, 100%);
+    padding: var(--lx-space-8);
+    border: 1px solid var(--lx-color-danger-border);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface-raised);
+}
+
+.lxt-confirm-title {
+    margin: 0 0 var(--lx-space-4);
+    font-size: var(--lx-text-title);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lxt-confirm-body {
+    margin: 0;
+    line-height: var(--lx-leading-normal);
+    color: var(--lx-color-text);
+}
+
+.lxt-confirm-caution {
+    margin: var(--lx-space-4) 0 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-warning);
+}
+
+/*
+    The one place the surface reshapes by breakpoint, and it does so by name.
+    At compact the per-row action buttons stack full width so they clear the
+    touch target minimum instead of crowding a phone row; from medium up they
+    sit inline.
+*/
+.lx-only-compact .lxt-row-actions .explorer-btn,
+.lx-only-compact .lxt-grant-actions .explorer-btn {
+    flex: 1 1 100%;
+    min-block-size: var(--lx-target-min-touch);
+}
+
+.lx-medium-up .lxt-dimensions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lx-expanded-up .lxt-dimensions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}

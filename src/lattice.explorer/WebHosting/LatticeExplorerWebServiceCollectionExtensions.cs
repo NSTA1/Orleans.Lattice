@@ -16,6 +16,7 @@ using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;
 
@@ -135,6 +136,13 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // gate that gates the area, plus the plugin registration that surfaces it.
         services.AddExplorerAccess();
         services.AddExplorerAccessPlugin();
+
+        // The Tenants (platform-operator tenant management) area. Registered
+        // after AddExplorerAccess(), which supplies the platform-operator gate
+        // this area is reserved to; the plugin's own registration turns on the
+        // tenant-view seam and the shared tenancy client, and refuses to compose
+        // at all if the gate it needs is the fail-closed default.
+        services.AddExplorerTenantsPlugin();
 
         // The Schema management area: the schema control-API client, its policy,
         // versioning, and compliance services, and the access gate that gates the

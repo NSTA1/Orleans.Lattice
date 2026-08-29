@@ -1,0 +1,144 @@
+@*
+    The selected tenant's admin subjects and its cross-tenant grants.
+
+    A cross-tenant grant is a two-step agreement, so a grant exists from the
+    moment it is offered and authorizes nothing until the grantee approves it.
+    Every row therefore states its lifecycle state three ways - a badge, the
+    words for what it does and does not permit, and the actions it still allows -
+    so a pending offer can never be mistaken for live access.
+
+    The two directions stay separate because they carry different affordances:
+    the tenant offers and withdraws on the issued side, and answers on the
+    received side. An operator acts on either tenant's behalf, so both are
+    actionable here.
+*@
+
+<div class="lxt-access">
+    <header class="lxt-surface-header">
+        <h3 class="lxt-surface-title">Tenant access for @State.SelectedTenantId</h3>
+        <button type="button" class="explorer-btn"
+                disabled="@(State.Busy || !State.Allowed)"
+                @onclick="State.RefreshAccessAsync">Refresh</button>
+    </header>
+
+    @if (State.SelectedIsDefault)
+    {
+        <p class="lxt-caption is-warning" role="status">
+            This is the reserved default tenant. The cluster refuses edits to its admin subjects and
+            its cross-tenant grants.
+        </p>
+    }
+
+    <section class="lxt-subjects" aria-label="Admin subjects">
+        <h4 class="lxt-section-title">Admin subjects</h4>
+        @if (State.AdminSubjects.Count == 0)
+        {
+            <p class="lxt-empty" role="status">No admin subjects were read for this tenant.</p>
+        }
+        else
+        {
+            <ul class="lxt-subject-list">
+                @foreach (var subject in State.AdminSubjects)
+                {
+                    <li class="lxt-subject" @key="subject">
+                        <span class="lxt-subject-id">@subject</span>
+                        <button type="button" class="explorer-btn lxt-danger lxt-row-action"
+                                disabled="@(State.Busy || !State.Allowed || !State.CanRemoveAdminSubject)"
+                                title="@(State.CanRemoveAdminSubject ? null : TenantRefusal.LastAdminSubjectRule)"
+                                @onclick="@(() => State.RequestRemoveAdminSubject(subject))">Revoke</button>
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (!State.CanRemoveAdminSubject && State.AdminSubjects.Count == 1)
+        {
+            <p class="lxt-caption is-warning" role="status">@TenantRefusal.LastAdminSubjectRule</p>
+        }
+
+        <form class="lxt-subject-add" @onsubmit="State.AddAdminSubjectAsync" @onsubmit:preventDefault="true">
+            <label class="lxt-field">
+                <span class="lxt-field-label">Grant admin authority to</span>
+                <input class="lxt-input" type="text"
+                       value="@State.AddAdminSubjectId"
+                       @onchange="@(e => State.AddAdminSubjectId = e.Value?.ToString() ?? string.Empty)" />
+            </label>
+            <button type="submit" class="explorer-btn" disabled="@(State.Busy || !State.Allowed)">Add subject</button>
+        </form>
+    </section>
+
+    <section class="lxt-grants" aria-label="Cross-tenant grants">
+        <h4 class="lxt-section-title">
+            Cross-tenant grants
+            @if (State.PendingReceivedCount > 0)
+            {
+                <span class="lxt-badge is-pending">
+                    @State.PendingReceivedCount awaiting an answer
+                </span>
+            }
+        </h4>
+
+        <p class="lxt-hint">
+            A grant is a two-step agreement: the granting tenant offers it and the grantee approves
+            it. Only an active grant authorizes anything - a pending, rejected, or revoked one
+            authorizes nothing at all.
+        </p>
+
+        <h5 class="lxt-subsection-title">Offered by @State.SelectedTenantId</h5>
+        <TenantGrantList State="State" Rows="State.IssuedGrants"
+                         EmptyText="This tenant has offered no cross-tenant grants." />
+
+        <h5 class="lxt-subsection-title">Offered to @State.SelectedTenantId</h5>
+        <TenantGrantList State="State" Rows="State.ReceivedGrants"
+                         EmptyText="No other tenant has offered this tenant a grant." />
+
+        <form class="lxt-offer" @onsubmit="State.OfferGrantAsync" @onsubmit:preventDefault="true">
+            <h5 class="lxt-subsection-title">Offer a grant</h5>
+            <label class="lxt-field">
+                <span class="lxt-field-label">Direction</span>
+                <select class="lxt-input" value="@(State.OfferFromSelectedTenant ? "from" : "to")"
+                        @onchange="@(e => State.OfferFromSelectedTenant = (e.Value?.ToString() ?? "from") == "from")">
+                    <option value="from">@State.SelectedTenantId offers its own data</option>
+                    <option value="to">Another tenant offers its data to @State.SelectedTenantId</option>
+                </select>
+            </label>
+            <label class="lxt-field">
+                <span class="lxt-field-label">@(State.OfferFromSelectedTenant ? "Grantee tenant" : "Granting tenant")</span>
+                <input class="lxt-input" type="text"
+                       value="@State.OfferCounterpartyTenantId"
+                       @onchange="@(e => State.OfferCounterpartyTenantId = e.Value?.ToString() ?? string.Empty)" />
+            </label>
+            <label class="lxt-field">
+                <span class="lxt-field-label">Scope</span>
+                <input class="lxt-input" type="text"
+                       value="@State.OfferScope"
+                       @onchange="@(e => State.OfferScope = e.Value?.ToString() ?? string.Empty)" />
+            </label>
+            <label class="lxt-field">
+                <span class="lxt-field-label">Operations</span>
+                <select class="lxt-input" value="@State.OfferOperations"
+                        @onchange="OnOperationsChanged">
+                    <option value="@ExplorerTenantGrantAccess.Read">Read</option>
+                    <option value="@ExplorerTenantGrantAccess.Write">Write</option>
+                    <option value="@ExplorerTenantGrantAccess.ReadWrite">Read and write</option>
+                </select>
+            </label>
+            <button type="submit" class="explorer-btn lxt-primary"
+                    disabled="@(State.Busy || !State.Allowed)">Offer grant</button>
+            <p class="lxt-hint">
+                The grant is created pending and authorizes nothing until the grantee tenant
+                approves it.
+            </p>
+        </form>
+    </section>
+</div>
+
+@code {
+    /// <summary>The workspace this view renders.</summary>
+    [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+
+    private void OnOperationsChanged(ChangeEventArgs args) =>
+        State.OfferOperations = Enum.TryParse<ExplorerTenantGrantAccess>(args.Value?.ToString(), out var parsed)
+            ? parsed
+            : ExplorerTenantGrantAccess.Read;
+}

@@ -69,6 +69,12 @@
       a head takes it directly. Withholding this reference ships no Access area.
     -->
     <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <!--
+      The Tenants plugin, likewise self-contained. It brings the shared tenancy
+      seam transitively, so a head that surfaces tenant administration takes
+      this one reference. Withholding it ships no Tenants area.
+    -->
+    <ProjectReference Include="..\Plugins\Tenants\Orleans.Lattice.Explorer.Tenants.csproj" />
   </ItemGroup>
 
 </Project>
