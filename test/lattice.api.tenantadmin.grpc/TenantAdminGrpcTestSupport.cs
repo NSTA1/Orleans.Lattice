@@ -211,6 +211,69 @@ internal sealed class FakeTenantRegionAdmin : ILatticeTenantRegionAdmin
     }
 }
 
+/// <summary>
+/// Configurable in-memory <see cref="ILatticeTenantAccessAdmin"/> facade for the
+/// gRPC tenant access-administration tests. Returns canned results per operation,
+/// or throws a pre-seeded exception, so the service's admin-subject
+/// result-mapping and its exception-to-<see cref="StatusCode"/> translation can be
+/// exercised without a real tenancy engine.
+/// </summary>
+internal sealed class FakeTenantAccessAdmin : ILatticeTenantAccessAdmin
+{
+    private static readonly string[] SeededSubjects = ["alice@example.com", "bob@example.com"];
+
+    public Exception? Throw { get; set; }
+
+    public string? LastTenantId { get; private set; }
+
+    public string? LastSubjectId { get; private set; }
+
+    public Task<TenantAdminSubjectReport> ListAdminSubjectsAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        return Throw is not null
+            ? Task.FromException<TenantAdminSubjectReport>(Throw)
+            : Task.FromResult(new TenantAdminSubjectReport
+            {
+                TenantId = tenantId,
+                Subjects = SeededSubjects,
+            });
+    }
+
+    public Task<TenantAdminSubjectChangeResult> AddAdminSubjectAsync(
+        string tenantId, string subjectId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        LastSubjectId = subjectId;
+        return Throw is not null
+            ? Task.FromException<TenantAdminSubjectChangeResult>(Throw)
+            : Task.FromResult(new TenantAdminSubjectChangeResult
+            {
+                TenantId = tenantId,
+                SubjectId = subjectId,
+                Changed = true,
+                Subjects = [.. SeededSubjects, subjectId],
+            });
+    }
+
+    public Task<TenantAdminSubjectChangeResult> RemoveAdminSubjectAsync(
+        string tenantId, string subjectId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        LastSubjectId = subjectId;
+        return Throw is not null
+            ? Task.FromException<TenantAdminSubjectChangeResult>(Throw)
+            : Task.FromResult(new TenantAdminSubjectChangeResult
+            {
+                TenantId = tenantId,
+                SubjectId = subjectId,
+                Changed = true,
+                Subjects = [.. SeededSubjects.Where(s => !string.Equals(s, subjectId, StringComparison.Ordinal))],
+            });
+    }
+}
+
 /// <summary>A fixed auth-scheme source returning a pre-built advertisement.</summary>
 internal sealed class FixedAuthSchemeSource(AuthSchemeAdvertisement advertisement) : ILatticeTenantAdminApiAuthSchemeSource
 {
@@ -335,6 +398,9 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "SetTenantResidency" => await service.SetTenantResidency((TenantAdminRegionSetRequest)(object)wireRequest, context),
             "GetTenantRegionStatus" => await service.GetTenantRegionStatus((TenantAdminTenantRequest)(object)wireRequest, context),
             "GetTenantQuotaUsage" => await service.GetTenantQuotaUsage((TenantAdminTenantRequest)(object)wireRequest, context),
+            "ListTenantAdminSubjects" => await service.ListTenantAdminSubjects((TenantAdminTenantRequest)(object)wireRequest, context),
+            "AddTenantAdminSubject" => await service.AddTenantAdminSubject((TenantAdminSubjectRequest)(object)wireRequest, context),
+            "RemoveTenantAdminSubject" => await service.RemoveTenantAdminSubject((TenantAdminSubjectRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };
 

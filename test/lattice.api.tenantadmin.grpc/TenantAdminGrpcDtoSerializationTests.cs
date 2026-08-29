@@ -363,6 +363,86 @@ public sealed class TenantAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TenantAdminSubjectRequest_round_trips()
+    {
+        var copy = RoundTrip(new TenantAdminSubjectRequest
+        {
+            TenantId = "acme",
+            SubjectId = "carol@example.com",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.SubjectId, Is.EqualTo("carol@example.com"));
+        });
+    }
+
+    [Test]
+    public void TenantAdminSubjectReport_round_trips_its_subjects()
+    {
+        var copy = RoundTrip(new TenantAdminSubjectReport
+        {
+            TenantId = "acme",
+            Subjects = ["alice@example.com", "bob@example.com"],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.Subjects, Is.EqualTo(new[] { "alice@example.com", "bob@example.com" }));
+        });
+    }
+
+    [Test]
+    public void TenantAdminSubjectReport_round_trips_an_empty_subject_set()
+    {
+        // A deliberately subject-less tenant must survive the wire as an empty
+        // list rather than null, so a client can tell it apart from a fault.
+        var copy = RoundTrip(new TenantAdminSubjectReport { TenantId = "acme", Subjects = [] });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Subjects, Is.Not.Null);
+            Assert.That(copy.Subjects, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void TenantAdminSubjectChangeResult_round_trips()
+    {
+        var copy = RoundTrip(new TenantAdminSubjectChangeResult
+        {
+            TenantId = "acme",
+            SubjectId = "carol@example.com",
+            Changed = true,
+            Subjects = ["alice@example.com", "carol@example.com"],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.TenantId, Is.EqualTo("acme"));
+            Assert.That(copy.SubjectId, Is.EqualTo("carol@example.com"));
+            Assert.That(copy.Changed, Is.True);
+            Assert.That(copy.Subjects, Is.EqualTo(new[] { "alice@example.com", "carol@example.com" }));
+        });
+    }
+
+    [Test]
+    public void TenantAdminSubjectChangeResult_round_trips_an_unchanged_result()
+    {
+        var copy = RoundTrip(new TenantAdminSubjectChangeResult
+        {
+            TenantId = "acme",
+            SubjectId = "alice@example.com",
+            Changed = false,
+            Subjects = ["alice@example.com"],
+        });
+
+        Assert.That(copy.Changed, Is.False);
+    }
+
+    [Test]
     public void Every_registry_alias_is_unique_and_uses_the_reserved_prefix()
     {
         var aliases = RegistryAliasValues();

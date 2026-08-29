@@ -269,6 +269,30 @@ public sealed class TenantRecord
     }
 
     /// <summary>
+    /// The number of live tenant-admin subjects. Counted in place without
+    /// materialising the id list, so a caller enforcing the "a tenant must keep at
+    /// least one admin subject" invariant pays no allocation for the check. The
+    /// zero-allocation counterpart of <see cref="AdminSubjects"/>, mirroring how
+    /// <see cref="ResidentRegionCount"/> complements <see cref="AllowedRegionIds"/>.
+    /// </summary>
+    public int AdminSubjectCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var slot in Subjects.Values)
+            {
+                if (slot.Present)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>
     /// The live cross-tenant grants, ordered by grant id. Materialised on each
     /// access; prefer <see cref="TryGetGrant"/> for a single lookup.
     /// </summary>

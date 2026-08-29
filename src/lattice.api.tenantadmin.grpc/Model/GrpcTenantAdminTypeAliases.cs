@@ -50,4 +50,7 @@ public static class GrpcTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantAdminRegionSetRequest"/>.</summary>
     public const string TenantAdminRegionSetRequest = "oitng.rgnset";
+
+    /// <summary>Alias for <see cref="TenantAdminSubjectRequest"/>.</summary>
+    public const string TenantAdminSubjectRequest = "oitng.subjreq";
 }

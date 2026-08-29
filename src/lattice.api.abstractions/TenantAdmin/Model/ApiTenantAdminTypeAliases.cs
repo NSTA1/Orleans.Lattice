@@ -70,4 +70,10 @@ public static class ApiTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantQuotaUsageReport"/>.</summary>
     public const string TenantQuotaUsageReport = "oitn.qr";
+
+    /// <summary>Alias for <see cref="TenantAdminSubjectReport"/>.</summary>
+    public const string TenantAdminSubjectReport = "oitn.sr";
+
+    /// <summary>Alias for <see cref="TenantAdminSubjectChangeResult"/>.</summary>
+    public const string TenantAdminSubjectChangeResult = "oitn.su";
 }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice;
+using Orleans.Lattice.Membership;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin;
@@ -107,6 +108,23 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetService<ILatticeMembershipContext>()));
         builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
         builder.Services.TryAddSingleton<TenantRegionLifecycleDriver>();
+
+        // N1 tenant access administration. The tenant-tier surface that manages a
+        // tenant's admin-subject set (list / add / remove), so membership can be
+        // changed after creation instead of being frozen at the create-time seed.
+        // It reuses the same two-tier authorizer as region residency - platform
+        // operator OR a live admin subject of that tenant - deliberately not the
+        // operator-only TenantAdminAccessAuthorizer that gates the lifecycle
+        // mutations above. The identity directory is resolved optionally so a
+        // granted subject id is validated against the upstream directory wherever
+        // one is configured, matching the create path's seeding contract.
+        builder.Services.TryAddSingleton<ILatticeTenantAccessAdmin>(sp => new LatticeTenantAccessAdmin(
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<ITenantAdminClock>(),
+            sp.GetRequiredService<IOptions<ClusterOptions>>(),
+            sp.GetService<ILatticeIdentityDirectory>(),
+            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
 
         // T21 tenant self-awareness. The read-only counterpart to the lifecycle
         // facade: it projects the caller's current tenant, the tenants it may

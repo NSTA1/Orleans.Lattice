@@ -62,6 +62,27 @@ public enum LatticeTenantAdminApiOperation
     /// applied through this value must not reintroduce a distinguishable refusal.
     /// </summary>
     GetTenantQuotaUsage = 9,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b>
+    /// <c>ListTenantAdminSubjects</c> RPC that reports which subjects hold
+    /// tenant-admin authority over a tenant.
+    /// </summary>
+    ListTenantAdminSubjects = 10,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-tenant-admin</b> <c>AddTenantAdminSubject</c>
+    /// RPC that grants a subject tenant-admin authority over a tenant.
+    /// </summary>
+    AddTenantAdminSubject = 11,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-tenant-admin</b>
+    /// <c>RemoveTenantAdminSubject</c> RPC that revokes a subject's tenant-admin
+    /// authority over a tenant. The facade refuses the removal of a tenant's last
+    /// admin subject.
+    /// </summary>
+    RemoveTenantAdminSubject = 12,
 }
 
 /// <summary>

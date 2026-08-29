@@ -11,8 +11,10 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// resume, and delete with tree cascade) alongside the unauthenticated auth-scheme
 /// discovery RPC - plus the three <see cref="ILatticeTenantRegionAdmin"/>
 /// region-residency operations (authorize allowed regions, set residency, read
-/// per-region status). A management surface (dashboard, CLI) consumes the API
-/// through this client rather than hand-rolling channel calls.
+/// per-region status) and the three <see cref="ILatticeTenantAccessAdmin"/>
+/// admin-subject operations (list, add, remove). A management surface (dashboard,
+/// CLI) consumes the API through this client rather than hand-rolling channel
+/// calls.
 /// </summary>
 /// <remarks>
 /// The client carries no transport policy of its own: address, TLS, retries,
@@ -268,6 +270,78 @@ public sealed class LatticeTenantAdminApiGrpcClient
         return UnaryAsync(
             _methods.GetTenantQuotaUsage,
             new TenantAdminTenantRequest { TenantId = tenantId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Lists the subjects that hold tenant-admin authority over a tenant, in
+    /// ordinal order. Read-only, and a <b>tenant-admin</b> action - the server
+    /// authorizes the caller as the platform operator <b>or</b> a live admin
+    /// subject on the tenant record, and answers a non-operator caller naming a
+    /// tenant it does not administer with <c>PermissionDenied</c> rather than
+    /// <c>NotFound</c>, so tenant existence cannot be probed.
+    /// </summary>
+    /// <param name="tenantId">The tenant id whose admin subjects to list. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tenant's live admin-subject set.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantAdminSubjectReport> ListTenantAdminSubjectsAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        return UnaryAsync(
+            _methods.ListTenantAdminSubjects,
+            new TenantAdminTenantRequest { TenantId = tenantId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Grants <paramref name="subjectId"/> tenant-admin authority over
+    /// <paramref name="tenantId"/>. A <b>tenant-admin</b> action - the server
+    /// authorizes the caller as the platform operator <b>or</b> a live admin
+    /// subject on the tenant record. Idempotent: granting an existing member
+    /// reports <see cref="TenantAdminSubjectChangeResult.Changed"/>
+    /// <see langword="false"/>. The reserved default tenant is refused with
+    /// <c>FailedPrecondition</c>.
+    /// </summary>
+    /// <param name="tenantId">The tenant id to grant authority over. Must not be <c>null</c> or empty.</param>
+    /// <param name="subjectId">The subject id to grant tenant-admin authority to. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The change result, carrying the resulting admin-subject set.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> or <paramref name="subjectId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantAdminSubjectChangeResult> AddTenantAdminSubjectAsync(
+        string tenantId, string subjectId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        ArgumentException.ThrowIfNullOrEmpty(subjectId);
+        return UnaryAsync(
+            _methods.AddTenantAdminSubject,
+            new TenantAdminSubjectRequest { TenantId = tenantId, SubjectId = subjectId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Revokes <paramref name="subjectId"/>'s tenant-admin authority over
+    /// <paramref name="tenantId"/>. A <b>tenant-admin</b> action - the server
+    /// authorizes the caller as the platform operator <b>or</b> a live admin
+    /// subject on the tenant record. Idempotent: revoking a non-member reports
+    /// <see cref="TenantAdminSubjectChangeResult.Changed"/> <see langword="false"/>.
+    /// Removing the tenant's last admin subject, and any mutation of the reserved
+    /// default tenant, are refused with <c>FailedPrecondition</c>.
+    /// </summary>
+    /// <param name="tenantId">The tenant id to revoke authority over. Must not be <c>null</c> or empty.</param>
+    /// <param name="subjectId">The subject id to revoke tenant-admin authority from. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The change result, carrying the resulting admin-subject set.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> or <paramref name="subjectId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantAdminSubjectChangeResult> RemoveTenantAdminSubjectAsync(
+        string tenantId, string subjectId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        ArgumentException.ThrowIfNullOrEmpty(subjectId);
+        return UnaryAsync(
+            _methods.RemoveTenantAdminSubject,
+            new TenantAdminSubjectRequest { TenantId = tenantId, SubjectId = subjectId },
             cancellationToken);
     }
 
