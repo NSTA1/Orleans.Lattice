@@ -59,19 +59,6 @@ public static class ExplorerUiPluginServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the Access area plugin. The Access feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerAccessPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<AccessAreaPlugin>();
-    }
-
-    /// <summary>
     /// Registers the Schema area plugin. The Schema feature itself must be
     /// registered separately (it owns the control client and the access gate).
     /// A head that does not call this ships no Schema tab at all, which is what

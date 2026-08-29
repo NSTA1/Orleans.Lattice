@@ -1,8 +1,7 @@
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
-using Orleans.Lattice.Explorer.Access;
 
-namespace Orleans.Lattice.Explorer.UI.Access;
+namespace Orleans.Lattice.Explorer.Access.Views;
 
 /// <summary>
 /// Presentation helpers shared by the Access area's policy views: compact,

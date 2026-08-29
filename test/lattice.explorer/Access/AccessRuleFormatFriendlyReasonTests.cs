@@ -2,7 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Access;
-using Orleans.Lattice.Explorer.UI.Access;
+using Orleans.Lattice.Explorer.Access.Views;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.Tests.Access;
