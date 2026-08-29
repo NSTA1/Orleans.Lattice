@@ -23,10 +23,11 @@ public partial class BPlusLeafGrainTests
         ICommitLogWriter? commitLog = null)
     {
         state ??= new FakePersistentState<LeafNodeState>();
-        // CrdtShapeRegistry.TryGet rejects an empty tree id, and in
-        // production every leaf activation lands with a non-empty
-        // TreeId; tests that route through ApplyCrdtDeltaAsync must
-        // therefore seed one before driving the grain.
+        // Both CRDT paths on the leaf refuse to resolve a CrdtShape until the
+        // owning shard root has attached the leaf with a tree id (see
+        // BPlusLeafGrainTests.CrdtUnseededLeaf), and in production every leaf
+        // activation lands attached; tests that route through
+        // ApplyCrdtDeltaAsync must therefore seed one before driving the grain.
         if (string.IsNullOrEmpty(state.State.TreeId))
             state.State.TreeId = "test-tree";
         return CreateGrain(state, commitLog: commitLog);

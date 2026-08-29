@@ -17,7 +17,8 @@ public partial class BPlusLeafGrainTests
         LatticeOptions? options = null,
         IBPlusLeafGrain? siblingStub = null,
         int maxLeafKeys = 128,
-        ICommitLogWriter? commitLog = null)
+        ICommitLogWriter? commitLog = null,
+        ILatticeMergeModeResolver? mergeModeResolver = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
@@ -31,12 +32,20 @@ public partial class BPlusLeafGrainTests
         // fake exclusively; the legacy state.WriteStateAsync() call
         // site is gone from the backstop path under the
         // WAL-as-sole-commit-point invariant.
-        if (commitLog is not null)
+        //
+        // A fake ILatticeMergeModeResolver is wired through the same
+        // service provider but deliberately does NOT seed a TreeId: the
+        // unseeded-leaf regression tests need a CRDT merge mode on a leaf
+        // the shard root has not attached yet.
+        if (commitLog is not null || mergeModeResolver is not null)
         {
             var services = Substitute.For<IServiceProvider>();
-            services.GetService(typeof(ICommitLogWriter)).Returns(commitLog);
+            if (commitLog is not null)
+                services.GetService(typeof(ICommitLogWriter)).Returns(commitLog);
+            if (mergeModeResolver is not null)
+                services.GetService(typeof(ILatticeMergeModeResolver)).Returns(mergeModeResolver);
             context.ActivationServices.Returns(services);
-            if (string.IsNullOrEmpty(state.State.TreeId))
+            if (commitLog is not null && string.IsNullOrEmpty(state.State.TreeId))
                 state.State.TreeId = "test-tree";
         }
 

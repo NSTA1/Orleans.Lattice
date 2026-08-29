@@ -20,6 +20,13 @@ namespace Orleans.Lattice;
 /// <b>Sources.</b> Raised by the leaf grain's typed CRDT apply path
 /// (<c>ApplyCrdtDeltaAsync</c>) and by the prepared-atomic-write fold on the
 /// terminal commit, both of which require a shape descriptor for OR-Map trees.
+/// Both paths also raise it when the leaf activation has no tree id bound at
+/// all - a CRDT write that reached a leaf the owning shard root had not yet
+/// attached, so no shape could be looked up for any mode. That variant carries
+/// an empty <see cref="TreeId"/> and names the grain, key, and mode in its
+/// message; it is a routing/lifecycle race (for example a tree deleted and
+/// recovered underneath in-flight writes), not a missing registration, so the
+/// remedy is to retry once the tree has finished attaching.
 /// </para>
 /// <para>
 /// Derives from <see cref="System.InvalidOperationException"/> so existing catch
