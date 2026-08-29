@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.Web;
@@ -50,7 +50,7 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
             Assert.That(services.Any(d => d.ServiceType == typeof(LatticeExplorerWebOptions)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerConfigStore)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerSession)), Is.True);
-            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerCapabilityStore)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerPluginAccessStore)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(ICredentialStore)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(ExplorerAuthUiOptions)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IUiPreferenceBackingStore)), Is.True);

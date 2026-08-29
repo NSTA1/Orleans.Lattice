@@ -1,20 +1,20 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Backup;
 
 /// <summary>
 /// Registration helpers for the explorer's Backups area: the backup control
-/// client, the catalog reader, and the capability service, plus the navigation
-/// capability store they publish into.
+/// client, the catalog reader, and the plugin access gate, plus the keyed
+/// plugin access store the gate publishes into.
 /// </summary>
 public static class ExplorerBackupServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Backups feature. Also calls
-    /// <see cref="ExplorerNavigationServiceCollectionExtensions.AddExplorerNavigation"/>
-    /// so the shell's capability store exists. Call after
+    /// <see cref="ExplorerPluginServiceCollectionExtensions.AddExplorerPluginHost"/>
+    /// so the keyed access store the gate publishes into exists. Call after
     /// <c>AddExplorerConfiguration</c> and <c>AddExplorerAuth</c>, whose session
     /// and sign-in the backup client reads.
     /// </summary>
@@ -22,7 +22,7 @@ public static class ExplorerBackupServiceCollectionExtensions
     public static IServiceCollection AddExplorerBackup(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerNavigation();
+        services.AddExplorerPluginHost();
         // Scoped per Blazor circuit: the backup control client reads the calling
         // scope's session and sign-in, so it must not be shared across circuits.
         // GrpcBackupControlClient owns its own Orleans serializer provider; it must

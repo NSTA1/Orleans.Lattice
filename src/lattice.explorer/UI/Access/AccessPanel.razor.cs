@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.UI.Access;
@@ -11,9 +12,11 @@ namespace Orleans.Lattice.Explorer.UI.Access;
 /// The Access (membership &amp; access-control) area's interactive panel. Drives
 /// the membership and policy admin services over the auth-admin control plane and
 /// the facade-computed Explain / EffectivePermissions introspection. Every action
-/// is gated on the advisory <see cref="Orleans.Lattice.Explorer.Core.Navigation.ExplorerCapabilities.AuthAdminAllowed"/>
-/// flag (rendering disabled, not hidden, when denied) and folds a server denial
-/// into a clean status banner rather than surfacing an unhandled error.
+/// is gated on the Access plugin's own advisory access decision, read from the
+/// keyed <see cref="IExplorerPluginAccessStore"/> under
+/// <see cref="AccessPluginKeys.PluginId"/> (rendering disabled, not hidden, when
+/// denied) and folds a server denial into a clean status banner rather than
+/// surfacing an unhandled error.
 /// </summary>
 public partial class AccessPanel : ComponentBase, IDisposable
 {
@@ -126,9 +129,8 @@ public partial class AccessPanel : ComponentBase, IDisposable
     protected override async Task OnInitializedAsync()
     {
         _accessModel = new AccessCreateModel(Membership);
-        _allowed = Capabilities.Current.AuthAdminAllowed;
-        _authenticationRequired = Capabilities.Current.AuthAdminAuthenticationRequired;
-        Capabilities.Changed += OnCapabilitiesChanged;
+        ReadAccess(out _allowed, out _authenticationRequired);
+        AccessStore.Changed += OnAccessChanged;
         if (_allowed)
         {
             await LoadAccessModelAsync();
@@ -137,10 +139,25 @@ public partial class AccessPanel : ComponentBase, IDisposable
         }
     }
 
-    private void OnCapabilitiesChanged()
+    private void ReadAccess(out bool allowed, out bool authenticationRequired)
     {
-        var allowed = Capabilities.Current.AuthAdminAllowed;
-        var authenticationRequired = Capabilities.Current.AuthAdminAuthenticationRequired;
+        var access = AccessStore.Get(AccessPluginKeys.PluginId);
+        allowed = access.IsAllowed;
+        authenticationRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
+    }
+
+    private void OnAccessChanged(ExplorerPluginAccessChange change)
+    {
+        // Only this plugin's own plugin-level decision gates the panel; a sibling
+        // plugin's probe completing, or this plugin's scoped sub-capability
+        // changing, must not re-render it.
+        if (change.Key.Scope is not null
+            || !string.Equals(change.Key.PluginId, AccessPluginKeys.PluginId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        ReadAccess(out var allowed, out var authenticationRequired);
         if (allowed == _allowed && authenticationRequired == _authenticationRequired)
         {
             return;
@@ -944,5 +961,5 @@ public partial class AccessPanel : ComponentBase, IDisposable
     };
 
     /// <inheritdoc />
-    public void Dispose() => Capabilities.Changed -= OnCapabilitiesChanged;
+    public void Dispose() => AccessStore.Changed -= OnAccessChanged;
 }

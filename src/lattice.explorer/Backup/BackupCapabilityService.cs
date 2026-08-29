@@ -2,33 +2,56 @@ using Grpc.Core;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Backup;
 
 /// <summary>
 /// The default <see cref="IBackupCapabilityService"/>. Drives the
-/// <see cref="IBackupControlClient"/> probe surface and republishes a merged
-/// <see cref="ExplorerCapabilities"/> into the <see cref="IExplorerCapabilityStore"/>.
+/// <see cref="IBackupControlClient"/> probe surface: its plugin-level probe is
+/// the coarse catalog read, and <see cref="ProbeScopeAsync"/> files the
+/// per-tree decisions into the keyed <see cref="IExplorerPluginAccessStore"/>.
 /// All probes swallow a denial / transport failure and fall back to deny, so a
 /// probe never breaks the shell.
 /// </summary>
+/// <remarks>
+/// The plugin-level decision is the coarse catalog gate <em>or</em> any per-tree
+/// scope that has granted list access, so a caller who can read backups for at
+/// least one tree can reach the area even when the catalog-wide read is denied.
+/// The per-scope grants persist across a re-probe, exactly as the cached scope
+/// map they replace did.
+/// </remarks>
 public sealed class BackupCapabilityService(
     IBackupControlClient client,
-    IExplorerCapabilityStore store) : IBackupCapabilityService
+    IExplorerPluginAccessStore store) : IBackupCapabilityService
 {
     private readonly IBackupControlClient _client = client ?? throw new ArgumentNullException(nameof(client));
-    private readonly IExplorerCapabilityStore _store = store ?? throw new ArgumentNullException(nameof(store));
+
+    private readonly IExplorerPluginAccessStore _store =
+        store ?? throw new ArgumentNullException(nameof(store));
+
+    // Set once any probed scope grants list access. Read on the probe path only
+    // (never per render), and never cleared, so a scope grant keeps the area
+    // reachable across a later coarse re-probe.
+    private volatile bool _anyScopeGrantsList;
 
     /// <inheritdoc />
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<ExplorerPluginAccess> ProbeAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
+
         var allowed = await ProbeCoarseAsync(cancellationToken).ConfigureAwait(false);
-        var current = _store.Current;
-        _store.Set(current with { BackupListAllowed = allowed });
+        return allowed || _anyScopeGrantsList
+            ? ExplorerPluginAccess.Allowed
+            : ExplorerPluginAccess.Denied;
     }
 
     /// <inheritdoc />
-    public async Task<BackupScopeCapabilitySnapshot> ProbeScopeAsync(string treeId, CancellationToken cancellationToken = default)
+    public async Task<BackupScopeCapabilitySnapshot> ProbeScopeAsync(
+        string treeId,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
@@ -49,16 +72,38 @@ public sealed class BackupCapabilityService(
             snapshot = BackupScopeCapabilitySnapshot.None;
         }
 
-        var current = _store.Current;
-        var byScope = new Dictionary<string, BackupScopeCapabilitySnapshot>(current.BackupByScope, StringComparer.Ordinal)
-        {
-            [treeId] = snapshot,
-        };
-
-        // A scope that grants list access also implies the coarse area gate.
-        var allowed = current.BackupListAllowed || snapshot.CanList;
-        _store.Set(current with { BackupListAllowed = allowed, BackupByScope = byScope });
+        Publish(treeId, snapshot);
         return snapshot;
+    }
+
+    private void Publish(string treeId, BackupScopeCapabilitySnapshot snapshot)
+    {
+        _store.Set(BackupsPluginKeys.PluginId, BackupsPluginKeys.ListScope(treeId), Decide(snapshot.CanList));
+        _store.Set(
+            BackupsPluginKeys.PluginId,
+            BackupsPluginKeys.CaptureScope(treeId),
+            Decide(snapshot.CanCapture));
+        _store.Set(
+            BackupsPluginKeys.PluginId,
+            BackupsPluginKeys.CaptureIncrementalScope(treeId),
+            Decide(snapshot.CanCaptureIncremental));
+        _store.Set(
+            BackupsPluginKeys.PluginId,
+            BackupsPluginKeys.RestoreScope(treeId),
+            Decide(snapshot.CanRestore));
+        _store.Set(
+            BackupsPluginKeys.PluginId,
+            BackupsPluginKeys.DeleteScope(treeId),
+            Decide(snapshot.CanDelete));
+
+        if (!snapshot.CanList)
+        {
+            return;
+        }
+
+        // A scope that grants list access also implies the plugin-level gate.
+        _anyScopeGrantsList = true;
+        _store.Set(BackupsPluginKeys.PluginId, ExplorerPluginAccess.Allowed);
     }
 
     private async Task<bool> ProbeCoarseAsync(CancellationToken cancellationToken)
@@ -87,6 +132,9 @@ public sealed class BackupCapabilityService(
             return false;
         }
     }
+
+    private static ExplorerPluginAccess Decide(bool granted) =>
+        granted ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Denied;
 
     private static BackupScopeCapabilitySnapshot Map(BackupScopeCapabilities capabilities) => new()
     {

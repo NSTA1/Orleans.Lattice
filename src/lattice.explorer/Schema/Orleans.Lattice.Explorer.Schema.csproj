@@ -32,6 +32,7 @@
   -->
   <ItemGroup>
     <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\Plugins\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\..\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
   </ItemGroup>
 
