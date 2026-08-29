@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.TestingHost;
 using System.Text;
 
@@ -159,6 +160,122 @@ public class TreeDeletionIntegrationTests
 
         await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         Assert.ThrowsAsync<InvalidOperationException>(() => router.RecoverTreeAsync());
+    }
+
+    /// <summary>
+    /// Issue #1744. A purge that dies part-way clears node state but leaves the
+    /// owning shard root intact, and the shard root only seeds a node's tree id
+    /// when it CREATES that node. Recovering such a tree used to leave a
+    /// routable but unseeded root leaf: routing delivered the write, the leaf
+    /// had no tree id to resolve a CrdtShape from, and every typed CRDT write to
+    /// its key range failed permanently with
+    /// <see cref="LatticeCrdtShapeNotRegisteredException"/>. Recovery now
+    /// re-asserts the binding.
+    /// </summary>
+    [Test]
+    public async Task RecoverTree_rebinds_a_root_leaf_left_unseeded_by_an_interrupted_purge()
+    {
+        var treeName = $"rec-partial-purge-{Guid.NewGuid():N}";
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeName, new TreeRegistryEntry { ShardCount = 1 });
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{treeName}/0");
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        Assert.That(leafId, Is.Not.Null);
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
+
+        await router.DeleteTreeAsync();
+
+        // Simulate a purge interrupted after its first node clear. The leftmost
+        // leaf is unconditionally the first node ShardRootGrain.PurgeAsync
+        // clears, and ClearGrainStateAsync is exactly the call it makes, so this
+        // is the state a PurgeTreeAsync that blew the grain-call timeout leaves
+        // behind: node state gone, shard root untouched, no purge flags set.
+        await leaf.ClearGrainStateAsync();
+        Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the leaf");
+
+        await router.RecoverTreeAsync();
+
+        Assert.That(await leaf.GetTreeIdAsync(), Is.EqualTo(treeName));
+
+        // The write path that used to fail permanently: a typed CRDT apply
+        // routed to the re-bound leaf.
+        await router.OrFlag("a").EnableAsync("replica-1");
+        Assert.That(await router.OrFlag("a").IsEnabledAsync(), Is.True);
+    }
+
+    /// <summary>
+    /// Issue #1744, deeper topology. When the shard root is an internal node the
+    /// unseeded leaf is not the root, so the repair has to descend the internal
+    /// nodes to reach it - the leaf sibling chain cannot be used, because
+    /// clearing a leaf wipes its sibling pointers.
+    /// </summary>
+    [Test]
+    public async Task RecoverTree_rebinds_a_non_root_leaf_left_unseeded_by_an_interrupted_purge()
+    {
+        var treeName = $"rec-partial-purge-deep-{Guid.NewGuid():N}";
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeName, new TreeRegistryEntry
+        {
+            MaxLeafKeys = SmallLeafClusterFixture.SmallMaxLeafKeys,
+            ShardCount = 1,
+        });
+
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+        for (var i = 0; i < 20; i++)
+        {
+            await router.SetAsync($"k{i:D2}", Encoding.UTF8.GetBytes($"v{i:D2}"));
+        }
+
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{treeName}/0");
+        var diagnostics = await shard.GetDiagnosticsAsync(deep: false);
+        Assert.That(diagnostics.RootIsLeaf, Is.False, "precondition: the tree split into an internal root");
+
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        Assert.That(leafId, Is.Not.Null);
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
+
+        // A second leaf, so the repair has to rebind more than the one the
+        // damage probe happens to look at.
+        var siblingId = await leaf.GetNextSiblingAsync();
+        Assert.That(siblingId, Is.Not.Null, "precondition: the tree has more than one leaf");
+        var sibling = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(siblingId!.Value);
+
+        await router.DeleteTreeAsync();
+        await leaf.ClearGrainStateAsync();
+        await sibling.ClearGrainStateAsync();
+        Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the leaf");
+        Assert.That(await sibling.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the sibling");
+
+        await router.RecoverTreeAsync();
+
+        Assert.That(await leaf.GetTreeIdAsync(), Is.EqualTo(treeName));
+        Assert.That(await sibling.GetTreeIdAsync(), Is.EqualTo(treeName));
+        await router.OrFlag("k00").EnableAsync("replica-1");
+        Assert.That(await router.OrFlag("k00").IsEnabledAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task RecoverTree_leaves_a_healthy_tree_bound()
+    {
+        var treeName = $"rec-healthy-{Guid.NewGuid():N}";
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeName, new TreeRegistryEntry { ShardCount = 1 });
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{treeName}/0");
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
+
+        await router.DeleteTreeAsync();
+        await router.RecoverTreeAsync();
+
+        Assert.That(await leaf.GetTreeIdAsync(), Is.EqualTo(treeName));
+        Assert.That(Encoding.UTF8.GetString((await router.GetAsync("a"))!), Is.EqualTo("1"));
     }
 
     [Test]

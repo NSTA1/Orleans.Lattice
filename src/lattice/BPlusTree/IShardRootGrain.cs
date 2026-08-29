@@ -395,6 +395,31 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task PurgeAsync();
 
     /// <summary>
+    /// Re-asserts the owning-tree binding on every node this shard still
+    /// routes to, repairing a topology left half-torn-down by an interrupted
+    /// <see cref="PurgeAsync"/>. Called by <see cref="ITreeDeletionGrain"/> on
+    /// the recovery path.
+    /// <para>
+    /// <see cref="PurgeAsync"/> clears its child nodes before its own state, so
+    /// a purge that dies part-way (a grain-call timeout, a storage fault, a
+    /// silo restart) leaves this shard root pointing at nodes whose state -
+    /// including the <c>TreeId</c> the shard root seeded at creation - has been
+    /// wiped. Because the creation branch that seeds a node is guarded by the
+    /// shard root's own <c>RootNodeId</c>, nothing ever re-seeds them, and a
+    /// recovered tree routes writes to a leaf that rejects every typed CRDT
+    /// apply with <see cref="LatticeCrdtShapeNotRegisteredException"/> forever.
+    /// </para>
+    /// <para>
+    /// Cheap on a healthy shard: the leftmost leaf is unconditionally the first
+    /// node <see cref="PurgeAsync"/> clears, so a leftmost leaf that still
+    /// carries its binding proves no node in this shard was cleared and the
+    /// walk is skipped after a single probe. Idempotent, and safe to call on a
+    /// shard that was never purged.
+    /// </para>
+    /// </summary>
+    Task ReseedNodeBindingsAsync();
+
+    /// <summary>
     /// Merges entries into this shard using LWW (Last-Writer-Wins) semantics,
     /// preserving original
     /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/> timestamps. Routes
