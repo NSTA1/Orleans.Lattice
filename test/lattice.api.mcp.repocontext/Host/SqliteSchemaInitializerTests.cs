@@ -123,6 +123,21 @@ public sealed class SqliteSchemaInitializerTests
     public void Constructor_rejects_an_empty_path(string path)
         => Assert.That(() => new SqliteSchemaInitializer(path), Throws.ArgumentException);
 
+    [Test]
+    public void Initialize_rejects_a_database_path_with_no_parent_directory()
+    {
+        // A filesystem root has no parent, so there is no directory the guard
+        // could prove writable. Refusing beats opening a database at the root of
+        // the container filesystem, which is outside the mounted data volume and
+        // would not survive a restart.
+        var root = Path.GetPathRoot(Path.GetTempPath())!;
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => new SqliteSchemaInitializer(root).Initialize());
+
+        Assert.That(ex!.Message, Does.Contain("Could not resolve a directory"));
+    }
+
     private bool TableExists(string table)
     {
         using var connection = new SqliteConnection(SqliteSchemaInitializer.BuildConnectionString(_dbPath));
