@@ -198,52 +198,45 @@ internal sealed partial class ShardRootGrain
         // binding included, on the first operation after recovery.
         if (state.State.RootNodeId is null) return;
 
-        var rootIsLeafTyped = RootIsLeafTyped;
-
-        // Probe before walking. PurgeAsync clears the leftmost leaf before any
-        // other node in this shard, so a leftmost leaf that still carries its
-        // tree-id binding proves no node here was cleared: the healthy
-        // delete/recover cycle pays one edge descent plus one RPC and skips the
-        // walk entirely.
-        //
-        // Best-effort: a probe that cannot resolve or reach the leftmost leaf
-        // (a topology whose internal root was itself cleared, a leaf whose silo
-        // is momentarily unreachable) must not fail the recovery that called
-        // it. Recovery succeeds today without this repair, and an unbound node
-        // still surfaces loudly and typed on the write path, so degrading to
-        // "no repair" is strictly no worse than the status quo whereas throwing
-        // would make recovery newly fragile.
-        string? boundTreeId;
+        // Walk unconditionally rather than probing one node and inferring the
+        // rest. An earlier revision of this repair probed the leftmost leaf on
+        // the theory that PurgeAsync clears it first, so a bound leftmost leaf
+        // proved the whole shard was intact. That inference does not hold: a
+        // split inherits the donor's binding verbatim, so an unbound leaf mints
+        // an unbound sibling anywhere in the key range while the leftmost leaf
+        // stays perfectly bound. Recovery is a rare operator action, so paying
+        // the full walk to be correct is the right trade.
+        var leafIds = new List<GrainId>();
+        var internalIds = new List<GrainId>();
+        bool truncated;
         try
         {
-            var leftmostLeafId = rootIsLeafTyped
-                ? state.State.RootNodeId!.Value
-                : await TraverseToLeftmostLeafAsync();
-            boundTreeId = await grainFactory.GetGrain<IBPlusLeafGrain>(leftmostLeafId).GetTreeIdAsync();
+            truncated = await CollectBindingTargetsAsync(RootIsLeafTyped, leafIds, internalIds);
         }
         catch (Exception ex)
         {
+            // Best-effort: a topology whose internal root was itself cleared has
+            // nothing to descend, and a node's silo may be momentarily
+            // unreachable. Recovery succeeds today without this repair and an
+            // unbound node still surfaces loudly and typed on the write path
+            // (where it is now also self-repairing), so degrading to "no repair"
+            // is strictly no worse than the status quo, whereas throwing would
+            // make recovery newly fragile.
             logger.LogWarning(
                 ex,
-                "Could not probe node bindings for shard {ShardIndex} of tree {TreeId} after recovery; "
-                + "a node left unbound by an interrupted purge would keep rejecting typed CRDT writes to its key range.",
+                "Could not walk shard {ShardIndex} of tree {TreeId} to re-assert node bindings after recovery; "
+                + "a node left unbound by an interrupted purge would keep rejecting typed CRDT writes to its key "
+                + "range until the write path re-binds it.",
                 MyShardIndex,
                 TreeId);
             return;
         }
 
-        // Healthy shard - nothing was torn down, so nothing to re-assert.
-        if (boundTreeId is not null) return;
-
-        var leafIds = new List<GrainId>();
-        var internalIds = new List<GrainId>();
-        var truncated = await CollectBindingTargetsAsync(rootIsLeafTyped, leafIds, internalIds);
-
         // Leaves first: an unbound leaf is what actually fails the write path,
         // whereas an unbound internal node only degrades its per-tree options
-        // lookup. Both setters are idempotent, so a node that survived the
-        // interrupted purge with its binding intact costs one short-circuited
-        // RPC and no storage write.
+        // lookup. Both setters are idempotent and short-circuit inside the
+        // callee, so a node that is already bound costs one RPC and no storage
+        // write - which is what makes an unconditional walk affordable.
         await BoundedFanOut.RunAsync(leafIds.Count, ReseedFanOutWidth, async slot =>
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[slot]);
@@ -258,23 +251,12 @@ internal sealed partial class ShardRootGrain
         {
             logger.LogWarning(
                 "Re-asserted node bindings on the first {NodeCount} nodes of shard {ShardIndex} of tree {TreeId} "
-                + "after an interrupted purge, but the shard has more than the {MaxReseedNodes}-node repair budget; "
-                + "keys routed to the nodes beyond it may still reject typed CRDT writes.",
+                + "after recovery, but the shard has more than the {MaxReseedNodes}-node repair budget; "
+                + "keys routed to the nodes beyond it are re-bound by the write path on their next typed CRDT write.",
                 leafIds.Count + internalIds.Count,
                 MyShardIndex,
                 TreeId,
                 MaxReseedNodes);
-        }
-        else
-        {
-            logger.LogWarning(
-                "Re-asserted node bindings on {LeafCount} leaf and {InternalCount} internal node(s) of shard "
-                + "{ShardIndex} of tree {TreeId}: an earlier purge was interrupted after clearing node state but "
-                + "before clearing this shard root, leaving the recovered tree routing writes to unbound nodes.",
-                leafIds.Count,
-                internalIds.Count,
-                MyShardIndex,
-                TreeId);
         }
     }
 

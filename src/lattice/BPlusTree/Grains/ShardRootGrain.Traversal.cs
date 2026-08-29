@@ -677,7 +677,8 @@ internal sealed partial class ShardRootGrain
         {
             var leafId = await ResolveWriteLeafAsync(key, path);
             var leafGrain = ResolveLeafGrain(leafId);
-            var result = await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks);
+            var result = await ApplyCrdtDeltaRebindingUnboundLeafAsync(
+                leafGrain, leafId, key, mode, deltaBytes, expiresAtTicks);
 
             // Propagate splits up the tree.
             var splitResult = result.Split;
@@ -698,6 +699,74 @@ internal sealed partial class ShardRootGrain
         finally
         {
             StackPool.Return(path);
+        }
+    }
+
+    /// <summary>
+    /// Applies a typed CRDT delta to <paramref name="leafGrain"/>, re-binding the
+    /// leaf and retrying once if it turns out to be routable but unseeded.
+    /// <para>
+    /// A leaf's owning-tree binding is otherwise only ever written when the node
+    /// is <em>created</em>, so a leaf that loses it - an interrupted
+    /// <c>PurgeAsync</c> clears node state before the shard root's own state, and
+    /// a split inherits the donor's binding verbatim, so an unbound donor mints an
+    /// unbound sibling - stays unbound forever. Routing still delivers writes to
+    /// it, but every typed CRDT apply faults resolving its <c>CrdtShape</c>, and
+    /// nothing on any lifecycle path repairs it (issue #1744).
+    /// </para>
+    /// <para>
+    /// This shard root knows the binding the leaf is missing, so it re-asserts it
+    /// and retries. The repair is driven from the fault rather than from a probe,
+    /// which is what lets it heal a deployment that is <em>already</em> in this
+    /// state, on the very next write, with no operator action and no restart: the
+    /// happy path never pays for it, because an exception filter is only evaluated
+    /// once a fault is in flight.
+    /// </para>
+    /// <para>
+    /// Deliberately narrow, so a genuine fault is never masked. Only the unbound
+    /// -leaf shape is caught - <see cref="LatticeCrdtShapeNotRegisteredException"/>
+    /// carrying an empty <see cref="LatticeCrdtShapeNotRegisteredException.TreeId"/>,
+    /// which is raised on exactly one branch - so a real "no shape registered for
+    /// this tree" fault (which carries the tree id) propagates untouched. The
+    /// retry is single-shot and its own failure propagates, so a leaf whose
+    /// binding cannot be restored still fails closed exactly as it does today
+    /// rather than silently accepting an unbound write. The repair is logged at
+    /// warning level because a leaf losing its binding is an anomaly worth
+    /// surfacing even though it is now self-correcting.
+    /// </para>
+    /// </summary>
+    private async Task<CrdtApplyResult> ApplyCrdtDeltaRebindingUnboundLeafAsync(
+        IBPlusLeafGrain leafGrain,
+        GrainId leafId,
+        string key,
+        LatticeMergeMode mode,
+        byte[] deltaBytes,
+        long expiresAtTicks)
+    {
+        try
+        {
+            return await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks);
+        }
+        catch (LatticeCrdtShapeNotRegisteredException ex) when (ex.TreeId.Length == 0)
+        {
+            logger.LogWarning(
+                ex,
+                "Leaf {LeafId} of shard {ShardIndex} of tree {TreeId} is routable but has no tree id bound, so the "
+                + "typed CRDT write to key {Key} could not resolve a CrdtShape. Re-asserting the binding and "
+                + "retrying once; this repairs a node left unseeded by an interrupted purge or inherited from an "
+                + "unbound split donor.",
+                leafId,
+                MyShardIndex,
+                TreeId,
+                key);
+
+            await leafGrain.SetTreeIdAsync(TreeId);
+            await leafGrain.SetShardIndexAsync(MyShardIndex);
+
+            // Single-shot. A second failure is a genuine fault (the shape really
+            // is unregistered, or the binding write did not stick) and must stay
+            // fail-closed, so it propagates to the caller unaltered.
+            return await leafGrain.ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks);
         }
     }
 

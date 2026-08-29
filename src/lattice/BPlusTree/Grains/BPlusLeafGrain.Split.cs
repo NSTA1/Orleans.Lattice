@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -230,6 +231,22 @@ internal sealed partial class BPlusLeafGrain
         // next/prev sibling pointers. This replaces five separate gated
         // setter RPCs (each its own gate acquire + WriteStateAsync) with a
         // single gate acquire and a single persist on the sibling.
+        //
+        // The sibling inherits this leaf's binding verbatim, so a donor that
+        // is itself unbound mints an unbound sibling - which is how a single
+        // unseeded node propagates across a key range (issue #1744). Surface
+        // it rather than passing it on silently; the shard root re-binds both
+        // on the next typed CRDT write routed to them, so this is a warning
+        // and not a fault.
+        if (string.IsNullOrEmpty(state.State.TreeId))
+        {
+            ResolveLogger()?.LogWarning(
+                "Leaf {LeafId} is splitting with no tree id bound, so its new sibling {SiblingId} inherits an "
+                + "unbound tree id and will reject typed CRDT writes until the owning shard root re-binds it.",
+                context.GrainId,
+                siblingId);
+        }
+
         await newLeaf.InitializeSiblingAsync(new SiblingInitialization
         {
             TreeId = state.State.TreeId!,
