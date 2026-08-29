@@ -295,7 +295,7 @@ public sealed class GrpcTenantAdminClient : ITenantAdminClient, IDisposable
         {
             return await call(clients.Admin).ConfigureAwait(false);
         }
-        catch (RpcException ex)
+        catch (RpcException ex) when (IsTranslatable(ex))
         {
             throw Translate(ex);
         }
@@ -308,16 +308,24 @@ public sealed class GrpcTenantAdminClient : ITenantAdminClient, IDisposable
         {
             return await call(clients.SelfService).ConfigureAwait(false);
         }
-        catch (RpcException ex)
+        catch (RpcException ex) when (IsTranslatable(ex))
         {
             throw Translate(ex);
         }
     }
 
     /// <summary>
-    /// Reconstructs the two transport statuses that map unambiguously onto a
-    /// typed Explorer exception, and returns <paramref name="exception"/>
-    /// unchanged otherwise so nothing is guessed at.
+    /// Whether <paramref name="exception"/> carries one of the two statuses that
+    /// map unambiguously onto a typed Explorer exception. Used as a catch filter
+    /// so every other fault propagates untouched, keeping its original stack
+    /// trace rather than being caught and rethrown.
+    /// </summary>
+    private static bool IsTranslatable(RpcException exception) =>
+        exception.StatusCode is StatusCode.Unimplemented or StatusCode.PermissionDenied;
+
+    /// <summary>
+    /// Reconstructs the typed Explorer exception for a transport status
+    /// <see cref="IsTranslatable"/> accepted.
     /// </summary>
     private static Exception Translate(RpcException exception) => exception.StatusCode switch
     {
@@ -326,8 +334,7 @@ public sealed class GrpcTenantAdminClient : ITenantAdminClient, IDisposable
                 ? "This cluster does not serve tenant administration."
                 : exception.Status.Detail,
             exception),
-        StatusCode.PermissionDenied => new LatticeAuthorizationDeniedException(exception.Status.Detail, exception),
-        _ => exception,
+        _ => new LatticeAuthorizationDeniedException(exception.Status.Detail, exception),
     };
 
     /// <summary>

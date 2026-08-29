@@ -1,4 +1,4 @@
-# Orleans.Lattice.Explorer.Plugins.Tenancy
+# Orleans.Lattice.Explorer.Tenancy
 
 The shared **tenancy seam** for the
 [Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice). It is not a
