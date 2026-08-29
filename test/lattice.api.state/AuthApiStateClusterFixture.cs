@@ -145,24 +145,45 @@ internal sealed class AuthApiStateClusterFixture
 
     /// <summary>
     /// Opens a live change subscription for <paramref name="request"/> under the
-    /// currently ambient subject, seeds its tail, then runs <paramref name="mutate"/>
-    /// and drains up to <paramref name="expectedCount"/> notifications (or until the
-    /// timeout elapses). The subscription captures the ambient subject at open, so
-    /// the caller must invoke this inside the observer's <c>AsSubject</c> scope;
-    /// <paramref name="mutate"/> may re-scope internally to author writes as another
-    /// subject without changing the subscriber's identity.
+    /// currently ambient subject, pins it to the tree's current write-ahead-log
+    /// tail, then runs <paramref name="mutate"/> and drains up to
+    /// <paramref name="expectedCount"/> notifications (or until the timeout
+    /// elapses). The subscription captures the ambient subject at open, so the
+    /// caller must invoke this inside the observer's <c>AsSubject</c> scope;
+    /// <paramref name="mutate"/> may re-scope internally to author writes as
+    /// another subject without changing the subscriber's identity.
     /// </summary>
     public async Task<IReadOnlyList<StateChangeNotification>> ObserveWhileAsync(
         StateObserveRequest request,
         int expectedCount,
         Func<Task> mutate)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var collectTask = CollectAsync(request, expectedCount, cts.Token);
+        // Pin the observed window to a cursor captured BEFORE the mutation
+        // rather than to wherever a fresh subscription happens to seed its tail.
+        // An earlier revision slept 300ms and hoped the seeding had finished; a
+        // slow run (the coverage job's instrumentation being the reliable one)
+        // let the first write land ahead of the tail, so the change was never
+        // delivered and the test failed having silently missed it. See
+        // StateObserveTailCursor for why pinning closes the race rather than
+        // narrowing it. A request that already carries a cursor keeps it.
+        var pinned = request;
+        if (request.ContinuationToken is null)
+        {
+            // Scaffolding, not the behaviour under test: capture as the
+            // bootstrap administrator so the probe itself is never refused for a
+            // partially authorized subscriber. The scope is disposed before the
+            // subscription opens, so the subscriber's own identity is unchanged.
+            string token;
+            using (AsSubject(BootstrapAdmin))
+            {
+                token = await StateObserveTailCursor.CaptureAsync(Cluster.Client, SiloServices, request.TreeId);
+            }
 
-        // Give the subscription a moment to seed its tail cursor before the
-        // mutations land, so a fresh subscription observes exactly them.
-        await Task.Delay(300);
+            pinned = request with { ContinuationToken = token };
+        }
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var collectTask = CollectAsync(pinned, expectedCount, cts.Token);
         await mutate();
 
         return await collectTask;

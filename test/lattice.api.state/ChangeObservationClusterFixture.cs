@@ -101,6 +101,15 @@ internal sealed class ChangeObservationClusterFixture
     };
 
     /// <summary>
+    /// Captures this tree's current write-ahead-log tail as a change-observation
+    /// continuation token, so a test can pin the exact window a subscription
+    /// observes instead of racing its fresh-tail seeding. See
+    /// <see cref="StateObserveTailCursor"/>.
+    /// </summary>
+    public Task<string> CaptureTailAsync(string treeId) =>
+        StateObserveTailCursor.CaptureAsync(Cluster.Client, SiloServices, treeId);
+
+    /// <summary>
     /// Drains up to <paramref name="count"/> notifications from a live
     /// subscription, returning early if <paramref name="timeout"/> elapses. The
     /// subscription is always torn down before returning.
