@@ -1,23 +1,26 @@
 @inherits LayoutComponentBase
 @using Orleans.Lattice.Explorer.UI.Authentication
+@using Orleans.Lattice.Explorer.DesignSystem.Components
 @implements IDisposable
 
 <CascadingValue Value="_login" IsFixed="true">
-    <div class="explorer-shell">
-        <ConfigurationGate>
-            <div class="explorer-body">
-                <ClusterBadge />
-                <AppShell>
-                    <div class="explorer-layout">
-                        <NavigationPanel />
-                        <main class="explorer-main">
-                            @Body
-                        </main>
-                    </div>
-                </AppShell>
-            </div>
-        </ConfigurationGate>
-    </div>
+    <LatticeAdaptiveRoot>
+        <div class="explorer-shell">
+            <ConfigurationGate>
+                <div class="explorer-body">
+                    <ClusterBadge />
+                    <AppShell>
+                        <div class="explorer-layout">
+                            <NavigationPanel />
+                            <main class="explorer-main">
+                                @Body
+                            </main>
+                        </div>
+                    </AppShell>
+                </div>
+            </ConfigurationGate>
+        </div>
+    </LatticeAdaptiveRoot>
 
     @if (_login.IsVisible)
     {
