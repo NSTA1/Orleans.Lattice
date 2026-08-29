@@ -1,0 +1,40 @@
+@*
+    The dead-letter concern: the strict-mode ingest queue. When a tree's policy
+    (or version config) runs strict, a non-compliant ingested item is diverted
+    here instead of being applied. Read-only, and loaded on an explicit action
+    because the queue can be large and is not needed to understand the tree's
+    governance state.
+
+    The queue is the area's widest surface, so it renders through the design
+    system's adaptive table: a table at medium and expanded, a card list at
+    compact, from one column declaration and with no media query of its own.
+*@
+
+<div class="lx-schema-grid">
+    <div class="lx-schema-formcol">
+        <h3 class="lx-schema-title">Dead letters</h3>
+        <p class="lx-schema-note">Strict-mode ingest diverts non-compliant items here instead of applying them. Read-only.</p>
+        <button type="button" class="lx-schema-btn"
+                disabled="@(!Session.Can(SchemaCapability.ViewDeadLetters))"
+                @onclick="LoadAsync">Load dead letters</button>
+    </div>
+    <div class="lx-schema-formcol">
+        @if (View is not { } view)
+        {
+            <p class="lx-schema-empty">Select a tree, then load its dead letters.</p>
+        }
+        else if (!view.IsSuccess)
+        {
+            <p class="lx-schema-result @SchemaStatusStyles.For(view.Status)" role="status">@view.Message</p>
+        }
+        else
+        {
+            <p class="lx-schema-sub">Total: @view.Count (showing @view.Entries.Count)</p>
+            <LatticeAdaptiveTable TItem="LatticeSchemaDeadLetterEntry"
+                                  Items="view.Entries"
+                                  Columns="EntryColumns"
+                                  Label="Dead letters"
+                                  EmptyText="No dead letters." />
+        }
+    </div>
+</div>

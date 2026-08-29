@@ -63,7 +63,8 @@ public class AssembledExplorerHostSmokeTests
     [Test]
     public async Task Assembled_web_head_registers_the_schema_plugin_when_the_head_opts_in()
     {
-        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var provider = BuildAssembledProvider(
+            registerPlugins: services => services.AddExplorerSchemaPlugin());
         await using var scope = provider.CreateAsyncScope();
 
         Assert.That(
@@ -81,7 +82,8 @@ public class AssembledExplorerHostSmokeTests
     [Test]
     public async Task Before_any_probe_every_area_plugin_is_denied()
     {
-        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var provider = BuildAssembledProvider(
+            registerPlugins: services => services.AddExplorerSchemaPlugin());
         await using var scope = provider.CreateAsyncScope();
 
         var store = scope.ServiceProvider.GetRequiredService<IExplorerPluginAccessStore>();
@@ -107,7 +109,8 @@ public class AssembledExplorerHostSmokeTests
     [Test]
     public async Task Each_area_plugin_carries_its_own_gate_and_no_two_share_one()
     {
-        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var provider = BuildAssembledProvider(
+            registerPlugins: services => services.AddExplorerSchemaPlugin());
         await using var scope = provider.CreateAsyncScope();
 
         var plugins = scope.ServiceProvider
@@ -147,7 +150,8 @@ public class AssembledExplorerHostSmokeTests
     [Test]
     public async Task The_shared_refresh_fails_every_gate_closed_when_no_endpoint_is_configured()
     {
-        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var provider = BuildAssembledProvider(
+            registerPlugins: services => services.AddExplorerSchemaPlugin());
         await using var scope = provider.CreateAsyncScope();
 
         var store = scope.ServiceProvider.GetRequiredService<IExplorerPluginAccessStore>();
@@ -219,10 +223,17 @@ public class AssembledExplorerHostSmokeTests
         .Select(plugin => plugin.Descriptor.PluginId)
         .ToArray();
 
-    private static ServiceProvider BuildAssembledProvider(Action<LatticeExplorerWebOptions>? configure = null)
+    private static ServiceProvider BuildAssembledProvider(
+        Action<LatticeExplorerWebOptions>? configure = null,
+        Action<IServiceCollection>? registerPlugins = null)
     {
         var services = new ServiceCollection();
         services.AddLatticeExplorerWeb(configure);
+
+        // An area that ships as its own plugin package (Schema) is opted in by the
+        // head registering it, which is the whole of the opt-in now that the
+        // per-area option flag is retired.
+        registerPlugins?.Invoke(services);
 
         // Replace the real auth session with a substitute so resolving the area
         // clients never opens a gRPC channel; the fail-closed probe throws on the
