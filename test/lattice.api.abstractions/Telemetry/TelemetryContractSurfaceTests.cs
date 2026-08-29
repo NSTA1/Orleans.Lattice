@@ -37,6 +37,20 @@ public sealed class TelemetryContractSurfaceTests
     /// </summary>
     private static readonly string[] TenantIdentityMarkers = ["tenantid", "tenantname", "tenants"];
 
+    /// <summary>
+    /// The exhaustive exemption list for <see cref="TenantIdentityMarkers"/> on the
+    /// request: the single operator-only tenant selector the contract deliberately
+    /// carries. It is a <em>request</em> the facade re-validates and may refuse, not
+    /// an assertion, which is why it is permitted at all.
+    /// <para>
+    /// This list must stay at exactly one entry. It exists to make room for that one
+    /// field without disarming the guard, so a second tenant-ish property appearing
+    /// on the request still breaks the build.
+    /// </para>
+    /// </summary>
+    private static readonly string[] PermittedTenantSelectors =
+        [nameof(TelemetryQueryRequest.RequestedTenantId)];
+
     [Test]
     public void The_facade_is_a_public_interface_in_the_abstractions_assembly()
     {
@@ -116,22 +130,120 @@ public sealed class TelemetryContractSurfaceTests
     }
 
     [Test]
-    public void The_request_carries_no_tenant_identity_field()
+    public void The_request_carries_no_unexempted_tenant_identity_field()
     {
-        var offenders = typeof(TelemetryQueryRequest).GetProperties()
-            .Where(p => TenantIdentityMarkers.Any(marker =>
-                p.Name.Contains(marker, StringComparison.OrdinalIgnoreCase)))
-            .Select(p => p.Name)
-            .OrderBy(s => s, StringComparer.Ordinal)
-            .ToList();
+        var offenders = TenantIdentityOffenders(typeof(TelemetryQueryRequest));
 
         Assert.That(offenders, Is.Empty,
             "The effective tenant is derived server-side from the authenticated caller and must never "
-            + "be readable from a request field. Offenders: " + string.Join(", ", offenders));
+            + "be taken on trust from a request field. Exactly one operator-only tenant selector is "
+            + "exempt; anything else is a leak. Offenders: " + string.Join(", ", offenders));
     }
 
     [Test]
-    public void The_request_carries_only_a_requested_visibility_for_tenancy()
+    public void Exactly_one_tenant_selector_is_exempt_from_the_tenant_identity_guard()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(PermittedTenantSelectors, Has.Length.EqualTo(1),
+                "The exemption list must stay at one entry. Growing it is how this guard would be "
+                + "quietly disarmed one property at a time.");
+            Assert.That(PermittedTenantSelectors[0],
+                Is.EqualTo(nameof(TelemetryQueryRequest.RequestedTenantId)));
+        });
+    }
+
+    [Test]
+    public void The_exempted_tenant_selector_still_exists_on_the_request()
+    {
+        var selector = typeof(TelemetryQueryRequest)
+            .GetProperty(nameof(TelemetryQueryRequest.RequestedTenantId));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(selector, Is.Not.Null,
+                "A stale exemption naming a property that no longer exists would silently widen the "
+                + "guard's blind spot.");
+            Assert.That(selector!.PropertyType, Is.EqualTo(typeof(string)),
+                "The selector is optional - a caller that is not requesting a single tenant omits it.");
+        });
+    }
+
+    [Test]
+    public void The_narrowed_guard_still_detects_a_second_tenant_identity_field()
+    {
+        var offenders = TenantIdentityOffenders(typeof(TenantIdentityProbe));
+
+        Assert.That(offenders, Is.EqualTo(new[] { "AssertedTenantId", "TenantName", "Tenants" }),
+            "The exemption must admit exactly the one permitted selector by name and keep flagging "
+            + "every other tenant-ish property, so the guard cannot be defeated by adding a second "
+            + "field beside the exempted one.");
+    }
+
+    [Test]
+    public void The_narrowed_guard_admits_the_permitted_selector_and_ignores_unrelated_properties()
+    {
+        var offenders = TenantIdentityOffenders(typeof(TenantIdentityProbe));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(offenders, Does.Not.Contain(nameof(TelemetryQueryRequest.RequestedTenantId)));
+            Assert.That(offenders, Does.Not.Contain("QueryId"));
+        });
+    }
+
+    /// <summary>
+    /// Applies the tenant-identity guard's predicate to <paramref name="type"/>:
+    /// every public property whose name contains a
+    /// <see cref="TenantIdentityMarkers"/> substring and is not named by
+    /// <see cref="PermittedTenantSelectors"/>. Shared by the real assertion and the
+    /// probe assertion so the two can never drift apart.
+    /// </summary>
+    private static IReadOnlyList<string> TenantIdentityOffenders(Type type) =>
+        type.GetProperties()
+            .Where(p => !PermittedTenantSelectors.Contains(p.Name, StringComparer.Ordinal))
+            .Where(p => TenantIdentityMarkers.Any(marker =>
+                p.Name.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+            .Select(p => p.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// A stand-in shaped like a request that has grown extra tenant-identity fields
+    /// beside the one permitted selector. It exists so the narrowed guard's
+    /// detection can be proven positively - an exemption that accidentally admitted
+    /// everything would pass the real assertion vacuously but fails here.
+    /// </summary>
+    private sealed class TenantIdentityProbe
+    {
+        public string? RequestedTenantId { get; init; }
+
+        public string? AssertedTenantId { get; init; }
+
+        public string? TenantName { get; init; }
+
+        public string? Tenants { get; init; }
+
+        public string? QueryId { get; init; }
+    }
+
+    [Test]
+    public void The_request_serialized_member_ids_are_sequential_from_zero()
+    {
+        var ids = typeof(TelemetryQueryRequest).GetProperties()
+            .Select(p => p.GetCustomAttribute<Orleans.IdAttribute>())
+            .Where(a => a is not null)
+            .Select(a => (int)a!.Id)
+            .OrderBy(id => id)
+            .ToArray();
+
+        Assert.That(ids, Is.EqualTo(new[] { 0, 1, 2, 3, 4 }),
+            "The tenant selector was appended at the next free id. Reusing or reordering an id would "
+            + "silently reinterpret an existing field on the wire.");
+    }
+
+    [Test]
+    public void The_request_carries_a_requested_visibility_for_tenancy()
     {
         var visibility = typeof(TelemetryQueryRequest)
             .GetProperty(nameof(TelemetryQueryRequest.RequestedVisibility));

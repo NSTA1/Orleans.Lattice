@@ -15,10 +15,13 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// contract change here, not something a catalogue author can invent.
 /// </para>
 /// <para>
-/// Tenant scoping is deliberately absent from this set. The effective tenant is
-/// derived server-side from the authenticated caller and is never a query
-/// parameter; a caller may only request a visibility, which the facade
-/// re-validates and pins itself.
+/// Tenant scoping is deliberately absent from this set. It is not a query
+/// parameter at all: the effective tenant is derived server-side from the
+/// authenticated caller, and a caller may only <em>request</em> a visibility (and,
+/// for an operator's single-tenant request, name the tenant it wants), which the
+/// facade re-validates and may refuse. Those fields therefore live on the request
+/// itself rather than being declared per catalogue entry, so no entry can opt out
+/// of tenant scoping by failing to declare it.
 /// </para>
 /// </remarks>
 [Flags]

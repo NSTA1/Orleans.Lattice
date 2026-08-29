@@ -100,6 +100,73 @@ public sealed class TelemetryTenantScopeTests
     }
 
     [Test]
+    public void PinnedTo_reports_a_downgrade_when_an_unvalidated_single_tenant_request_fails_closed()
+    {
+        var scope = TelemetryTenantScope.PinnedTo("caller-own", TelemetryTenantVisibility.SingleTenant);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.RequestedVisibility, Is.EqualTo(TelemetryTenantVisibility.SingleTenant));
+            Assert.That(scope.EffectiveVisibility, Is.EqualTo(TelemetryTenantVisibility.ActiveTenant),
+                "An unvalidated single-tenant request must degrade to the caller's own active tenant.");
+            Assert.That(scope.TenantId, Is.EqualTo("caller-own"),
+                "The pinned tenant is the caller's server-derived tenant, never the one it asked for.");
+            Assert.That(scope.WasDowngraded, Is.True);
+            Assert.That(scope.IsCrossTenant, Is.False);
+        });
+    }
+
+    [Test]
+    public void AtRequestedTenant_honours_a_validated_single_tenant_request()
+    {
+        var scope = TelemetryTenantScope.AtRequestedTenant("acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.RequestedVisibility, Is.EqualTo(TelemetryTenantVisibility.SingleTenant));
+            Assert.That(scope.EffectiveVisibility, Is.EqualTo(TelemetryTenantVisibility.SingleTenant));
+            Assert.That(scope.TenantId, Is.EqualTo("acme"));
+            Assert.That(scope.WasDowngraded, Is.False,
+                "An honoured request is not a degradation, so a client must not label it as one.");
+            Assert.That(scope.IsCrossTenant, Is.False,
+                "A single-tenant evaluation is scoped to one tenant even when that tenant is not the "
+                + "caller's own, so it is not a cross-tenant view.");
+        });
+    }
+
+    [Test]
+    public void AtRequestedTenant_rejects_a_null_tenant_id()
+    {
+        Assert.That(() => TelemetryTenantScope.AtRequestedTenant(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void AtRequestedTenant_rejects_an_empty_or_white_space_tenant_id()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => TelemetryTenantScope.AtRequestedTenant(string.Empty), Throws.ArgumentException);
+            Assert.That(() => TelemetryTenantScope.AtRequestedTenant("   "), Throws.ArgumentException);
+        });
+    }
+
+    [Test]
+    public void The_honoured_and_degraded_single_tenant_outcomes_are_distinguishable()
+    {
+        var honoured = TelemetryTenantScope.AtRequestedTenant("acme");
+        var degraded = TelemetryTenantScope.PinnedTo("acme", TelemetryTenantVisibility.SingleTenant);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(honoured, Is.Not.EqualTo(degraded),
+                "The two outcomes must not collapse into one value, or a client could not tell a "
+                + "granted operator view from a refused one that happens to name the same tenant.");
+            Assert.That(honoured.WasDowngraded, Is.False);
+            Assert.That(degraded.WasDowngraded, Is.True);
+        });
+    }
+
+    [Test]
     public void Equal_scopes_compare_equal_by_value()
     {
         var a = TelemetryTenantScope.PinnedTo("acme", TelemetryTenantVisibility.AllTenants);
@@ -120,17 +187,22 @@ public sealed class TelemetryTenantScopeTests
             Assert.That((int)TelemetryTenantVisibility.ActiveTenant, Is.EqualTo(0),
                 "The narrow scope must be the default so an unset field never widens a query.");
             Assert.That((int)TelemetryTenantVisibility.AllTenants, Is.EqualTo(1));
+            Assert.That((int)TelemetryTenantVisibility.SingleTenant, Is.EqualTo(2),
+                "SingleTenant is appended, so the two pre-existing wire values are unchanged.");
+            Assert.That(Enum.GetValues<TelemetryTenantVisibility>(), Has.Length.EqualTo(3));
         });
     }
 
     [Test]
-    public void A_request_defaults_to_the_narrow_visibility()
+    public void A_request_defaults_to_the_narrow_visibility_and_names_no_tenant()
     {
         var request = new TelemetryQueryRequest { QueryId = "tree.write.ops" };
 
         Assert.Multiple(() =>
         {
             Assert.That(request.RequestedVisibility, Is.EqualTo(TelemetryTenantVisibility.ActiveTenant));
+            Assert.That(request.RequestedTenantId, Is.Null,
+                "A caller that is not requesting a single tenant names none.");
             Assert.That(request.TreeId, Is.Null);
             Assert.That(request.Range, Is.EqualTo(default(TelemetryTimeRange)));
         });
@@ -150,6 +222,25 @@ public sealed class TelemetryTenantScopeTests
         {
             Assert.That(request.RequestedVisibility, Is.EqualTo(TelemetryTenantVisibility.AllTenants));
             Assert.That(request.TreeId, Is.EqualTo("t/acme/orders"));
+            Assert.That(request.RequestedTenantId, Is.Null);
+        });
+    }
+
+    [Test]
+    public void A_request_preserves_the_single_tenant_selection_it_asks_for()
+    {
+        var request = new TelemetryQueryRequest
+        {
+            QueryId = "tree.write.ops",
+            RequestedVisibility = TelemetryTenantVisibility.SingleTenant,
+            RequestedTenantId = "acme",
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(request.RequestedVisibility, Is.EqualTo(TelemetryTenantVisibility.SingleTenant));
+            Assert.That(request.RequestedTenantId, Is.EqualTo("acme"),
+                "The wire carries what the operator would like; the facade still decides what applies.");
         });
     }
 }

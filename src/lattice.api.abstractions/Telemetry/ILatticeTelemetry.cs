@@ -18,13 +18,15 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// </para>
 /// <para>
 /// <b>Tenant scoping is derived, never asserted.</b> The effective tenant comes
-/// from the authenticated caller. A caller may request a cross-tenant visibility
-/// on <see cref="TelemetryQueryRequest.RequestedVisibility"/>, which the facade
+/// from the authenticated caller. A caller may request a wider or elsewhere scope
+/// on <see cref="TelemetryQueryRequest.RequestedVisibility"/> - and, for
+/// <see cref="TelemetryTenantVisibility.SingleTenant"/>, name the tenant it wants
+/// on <see cref="TelemetryQueryRequest.RequestedTenantId"/> - which the facade
 /// honours only after validating it as a platform operator server-side; an
-/// unvalidated request degrades, fail-closed, to the caller's active tenant. What
-/// was actually applied is always reported on
-/// <see cref="TelemetryQueryResponse.Scope"/>. No operation reads a tenant id from
-/// a request.
+/// unvalidated request degrades, fail-closed, to the caller's active tenant and
+/// the requested tenant id is ignored entirely. What was actually applied is
+/// always reported on <see cref="TelemetryQueryResponse.Scope"/>. No operation
+/// takes a tenant on trust from a request.
 /// </para>
 /// <para>
 /// <b>Leak-free discovery.</b> <see cref="GetCatalogAsync"/> returns only the

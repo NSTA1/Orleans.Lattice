@@ -9,22 +9,24 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// </summary>
 /// <remarks>
 /// <para>
-/// There is no ambient cross-tenant view. The default,
+/// There is no ambient view beyond the caller's own tenant. The default,
 /// <see cref="ActiveTenant"/>, resolves to the tenant the facade derives from the
 /// authenticated caller, so a tenant - and a platform operator that has not
 /// asserted otherwise - sees only its own series. A caller must explicitly request
-/// <see cref="AllTenants"/> to see across tenants, and the facade honours that
-/// request only after validating the caller as a platform operator server-side.
+/// <see cref="AllTenants"/> or <see cref="SingleTenant"/> to see anything wider or
+/// elsewhere, and the facade honours either request only after validating the
+/// caller as a platform operator server-side.
 /// </para>
 /// <para>
-/// An unvalidated cross-tenant request degrades, fail-closed, to
+/// An unvalidated widening request degrades, fail-closed, to
 /// <see cref="ActiveTenant"/> rather than failing loudly, and the degradation is
 /// reported through <see cref="TelemetryTenantScope.WasDowngraded"/> so the client
-/// can label the view honestly instead of implying it is cross-tenant.
+/// can label the view honestly instead of implying it is wider than it is.
 /// </para>
 /// <para>
-/// This mirrors the Explorer's existing tenant-visibility contract so a client
-/// switching between the two surfaces gets one, consistent fail-closed rule.
+/// This extends the Explorer's existing two-valued tenant-visibility contract with
+/// the operator-only single-tenant selection, keeping the same fail-closed rule: a
+/// request is only ever a request, and the effective scope is decided server-side.
 /// </para>
 /// </remarks>
 [GenerateSerializer]
@@ -44,4 +46,22 @@ public enum TelemetryTenantVisibility
     /// <see cref="ActiveTenant"/>.
     /// </summary>
     AllTenants = 1,
+
+    /// <summary>
+    /// The explicit single-tenant scope: evaluate against the series of the one
+    /// tenant named by <see cref="TelemetryQueryRequest.RequestedTenantId"/>, which
+    /// need not be the caller's own. Honoured only when the facade validates the
+    /// caller as a platform operator; otherwise the query falls back, fail-closed,
+    /// to <see cref="ActiveTenant"/> and the requested tenant id is ignored
+    /// entirely.
+    /// </summary>
+    /// <remarks>
+    /// This exists so a platform-operator surface can render one tenant without
+    /// fetching every tenant's series and filtering client-side, which costs data
+    /// proportional to the tenant count in order to display one of them. It is not
+    /// a widening of authority: a caller the facade validates for this is already
+    /// validated for <see cref="AllTenants"/>, so it narrows what is fetched
+    /// rather than broadening what is reachable.
+    /// </remarks>
+    SingleTenant = 2,
 }

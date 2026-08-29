@@ -9,19 +9,22 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The tenant is never read from the request.</b> A request carries only a
-/// requested <see cref="TelemetryTenantVisibility"/>; it has no tenant-id field at
-/// all. The facade derives the effective tenant from the authenticated caller,
-/// re-validates any cross-tenant request server-side, and pins the result here. A
-/// caller therefore cannot name a tenant, and this reported
-/// <see cref="TenantId"/> is server-derived output, never echoed input.
+/// <b>The effective tenant is never trusted from the request.</b> A request
+/// carries a requested <see cref="TelemetryTenantVisibility"/> and, for an
+/// operator's single-tenant request, a requested tenant id - both of which are
+/// requests the facade may refuse. The facade derives the effective tenant from
+/// the authenticated caller, validates any widened request server-side, and pins
+/// the result here. The reported <see cref="TenantId"/> is therefore always
+/// server-decided output; it equals a caller's requested tenant only when the
+/// facade validated that caller and chose to honour it.
 /// </para>
 /// <para>
 /// <b>Degradation is visible, not silent.</b> An unvalidated
-/// <see cref="TelemetryTenantVisibility.AllTenants"/> request is served as
-/// <see cref="TelemetryTenantVisibility.ActiveTenant"/> rather than refused, and
-/// <see cref="WasDowngraded"/> reports it, so a client labels the panel as
-/// single-tenant instead of presenting a scoped view as if it were cluster-wide.
+/// <see cref="TelemetryTenantVisibility.AllTenants"/> or
+/// <see cref="TelemetryTenantVisibility.SingleTenant"/> request is served at
+/// <see cref="TelemetryTenantVisibility.ActiveTenant"/> scope rather than refused,
+/// and <see cref="WasDowngraded"/> reports it, so a client labels the panel for
+/// the scope it actually got instead of the one it asked for.
 /// </para>
 /// <para>
 /// This is a value-typed descriptor (a <see langword="readonly"/> record struct),
@@ -44,36 +47,46 @@ public readonly record struct TelemetryTenantScope
     [Id(1)] public TelemetryTenantVisibility EffectiveVisibility { get; init; }
 
     /// <summary>
-    /// The tenant the query was pinned to when
-    /// <see cref="EffectiveVisibility"/> is
-    /// <see cref="TelemetryTenantVisibility.ActiveTenant"/>; <see langword="null"/>
-    /// for a validated cross-tenant evaluation. Derived server-side from the
-    /// authenticated caller, never supplied by one.
+    /// The tenant the query was pinned to whenever
+    /// <see cref="EffectiveVisibility"/> names a single tenant - either
+    /// <see cref="TelemetryTenantVisibility.ActiveTenant"/> (the caller's own,
+    /// derived from its credential) or
+    /// <see cref="TelemetryTenantVisibility.SingleTenant"/> (an operator's request
+    /// the facade validated and honoured). <see langword="null"/> for a validated
+    /// cross-tenant evaluation. Always decided server-side.
     /// </summary>
     [Id(2)] public string? TenantId { get; init; }
 
     /// <summary>
     /// <see langword="true"/> when the facade served a narrower visibility than the
-    /// caller requested - the fail-closed degradation of an unvalidated
-    /// cross-tenant request.
+    /// caller requested - the fail-closed degradation of an unvalidated widening
+    /// request, whether that request was
+    /// <see cref="TelemetryTenantVisibility.AllTenants"/> or
+    /// <see cref="TelemetryTenantVisibility.SingleTenant"/>.
     /// </summary>
     public bool WasDowngraded => RequestedVisibility != EffectiveVisibility;
 
     /// <summary>
-    /// <see langword="true"/> when the query was evaluated across every tenant's
-    /// series, which happens only after the facade validated the caller as a
-    /// platform operator.
+    /// <see langword="true"/> when the query was evaluated across <em>every</em>
+    /// tenant's series, which happens only after the facade validated the caller as
+    /// a platform operator. An honoured
+    /// <see cref="TelemetryTenantVisibility.SingleTenant"/> evaluation is
+    /// <see langword="false"/> here: it is scoped to exactly one tenant, even
+    /// though that tenant need not be the caller's own.
     /// </summary>
     public bool IsCrossTenant => EffectiveVisibility == TelemetryTenantVisibility.AllTenants;
 
     /// <summary>
-    /// Creates a scope pinned to one tenant, recording what the caller had
-    /// requested. Passing <see cref="TelemetryTenantVisibility.AllTenants"/> as
-    /// <paramref name="requestedVisibility"/> records a fail-closed degradation.
+    /// Creates a scope pinned, fail-closed, to the caller's own active tenant while
+    /// recording what the caller had requested. Passing
+    /// <see cref="TelemetryTenantVisibility.AllTenants"/> or
+    /// <see cref="TelemetryTenantVisibility.SingleTenant"/> as
+    /// <paramref name="requestedVisibility"/> therefore records a refused widening
+    /// request, which <see cref="WasDowngraded"/> then reports.
     /// </summary>
     /// <param name="tenantId">The server-derived effective tenant. Must be non-empty.</param>
     /// <param name="requestedVisibility">The visibility the caller asked for.</param>
-    /// <returns>A per-tenant scope.</returns>
+    /// <returns>An active-tenant scope.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="tenantId"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="tenantId"/> is empty or white space.</exception>
     public static TelemetryTenantScope PinnedTo(string tenantId, TelemetryTenantVisibility requestedVisibility)
@@ -84,6 +97,30 @@ public readonly record struct TelemetryTenantScope
         {
             RequestedVisibility = requestedVisibility,
             EffectiveVisibility = TelemetryTenantVisibility.ActiveTenant,
+            TenantId = tenantId,
+        };
+    }
+
+    /// <summary>
+    /// Creates the honoured single-tenant scope: requested and effective are both
+    /// <see cref="TelemetryTenantVisibility.SingleTenant"/> and the query is pinned
+    /// to <paramref name="tenantId"/>. Produced only after the facade has validated
+    /// the caller as a platform operator and accepted its requested tenant; a
+    /// refused request uses <see cref="PinnedTo"/> instead, which reports the
+    /// degradation.
+    /// </summary>
+    /// <param name="tenantId">The requested tenant the facade validated and honoured. Must be non-empty.</param>
+    /// <returns>An honoured single-tenant scope.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="tenantId"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is empty or white space.</exception>
+    public static TelemetryTenantScope AtRequestedTenant(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+
+        return new TelemetryTenantScope
+        {
+            RequestedVisibility = TelemetryTenantVisibility.SingleTenant,
+            EffectiveVisibility = TelemetryTenantVisibility.SingleTenant,
             TenantId = tenantId,
         };
     }
