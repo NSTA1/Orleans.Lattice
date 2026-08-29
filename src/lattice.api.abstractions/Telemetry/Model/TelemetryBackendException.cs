@@ -6,6 +6,7 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// that could not be read.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A backend fault is deliberately distinct from
 /// <see cref="TelemetryQueryNotFoundException"/> and
 /// <see cref="TelemetryQueryBoundsException"/>, which report a caller error. It is
@@ -13,6 +14,22 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// "no data" when the backend is down misreports an outage as a quiet cluster.
 /// Derives directly from <see cref="Exception"/>, matching the sibling contract
 /// groups, so it stays safe to mark serializable later.
+/// </para>
+/// <para>
+/// It lives in the contract, beside the two caller-error exceptions, because it is
+/// part of the observable failure surface of <see cref="ILatticeTelemetry"/> and
+/// <b>every</b> transport binding has to map it to its own fault vocabulary - and
+/// must map it differently from a caller error, so a client neither retries a
+/// genuinely bad query forever nor abandons a transient outage. A client-safe
+/// binding cannot reference the facade implementation by construction, so an
+/// exception parked there would be one no such binding could name.
+/// </para>
+/// <para>
+/// <b>The message is for an operator, not for an untrusted caller.</b> It embeds
+/// the underlying transport fault, which routinely carries the backend host or
+/// address, so a binding serving a remote caller should log it and answer with a
+/// fixed, non-revealing detail rather than forwarding it verbatim.
+/// </para>
 /// </remarks>
 public sealed class TelemetryBackendException : Exception
 {
