@@ -1,8 +1,8 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Data
-@using Orleans.Lattice.Explorer.Core.Detail
 @using Orleans.Lattice.Explorer.Core.Session
-@inherits DetailTabBase
+@using Orleans.Lattice.Explorer.UI.Plugins
+@inherits SelectionPluginViewBase
 @inject IDataReader DataReader
 @inject IExplorerSelection ExplorerSelection
 @inject IUiPreferenceStore Preferences
@@ -353,11 +353,14 @@
     }
 
     // Navigate to a covered tree's Data tab with no tag filter. Seeds the active
-    // detail tab so the panel opens on Data (DetailPanel re-applies the retained
-    // tab on selection change) rather than whichever tab was last active.
+    // detail surface so the panel opens on Data (DetailPanel re-applies the
+    // retained surface on selection change) rather than whichever was last active.
     private async Task GoToTree(string treeId)
     {
-        await Preferences.SetAsync("detail-tab", DetailTab.Data, cancellationToken: TabToken);
+        await Preferences.SetAsync(
+            SelectionPluginKeys.ActivePluginPreferenceKey,
+            SelectionPluginKeys.Data,
+            cancellationToken: TabToken);
 
         ExplorerSelection.Select(new CatalogItem
         {
@@ -379,7 +382,10 @@
             await Preferences.SetAsync($"data-tagvalue:{member.TreeId}:{indexName}", _selectedTag, owner: member.TreeId, TabToken);
         }
 
-        await Preferences.SetAsync("detail-tab", DetailTab.Data, cancellationToken: TabToken);
+        await Preferences.SetAsync(
+            SelectionPluginKeys.ActivePluginPreferenceKey,
+            SelectionPluginKeys.Data,
+            cancellationToken: TabToken);
         SessionStore.Set(DataSelection.SelectedKey(member.TreeId), member.Key);
 
         ExplorerSelection.Select(new CatalogItem

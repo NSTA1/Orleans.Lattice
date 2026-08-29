@@ -167,15 +167,8 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
         {
             Id = item.Id,
             Label = item.Label,
-            Kind = Project(item.Kind),
+            Kind = ExplorerSelectionKindProjection.ToPluginKind(item.Kind),
         };
-
-    private static ExplorerPluginSelectionKind Project(CatalogKind kind) => kind switch
-    {
-        CatalogKind.Views => ExplorerPluginSelectionKind.View,
-        CatalogKind.TagIndexes => ExplorerPluginSelectionKind.TagIndex,
-        _ => ExplorerPluginSelectionKind.Tree,
-    };
 
     private static ExplorerPluginConnectionStatus Project(LatticeConnectionStatus status) => new(
         status.State switch

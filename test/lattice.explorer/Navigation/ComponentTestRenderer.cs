@@ -158,6 +158,46 @@ internal sealed class ComponentTestRenderer(IServiceProvider services, ILoggerFa
         return children;
     }
 
+    /// <summary>
+    /// The first <typeparamref name="TComponent"/> rendered anywhere beneath
+    /// <paramref name="rootComponentId"/> (inclusive of its direct children),
+    /// with the id it is rendered under, or <see langword="null"/> when the tree
+    /// currently holds none.
+    /// <para>
+    /// A depth-first walk over the current frames, so a test can assert on a
+    /// component the subject renders indirectly - the tab strip a panel
+    /// delegates to, or the view a <see cref="DynamicComponent"/> mounts -
+    /// without reaching into the framework's internals from the test itself.
+    /// </para>
+    /// </summary>
+    public (int Id, TComponent Component)? FindComponent<TComponent>(int rootComponentId)
+        where TComponent : class, IComponent
+    {
+        var frames = GetCurrentRenderTreeFrames(rootComponentId);
+
+        for (var i = 0; i < frames.Count; i++)
+        {
+            if (frames.Array[i].FrameType != RenderTreeFrameType.Component)
+            {
+                continue;
+            }
+
+            var childId = frames.Array[i].ComponentId;
+            if (frames.Array[i].Component is TComponent match)
+            {
+                return (childId, match);
+            }
+
+            var nested = FindComponent<TComponent>(childId);
+            if (nested is not null)
+            {
+                return nested;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Whether <paramref name="componentId"/> currently renders an element named <paramref name="elementName"/>.</summary>
     public bool RendersElement(int componentId, string elementName)
     {

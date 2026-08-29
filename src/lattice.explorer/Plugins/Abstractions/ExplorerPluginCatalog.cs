@@ -6,8 +6,8 @@ namespace Orleans.Lattice.Explorer.Plugins;
 /// per-surface projections.
 /// <para>
 /// All of the work happens in the constructor, so
-/// <see cref="All"/>, <see cref="ForSurface"/> and <see cref="Find"/> are
-/// allocation-free reads on the render path.
+/// <see cref="All"/>, <see cref="ForSurface"/>, <see cref="ForSelection"/> and
+/// <see cref="Find"/> are allocation-free reads on the render path.
 /// </para>
 /// </summary>
 public sealed class ExplorerPluginCatalog : IExplorerPluginCatalog
@@ -17,6 +17,9 @@ public sealed class ExplorerPluginCatalog : IExplorerPluginCatalog
     private readonly IExplorerPlugin[] _all;
     private readonly IExplorerPlugin[] _areas;
     private readonly IExplorerPlugin[] _selections;
+    private readonly IExplorerPlugin[] _selectionTrees;
+    private readonly IExplorerPlugin[] _selectionViews;
+    private readonly IExplorerPlugin[] _selectionTagIndexes;
     private readonly Dictionary<string, IExplorerPlugin> _byId;
 
     /// <summary>
@@ -87,6 +90,9 @@ public sealed class ExplorerPluginCatalog : IExplorerPluginCatalog
         _all = ordered.Count == 0 ? Empty : [.. ordered];
         _areas = Project(_all, ExplorerPluginSurface.Area);
         _selections = Project(_all, ExplorerPluginSurface.Selection);
+        _selectionTrees = Project(_selections, ExplorerPluginSelectionKind.Tree);
+        _selectionViews = Project(_selections, ExplorerPluginSelectionKind.View);
+        _selectionTagIndexes = Project(_selections, ExplorerPluginSelectionKind.TagIndex);
     }
 
     /// <inheritdoc />
@@ -106,6 +112,15 @@ public sealed class ExplorerPluginCatalog : IExplorerPluginCatalog
         ArgumentNullException.ThrowIfNull(pluginId);
         return _byId.GetValueOrDefault(pluginId);
     }
+
+    /// <inheritdoc />
+    public IReadOnlyList<IExplorerPlugin> ForSelection(ExplorerPluginSelectionKind kind) => kind switch
+    {
+        ExplorerPluginSelectionKind.Tree => _selectionTrees,
+        ExplorerPluginSelectionKind.View => _selectionViews,
+        ExplorerPluginSelectionKind.TagIndex => _selectionTagIndexes,
+        _ => Empty,
+    };
 
     private static IExplorerPlugin[] Project(IExplorerPlugin[] all, ExplorerPluginSurface surface)
     {
@@ -128,6 +143,35 @@ public sealed class ExplorerPluginCatalog : IExplorerPluginCatalog
         foreach (var plugin in all)
         {
             if (plugin.Descriptor.Surface == surface)
+            {
+                projected[next++] = plugin;
+            }
+        }
+
+        return projected;
+    }
+
+    private static IExplorerPlugin[] Project(IExplorerPlugin[] selections, ExplorerPluginSelectionKind kind)
+    {
+        var count = 0;
+        foreach (var plugin in selections)
+        {
+            if (plugin.Descriptor.AppliesTo(kind))
+            {
+                count++;
+            }
+        }
+
+        if (count == 0)
+        {
+            return Empty;
+        }
+
+        var projected = new IExplorerPlugin[count];
+        var next = 0;
+        foreach (var plugin in selections)
+        {
+            if (plugin.Descriptor.AppliesTo(kind))
             {
                 projected[next++] = plugin;
             }

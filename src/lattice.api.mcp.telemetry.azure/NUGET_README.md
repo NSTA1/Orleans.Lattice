@@ -1,10 +1,10 @@
 # Orleans.Lattice.Api.Mcp.Telemetry.Azure
 
-Azure managed-identity backend-token provider for [`Orleans.Lattice.Api.Mcp.Telemetry`](https://github.com/NSTA1/Orleans.Lattice). It satisfies the telemetry proxy's `DynamicBearer` auth mode with a rotating Entra (Azure AD) access token, so the MCP cluster-telemetry tools can query an **Azure Monitor workspace (managed Prometheus)** endpoint - which requires a short-lived AAD bearer token rather than a static credential.
+Azure managed-identity backend-token provider for the transport-neutral [`Orleans.Lattice.Api.Telemetry`](https://github.com/NSTA1/Orleans.Lattice) facade. It satisfies the telemetry proxy's `DynamicBearer` auth mode with a rotating Entra (Azure AD) access token, so any telemetry binding - the MCP cluster-telemetry tools, or a client head hosting the facade directly - can query an **Azure Monitor workspace (managed Prometheus)** endpoint, which requires a short-lived AAD bearer token rather than a static credential.
 
 ## Why it exists
 
-The core telemetry package stays free of any cloud-identity dependency: its static auth modes (`None`, `Bearer`, `Basic`, `MutualTls`) cover self-hosted Prometheus, but managed Prometheus needs a token that rotates roughly hourly. This companion plugs into the core's `ITelemetryBackendTokenProvider` seam and owns token acquisition, caching, and refresh, keeping the `Azure.Core` dependency out of the core package.
+The core telemetry package stays free of any cloud-identity dependency: its static auth modes (`None`, `Bearer`, `Basic`, `MutualTls`) cover self-hosted Prometheus, but managed Prometheus needs a token that rotates roughly hourly. This companion plugs into the neutral facade's `ITelemetryBackendTokenProvider` seam and owns token acquisition, caching, and refresh, keeping the `Azure.Core` dependency out of the core package. It references only the neutral facade, so adding it does not pull in the MCP server surface.
 
 ## What it gives you
 
