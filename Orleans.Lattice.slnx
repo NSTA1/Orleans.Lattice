@@ -37,6 +37,7 @@
   <Project Path="src/lattice.storage.file/Orleans.Lattice.Storage.File.csproj" />
   <Project Path="src/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.csproj" />
   <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
   <Project Path="src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj" />
   <Project Path="src/lattice.explorer/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />

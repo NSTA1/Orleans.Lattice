@@ -1,0 +1,107 @@
+namespace Orleans.Lattice.Explorer.Plugins;
+
+/// <summary>
+/// The keyed, per-session store of plugin access decisions that replaces the
+/// Explorer's former single fat capability record.
+/// <para>
+/// Each plugin owns its own entries, so adding a plugin adds keys rather than
+/// editing a shared type, and one plugin's decision can never overwrite
+/// another's. Reads are the render-path operation and are lock-free and
+/// allocation-free; every unwritten key reads as
+/// <see cref="ExplorerPluginAccess.Denied"/>, so the store is fail-closed
+/// before any probe has run.
+/// </para>
+/// <para>
+/// Gating is advisory. The server remains the sole enforcement point, so an
+/// entry reading allowed never removes a plugin's duty to handle a runtime
+/// denial.
+/// </para>
+/// </summary>
+public interface IExplorerPluginAccessStore
+{
+    /// <summary>
+    /// Raised after each individual key changes value. Carries the key, so a
+    /// subscriber can filter to its own plugin. Not raised when a write leaves
+    /// a key's value unchanged.
+    /// </summary>
+    event Action<ExplorerPluginAccessChange>? Changed;
+
+    /// <summary>
+    /// Reads the decision filed under <paramref name="key"/>, or
+    /// <see cref="ExplorerPluginAccess.Denied"/> when nothing is filed there.
+    /// </summary>
+    /// <param name="key">The key to read.</param>
+    ExplorerPluginAccess Get(ExplorerPluginAccessKey key);
+
+    /// <summary>
+    /// Reads the plugin-level decision for <paramref name="pluginId"/>, or
+    /// <see cref="ExplorerPluginAccess.Denied"/> when nothing is filed for it.
+    /// </summary>
+    /// <param name="pluginId">The plugin id to read. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="pluginId"/> is <see langword="null"/>.</exception>
+    ExplorerPluginAccess Get(string pluginId);
+
+    /// <summary>
+    /// Reads the scoped decision for <paramref name="pluginId"/> and
+    /// <paramref name="scope"/>, or <see cref="ExplorerPluginAccess.Denied"/>
+    /// when nothing is filed there. A scoped key does <em>not</em> inherit the
+    /// plugin-level decision: an unprobed scope is denied, not admitted by its
+    /// plugin's coarse gate.
+    /// </summary>
+    /// <param name="pluginId">The plugin id to read. Must not be <see langword="null"/>.</param>
+    /// <param name="scope">The scope to read. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    ExplorerPluginAccess Get(string pluginId, string scope);
+
+    /// <summary>
+    /// Files <paramref name="access"/> under <paramref name="key"/>, raising
+    /// <see cref="Changed"/> when that alters the stored value.
+    /// </summary>
+    /// <param name="key">The key to write.</param>
+    /// <param name="access">The decision to file.</param>
+    void Set(ExplorerPluginAccessKey key, ExplorerPluginAccess access);
+
+    /// <summary>
+    /// Files the plugin-level decision for <paramref name="pluginId"/>.
+    /// </summary>
+    /// <param name="pluginId">The plugin id to write. Must not be <see langword="null"/>.</param>
+    /// <param name="access">The decision to file.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="pluginId"/> is <see langword="null"/>.</exception>
+    void Set(string pluginId, ExplorerPluginAccess access);
+
+    /// <summary>
+    /// Files a scoped decision for <paramref name="pluginId"/> and
+    /// <paramref name="scope"/>.
+    /// </summary>
+    /// <param name="pluginId">The plugin id to write. Must not be <see langword="null"/>.</param>
+    /// <param name="scope">The scope to write. Must not be <see langword="null"/>.</param>
+    /// <param name="access">The decision to file.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="pluginId"/> or <paramref name="scope"/> is <see langword="null"/>.</exception>
+    void Set(string pluginId, string scope, ExplorerPluginAccess access);
+
+    /// <summary>
+    /// Drops every decision filed for <paramref name="pluginId"/> - its
+    /// plugin-level entry and all of its scoped entries - raising
+    /// <see cref="Changed"/> once per dropped key. Use when a plugin's
+    /// preconditions change and its cached per-scope decisions must not be
+    /// trusted, rather than mutating them in place.
+    /// </summary>
+    /// <param name="pluginId">The plugin id to clear. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="pluginId"/> is <see langword="null"/>.</exception>
+    void Clear(string pluginId);
+
+    /// <summary>
+    /// Drops every decision in the store, raising <see cref="Changed"/> once
+    /// per dropped key. Call on sign-out or before a full re-probe so a stale
+    /// admission cannot survive an identity change.
+    /// </summary>
+    void Reset();
+
+    /// <summary>
+    /// A point-in-time copy of every decision currently filed. Intended for
+    /// diagnostics and tests; the render path reads individual keys through
+    /// <see cref="Get(ExplorerPluginAccessKey)"/> instead, because a snapshot
+    /// allocates.
+    /// </summary>
+    IReadOnlyDictionary<ExplorerPluginAccessKey, ExplorerPluginAccess> Snapshot();
+}
