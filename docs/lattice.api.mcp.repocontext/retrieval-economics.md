@@ -61,7 +61,14 @@ fail-closed boundary):
   index - files added, updated, and removed - by comparing content digests without
   invoking git, and lists the indexed files that depend on the changed ones (the
   reverse-reference impact set), so an agent sees the blast radius of a set of
-  edits before re-indexing.
+  edits before re-indexing. The walk is rooted at the repository's *indexed* root
+  and reuses the filters it was ingested with, so the report always compares the
+  same path space the index was built in; the supplied path is a scope, so a
+  directory inside the repository restricts the report to that subtree, and a path
+  outside the indexed root is refused rather than compared. Unchanged files are
+  settled by a stat against the stored size and ingest anchor instead of being
+  re-read, the same fast path the periodic reconcile uses, so a whole-repository
+  drift report stays cheap on a large tree.
 
 ## The budgeted context bundle
 
