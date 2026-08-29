@@ -17,9 +17,11 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// surface: the four tenant lifecycle RPCs (<c>CreateTenant</c>,
 /// <c>SuspendTenant</c>, <c>ResumeTenant</c>, <c>DeleteTenant</c>) plus the
 /// unauthenticated auth-scheme discovery RPC (<c>GetAuthScheme</c>), the read-only
-/// self-service RPCs, and the three <see cref="ILatticeTenantRegionAdmin"/>
+/// self-service RPCs, the three <see cref="ILatticeTenantRegionAdmin"/>
 /// region-residency RPCs (<c>AuthorizeAllowedRegions</c>,
-/// <c>SetTenantResidency</c>, <c>GetTenantRegionStatus</c>).
+/// <c>SetTenantResidency</c>, <c>GetTenantRegionStatus</c>), and the read-only
+/// <see cref="ILatticeTenantQuotaUsage"/> usage-against-quota RPC
+/// (<c>GetTenantQuotaUsage</c>).
 /// Contract-versioning policy: fields on the wire messages are additive-only (new
 /// <c>[Id(n)]</c>); aliases and field numbers are never renumbered, so a newer
 /// response decodes cleanly under an older client, and new RPCs are added without
@@ -66,6 +68,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant-admin per-region status RPC method name.</summary>
     public const string GetTenantRegionStatusMethodName = "GetTenantRegionStatus";
 
+    /// <summary>The unary, read-only tenant-admin usage-against-quota RPC method name.</summary>
+    public const string GetTenantQuotaUsageMethodName = "GetTenantQuotaUsage";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
@@ -85,7 +90,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantAdminRegionSetRequest> regionSetRequestSerializer,
         Serializer<TenantRegionAuthorizationResult> regionAuthorizationResultSerializer,
         Serializer<TenantResidencyChangeResult> residencyChangeResultSerializer,
-        Serializer<TenantRegionStatusReport> regionStatusReportSerializer)
+        Serializer<TenantRegionStatusReport> regionStatusReportSerializer,
+        Serializer<TenantQuotaUsageReport> quotaUsageReportSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
         ArgumentNullException.ThrowIfNull(createRequestSerializer);
@@ -105,6 +111,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(regionAuthorizationResultSerializer);
         ArgumentNullException.ThrowIfNull(residencyChangeResultSerializer);
         ArgumentNullException.ThrowIfNull(regionStatusReportSerializer);
+        ArgumentNullException.ThrowIfNull(quotaUsageReportSerializer);
 
         CreateTenant = new Method<TenantAdminCreateRequest, TenantCreationResult>(
             type: MethodType.Unary,
@@ -189,6 +196,13 @@ internal sealed class LatticeTenantAdminGrpcMethods
             name: GetTenantRegionStatusMethodName,
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionStatusReportSerializer));
+
+        GetTenantQuotaUsage = new Method<TenantAdminTenantRequest, TenantQuotaUsageReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTenantQuotaUsageMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(quotaUsageReportSerializer));
     }
 
     /// <summary>The unary tenant-creation RPC.</summary>
@@ -227,6 +241,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant-admin per-region status RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantRegionStatusReport> GetTenantRegionStatus { get; }
 
+    /// <summary>The unary, read-only tenant-admin usage-against-quota RPC.</summary>
+    public Method<TenantAdminTenantRequest, TenantQuotaUsageReport> GetTenantQuotaUsage { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -254,7 +271,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantAdminRegionSetRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantRegionAuthorizationResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantResidencyChangeResult>>(),
-            serializerProvider.GetRequiredService<Serializer<TenantRegionStatusReport>>());
+            serializerProvider.GetRequiredService<Serializer<TenantRegionStatusReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantQuotaUsageReport>>());
     }
 }
 

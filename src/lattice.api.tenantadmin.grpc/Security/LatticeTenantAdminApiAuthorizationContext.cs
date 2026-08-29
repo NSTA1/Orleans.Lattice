@@ -54,6 +54,14 @@ public enum LatticeTenantAdminApiOperation
     /// RPC that reports a tenant's per-region residency lifecycle.
     /// </summary>
     GetTenantRegionStatus = 8,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantQuotaUsage</c>
+    /// RPC that reports a tenant's current usage against its quota ceilings. The
+    /// facade unifies an unauthorized tenant with an absent one, so a host policy
+    /// applied through this value must not reintroduce a distinguishable refusal.
+    /// </summary>
+    GetTenantQuotaUsage = 9,
 }
 
 /// <summary>

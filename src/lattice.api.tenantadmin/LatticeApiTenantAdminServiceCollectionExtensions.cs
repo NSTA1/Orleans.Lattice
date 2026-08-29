@@ -122,6 +122,17 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetService<ILatticeMembershipContext>()));
 
+        // N3 tenant usage against quota. The read-only counterpart to
+        // SetTenantQuotasAsync: it projects the tenancy engine's warm per-tenant
+        // usage index onto the control-API contract so a quota surface can render
+        // a bar rather than only a ceiling. It reuses the two-tier region-residency
+        // authorizer (operator, or a live admin subject of that tenant) because it
+        // is a tenant-tier read, and it unifies an unauthorized tenant with an
+        // absent one so it can never be used to probe for tenant existence.
+        builder.Services.TryAddSingleton<ILatticeTenantQuotaUsage>(sp => new LatticeTenantQuotaUsage(
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<ITenantUsageReader>()));
+
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any
         // supplied configure delegate above, matching how the sibling add-ons
