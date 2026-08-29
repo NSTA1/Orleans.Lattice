@@ -237,11 +237,13 @@ public partial class TreeResizeGrainTests
     public async Task UndoResize_during_reject_phase_routes_through_after_swap_recovery()
     {
         // During Phase == Reject the alias has already been flipped to the
-        // destination tree, so undo must take the after-swap path: recover
-        // the old physical tree, remove the alias, clear shadow-forward on
-        // every old-tree shard, and delete the snapshot (destination) tree.
-        // Routing through the drain branch would erroneously delete the
-        // live destination that the alias now points at.
+        // destination tree, so undo must take the after-swap path: remove the
+        // alias, clear shadow-forward on every old-tree shard, and delete the
+        // snapshot (destination) tree. Routing through the drain branch would
+        // erroneously delete the live destination that the alias now points at.
+        // The old physical tree is NOT recovered here - only the Cleanup phase
+        // soft-deletes it, so in Reject it is still live and RecoverAsync would
+        // throw, aborting the whole compensation.
         var (grain, state, _, grainFactory, _) = CreateGrain();
 
         state.State.InProgress = true;
@@ -252,12 +254,15 @@ public partial class TreeResizeGrainTests
         state.State.OldPhysicalTreeId = TreeId;
         state.State.SnapshotTreeId = $"{TreeId}/resized/undo-reject";
 
+        SetupOldTreeDeletion(grainFactory, isDeleted: false);
+
         await grain.UndoResizeAsync();
 
-        // After-swap branch: recover old tree, delete snapshot (destination) tree.
+        // After-swap branch: leave the still-live old tree alone, delete the
+        // snapshot (destination) tree.
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(TreeId);
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/undo-reject");
-        await oldDeletion.Received().RecoverAsync();
+        await oldDeletion.DidNotReceive().RecoverAsync();
         await newDeletion.Received().DeleteTreeAsync();
 
         // Alias removed so the logical tree maps back to the old physical tree.
