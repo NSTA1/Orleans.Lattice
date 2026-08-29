@@ -31,6 +31,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.api.mcp.telemetry.azure\Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj" />
+    <!--
+      Test-only. The product package deliberately references only the neutral
+      Orleans.Lattice.Api.Telemetry facade (issue #1767), so a client head does not
+      drag in the MCP server surface. The test project still needs the MCP binding
+      to (a) compile this package's docs snippet, which shows the MCP composition,
+      and (b) prove end to end that an MCP host composing AddTelemetryTools with
+      AddAzureTelemetryBackendToken keeps the minted token confined to the backend.
+      Keeping the reference here rather than in src is what makes that provable
+      without re-coupling the shipped package.
+    -->
+    <ProjectReference Include="..\..\src\lattice.api.mcp.telemetry\Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>
 

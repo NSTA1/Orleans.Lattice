@@ -117,6 +117,83 @@ public sealed class ExplorerPluginCatalogTests
     }
 
     [Test]
+    public void ForSelection_filters_to_the_surfaces_that_declare_the_kind_and_keeps_the_order()
+    {
+        var catalog = new ExplorerPluginCatalog(new[]
+        {
+            Selection("tags", order: 10, kinds: ExplorerPluginSelectionKinds.TagIndex),
+            Selection("data", order: 20, kinds: ExplorerPluginSelectionKinds.Tree | ExplorerPluginSelectionKinds.View),
+            Selection("deadletter", order: 30, kinds: ExplorerPluginSelectionKinds.Tree),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                catalog.ForSelection(ExplorerPluginSelectionKind.Tree).Select(p => p.Descriptor.PluginId),
+                Is.EqualTo(new[] { "data", "deadletter" }).AsCollection);
+            Assert.That(
+                catalog.ForSelection(ExplorerPluginSelectionKind.View).Select(p => p.Descriptor.PluginId),
+                Is.EqualTo(new[] { "data" }).AsCollection);
+            Assert.That(
+                catalog.ForSelection(ExplorerPluginSelectionKind.TagIndex).Select(p => p.Descriptor.PluginId),
+                Is.EqualTo(new[] { "tags" }).AsCollection);
+        });
+    }
+
+    [Test]
+    public void ForSelection_never_yields_an_area_plugin()
+    {
+        var catalog = new ExplorerPluginCatalog(new[]
+        {
+            new FakeExplorerPlugin("area", ExplorerPluginSurface.Area),
+            Selection("tab", order: 10, kinds: ExplorerPluginSelectionKinds.All),
+        });
+
+        Assert.That(
+            catalog.ForSelection(ExplorerPluginSelectionKind.Tree).Select(p => p.Descriptor.PluginId),
+            Is.EqualTo(new[] { "tab" }).AsCollection);
+    }
+
+    [Test]
+    public void ForSelection_returns_empty_for_a_kind_no_plugin_declares()
+    {
+        var catalog = new ExplorerPluginCatalog(new[]
+        {
+            Selection("tags", order: 10, kinds: ExplorerPluginSelectionKinds.TagIndex),
+        });
+
+        Assert.That(catalog.ForSelection(ExplorerPluginSelectionKind.View), Is.Empty);
+    }
+
+    [Test]
+    public void ForSelection_returns_empty_for_an_undefined_kind()
+    {
+        var catalog = new ExplorerPluginCatalog(new[]
+        {
+            Selection("tab", order: 10, kinds: ExplorerPluginSelectionKinds.All),
+        });
+
+        Assert.That(catalog.ForSelection((ExplorerPluginSelectionKind)999), Is.Empty);
+    }
+
+    [Test]
+    public void ForSelection_returns_the_same_cached_list_on_every_call()
+    {
+        var catalog = new ExplorerPluginCatalog(new[]
+        {
+            Selection("tab", order: 10, kinds: ExplorerPluginSelectionKinds.All),
+        });
+
+        Assert.That(
+            catalog.ForSelection(ExplorerPluginSelectionKind.Tree),
+            Is.SameAs(catalog.ForSelection(ExplorerPluginSelectionKind.Tree)),
+            "the render path must read a pre-computed projection, never build one");
+    }
+
+    private static FakeExplorerPlugin Selection(string id, int order, ExplorerPluginSelectionKinds kinds) =>
+        new(id, ExplorerPluginSurface.Selection, order, selectionKinds: kinds);
+
+    [Test]
     public void Find_returns_the_registered_plugin()
     {
         var plugin = new FakeExplorerPlugin("a");

@@ -61,6 +61,13 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // which area plugins this head registers.
         services.AddExplorerPluginAdapters();
 
+        // The per-selection tier: the metrics, topology, data and dead-letter
+        // surfaces a tree or view resolves to, and the tag-index browser a
+        // tag-index selection resolves to. Registered as ordinary plugins, so
+        // the detail panel enumerates and gates them exactly as the shell does
+        // the area tier.
+        services.AddExplorerSelectionPlugins();
+
         // The web head is Blazor Server: the server process holds the gRPC channel
         // to the cluster's state API and the browser renders over the SignalR
         // circuit. Interactive server components host the shared UI class library.

@@ -6,12 +6,13 @@ namespace Orleans.Lattice.Explorer.UI.Plugins;
 
 /// <summary>
 /// Registration helpers for the Explorer shell's plugin host: the two adapters
-/// the plugin contract deliberately cannot supply itself, and one method per
-/// area plugin the shared UI ships.
+/// the plugin contract deliberately cannot supply itself, one method per
+/// area plugin the shared UI ships, and the shared UI's own per-selection
+/// plugin set.
 /// <para>
-/// A head chooses its area set by which of these it calls. There is no per-area
-/// option flag and no shared registry to edit: withholding an area is simply
-/// not registering its plugin.
+/// A head chooses its plugin set by which of these it calls. There is no
+/// per-area option flag and no shared registry to edit: withholding a plugin is
+/// simply not registering it.
 /// </para>
 /// <para>
 /// A plugin that lives in its own package registers itself from that package
@@ -76,5 +77,33 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerPluginAdapters();
         return services.AddExplorerPlugin<SchemaAreaPlugin>();
+    }
+
+    /// <summary>
+    /// Registers the Explorer's own per-selection plugins - the metrics,
+    /// topology, data and dead-letter surfaces a tree or view resolves to, and
+    /// the tag-index browser a tag-index selection resolves to.
+    /// <para>
+    /// These occupy the <see cref="ExplorerPluginSurface.Selection"/> surface, so
+    /// they are enumerated, ordered and gated by exactly the machinery that
+    /// serves the area tier. A head that wants a subset registers the individual
+    /// plugin types through
+    /// <see cref="ExplorerPluginServiceCollectionExtensions.AddExplorerPlugin{TPlugin}"/>
+    /// instead of calling this; withholding one renders no tab for it, and adds
+    /// no other coupling to remove.
+    /// </para>
+    /// </summary>
+    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
+    public static IServiceCollection AddExplorerSelectionPlugins(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddExplorerPluginAdapters();
+        services.AddExplorerPlugin<MetricsSelectionPlugin>();
+        services.AddExplorerPlugin<TopologySelectionPlugin>();
+        services.AddExplorerPlugin<DataSelectionPlugin>();
+        services.AddExplorerPlugin<DeadLetterSelectionPlugin>();
+        return services.AddExplorerPlugin<TagIndexSelectionPlugin>();
     }
 }
