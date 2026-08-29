@@ -8,9 +8,15 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 /// <summary>
 /// Registers the Azure managed-identity backend-token provider that satisfies the
 /// telemetry proxy's <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>
-/// mode, letting the MCP cluster-telemetry tools authenticate to an Azure Monitor
+/// mode, letting any telemetry binding authenticate to an Azure Monitor
 /// managed-Prometheus query endpoint with a rotating Entra access token.
 /// </summary>
+/// <remarks>
+/// The seam this satisfies - <see cref="ITelemetryBackendTokenProvider"/> - belongs
+/// to the transport-neutral <c>Orleans.Lattice.Api.Telemetry</c> facade, so this
+/// package takes no dependency on the MCP server surface: a client head that hosts
+/// the facade directly gets the Azure token provider without the MCP binding.
+/// </remarks>
 public static class LatticeAzureTelemetryTokenServiceCollectionExtensions
 {
     /// <summary>
@@ -18,9 +24,12 @@ public static class LatticeAzureTelemetryTokenServiceCollectionExtensions
     /// <paramref name="configure"/> and registers the
     /// <see cref="ITelemetryBackendTokenProvider"/> the telemetry proxy consults in
     /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/> mode. Call this
-    /// alongside <c>AddTelemetryTools</c> (which must set
+    /// alongside whichever call registers the telemetry backend - <c>AddTelemetryTools</c>
+    /// for the MCP binding, or
+    /// <see cref="LatticeApiTelemetryServiceCollectionExtensions.AddLatticeTelemetryBackend"/>
+    /// for a head that hosts the neutral facade directly - which must set
     /// <see cref="LatticeTelemetryOptions.AuthMode"/> to
-    /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>). Idempotent: a
+    /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>. Idempotent: a
     /// second call rebinds the options but registers exactly one provider, and a
     /// host that registered its own <see cref="ITelemetryBackendTokenProvider"/>
     /// first keeps it.
