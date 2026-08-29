@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Hashing;
 using System.Text;
 using Orleans.Lattice.Primitives;
@@ -94,8 +95,31 @@ internal static class AggregationRowCodec
             return 0;
         }
 
-        var hash = XxHash32.HashToUInt32(Encoding.UTF8.GetBytes(sourceKey));
-        return (int)(hash % (uint)fanout);
+        // Hash the key from a stack (or pooled, for long keys) UTF-8 buffer
+        // instead of allocating a fresh byte[] per call. This is the same
+        // idiom LatticeSharding / ShardMap.GetVirtualSlot use, and it runs on
+        // the view-write hot path: every source mutation feeding a count / sum
+        // aggregation view routes through here (once or twice per contribution)
+        // to pick its accumulator shard. The XxHash32 input bytes are identical,
+        // so the resulting slot is unchanged for every key.
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(sourceKey.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxByteCount <= 256
+            ? stackalloc byte[maxByteCount]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxByteCount));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(sourceKey, buffer);
+            var hash = XxHash32.HashToUInt32(buffer[..written]);
+            return (int)(hash % (uint)fanout);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     /// <summary>Encodes a membership row.</summary>

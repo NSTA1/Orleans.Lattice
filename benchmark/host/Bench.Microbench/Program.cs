@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, ordedup, mergefold, catalog.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, ordedup, mergefold, catalog.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -117,6 +117,13 @@ if (string.Equals(suite, "hotpath", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> hotpath (HotPathAllocationBenchmarks)");
     var hotpathSummary = BenchmarkRunner.Run<HotPathAllocationBenchmarks>(config);
     return hotpathSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "hashalloc", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> hashalloc (HashingAllocationBenchmarks)");
+    var hashAllocSummary = BenchmarkRunner.Run<HashingAllocationBenchmarks>(config);
+    return hashAllocSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "ordedup", StringComparison.OrdinalIgnoreCase))

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Hashing;
 using System.Text;
 using static Orleans.Lattice.Views.AggregationRowCodec;
@@ -243,8 +244,30 @@ internal sealed class AggregationApplier(
     private string OperationId(string sourceKey, HybridLogicalClock timestamp)
     {
         var payload = $"{_operationEpoch}\u0000{sourceKey}\u0000{timestamp.WallClockTicks}\u0000{timestamp.Counter}";
-        var hash = XxHash64.HashToUInt64(Encoding.UTF8.GetBytes(payload));
-        return "agg-" + hash.ToString("x16");
+
+        // Hash the payload from a stack (or pooled, for long payloads) UTF-8
+        // buffer instead of allocating a fresh byte[] per call. OperationId runs
+        // once per numeric contribution / retraction (the per-write view hot
+        // path), so the removed byte[] is one heap allocation per view mutation.
+        // The XxHash64 input bytes are identical, so the returned id is unchanged.
+        var maxByteCount = Encoding.UTF8.GetMaxByteCount(payload.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxByteCount <= 256
+            ? stackalloc byte[maxByteCount]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxByteCount));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(payload, buffer);
+            var hash = XxHash64.HashToUInt64(buffer[..written]);
+            return "agg-" + hash.ToString("x16");
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
     }
 
     // --- min / max / set-union: inverse-row path (already replay idempotent) ---

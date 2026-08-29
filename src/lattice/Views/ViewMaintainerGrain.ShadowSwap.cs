@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
@@ -592,21 +593,45 @@ internal sealed partial class ViewMaintainerGrain
         var entryHash = new byte[16];
         var lengthPrefix = new byte[4];
 
-        await foreach (var entry in tree.ScanEntriesAsync(floor, cancellationToken: cancellationToken))
+        // Reuse a single pooled UTF-8 buffer across every scanned entry instead
+        // of allocating a fresh byte[] per key. The digest folds one entry per
+        // materialised view row, so the previous per-entry Encoding.UTF8.GetBytes
+        // allocated once per row; a single reused rental drops that to O(1) for
+        // the whole scan. (A stackalloc span cannot be hoisted across the
+        // await-foreach in an async method, so the buffer is a rented array.)
+        // The appended bytes - length prefix, key bytes, value - are identical,
+        // so the computed digest is byte-for-byte unchanged.
+        var keyBuffer = ArrayPool<byte>.Shared.Rent(256);
+        try
         {
-            var keyBytes = Encoding.UTF8.GetBytes(entry.Key);
-            BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, keyBytes.Length);
-            hasher.Append(lengthPrefix);
-            hasher.Append(keyBytes);
-            hasher.Append(entry.Value);
-            hasher.GetHashAndReset(entryHash);
-
-            for (var i = 0; i < 16; i++)
+            await foreach (var entry in tree.ScanEntriesAsync(floor, cancellationToken: cancellationToken))
             {
-                accumulator[i] ^= entryHash[i];
-            }
+                var key = entry.Key;
+                var maxByteCount = Encoding.UTF8.GetMaxByteCount(key.Length);
+                if (maxByteCount > keyBuffer.Length)
+                {
+                    ArrayPool<byte>.Shared.Return(keyBuffer);
+                    keyBuffer = ArrayPool<byte>.Shared.Rent(maxByteCount);
+                }
 
-            count++;
+                var written = Encoding.UTF8.GetBytes(key, keyBuffer);
+                BinaryPrimitives.WriteInt32LittleEndian(lengthPrefix, written);
+                hasher.Append(lengthPrefix);
+                hasher.Append(keyBuffer.AsSpan(0, written));
+                hasher.Append(entry.Value);
+                hasher.GetHashAndReset(entryHash);
+
+                for (var i = 0; i < 16; i++)
+                {
+                    accumulator[i] ^= entryHash[i];
+                }
+
+                count++;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(keyBuffer);
         }
 
         var countBytes = new byte[8];
