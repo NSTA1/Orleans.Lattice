@@ -86,8 +86,13 @@ public sealed class SchemaPluginDomain(
         // transport fault yields the all-denied snapshot, which then publishes as
         // eight denied scopes rather than as stale admissions.
         var snapshot = await _capabilities.ProbeTreeAsync(treeId, cancellationToken).ConfigureAwait(false);
-        Publish(treeId, snapshot);
-        return SchemaTreeGrants.For(_access, treeId);
+
+        // Bind the read side first and file through it, so this tree's eight scope
+        // strings are built once for both the write and every later read rather
+        // than once per direction.
+        var grants = SchemaTreeGrants.For(_access, treeId);
+        Publish(grants, snapshot);
+        return grants;
     }
 
     /// <inheritdoc />
@@ -143,20 +148,15 @@ public sealed class SchemaPluginDomain(
     /// only the permitted ones - is what makes a re-probe of a tree whose grants
     /// shrank actually revoke the controls it previously opened.
     /// </summary>
-    private void Publish(string treeId, SchemaCapabilitySnapshot snapshot)
+    private static void Publish(SchemaTreeGrants grants, SchemaCapabilitySnapshot snapshot)
     {
-        Publish(treeId, SchemaCapability.ViewPolicy, snapshot.CanViewPolicy);
-        Publish(treeId, SchemaCapability.ManagePolicy, snapshot.CanManagePolicy);
-        Publish(treeId, SchemaCapability.ViewVersionConfig, snapshot.CanViewVersionConfig);
-        Publish(treeId, SchemaCapability.ManageVersion, snapshot.CanManageVersion);
-        Publish(treeId, SchemaCapability.ViewRemediationStatus, snapshot.CanViewRemediationStatus);
-        Publish(treeId, SchemaCapability.Remediate, snapshot.CanRemediate);
-        Publish(treeId, SchemaCapability.ScanCompliance, snapshot.CanScanCompliance);
-        Publish(treeId, SchemaCapability.ViewDeadLetters, snapshot.CanViewDeadLetters);
+        grants.Publish(SchemaCapability.ViewPolicy, snapshot.CanViewPolicy);
+        grants.Publish(SchemaCapability.ManagePolicy, snapshot.CanManagePolicy);
+        grants.Publish(SchemaCapability.ViewVersionConfig, snapshot.CanViewVersionConfig);
+        grants.Publish(SchemaCapability.ManageVersion, snapshot.CanManageVersion);
+        grants.Publish(SchemaCapability.ViewRemediationStatus, snapshot.CanViewRemediationStatus);
+        grants.Publish(SchemaCapability.Remediate, snapshot.CanRemediate);
+        grants.Publish(SchemaCapability.ScanCompliance, snapshot.CanScanCompliance);
+        grants.Publish(SchemaCapability.ViewDeadLetters, snapshot.CanViewDeadLetters);
     }
-
-    private void Publish(string treeId, SchemaCapability capability, bool permitted) =>
-        _access.Set(
-            SchemaTreeGrants.KeyFor(treeId, capability),
-            permitted ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Denied);
 }

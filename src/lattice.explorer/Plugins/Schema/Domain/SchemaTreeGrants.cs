@@ -104,4 +104,28 @@ public sealed class SchemaTreeGrants
         var index = (int)capability;
         return (uint)index < (uint)_keys.Length && _access.Get(_keys[index]).IsAllowed;
     }
+
+    /// <summary>
+    /// Files the decision for one capability through this tree's already-bound
+    /// key, so a probe spends the scope strings once rather than rebuilding them
+    /// to write and again to read. A no-op on <see cref="None"/>, which owns no
+    /// tree to file against.
+    /// </summary>
+    /// <param name="capability">The action the decision applies to.</param>
+    /// <param name="permitted">Whether the caller may perform it.</param>
+    internal void Publish(SchemaCapability capability, bool permitted)
+    {
+        if (_access is null || _keys is null)
+        {
+            return;
+        }
+
+        var index = (int)capability;
+        if ((uint)index < (uint)_keys.Length)
+        {
+            // The two results are cached statics, so filing a decision allocates
+            // nothing beyond the store's own entry.
+            _access.Set(_keys[index], permitted ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Denied);
+        }
+    }
 }

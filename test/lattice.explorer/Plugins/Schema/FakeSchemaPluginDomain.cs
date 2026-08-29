@@ -69,16 +69,17 @@ internal sealed class FakeSchemaPluginDomain : ISchemaPluginDomain
         ProbeCallCount++;
         LastProbedTreeId = treeId;
 
-        Publish(treeId, SchemaCapability.ViewPolicy, Capabilities.CanViewPolicy);
-        Publish(treeId, SchemaCapability.ManagePolicy, Capabilities.CanManagePolicy);
-        Publish(treeId, SchemaCapability.ViewVersionConfig, Capabilities.CanViewVersionConfig);
-        Publish(treeId, SchemaCapability.ManageVersion, Capabilities.CanManageVersion);
-        Publish(treeId, SchemaCapability.ViewRemediationStatus, Capabilities.CanViewRemediationStatus);
-        Publish(treeId, SchemaCapability.Remediate, Capabilities.CanRemediate);
-        Publish(treeId, SchemaCapability.ScanCompliance, Capabilities.CanScanCompliance);
-        Publish(treeId, SchemaCapability.ViewDeadLetters, Capabilities.CanViewDeadLetters);
+        var grants = SchemaTreeGrants.For(_access, treeId);
+        grants.Publish(SchemaCapability.ViewPolicy, Capabilities.CanViewPolicy);
+        grants.Publish(SchemaCapability.ManagePolicy, Capabilities.CanManagePolicy);
+        grants.Publish(SchemaCapability.ViewVersionConfig, Capabilities.CanViewVersionConfig);
+        grants.Publish(SchemaCapability.ManageVersion, Capabilities.CanManageVersion);
+        grants.Publish(SchemaCapability.ViewRemediationStatus, Capabilities.CanViewRemediationStatus);
+        grants.Publish(SchemaCapability.Remediate, Capabilities.CanRemediate);
+        grants.Publish(SchemaCapability.ScanCompliance, Capabilities.CanScanCompliance);
+        grants.Publish(SchemaCapability.ViewDeadLetters, Capabilities.CanViewDeadLetters);
 
-        return Task.FromResult(SchemaTreeGrants.For(_access, treeId));
+        return Task.FromResult(grants);
     }
 
     public Task<SchemaReadView<LatticeSchemaPolicy>> GetPolicyAsync(string treeId, CancellationToken cancellationToken = default)
@@ -152,8 +153,4 @@ internal sealed class FakeSchemaPluginDomain : ISchemaPluginDomain
         return Task.FromResult(DeadLetters);
     }
 
-    private void Publish(string treeId, SchemaCapability capability, bool permitted) =>
-        _access.Set(
-            SchemaTreeGrants.KeyFor(treeId, capability),
-            permitted ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Denied);
 }
