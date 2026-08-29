@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Api.Telemetry.Grpc</PackageId>
+    <Version>9.4.0</Version>
+    <Description>Code-first gRPC transport binding and client-safe client for Orleans.Lattice.Api.Telemetry. Exposes the read-only telemetry facade (curated named-query catalogue discovery and query evaluation by id) as a routable per-region gRPC surface, with a default-deny authorization interceptor, a caller-credential bridge, and an unauthenticated auth-scheme discovery RPC. Transport only: the effective tenant stays derived server-side by the facade, which remains the single enforcement point. References the shared contract package alone, so a desktop or web client head can consume telemetry without taking the MCP server surface.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Telemetry.Grpc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    Exactly one project reference, and it is the shared contract package. This is
+    the load-bearing constraint the PromQL hoist exists to make possible: a client
+    head consuming telemetry must not drag in the MCP server surface, nor the
+    neutral facade's own PromQL machinery. TelemetryGrpcPackageGraphTests asserts
+    this list, its transitive closure, and the emitted assembly references.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.83.0" />
+  </ItemGroup>
+
+</Project>
