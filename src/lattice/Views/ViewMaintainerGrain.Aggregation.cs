@@ -39,7 +39,8 @@ internal sealed partial class ViewMaintainerGrain
             Math.Max(0, options.AggregationMaxGroupEntries),
             state.State.RebuildGeneration.ToString(),
             projection as ILatticeFoldProjection,
-            ViewName);
+            ViewName,
+            ViewTenantTag);
     }
 
     private async Task<int> DrainAggregationAsync(ViewRegistration registration, CancellationToken cancellationToken)
@@ -155,11 +156,11 @@ internal sealed partial class ViewMaintainerGrain
             await cursorRegistry.ReportCursorAsync(sourceTreeId, ConsumerId, highest, blockedAtHlc, cancellationToken);
         }
 
-        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag);
-        BacklogDepth.Record(backlogRead, ViewTag);
+        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (applied > 0)
         {
-            AggregationApplied.Add(applied, ViewTag);
+            AggregationApplied.Add(applied, ViewTag, ViewTenantTag);
         }
 
         // Run any reconcile a cross-tree degrade scheduled this pass, after the

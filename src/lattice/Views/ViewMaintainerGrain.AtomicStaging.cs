@@ -422,7 +422,7 @@ internal sealed partial class ViewMaintainerGrain
 
     private bool TripBackstop()
     {
-        ViewAtomicStagingBackstop.Add(1, ViewTag);
+        ViewAtomicStagingBackstop.Add(1, ViewTag, ViewTenantTag);
         _staging.Clear();
         _stagedSourceKeyRefCount.Clear();
         _ordinaryHlcOverStagedKey.Clear();

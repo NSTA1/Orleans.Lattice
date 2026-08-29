@@ -55,11 +55,13 @@ internal sealed partial class LatticeGrain
             sw.Stop();
             LatticeMetrics.WarmUpInvocations.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
             LatticeMetrics.WarmUpDurationMs.Record(
                 sw.Elapsed.TotalMilliseconds,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                new KeyValuePair<string, object?>("shard_count", shardCount));
+                new KeyValuePair<string, object?>("shard_count", shardCount),
+                LatticeTenantLabel.ForTree(TreeId));
         }
 
         static async Task ProbeShardAsync(LatticeGrain self, string physicalTreeId, int shardIndex, SemaphoreSlim gate)

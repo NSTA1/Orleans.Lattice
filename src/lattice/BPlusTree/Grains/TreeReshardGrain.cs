@@ -66,11 +66,12 @@ internal sealed class TreeReshardGrain(
         // initiated counter increments AFTER the validation gate below
         // so it counts only invocations that actually start a reshard.
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
-        LatticeMetrics.ShardRootReshardInFlight.Record(state.State.InProgress ? 1L : 0L, treeTag);
+        var tenantTag = LatticeTenantLabel.ForTree(TreeId);
+        LatticeMetrics.ShardRootReshardInFlight.Record(state.State.InProgress ? 1L : 0L, treeTag, tenantTag);
 
         if (newShardCount < 2)
         {
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_min"));
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_min"), tenantTag);
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
                 "Target shard count must be at least 2.");
         }
@@ -78,7 +79,7 @@ internal sealed class TreeReshardGrain(
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         if (newShardCount > LatticeConstants.DefaultVirtualShardCount)
         {
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_max"));
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_max"), tenantTag);
             throw new ArgumentOutOfRangeException(nameof(newShardCount),
                 $"Target shard count ({newShardCount}) cannot exceed the virtual shard space ({LatticeConstants.DefaultVirtualShardCount}).");
         }
@@ -86,7 +87,7 @@ internal sealed class TreeReshardGrain(
         if (state.State.InProgress)
         {
             if (state.State.TargetShardCount == newShardCount) return;
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "already_in_progress"));
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "already_in_progress"), tenantTag);
             throw new InvalidOperationException(
                 $"A reshard is already in progress for tree '{TreeId}' (target={state.State.TargetShardCount}).");
         }
@@ -120,7 +121,7 @@ internal sealed class TreeReshardGrain(
 
         if (newShardCount < currentCount)
         {
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"));
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "shrink_unsupported"), tenantTag);
 #if LATTICE_DIAG
             // DIAG-PATH1: diagnose why currentCount mis-tracks the pinned ShardCount.
             var diagRegistry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
@@ -145,7 +146,7 @@ internal sealed class TreeReshardGrain(
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(TreeId);
         if (!await resize.IsIdleAsync())
         {
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "resize_in_flight"));
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "resize_in_flight"), tenantTag);
             throw new InvalidOperationException(
                 $"A resize is already in progress for tree '{TreeId}'; reshard refused until resize completes.");
         }
@@ -184,13 +185,13 @@ internal sealed class TreeReshardGrain(
             state.State.OperationId = prevOperationId;
             state.State.Phase = prevPhase;
             state.State.TargetShardCount = prevTargetShardCount;
-            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"));
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"), tenantTag);
             throw;
         }
 
         // Reshard activity counter: a reshard coordinator has been
         // successfully started.
-        LatticeMetrics.ShardRootReshardInitiated.Add(1, treeTag);
+        LatticeMetrics.ShardRootReshardInitiated.Add(1, treeTag, tenantTag);
 
         await StartCoordinatorAsync();
     }
@@ -471,11 +472,12 @@ internal sealed class TreeReshardGrain(
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "reshard"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "reshard"),
+            LatticeTenantLabel.ForTree(TreeId));
 
         // Reshard activity counter: coordinator-driven reshard
         // completed successfully.
-        LatticeMetrics.ShardRootReshardCompleted.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+        LatticeMetrics.ShardRootReshardCompleted.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId), LatticeTenantLabel.ForTree(TreeId));
 
         await PublishReshardCompletedAsync();
 
@@ -558,7 +560,8 @@ internal sealed class TreeReshardGrain(
         // in lockstep so dashboard sums match the coordinator-driven
         // path.
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
-        LatticeMetrics.ShardRootReshardInitiated.Add(1, treeTag);
-        LatticeMetrics.ShardRootReshardCompleted.Add(1, treeTag);
+        var tenantTag = LatticeTenantLabel.ForTree(TreeId);
+        LatticeMetrics.ShardRootReshardInitiated.Add(1, treeTag, tenantTag);
+        LatticeMetrics.ShardRootReshardCompleted.Add(1, treeTag, tenantTag);
     }
 }

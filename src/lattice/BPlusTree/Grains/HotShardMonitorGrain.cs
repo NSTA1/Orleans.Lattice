@@ -280,7 +280,8 @@ internal sealed class HotShardMonitorGrain(
         // cluster aggregate as a sum across the tree tag and decide whether they
         // need MaxClusterConcurrentAutoSplits at all.
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
-        LatticeMetrics.SplitInFlight.Record(inFlight, treeTag);
+        var tenantTag = LatticeTenantLabel.ForTree(TreeId);
+        LatticeMetrics.SplitInFlight.Record(inFlight, treeTag, tenantTag);
 
         var maxConcurrent = options.MaxConcurrentAutoSplits;
         if (maxConcurrent < 1) maxConcurrent = 1;
@@ -346,9 +347,9 @@ internal sealed class HotShardMonitorGrain(
         // per-tree cap plus any held back by the cluster gate.
         var suppressed = (candidates.Count - desiredNew) + clusterDeferred;
         if (suppressed > 0)
-            LatticeMetrics.SplitCandidatesSuppressed.Add(suppressed, treeTag);
+            LatticeMetrics.SplitCandidatesSuppressed.Add(suppressed, treeTag, tenantTag);
         if (clusterDeferred > 0)
-            LatticeMetrics.SplitAdmissionDeferred.Add(clusterDeferred, treeTag, LatticeMetrics.SplitDeferredClusterCapReasonTag);
+            LatticeMetrics.SplitAdmissionDeferred.Add(clusterDeferred, treeTag, LatticeMetrics.SplitDeferredClusterCapReasonTag, tenantTag);
 
         if (triggerCount == 0) return;
 

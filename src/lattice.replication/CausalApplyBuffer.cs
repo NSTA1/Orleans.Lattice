@@ -53,10 +53,12 @@ internal sealed class CausalApplyBuffer
         [
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, DefaultShard),
+            LatticeTenantLabel.ForTree(treeId),
         ];
         _treeTags =
         [
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            LatticeTenantLabel.ForTree(treeId),
         ];
     }
 

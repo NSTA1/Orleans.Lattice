@@ -374,12 +374,13 @@ internal sealed class LatticeBackupCaptureService(
                     fenceHlc, totalDrained, totalDrainWait.TotalMilliseconds, attempt);
 
                 BackupMetrics.CrossTreeFenceSelections.Add(
-                    1, new KeyValuePair<string, object?>(BackupMetrics.TagTreeCount, scopes.Count));
+                    1, new KeyValuePair<string, object?>(BackupMetrics.TagTreeCount, scopes.Count),
+                    LatticeTenantLabel.Platform);
                 if (totalDrained > 0)
                 {
-                    BackupMetrics.CrossTreeFenceDrainedInFlight.Add(totalDrained);
+                    BackupMetrics.CrossTreeFenceDrainedInFlight.Add(totalDrained, LatticeTenantLabel.Platform);
                 }
-                BackupMetrics.CrossTreeFenceDrainWaitMilliseconds.Record(totalDrainWait.TotalMilliseconds);
+                BackupMetrics.CrossTreeFenceDrainWaitMilliseconds.Record(totalDrainWait.TotalMilliseconds, LatticeTenantLabel.Platform);
 
                 logger.LogInformation(
                     "Captured cross-tree-consistent backup set '{SetName}' over {TreeCount} trees at fence hlc={FenceHlc} "
@@ -395,7 +396,7 @@ internal sealed class LatticeBackupCaptureService(
             // A cross-tree saga registered on the set mid-capture: the captured
             // members may be torn. Discard them (they remain as content-addressed
             // orphan per-tree backups) and retry with a fresh fence.
-            BackupMetrics.CrossTreeFenceRetries.Add(1);
+            BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
             logger.LogDebug(
                 "Backup set '{SetName}' fence attempt {Attempt} saw a cross-tree saga register during capture; retrying.",
                 request.Name, attempt);

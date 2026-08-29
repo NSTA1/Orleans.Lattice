@@ -555,7 +555,8 @@ internal sealed class TreeShardSplitGrain(
 
         LatticeMetrics.ShardSplitsCommitted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, state.State.SourceShardIndex));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, state.State.SourceShardIndex),
+            LatticeTenantLabel.ForTree(TreeId));
 
         await PublishSplitCommittedAsync(state.State.SourceShardIndex);
 
@@ -872,14 +873,16 @@ internal sealed class TreeShardSplitGrain(
             {
                 LatticeMetrics.SplitRetroactiveForwardEntries.Add(replayed,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagShard, sourceShardIndex));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagShard, sourceShardIndex),
+                    LatticeTenantLabel.ForTree(TreeId));
             }
 
             var elapsedMs = (System.Diagnostics.Stopwatch.GetTimestamp() - startTicks)
                 * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             LatticeMetrics.SplitRetroactiveForwardDuration.Record(elapsedMs,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, sourceShardIndex));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, sourceShardIndex),
+                LatticeTenantLabel.ForTree(TreeId));
         }
     }
 

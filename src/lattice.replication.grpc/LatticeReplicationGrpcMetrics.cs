@@ -53,6 +53,7 @@ internal static class LatticeReplicationGrpcMetrics
         InsecureChannel.Add(
             1,
             new KeyValuePair<string, object?>(TagPeer, peerClusterId),
-            new KeyValuePair<string, object?>(TagTransport, transport));
+            new KeyValuePair<string, object?>(TagTransport, transport),
+            LatticeTenantLabel.Platform);
     }
 }

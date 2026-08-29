@@ -42,6 +42,7 @@ internal sealed partial class ShardRootGrain
         [
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+            LatticeTenantLabel.ForTree(TreeId),
         ];
     }
 

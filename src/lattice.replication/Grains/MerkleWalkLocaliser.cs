@@ -206,7 +206,8 @@ internal static class MerkleWalkLocaliser
         LatticeReplicationMetrics.MerkleWalkLocalised.Add(
             leaves,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDepth, depth.ToString(CultureInfo.InvariantCulture)));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDepth, depth.ToString(CultureInfo.InvariantCulture)),
+            LatticeTenantLabel.ForTree(tree));
     }
 
     private static void RecordAborted(MerkleWalkAbortReason reason)
@@ -215,7 +216,8 @@ internal static class MerkleWalkLocaliser
             1,
             new KeyValuePair<string, object?>(
                 LatticeReplicationMetrics.TagReason,
-                LatticeReplicationMetrics.MerkleWalkAbortReasonTag(reason)));
+                LatticeReplicationMetrics.MerkleWalkAbortReasonTag(reason)),
+            LatticeTenantLabel.Platform);
     }
 
     private static bool HashesEqual(byte[]? a, byte[]? b)

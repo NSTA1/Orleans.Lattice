@@ -202,7 +202,7 @@ internal sealed partial class ViewMaintainerGrain
         CancellationToken cancellationToken)
     {
         await FlipLocalSliceAsync(viewTree, txId, upserts, deletes, cancellationToken);
-        ViewCrossTreeJointViolation.Add(1, ViewTag);
+        ViewCrossTreeJointViolation.Add(1, ViewTag, ViewTenantTag);
         _pendingCrossTreeReconcile = true;
         logger.LogWarning(
             "View '{ViewName}' degraded cross-tree operation '{OperationId}' to per-tree-slice atomicity after waiting {Timeout} for participant readiness; scheduling a reconcile.",

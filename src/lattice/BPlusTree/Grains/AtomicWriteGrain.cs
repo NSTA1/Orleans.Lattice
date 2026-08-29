@@ -2056,7 +2056,7 @@ internal sealed class AtomicWriteGrain(
         // (c2-xv memo, Phase D2-A null result); these histograms
         // close the attribution gap so the next optimisation step
         // targets the actual binding constraint.
-        var (sagaTreeTag, sagaWalPartitionsTag) = GetSagaMetricTags();
+        var (sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag) = GetSagaMetricTags();
 
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
@@ -2077,7 +2077,8 @@ internal sealed class AtomicWriteGrain(
                 LatticeMetrics.SagaPrepareDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(prepareStartTicks).TotalMilliseconds,
                     sagaTreeTag,
-                    sagaWalPartitionsTag);
+                    sagaWalPartitionsTag,
+                    sagaTenantTag);
             }
         }
 
@@ -2111,7 +2112,8 @@ internal sealed class AtomicWriteGrain(
                 LatticeMetrics.SagaTerminalDecisionDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(decisionStartTicks).TotalMilliseconds,
                     sagaTreeTag,
-                    sagaWalPartitionsTag);
+                    sagaWalPartitionsTag,
+                    sagaTenantTag);
             }
             var broadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
@@ -2123,7 +2125,8 @@ internal sealed class AtomicWriteGrain(
                 LatticeMetrics.SagaBroadcastDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(broadcastStartTicks).TotalMilliseconds,
                     sagaTreeTag,
-                    sagaWalPartitionsTag);
+                    sagaWalPartitionsTag,
+                    sagaTenantTag);
             }
             await CompleteSagaAsync(success: false);
             // Surface the saga's terminal failure as
@@ -2191,7 +2194,8 @@ internal sealed class AtomicWriteGrain(
                 LatticeMetrics.SagaTerminalDecisionDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(decisionStartTicks).TotalMilliseconds,
                     sagaTreeTag,
-                    sagaWalPartitionsTag);
+                    sagaWalPartitionsTag,
+                    sagaTenantTag);
             }
             var broadcastStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
@@ -2203,7 +2207,8 @@ internal sealed class AtomicWriteGrain(
                 LatticeMetrics.SagaBroadcastDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(broadcastStartTicks).TotalMilliseconds,
                     sagaTreeTag,
-                    sagaWalPartitionsTag);
+                    sagaWalPartitionsTag,
+                    sagaTenantTag);
             }
             await CompleteSagaAsync(success: true);
         }
@@ -2345,8 +2350,8 @@ internal sealed class AtomicWriteGrain(
         // Tags are sourced from the per-activation cache populated by
         // RunSagaAsync so we do not re-allocate the KeyValuePair pair
         // (and re-box the WalPartitions int) on every saga.
-        var (sagaTreeTag, sagaWalPartitionsTag) = GetSagaMetricTags();
-        LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag);
+        var (sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag) = GetSagaMetricTags();
+        LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag);
 
         // Phase D1b (c2-ix memo): collapse the D1 per-key
         // Task.WhenAll-of-N-SetAsync fan-out into a single
@@ -2551,7 +2556,7 @@ internal sealed class AtomicWriteGrain(
                     var perKeyAvgMs = batchElapsedMs / remaining;
                     for (var i = 0; i < remaining; i++)
                     {
-                        LatticeMetrics.SagaPerKeyDuration.Record(perKeyAvgMs, sagaTreeTag, sagaWalPartitionsTag);
+                        LatticeMetrics.SagaPerKeyDuration.Record(perKeyAvgMs, sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag);
                     }
                 }
 
@@ -2840,7 +2845,8 @@ internal sealed class AtomicWriteGrain(
                 : "compensated");
         LatticeMetrics.AtomicWriteCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
+            LatticeTenantLabel.ForTree(state.State.TreeId));
 
         // End-to-end saga duration and batch size, paired histograms tagged
         // by the same {tree, outcome} dimensions as AtomicWriteCompleted so
@@ -2859,12 +2865,14 @@ internal sealed class AtomicWriteGrain(
                 / (double)TimeSpan.TicksPerMillisecond;
             LatticeMetrics.AtomicWriteDuration.Record(elapsedMs,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
+                LatticeTenantLabel.ForTree(state.State.TreeId));
         }
 
         LatticeMetrics.AtomicWriteBatchSize.Record(completedBatchSize,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
+            LatticeTenantLabel.ForTree(state.State.TreeId));
 
         // Publish AtomicWriteCompleted only when the saga committed all writes.
         // Rolled-back sagas emitted per-key Set events during ExecutePhase but
@@ -3077,14 +3085,14 @@ internal sealed class AtomicWriteGrain(
     /// <see cref="RunSagaAsync"/> and <see cref="ExecutePhaseAsync"/>
     /// independently rebuilt the same pair per saga.
     /// </summary>
-    private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions)? _sagaMetricTags;
+    private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions, KeyValuePair<string, object?> Tenant)? _sagaMetricTags;
 
     /// <summary>
     /// Returns the cached per-saga metric tag pair, building it on
     /// first access. See <see cref="_sagaMetricTags"/> for the
     /// allocation-reduction rationale.
     /// </summary>
-    private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions) GetSagaMetricTags()
+    private (KeyValuePair<string, object?> Tree, KeyValuePair<string, object?> WalPartitions, KeyValuePair<string, object?> Tenant) GetSagaMetricTags()
     {
         if (_sagaMetricTags is { } cached)
         {
@@ -3097,10 +3105,14 @@ internal sealed class AtomicWriteGrain(
         // runs at saga entry, before PrepareAsync sets
         // state.State.TreeId; reading from state at that point would
         // cache a null tree tag for the activation's lifetime).
-        // The grain key is "{treeId}/{operationId}", so the prefix
-        // before the first slash is the tree id.
+        // The grain key is "{treeId}/{operationId}", and the operation
+        // id never contains a slash, so the segment after the LAST
+        // slash is the operation id and everything before it is the
+        // tree id. Splitting on the last (not the first) separator is
+        // what keeps this correct for a tenant-composed tree id, which
+        // is itself segmented as "t/{tenantId}/{name}".
         var grainKey = GrainContext.GrainId.Key.ToString()!;
-        var slashIndex = grainKey.IndexOf('/');
+        var slashIndex = grainKey.LastIndexOf('/');
         var treeIdFromKey = slashIndex >= 0 ? grainKey.Substring(0, slashIndex) : grainKey;
         var built = (
             Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdFromKey),
@@ -3123,7 +3135,8 @@ internal sealed class AtomicWriteGrain(
                 // can lag. Documented gap; promote to the resolver
                 // if the lag ever surfaces as an operator-visible
                 // observability bug.
-                optionsMonitor.Get(treeIdFromKey).WalPartitions));
+                optionsMonitor.Get(treeIdFromKey).WalPartitions),
+            Tenant: LatticeTenantLabel.ForTree(treeIdFromKey));
         _sagaMetricTags = built;
         return built;
     }
@@ -3160,7 +3173,7 @@ internal sealed class AtomicWriteGrain(
     /// </param>
     private async Task WriteSagaStateAsync(string phase)
     {
-        var (treeTag, walTag) = GetSagaMetricTags();
+        var (treeTag, walTag, tenantTag) = GetSagaMetricTags();
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -3170,9 +3183,13 @@ internal sealed class AtomicWriteGrain(
         {
             LatticeMetrics.SagaCheckpointDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
-                treeTag,
-                walTag,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, phase));
+                new System.Diagnostics.TagList
+                {
+                    treeTag,
+                    walTag,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, phase),
+                    tenantTag,
+                });
         }
     }
 
@@ -3205,7 +3222,7 @@ internal sealed class AtomicWriteGrain(
 
     private async Task RegisterKeepaliveAsync()
     {
-        var (treeTag, walTag) = GetSagaMetricTags();
+        var (treeTag, walTag, tenantTag) = GetSagaMetricTags();
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
@@ -3230,15 +3247,19 @@ internal sealed class AtomicWriteGrain(
         {
             LatticeMetrics.SagaReminderDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
-                treeTag,
-                walTag,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "register"));
+                new System.Diagnostics.TagList
+                {
+                    treeTag,
+                    walTag,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "register"),
+                    tenantTag,
+                });
         }
     }
 
     private async Task UnregisterKeepaliveAsync()
     {
-        var (treeTag, walTag) = GetSagaMetricTags();
+        var (treeTag, walTag, tenantTag) = GetSagaMetricTags();
         try
         {
             var getStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -3251,9 +3272,13 @@ internal sealed class AtomicWriteGrain(
             {
                 LatticeMetrics.SagaReminderDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(getStartTicks).TotalMilliseconds,
-                    treeTag,
-                    walTag,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "unregister-get"));
+                    new System.Diagnostics.TagList
+                    {
+                        treeTag,
+                        walTag,
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "unregister-get"),
+                        tenantTag,
+                    });
             }
 
             if (reminder is not null)
@@ -3267,9 +3292,13 @@ internal sealed class AtomicWriteGrain(
                 {
                     LatticeMetrics.SagaReminderDuration.Record(
                         System.Diagnostics.Stopwatch.GetElapsedTime(dropStartTicks).TotalMilliseconds,
-                        treeTag,
-                        walTag,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "unregister-drop"));
+                        new System.Diagnostics.TagList
+                        {
+                            treeTag,
+                            walTag,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "unregister-drop"),
+                            tenantTag,
+                        });
                 }
             }
         }

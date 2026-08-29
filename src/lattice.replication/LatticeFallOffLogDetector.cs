@@ -77,7 +77,8 @@ internal sealed class LatticeFallOffLogDetector(
             LatticeReplicationMetrics.PeerFellOffLogSuppressed.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                LatticeTenantLabel.ForTree(treeName));
 
             _logger.LogDebug(
                 "Receiver fall-off probe suppressed for tree {Tree} origin {Origin}: bootstrap already in flight in phase {Phase} from same source; localHwm={LocalHwm} senderOldest={SenderOldest}",
@@ -93,7 +94,8 @@ internal sealed class LatticeFallOffLogDetector(
         LatticeReplicationMetrics.PeerFellOffLog.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+            LatticeTenantLabel.ForTree(treeName));
 
         _logger.LogWarning(
             "Receiver fell off sender WAL for tree {Tree} origin {Origin}: localHwm={LocalHwm} senderOldest={SenderOldest}; auto-bootstrap={AutoBootstrap}",

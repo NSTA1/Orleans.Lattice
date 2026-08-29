@@ -40,7 +40,8 @@ internal sealed partial class ShardRootGrain
         // bespoke counting harness.
         LatticeMetrics.ShardDigestReads.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+            LatticeTenantLabel.ForTree(TreeId));
 
         if (state.State.RootNodeId is null)
         {
@@ -85,7 +86,8 @@ internal sealed partial class ShardRootGrain
 
         LatticeMetrics.ShardDigestReads.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+            LatticeTenantLabel.ForTree(TreeId));
 
         if (state.State.RootNodeId is null)
         {

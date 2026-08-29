@@ -64,7 +64,7 @@ internal static class AuthSnapshotGaugeRegistry
     {
         foreach (var maintainer in LiveSources())
         {
-            yield return new Measurement<long>(maintainer.CurrentEpoch);
+            yield return new Measurement<long>(maintainer.CurrentEpoch, LatticeTenantLabel.Platform);
         }
     }
 
@@ -76,7 +76,7 @@ internal static class AuthSnapshotGaugeRegistry
             if (maintainer.LastRebuildUtc is { } last)
             {
                 var seconds = Math.Max(0d, (now - last).TotalSeconds);
-                yield return new Measurement<double>(seconds);
+                yield return new Measurement<double>(seconds, LatticeTenantLabel.Platform);
             }
         }
     }
@@ -85,7 +85,7 @@ internal static class AuthSnapshotGaugeRegistry
     {
         foreach (var maintainer in LiveSources())
         {
-            yield return new Measurement<long>(maintainer.CurrentSubjectCount);
+            yield return new Measurement<long>(maintainer.CurrentSubjectCount, LatticeTenantLabel.Platform);
         }
     }
 

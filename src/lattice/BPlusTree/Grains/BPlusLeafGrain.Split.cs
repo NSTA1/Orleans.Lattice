@@ -149,7 +149,8 @@ internal sealed partial class BPlusLeafGrain
         await PersistAsync();
 
         LatticeMetrics.LeafSplits.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
+            LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
         return await CompleteSplitAsync(walHeadsAtSplit);
     }
 

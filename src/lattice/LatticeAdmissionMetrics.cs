@@ -198,7 +198,8 @@ internal sealed class LatticeAdmissionMetrics : IDisposable
             }
             yield return new Measurement<long>(
                 selector(sample),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 
@@ -227,7 +228,8 @@ internal sealed class LatticeAdmissionMetrics : IDisposable
 
             yield return new Measurement<long>(
                 over ? 1L : 0L,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 
@@ -244,6 +246,7 @@ internal sealed class LatticeAdmissionMetrics : IDisposable
             }
 
             var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key);
+            var tenantTag = LatticeTenantLabel.ForTree(kv.Key);
 
             // Prefer the enforcing cap as the denominator; fall back to the
             // advisory ceiling when only that is configured. Emit per dimension
@@ -254,7 +257,8 @@ internal sealed class LatticeAdmissionMetrics : IDisposable
                 yield return new Measurement<double>(
                     (double)sample.LiveKeys / kc,
                     treeTag,
-                    LatticeMetrics.DimensionKeys);
+                    LatticeMetrics.DimensionKeys,
+                    tenantTag);
             }
 
             var bytesCeiling = sample.MaxEstimatedBytes ?? sample.AdvisoryBytes;
@@ -263,7 +267,8 @@ internal sealed class LatticeAdmissionMetrics : IDisposable
                 yield return new Measurement<double>(
                     (double)sample.EstimatedBytes / bc,
                     treeTag,
-                    LatticeMetrics.DimensionBytes);
+                    LatticeMetrics.DimensionBytes,
+                    tenantTag);
             }
         }
     }

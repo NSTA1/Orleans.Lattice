@@ -1456,7 +1456,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("apply", applyStartTicks);
 
-        LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag());
+        LatticeMetrics.LeafTombstonesCreated.Add(1, LeafTreeTag(), LeafTenantTag());
 
         // step 3 (observer) - inside a commit-log scope.
         var observerStartTicks = Stopwatch.GetTimestamp();
@@ -1582,7 +1582,7 @@ internal sealed partial class BPlusLeafGrain(
         }
         RecordCommitStep("apply", applyStartTicks);
 
-        LatticeMetrics.LeafTombstonesCreated.Add(keysToDelete.Count, LeafTreeTag());
+        LatticeMetrics.LeafTombstonesCreated.Add(keysToDelete.Count, LeafTreeTag(), LeafTenantTag());
 
         // No leaf-level observer publish for DeleteRange - the shard
         // coordinator publishes one per-shard mutation after the
@@ -2086,22 +2086,48 @@ internal sealed partial class BPlusLeafGrain(
             // no-op so the visited-counter stays accurate.
             SampleLeafTombstoneRatio();
             var noopTreeTag = LeafTreeTag();
+            var noopTenantTag = LeafTenantTag();
             var noopTriggerTag = CompactionTriggerTag();
             var noopPathTag = CompactionPathTag();
             if (noopTriggerTag is { } noopTrig)
             {
                 if (noopPathTag is { } noopPath)
-                    LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig, noopPath);
+                    LatticeMetrics.CompactionLeavesVisited.Add(
+                        1,
+                        new System.Diagnostics.TagList
+                        {
+                            noopTreeTag,
+                            LatticeMetrics.OutcomeNoop,
+                            noopTrig,
+                            noopPath,
+                            noopTenantTag,
+                        });
                 else
-                    LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTrig);
+                    LatticeMetrics.CompactionLeavesVisited.Add(
+                        1,
+                        new System.Diagnostics.TagList
+                        {
+                            noopTreeTag,
+                            LatticeMetrics.OutcomeNoop,
+                            noopTrig,
+                            noopTenantTag,
+                        });
             }
             else if (noopPathTag is { } noopPath2)
             {
-                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopPath2);
+                LatticeMetrics.CompactionLeavesVisited.Add(
+                    1,
+                    new System.Diagnostics.TagList
+                    {
+                        noopTreeTag,
+                        LatticeMetrics.OutcomeNoop,
+                        noopPath2,
+                        noopTenantTag,
+                    });
             }
             else
             {
-                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop);
+                LatticeMetrics.CompactionLeavesVisited.Add(1, noopTreeTag, LatticeMetrics.OutcomeNoop, noopTenantTag);
             }
             return 0;
         }
@@ -2226,7 +2252,8 @@ internal sealed partial class BPlusLeafGrain(
                         var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                         LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
                             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                            LatticeMetrics.KindCompact);
+                            LatticeMetrics.KindCompact,
+                            LatticeTenantLabel.ForTree(treeId));
                     }
                 }
 
@@ -2246,37 +2273,63 @@ internal sealed partial class BPlusLeafGrain(
 
         var elapsedTotalMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         var treeTag = LeafTreeTag();
+        var tenantTag = LeafTenantTag();
         var triggerTag = CompactionTriggerTag();
         var pathTag = CompactionPathTag();
         var outcomeTag = toRemove.Count > 0 ? LatticeMetrics.OutcomeReaped : LatticeMetrics.OutcomeNoop;
         if (triggerTag is { } trig)
         {
-            LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag, trig);
+            LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag, trig, tenantTag);
             if (tombstonesRemoved > 0)
-                LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag, trig);
+                LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag, trig, tenantTag);
             if (expiredRemoved > 0)
-                LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag, trig);
+                LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag, trig, tenantTag);
 
             // Pass-level per-leaf outcome: reaped if at least one entry
             // was physically removed, otherwise noop (the leaf had work
             // pending but every tombstone was still in the grace window).
             if (pathTag is { } path)
-                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, trig, path);
+                LatticeMetrics.CompactionLeavesVisited.Add(
+                    1,
+                    new System.Diagnostics.TagList
+                    {
+                        treeTag,
+                        outcomeTag,
+                        trig,
+                        path,
+                        tenantTag,
+                    });
             else
-                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, trig);
+                LatticeMetrics.CompactionLeavesVisited.Add(
+                    1,
+                    new System.Diagnostics.TagList
+                    {
+                        treeTag,
+                        outcomeTag,
+                        trig,
+                        tenantTag,
+                    });
         }
         else
         {
-            LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag);
+            LatticeMetrics.LeafCompactionDuration.Record(elapsedTotalMs, treeTag, tenantTag);
             if (tombstonesRemoved > 0)
-                LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag);
+                LatticeMetrics.LeafTombstonesReaped.Add(tombstonesRemoved, treeTag, tenantTag);
             if (expiredRemoved > 0)
-                LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag);
+                LatticeMetrics.LeafTombstonesExpired.Add(expiredRemoved, treeTag, tenantTag);
 
             if (pathTag is { } path)
-                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, path);
+                LatticeMetrics.CompactionLeavesVisited.Add(
+                    1,
+                    new System.Diagnostics.TagList
+                    {
+                        treeTag,
+                        outcomeTag,
+                        path,
+                        tenantTag,
+                    });
             else
-                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag);
+                LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, outcomeTag, tenantTag);
         }
 
         // Forward the projection-hash delta from the reaped tombstones
@@ -2488,7 +2541,8 @@ internal sealed partial class BPlusLeafGrain(
                 var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                 LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
+                    LatticeTenantLabel.ForTree(treeId));
             }
         }
 
@@ -2619,7 +2673,8 @@ internal sealed partial class BPlusLeafGrain(
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
             LeafTreeTag(),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "keys"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "keys"),
+            LeafTenantTag());
         return keys;
     }
 
@@ -2693,7 +2748,8 @@ internal sealed partial class BPlusLeafGrain(
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafScanDuration.Record(elapsedMs,
             LeafTreeTag(),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "entries"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOperation, "entries"),
+            LeafTenantTag());
         return entries;
     }
 
@@ -2972,7 +3028,8 @@ internal sealed partial class BPlusLeafGrain(
                 var elapsedMs = (Stopwatch.GetTimestamp() - walStartTicks) * 1000.0 / Stopwatch.Frequency;
                 LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
+                    LatticeTenantLabel.ForTree(treeId));
             }
         }
 

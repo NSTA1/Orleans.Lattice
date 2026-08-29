@@ -255,11 +255,15 @@ public sealed class RemediationGuard
         {
             yield return new Measurement<long>(
                 1,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, kv.Key.Tree),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer),
-                new KeyValuePair<string, object?>(
-                    LatticeReplicationMetrics.TagReason,
-                    LatticeReplicationMetrics.DigestRemediationDisabledReasonTag(kv.Value)));
+                new System.Diagnostics.TagList
+                {
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, kv.Key.Tree),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer),
+                    new KeyValuePair<string, object?>(
+                        LatticeReplicationMetrics.TagReason,
+                        LatticeReplicationMetrics.DigestRemediationDisabledReasonTag(kv.Value)),
+                    LatticeTenantLabel.ForTree(kv.Key.Tree),
+                });
         }
     }
 

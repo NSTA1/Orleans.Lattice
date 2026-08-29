@@ -101,7 +101,8 @@ public sealed class RetryAttemptTrackingPolicy : HttpPipelinePolicy
         var status = message.HasResponse ? message.Response.Status : 0;
         LatticeMetrics.ProviderRetryAttempts.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagStatus,
-                status.ToString(CultureInfo.InvariantCulture)));
+                status.ToString(CultureInfo.InvariantCulture)),
+            LatticeTenantLabel.Platform);
     }
 
     /// <summary>

@@ -609,7 +609,8 @@ internal sealed class TreeResizeGrain(
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "resize"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "resize"),
+            LatticeTenantLabel.ForTree(TreeId));
 
         await PublishResizeCompletedAsync();
 

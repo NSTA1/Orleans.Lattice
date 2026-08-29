@@ -352,7 +352,8 @@ internal sealed class TombstoneCompactionGrain(
         };
         LatticeMetrics.CompactionPassDuration.Record(elapsedMs,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            triggerTag);
+            triggerTag,
+            LatticeTenantLabel.ForTree(TreeId));
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)
@@ -543,7 +544,8 @@ internal sealed class TombstoneCompactionGrain(
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
                 LatticeMetrics.CompactionShardRetries.Add(1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
                 var prevShardRetries = state.State.ShardRetries;
                 state.State.ShardRetries++;
                 try
@@ -559,7 +561,8 @@ internal sealed class TombstoneCompactionGrain(
             else
             {
                 LatticeMetrics.CompactionShardSkipped.Add(1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
                 // Exhausted retries for this shard - skip to next and
                 // clear the in-shard cursor so the next shard starts
                 // from its leftmost leaf.
@@ -673,7 +676,8 @@ internal sealed class TombstoneCompactionGrain(
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            LatticeMetrics.KindCompaction);
+            LatticeMetrics.KindCompaction,
+            LatticeTenantLabel.ForTree(TreeId));
 
         RecordPassDuration(_currentTriggerKind);
         _scopedShardIndices = null;
@@ -774,7 +778,8 @@ internal sealed class TombstoneCompactionGrain(
             {
                 var snapshot = await shardRoot.GetDirtyLeavesSinceLastCompactionAsync();
                 LatticeMetrics.CompactionShardDirtyLeaves.Record(snapshot.DirtyLeaves.Count,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId),
+                    LatticeTenantLabel.ForTree(physicalTreeId));
                 if (snapshot.DirtyLeaves.Count > 0)
                 {
                     dirtyLeaves = new string[snapshot.DirtyLeaves.Count];
@@ -840,6 +845,7 @@ internal sealed class TombstoneCompactionGrain(
                     // ProcessNextShardAsync still drives the
                     // shard.retries / shard.skipped counters.
                     var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId);
+        var tenantTag = LatticeTenantLabel.ForTree(physicalTreeId);
                     if (triggerScope is not null)
                     {
                         var trig = _currentTriggerKind switch
@@ -850,11 +856,28 @@ internal sealed class TombstoneCompactionGrain(
                             TriggerOperator => LatticeMetrics.TriggerOperatorTag,
                             _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, _currentTriggerKind),
                         };
-                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped, trig, pathTag);
+                        LatticeMetrics.CompactionLeavesVisited.Add(
+                            1,
+                            new System.Diagnostics.TagList
+                            {
+                                treeTag,
+                                LatticeMetrics.OutcomeSkipped,
+                                trig,
+                                pathTag,
+                                tenantTag,
+                            });
                     }
                     else
                     {
-                        LatticeMetrics.CompactionLeavesVisited.Add(1, treeTag, LatticeMetrics.OutcomeSkipped, pathTag);
+                        LatticeMetrics.CompactionLeavesVisited.Add(
+                            1,
+                            new System.Diagnostics.TagList
+                            {
+                                treeTag,
+                                LatticeMetrics.OutcomeSkipped,
+                                pathTag,
+                                tenantTag,
+                            });
                     }
                     throw;
                 }

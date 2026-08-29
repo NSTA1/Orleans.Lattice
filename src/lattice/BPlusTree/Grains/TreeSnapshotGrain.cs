@@ -644,7 +644,8 @@ internal sealed class TreeSnapshotGrain(
 
         LatticeMetrics.CoordinatorCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, SourceTreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "snapshot"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "snapshot"),
+            LatticeTenantLabel.ForTree(SourceTreeId));
 
         await PublishSnapshotCompletedAsync();
 

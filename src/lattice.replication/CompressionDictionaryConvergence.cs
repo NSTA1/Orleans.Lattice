@@ -94,11 +94,13 @@ public static class CompressionDictionaryConvergence
             {
                 LatticeReplicationMetrics.DictionaryConvergence.Add(
                     1,
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, targetClusterId),
-                    new KeyValuePair<string, object?>(
-                        LatticeReplicationMetrics.TagOutcome,
-                        LatticeReplicationMetrics.DictionaryConvergenceOutcomeUnavailable));
+                    new System.Diagnostics.TagList
+                    {
+                        new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+                        new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, targetClusterId),
+                        new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.DictionaryConvergenceOutcomeUnavailable),
+                        LatticeTenantLabel.ForTree(treeId),
+                    });
                 continue;
             }
 
@@ -114,13 +116,13 @@ public static class CompressionDictionaryConvergence
 
             LatticeReplicationMetrics.DictionaryConvergence.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, targetClusterId),
-                new KeyValuePair<string, object?>(
-                    LatticeReplicationMetrics.TagOutcome,
-                    accepted
-                        ? LatticeReplicationMetrics.DictionaryConvergenceOutcomeInstalled
-                        : LatticeReplicationMetrics.DictionaryConvergenceOutcomeRejected));
+                new System.Diagnostics.TagList
+                {
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, targetClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, accepted ? LatticeReplicationMetrics.DictionaryConvergenceOutcomeInstalled : LatticeReplicationMetrics.DictionaryConvergenceOutcomeRejected),
+                    LatticeTenantLabel.ForTree(treeId),
+                });
         }
 
         return installed;

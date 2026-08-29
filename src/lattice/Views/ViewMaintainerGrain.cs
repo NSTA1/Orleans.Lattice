@@ -139,6 +139,14 @@ internal sealed partial class ViewMaintainerGrain(
 
     private KeyValuePair<string, object?> ViewTag => new(LatticeMetrics.TagView, ViewName);
 
+    // Cached per-activation: the view's owning tenant is derived from the view's
+    // own tree id, whose tenant segment is fixed for the activation (only the
+    // generation suffix moves on a shadow swap), so the classification runs once
+    // rather than on every drain-batch measurement.
+    private KeyValuePair<string, object?>? _viewTenantTag;
+    private KeyValuePair<string, object?> ViewTenantTag =>
+        _viewTenantTag ??= LatticeTenantLabel.ForTree(ViewTreeId);
+
     /// <inheritdoc />
     public async Task EnsureActiveAsync(CancellationToken cancellationToken = default)
     {
@@ -486,11 +494,11 @@ internal sealed partial class ViewMaintainerGrain(
                 ;
         }
 
-        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag);
-        BacklogDepth.Record(backlogRead, ViewTag);
+        ApplyLag.Record(await ComputeLagAsync(sourceTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (appliedCount > 0)
         {
-            Applied.Add(appliedCount, ViewTag);
+            Applied.Add(appliedCount, ViewTag, ViewTenantTag);
         }
 
         // Run any reconcile a cross-tree degrade scheduled this pass, after the
@@ -785,7 +793,7 @@ internal sealed partial class ViewMaintainerGrain(
         logger.LogWarning(
             "View '{ViewName}' lag {Lag} exceeded MaxLagBudget {Budget}; force-evicting (unpinning the source WAL and rebuilding from current source state).",
             ViewName, lag, budget);
-        LagBudgetEviction.Add(1, ViewTag);
+        LagBudgetEviction.Add(1, ViewTag, ViewTenantTag);
         _lastLagEvictionTicks = nowTicks;
 
         // Unpin the source WAL before rebuilding so the GC is released even if the
@@ -1074,7 +1082,7 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
-        KeyCollisions.Add(collisions.Count, ViewTag);
+        KeyCollisions.Add(collisions.Count, ViewTag, ViewTenantTag);
         logger.LogWarning(
             "View '{ViewName}' detected {Count} re-key collision(s) in a drain batch (e.g. view key '{Example}' produced by multiple distinct source keys); the key re-map is not injective. Resolving by source-HLC last-writer-wins.",
             ViewName, collisions.Count, collisions[0]);
@@ -1187,7 +1195,8 @@ internal sealed partial class ViewMaintainerGrain(
         ViewSourceBackpressure.Add(
             1,
             ViewTag,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagWalSaturationState, saturation.ToString().ToLowerInvariant()));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagWalSaturationState, saturation.ToString().ToLowerInvariant()),
+            ViewTenantTag);
 
         return ViewBackpressure.ScaleBatch(saturation, batchSize, options.ThrottledBatchRatio, options.SaturatedBatchSize);
     }

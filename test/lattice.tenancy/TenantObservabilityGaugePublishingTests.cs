@@ -116,8 +116,12 @@ public sealed class TenantObservabilityGaugePublishingTests
                 "the published overage series is observable, tagged by tenant");
             Assert.That(
                 recorded,
-                Has.Some.Matches<(string Name, long Value, string? Tenant)>(m => m.Name == LatticeTenantMetrics.TenantsName && m.Tenant is null),
-                "the cluster-aggregate tenant count carries no tenant tag");
+                Has.Some.Matches<(string Name, long Value, string? Tenant)>(
+                    m => m.Name == LatticeTenantMetrics.TenantsName
+                        && m.Tenant == LatticeTenantLabel.PlatformTenant),
+                "the cluster-aggregate tenant count is not attributable to any one tenant, so it carries "
+                    + "the reserved platform sentinel rather than a tenant id - the derived tenant dimension "
+                    + "is emitted on every series, so a tenant-scoped query never has to special-case it");
         });
     }
 

@@ -633,9 +633,13 @@ internal sealed partial class ReplicationApplier(
         var elapsedMs = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
         LatticeReplicationMetrics.ApplyDuration.Record(
             elapsedMs,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerOriginClusterId ?? string.Empty),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerOriginClusterId ?? string.Empty),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome),
+                LatticeTenantLabel.ForTree(treeId),
+            });
     }
 
     private static bool HasCausalDependencies(WalRecord entry) =>
@@ -1558,7 +1562,8 @@ internal sealed partial class ReplicationApplier(
         LatticeReplicationMetrics.ApplyLag.Record(
             ms,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, entry.OriginClusterId ?? string.Empty));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, entry.OriginClusterId ?? string.Empty),
+            LatticeTenantLabel.ForTree(entry.TreeId));
     }
 
     /// <summary>
@@ -1609,7 +1614,8 @@ internal sealed partial class ReplicationApplier(
                 LatticeReplicationMetrics.ApplyFifoViolations.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId),
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId!));
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId!),
+                    LatticeTenantLabel.ForTree(entry.TreeId));
                 return;
             }
 
