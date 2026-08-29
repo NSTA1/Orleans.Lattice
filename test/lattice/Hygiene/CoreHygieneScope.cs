@@ -27,6 +27,7 @@ internal static class CoreHygieneScope
         "src/lattice", "test/lattice",
         "src/lattice.api.state", "test/lattice.api.state",
         "src/lattice.api.state.grpc", "test/lattice.api.state.grpc",
+        "src/lattice.api.telemetry", "test/lattice.api.telemetry",
         "src/lattice.dashboards", "test/lattice.dashboards",
         "src/lattice.explorer", "test/lattice.explorer",
         "src/lattice.explorer.entra.web", "test/lattice.explorer.entra.web",
