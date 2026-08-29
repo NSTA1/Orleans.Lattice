@@ -81,6 +81,54 @@ internal sealed partial class BPlusLeafGrain
             context.ActivationServices.GetService<CrdtShapeRegistry>()
             ?? FallbackCrdtShapeRegistry;
 
+    /// <summary>
+    /// Resolves the tree id this leaf activation is bound to for a CRDT shape
+    /// lookup, faulting with the typed
+    /// <see cref="LatticeCrdtShapeNotRegisteredException"/> when the activation
+    /// was never seeded with one.
+    /// <para>
+    /// <see cref="CrdtShapeRegistry.TryGet"/> rejects a null or empty tree id
+    /// with <see cref="ArgumentException"/>, so coalescing an unset id to
+    /// <see cref="string.Empty"/> and letting the registry decide raises an
+    /// opaque "The value cannot be an empty string. (Parameter 'treeId')" that
+    /// names neither the tree, the key, nor the grain - and makes the
+    /// informative not-registered throw at the call site unreachable. Faulting
+    /// here keeps the diagnostic actionable and keeps the failure on the same
+    /// typed exception the API bindings already map to a client-side
+    /// precondition error rather than an opaque server fault.
+    /// </para>
+    /// <para>
+    /// The owning shard root attaches every leaf (<c>SetTreeIdAsync</c>) before
+    /// routing writes to it, so an unseeded leaf on a CRDT path means the write
+    /// raced or outlived that attach - for example a tree deleted and recovered
+    /// underneath in-flight writes.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The key the CRDT write targets, echoed into the fault.</param>
+    /// <param name="mode">The CRDT merge mode being resolved, echoed into the fault.</param>
+    /// <param name="operation">Short description of the calling path, echoed into the fault.</param>
+    private string RequireBoundTreeId(string key, LatticeMergeMode mode, string operation)
+    {
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId))
+        {
+            throw new LatticeCrdtShapeNotRegisteredException(
+                "Leaf grain '"
+                + context.GrainId
+                + "' has no tree id bound, so no CrdtShape can be resolved for "
+                + operation
+                + " (key '"
+                + key
+                + "', mode '"
+                + mode
+                + "'). The leaf received a CRDT write before the owning shard root seeded it "
+                + "with a tree id via SetTreeIdAsync; retry once the tree has finished attaching "
+                + "(for example after a delete/recover cycle).",
+                string.Empty);
+        }
+        return treeId;
+    }
+
     private ILatticeMergeModeResolver? _resolvedMergeModeResolver;
     private bool _mergeModeResolverResolved;
 
@@ -126,11 +174,11 @@ internal sealed partial class BPlusLeafGrain
                 nameof(mode));
         }
 
+        var treeId = RequireBoundTreeId(key, mode, "the typed CRDT delta apply");
         var registry = ResolveCrdtShapeRegistry();
-        var shape = registry.TryGet(state.State.TreeId ?? string.Empty, mode);
+        var shape = registry.TryGet(treeId, mode);
         if (shape is null)
         {
-            var treeId = state.State.TreeId ?? string.Empty;
             throw new LatticeCrdtShapeNotRegisteredException(
                 "No CrdtShape is registered for tree '"
                 + treeId
@@ -261,7 +309,7 @@ internal sealed partial class BPlusLeafGrain
             if (writer is not null)
             {
                 var record = WalRecordBuilder.ForCrdtDelta(
-                    state.State.TreeId ?? string.Empty,
+                    treeId,
                     state.State.ShardIndex ?? 0,
                     key,
                     mode,
@@ -316,7 +364,7 @@ internal sealed partial class BPlusLeafGrain
             if (writer is not null)
             {
                 var record = WalRecordBuilder.ForCrdtDelta(
-                    state.State.TreeId ?? string.Empty,
+                    treeId,
                     state.State.ShardIndex ?? 0,
                     key,
                     mode,
