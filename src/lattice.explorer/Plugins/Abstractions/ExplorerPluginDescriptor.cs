@@ -63,4 +63,27 @@ public sealed record ExplorerPluginDescriptor
     /// depend on DI registration order. Defaults to <c>0</c>.
     /// </summary>
     public int Order { get; init; }
+
+    /// <summary>
+    /// The selection kinds this plugin applies to, for a plugin on the
+    /// <see cref="ExplorerPluginSurface.Selection"/> surface. Defaults to
+    /// <see cref="ExplorerPluginSelectionKinds.All"/>, so an unstated
+    /// applicability means "wherever a selection exists".
+    /// <para>
+    /// This is how a surface that is only meaningful for one kind of selection
+    /// - a tag-index browser, say - resolves to a different plugin set instead
+    /// of the host special-casing that selection. Ignored for an
+    /// <see cref="ExplorerPluginSurface.Area"/> plugin, which is not selection
+    /// scoped.
+    /// </para>
+    /// </summary>
+    public ExplorerPluginSelectionKinds SelectionKinds { get; init; } = ExplorerPluginSelectionKinds.All;
+
+    /// <summary>
+    /// Whether this plugin applies to a selection of <paramref name="kind"/>,
+    /// per <see cref="SelectionKinds"/>. A bitwise test, so the host may call it
+    /// on the render path.
+    /// </summary>
+    /// <param name="kind">The kind of the current selection.</param>
+    public bool AppliesTo(ExplorerPluginSelectionKind kind) => SelectionKinds.Includes(kind);
 }

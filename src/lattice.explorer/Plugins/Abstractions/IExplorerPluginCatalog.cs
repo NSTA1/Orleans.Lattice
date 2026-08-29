@@ -26,6 +26,21 @@ public interface IExplorerPluginCatalog
     IReadOnlyList<IExplorerPlugin> ForSurface(ExplorerPluginSurface surface);
 
     /// <summary>
+    /// The <see cref="ExplorerPluginSurface.Selection"/> plugins that apply to a
+    /// selection of <paramref name="kind"/>, in display order. Returns an empty
+    /// list when no plugin declares that kind.
+    /// <para>
+    /// This is the whole of per-selection resolution: a selection kind with its
+    /// own dedicated surface simply resolves to a different plugin set, so the
+    /// host never special-cases a selection and never bypasses the tier.
+    /// Projections are pre-computed, so this is an allocation-free read on the
+    /// render path.
+    /// </para>
+    /// </summary>
+    /// <param name="kind">The kind of the current selection.</param>
+    IReadOnlyList<IExplorerPlugin> ForSelection(ExplorerPluginSelectionKind kind);
+
+    /// <summary>
     /// The plugin registered under <paramref name="pluginId"/>, or
     /// <see langword="null"/> when none is. Ids compare ordinally.
     /// </summary>

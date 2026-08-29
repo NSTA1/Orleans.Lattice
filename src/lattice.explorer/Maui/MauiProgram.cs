@@ -86,6 +86,9 @@ public static class MauiProgram
         // plugins this head registers below.
         builder.Services.AddExplorerPluginAdapters();
 
+        // The per-selection tier (see the web head for the rationale).
+        builder.Services.AddExplorerSelectionPlugins();
+
         // The Backups management area (see the web head for the rationale).
         builder.Services.AddExplorerBackup();
         builder.Services.AddExplorerBackupsPlugin();

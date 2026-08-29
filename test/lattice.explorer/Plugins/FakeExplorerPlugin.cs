@@ -16,7 +16,8 @@ internal sealed class FakeExplorerPlugin : IExplorerPlugin
         string? label = null,
         IExplorerPluginAccessGate? gate = null,
         Type? domainContract = null,
-        Type? viewType = null)
+        Type? viewType = null,
+        ExplorerPluginSelectionKinds selectionKinds = ExplorerPluginSelectionKinds.All)
     {
         Descriptor = new ExplorerPluginDescriptor
         {
@@ -24,6 +25,7 @@ internal sealed class FakeExplorerPlugin : IExplorerPlugin
             Label = label ?? pluginId,
             Surface = surface,
             Order = order,
+            SelectionKinds = selectionKinds,
         };
 
         AccessGate = gate ?? ExplorerPluginAccessGates.Denied;
