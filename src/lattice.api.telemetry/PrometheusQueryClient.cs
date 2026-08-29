@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// The default <see cref="IPrometheusQueryClient"/>: an <see cref="HttpClient"/>
@@ -15,10 +15,10 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// dependency on any Lattice credential source, so the caller's Lattice
 /// credential can never be forwarded to the backend.
 /// </summary>
-internal sealed class PrometheusQueryClient : IPrometheusQueryClient
+public sealed class PrometheusQueryClient : IPrometheusQueryClient
 {
     private readonly HttpClient _http;
-    private readonly IOptions<LatticeApiMcpTelemetryOptions> _options;
+    private readonly IOptions<LatticeTelemetryOptions> _options;
     private readonly ITelemetryBackendTokenProvider? _tokenProvider;
 
     /// <summary>
@@ -27,7 +27,7 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
     /// telemetry <paramref name="options"/> the per-request backend credential is
     /// read from. The optional <paramref name="tokenProvider"/> supplies the
     /// rotating backend token when
-    /// <see cref="LatticeApiMcpTelemetryOptions.AuthMode"/> is
+    /// <see cref="LatticeTelemetryOptions.AuthMode"/> is
     /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>; it is a backend
     /// credential seam and can never carry a Lattice caller credential.
     /// </summary>
@@ -40,7 +40,7 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
     /// </param>
     public PrometheusQueryClient(
         HttpClient http,
-        IOptions<LatticeApiMcpTelemetryOptions> options,
+        IOptions<LatticeTelemetryOptions> options,
         ITelemetryBackendTokenProvider? tokenProvider = null)
     {
         ArgumentNullException.ThrowIfNull(http);

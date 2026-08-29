@@ -1,8 +1,8 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// Supplies a currently-valid <b>backend</b> bearer token for the telemetry proxy
-/// when <see cref="LatticeApiMcpTelemetryOptions.AuthMode"/> is
+/// when <see cref="LatticeTelemetryOptions.AuthMode"/> is
 /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>. The proxy calls
 /// <see cref="GetAccessTokenAsync"/> before each backend request and stamps the
 /// returned value as <c>Authorization: Bearer &lt;token&gt;</c>.

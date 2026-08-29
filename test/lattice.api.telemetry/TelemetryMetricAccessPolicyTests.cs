@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
+namespace Orleans.Lattice.Api.Telemetry.Tests;
 
 /// <summary>
 /// Tests for <see cref="TelemetryMetricAccessPolicy"/>: the read-all posture
@@ -10,7 +10,7 @@ public sealed class TelemetryMetricAccessPolicyTests
 {
     private static TelemetryMetricAccessPolicy DenyAll(params string[] allowed)
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed,
         };
@@ -25,7 +25,7 @@ public sealed class TelemetryMetricAccessPolicyTests
     [Test]
     public void ReadAll_admits_every_metric()
     {
-        var policy = new TelemetryMetricAccessPolicy(new LatticeApiMcpTelemetryOptions());
+        var policy = new TelemetryMetricAccessPolicy(new LatticeTelemetryOptions());
 
         Assert.Multiple(() =>
         {
@@ -123,7 +123,7 @@ public sealed class TelemetryMetricAccessPolicyTests
     [Test]
     public void Null_or_empty_allow_list_entries_are_ignored()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed,
         };
@@ -145,7 +145,7 @@ public sealed class TelemetryMetricAccessPolicyTests
     [Test]
     public void A_null_metric_is_rejected()
     {
-        var policy = new TelemetryMetricAccessPolicy(new LatticeApiMcpTelemetryOptions());
+        var policy = new TelemetryMetricAccessPolicy(new LatticeTelemetryOptions());
         Assert.Throws<ArgumentNullException>(() => policy.IsAdmitted(metric: null!));
     }
 }

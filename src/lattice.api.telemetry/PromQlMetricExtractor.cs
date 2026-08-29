@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// A conservative extractor of the metric names a PromQL expression references,
@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// named a denied series only through <c>__name__</c>.
 /// </para>
 /// </remarks>
-internal static class PromQlMetricExtractor
+public static class PromQlMetricExtractor
 {
     private static readonly HashSet<string> ReservedWords = new(StringComparer.Ordinal)
     {

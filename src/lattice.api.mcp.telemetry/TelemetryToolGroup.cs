@@ -1,4 +1,5 @@
 using ModelContextProtocol.Server;
+using Orleans.Lattice.Api.Telemetry;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry;
 

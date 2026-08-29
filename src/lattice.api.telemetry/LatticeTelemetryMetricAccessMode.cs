@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// Governs which backend metrics the telemetry proxy is permitted to read.
@@ -14,7 +14,7 @@ public enum LatticeTelemetryMetricAccessMode
 
     /// <summary>
     /// Deny every metric by default and permit only those matching an entry in
-    /// <see cref="LatticeApiMcpTelemetryOptions.AllowedMetrics"/> (exact names or
+    /// <see cref="LatticeTelemetryOptions.AllowedMetrics"/> (exact names or
     /// patterns). A deny-all posture with an empty allow-list exposes nothing and
     /// is rejected at validation as almost certainly a misconfiguration.
     /// </summary>

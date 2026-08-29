@@ -1,5 +1,6 @@
 using Azure.Core;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Api.Telemetry;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 

@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
+namespace Orleans.Lattice.Api.Telemetry.Tests;
 
 /// <summary>
 /// Tests for <see cref="PromQlMetricExtractor"/>: it recognises identifiers in

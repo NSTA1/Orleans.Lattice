@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Api.Telemetry;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry;
 
@@ -20,6 +21,12 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// (they are excluded from each tool's input schema); the
 /// <see cref="CancellationToken"/> is bound to the invocation's token. The
 /// remaining, schema-visible arguments carry the query text and range budget.
+/// </para>
+/// <para>
+/// The range guardrails and the deny-all authorization gate are not restated here:
+/// they live in the transport-neutral <see cref="TelemetryRangeGuardrails"/> and
+/// <see cref="TelemetryQueryAuthorizer"/>, so this binding and every other
+/// telemetry transport reject an identical request with an identical message.
 /// </para>
 /// <para>
 /// A genuine caller cancellation propagates; a backend timeout, HTTP failure,
@@ -46,7 +53,7 @@ internal static class TelemetryToolHandlers
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(query);
 
-        if (!TryAuthorizeQuery(policy, query, out var denialMessage))
+        if (!TelemetryQueryAuthorizer.TryAuthorizeQuery(policy, query, out var denialMessage))
         {
             return TelemetryQueryResult.Failure(denialMessage!);
         }
@@ -86,31 +93,13 @@ internal static class TelemetryToolHandlers
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(query);
 
-        var settings = options.Value;
-        if (end < start)
+        if (!TelemetryRangeGuardrails.TryValidateRange(
+                options.Value, start, end, step, out var violationMessage))
         {
-            return TelemetryQueryResult.Failure("The range end must be at or after the range start.");
+            return TelemetryQueryResult.Failure(violationMessage!);
         }
 
-        if (step <= TimeSpan.Zero)
-        {
-            return TelemetryQueryResult.Failure("The range step must be strictly positive.");
-        }
-
-        var range = end - start;
-        if (range > settings.MaxRange)
-        {
-            return TelemetryQueryResult.Failure(
-                $"The requested range of {range} exceeds the configured maximum of {settings.MaxRange}.");
-        }
-
-        if (step > settings.MaxStep)
-        {
-            return TelemetryQueryResult.Failure(
-                $"The requested step of {step} exceeds the configured maximum of {settings.MaxStep}.");
-        }
-
-        if (!TryAuthorizeQuery(policy, query, out var denialMessage))
+        if (!TelemetryQueryAuthorizer.TryAuthorizeQuery(policy, query, out var denialMessage))
         {
             return TelemetryQueryResult.Failure(denialMessage!);
         }
@@ -230,59 +219,6 @@ internal static class TelemetryToolHandlers
         {
             return TelemetryMetricMetadataResult.Failure(BackendErrorMessage(ex));
         }
-    }
-
-    private static bool TryAuthorizeQuery(
-        TelemetryMetricAccessPolicy policy,
-        string query,
-        out string? denialMessage)
-    {
-        denialMessage = null;
-        if (policy.IsReadAll)
-        {
-            return true;
-        }
-
-        var references = PromQlMetricExtractor.ExtractReferences(query);
-        if (references.HasUnresolvableNameMatcher)
-        {
-            denialMessage =
-                "The query references a metric by a '__name__' pattern or negative matcher, "
-                + "which the telemetry metric-access allow-list cannot admit.";
-            return false;
-        }
-
-        if (references.HasUnconstrainedSelector)
-        {
-            // Fail closed: a label-only selector that is not anchored to a metric
-            // name (for example the right-hand side of `up or {job="api"}`) matches
-            // series across every metric name, so it defeats the allow-list even
-            // when the expression also names an admitted metric.
-            denialMessage =
-                "The query selects series by label without constraining the metric name, "
-                + "which the telemetry metric-access allow-list cannot admit.";
-            return false;
-        }
-
-        if (references.Names.Count == 0)
-        {
-            // Fail closed: a deny-all query whose metric names cannot be extracted
-            // (for example a label-only selector) is rejected rather than admitted.
-            denialMessage =
-                "The query does not name a metric the telemetry metric-access allow-list can admit.";
-            return false;
-        }
-
-        foreach (var name in references.Names)
-        {
-            if (!policy.IsAdmitted(name))
-            {
-                denialMessage = DeniedMessage(name);
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static TelemetryQueryResult MapQueryEnvelope(PrometheusQueryResponse response)
@@ -461,7 +397,7 @@ internal static class TelemetryToolHandlers
         => $"The telemetry backend request failed: {ex.Message}";
 
     private static string DeniedMessage(string metric)
-        => $"Metric '{metric}' is not permitted by the telemetry metric-access allow-list.";
+        => TelemetryQueryAuthorizer.DeniedMessage(metric);
 
     private static readonly IReadOnlyDictionary<string, string> EmptyLabels
         = new Dictionary<string, string>(StringComparer.Ordinal);

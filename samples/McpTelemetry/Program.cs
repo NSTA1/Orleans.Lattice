@@ -10,6 +10,7 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.Mcp;
 using Orleans.Lattice.Api.Mcp.Telemetry;
 using Orleans.Lattice.Api.State;
+using Orleans.Lattice.Api.Telemetry;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Samples.McpTelemetry;
