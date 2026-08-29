@@ -35,6 +35,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\UI\Orleans.Lattice.Explorer.UI.csproj" />
+    <!--
+      The Schema plugin is referenced but deliberately NOT registered: that ships
+      its stylesheet and its registration extension with this head, so a consumer
+      opts the area in with a single services.AddExplorerSchemaPlugin() call and
+      no extra package reference, while the area stays absent by default.
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Plugins.Schema.csproj" />
   </ItemGroup>
 
 </Project>

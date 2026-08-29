@@ -1,0 +1,140 @@
+@*
+    The versioning and remediation concern: how a tree's value shape evolves over
+    time. Reading comes first - a plain-words statement of whether the tree is
+    versioned and, when it is, what re-stamping has done - and the raw admin
+    controls (set config directly, migrate stored values) stay behind an
+    "Advanced" disclosure so the primary next step is always the visible one.
+
+    Advancing changes only new writes; re-stamping rewrites stored values, so the
+    two are separate, separately gated actions rather than one ambiguous button.
+*@
+
+<div class="lx-schema-grid is-narrow">
+    <div class="lx-schema-listcol">
+        <div class="lx-schema-listhead">
+            <h3 class="lx-schema-title">Versioning</h3>
+        </div>
+        @if (_view is null)
+        {
+            <p class="lx-schema-empty">Select a tree to view its versioning.</p>
+        }
+        else if (!_view.IsSuccess)
+        {
+            <p class="lx-schema-result @SchemaStatusStyles.For(_view.Status)" role="status">@_view.Message</p>
+        }
+        else if (_view.Value.TargetVersion == 0)
+        {
+            <div class="lx-schema-statuscard">
+                <p class="lx-schema-title">This tree is unversioned</p>
+                <p class="lx-schema-sub">Values are stored exactly as written. Enable versioning to stamp each value with a schema version so its shape can evolve over time.</p>
+                <div class="lx-schema-actions">
+                    <button type="button" class="lx-schema-btn lx-schema-btn-primary"
+                            disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                            @onclick="EnableVersioning">Enable versioning</button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="lx-schema-statuscard">
+                <p class="lx-schema-sub">Schema @_view.Value.SchemaId, target v@(_view.Value.TargetVersion), strict ingest @(_view.Value.StrictIngest ? "on" : "off").</p>
+                <p class="lx-schema-sub">New writes are stamped v@(_view.Value.TargetVersion); older values are upcast to v@(_view.Value.TargetVersion) when read.</p>
+                @if (_remediation is { IsSuccess: true } remediation)
+                {
+                    <p class="lx-schema-sub">Re-stamp: @remediation.Value.Phase, @(remediation.Value.InProgress ? "in progress" : "idle"), scanned @remediation.Value.ScannedCount.</p>
+                    @if (remediation.Value.DidAbort)
+                    {
+                        <p class="lx-schema-sub">Aborted on key '@remediation.Value.OffendingKey': @remediation.Value.Reason</p>
+                    }
+                }
+                else if (_remediation is { IsSuccess: false } failed)
+                {
+                    <p class="lx-schema-result @SchemaStatusStyles.For(failed.Status)" role="status">@failed.Message</p>
+                }
+                <div class="lx-schema-actions">
+                    <button type="button" class="lx-schema-btn lx-schema-btn-primary"
+                            disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                            @onclick="BeginAdvance">Advance version</button>
+                    <button type="button" class="lx-schema-btn-link"
+                            @onclick="ToggleAdvanced">@(_showAdvanced ? "Hide advanced" : "Advanced")</button>
+                </div>
+                @if (_showAdvanced)
+                {
+                    <div class="lx-schema-advanced">
+                        <button type="button" class="lx-schema-btn"
+                                disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                                @onclick="ShowAdvancedSetConfig">Set config directly</button>
+                        <button type="button" class="lx-schema-btn"
+                                disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                                @onclick="MigrateAsync">Migrate stored values to target</button>
+                        <p class="lx-schema-sub">Re-stamps existing values now so reads stop paying the per-read upcast cost.</p>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+    @if (_editor == VersionEditor.Configure)
+    {
+        <div class="lx-schema-formcol">
+            <h3 class="lx-schema-title">@(IsVersioned ? "Set config directly" : "Enable versioning")</h3>
+            <label class="lx-schema-field">
+                <span>Schema id</span>
+                <input type="number" min="0" value="@_setSchemaId"
+                       disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                       @oninput="e => uint.TryParse(e.Value?.ToString(), out _setSchemaId)" />
+            </label>
+            <label class="lx-schema-field">
+                <span>@(IsVersioned ? "Target version" : "Starting version")</span>
+                <input type="number" min="1" value="@_setTargetVersion"
+                       disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                       @oninput="e => uint.TryParse(e.Value?.ToString(), out _setTargetVersion)" />
+            </label>
+            <label class="lx-schema-check">
+                <input type="checkbox" checked="@_setStrictIngest"
+                       disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                       @onchange="e => _setStrictIngest = (bool)(e.Value ?? false)" />
+                <span>Strict ingest</span>
+            </label>
+            <div class="lx-schema-actions">
+                <button type="button" class="lx-schema-btn"
+                        disabled="@(!Session.Can(SchemaCapability.ManageVersion) || _setTargetVersion == 0)"
+                        @onclick="SetConfigAsync">@(IsVersioned ? "Set config" : "Enable versioning")</button>
+                <button type="button" class="lx-schema-btn" disabled="@Session.IsBusy" @onclick="CancelEditor">Cancel</button>
+                @if (IsVersioned)
+                {
+                    <button type="button" class="lx-schema-btn lx-schema-danger"
+                            disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                            @onclick="ClearConfigAsync">Clear config</button>
+                }
+            </div>
+        </div>
+    }
+    else if (_editor == VersionEditor.Advance)
+    {
+        <div class="lx-schema-formcol">
+            <h3 class="lx-schema-title">Advance version</h3>
+            <label class="lx-schema-field">
+                <span>New target version</span>
+                <input type="number" min="1" value="@_advanceTargetVersion"
+                       disabled="@(!Session.Can(SchemaCapability.ManageVersion))"
+                       @oninput="e => uint.TryParse(e.Value?.ToString(), out _advanceTargetVersion)" />
+            </label>
+            <p class="lx-schema-sub">Advance changes only new writes; re-stamp also rewrites stored values now.</p>
+            <div class="lx-schema-actions">
+                <button type="button" class="lx-schema-btn"
+                        disabled="@(!Session.Can(SchemaCapability.ManageVersion) || _advanceTargetVersion == 0)"
+                        @onclick="AdvanceAsync">Advance target</button>
+                <button type="button" class="lx-schema-btn"
+                        disabled="@(!Session.Can(SchemaCapability.ManageVersion) || _advanceTargetVersion == 0)"
+                        @onclick="AdvanceAndMigrateAsync">Advance and re-stamp existing values</button>
+                <button type="button" class="lx-schema-btn" disabled="@Session.IsBusy" @onclick="CancelEditor">Cancel</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="lx-schema-formcol">
+            <p class="lx-schema-empty">Choose 'Enable versioning' or 'Advance version' to change this tree's schema versioning.</p>
+        </div>
+    }
+</div>

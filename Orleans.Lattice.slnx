@@ -43,6 +43,7 @@
   <Project Path="src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj" />
   <Project Path="src/lattice.explorer/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Schema/Orleans.Lattice.Explorer.Plugins.Schema.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />
   <Project Path="src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj" />
   <Project Path="src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj" />

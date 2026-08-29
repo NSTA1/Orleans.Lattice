@@ -9,9 +9,10 @@ namespace Orleans.Lattice.Explorer.UI.Plugins;
 /// the plugin contract deliberately cannot supply itself, and one method per
 /// area plugin the shared UI ships.
 /// <para>
-/// A head chooses its area set by which of these it calls. There is no per-area
-/// option flag and no shared registry to edit: withholding an area is simply
-/// not registering its plugin.
+/// A head chooses its area set by which of these it calls, plus one
+/// <c>AddExplorer*Plugin</c> call per area that ships in its own plugin package
+/// (the Schema area does). There is no per-area option flag and no shared
+/// registry to edit: withholding an area is simply not registering its plugin.
 /// </para>
 /// </summary>
 public static class ExplorerUiPluginServiceCollectionExtensions
@@ -69,20 +70,5 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerPluginAdapters();
         return services.AddExplorerPlugin<AccessAreaPlugin>();
-    }
-
-    /// <summary>
-    /// Registers the Schema area plugin. The Schema feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// A head that does not call this ships no Schema tab at all, which is what
-    /// the retired per-area navigation flag was emulating.
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerSchemaPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<SchemaAreaPlugin>();
     }
 }

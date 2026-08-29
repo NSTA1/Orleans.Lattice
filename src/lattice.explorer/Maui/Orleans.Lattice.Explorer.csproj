@@ -57,6 +57,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\UI\Orleans.Lattice.Explorer.UI.csproj" />
+    <!--
+      The Schema plugin is referenced but deliberately NOT registered (see
+      MauiProgram): the desktop head wires the schema services and renders no
+      Schema tab until it calls AddExplorerSchemaPlugin().
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Plugins.Schema.csproj" />
   </ItemGroup>
 
 </Project>

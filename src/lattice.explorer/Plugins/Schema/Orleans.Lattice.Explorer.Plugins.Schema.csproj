@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.Schema</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.Plugins.Schema</AssemblyName>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Schema</PackageId>
+    <Version>9.4.0</Version>
+    <Description>The Orleans.Lattice Explorer Schema area as a self-contained plugin: its registration, its controlled domain model, its Razor components (enforcement policy, versioning and remediation, compliance, dead letters), and its own plugin-scoped stylesheet. A head surfaces the Schema area by registering this plugin and withholds it by not registering it; there is no per-area option flag. Served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.Schema.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+  </ItemGroup>
+
+  <!--
+    A plugin project owns its whole vertical slice: the feature services it
+    drives (Schema), the plugin contract it registers through
+    (Plugins.Abstractions), and the design system it is styled against
+    (DesignSystem). It references Explorer.Core only for the catalog reader its
+    domain adapter projects governable trees from - the components never see
+    Core, only the plugin's own ISchemaPluginDomain. It must never reference the
+    shared UI project: that dependency now runs the other way, which is the
+    whole point of the conversion.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+    <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+  </ItemGroup>
+
+</Project>

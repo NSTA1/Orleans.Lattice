@@ -1,0 +1,552 @@
+/*
+  Orleans.Lattice Explorer - Schema plugin stylesheet.
+
+  This is the Schema area's own layer. Every rule is namespaced `lx-schema-`, so
+  it can neither be edited by nor collide with another plugin, and every value is
+  a design-token reference (`--lx-*`) rather than a literal, so the area inherits
+  the product's visual language and any future theme without restating it.
+
+  Two rules keep it honest, both enforced by `BreakpointTokenHygieneTests`:
+
+  1. There is no width media query here. Breakpoints live in exactly one file,
+     `lattice-breakpoints.css`. Where this area must adapt, it does so
+     intrinsically - wrapping flex rows with a flex basis - or by composing the
+     breakpoint layer's `lx-only-compact` / `lx-medium-up` / `lx-expanded-up`
+     utilities, or by taking the resolved breakpoint from the .NET layer (which
+     is how the compliance and dead-letter tables reflow to cards).
+  2. No literal breakpoint width appears anywhere in the file.
+
+  Served at `_content/Orleans.Lattice.Explorer.Plugins.Schema/lattice-schema.css`.
+*/
+
+.lx-schema {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    flex: 1;
+    min-height: 0;
+    font-family: var(--lx-font-ui);
+    color: var(--lx-color-text);
+    text-align: left;
+}
+
+/* --------------------------------------------------------------------------
+   Layout. The tree panel and the working surface share one wrapping flex row:
+   both carry a flex basis, so once the row cannot hold them side by side the
+   panel wraps above the content on its own. No query decides that - the content
+   does (epic decision D7).
+   -------------------------------------------------------------------------- */
+.lx-schema-layout {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-7);
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+}
+
+.lx-schema-treepanel {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 15rem;
+    min-width: min(15rem, 100%);
+    max-width: 18rem;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    overflow: hidden;
+}
+
+.lx-schema-treepanel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--lx-space-4);
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.lx-schema-treepanel-title {
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-text);
+}
+
+.lx-schema-treelist {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--lx-space-3);
+    min-height: 6rem;
+}
+
+/* The working surface takes every remaining column. The very large grow factor
+   is what keeps it on the same row as the tree panel until the panel's own
+   basis can no longer fit, at which point both wrap to full width. */
+.lx-schema-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    flex: 999 1 20rem;
+    min-width: min(20rem, 100%);
+    text-align: left;
+    align-items: stretch;
+}
+
+.lx-schema-header {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-5);
+    flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   The two-column read/write grid. `is-narrow` packs the columns to the left at
+   a natural width (the Policy and Versions tabs), instead of stretching each to
+   half the surface and stranding the form column against the far edge. Without
+   it the columns share the full width, which is what the wide dead-letter table
+   wants. Both wrap to a single column when the columns no longer fit.
+   -------------------------------------------------------------------------- */
+.lx-schema-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-7);
+    align-items: flex-start;
+}
+
+.lx-schema-grid.is-narrow {
+    justify-content: flex-start;
+    gap: var(--lx-space-9);
+}
+
+.lx-schema-listcol,
+.lx-schema-formcol {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    flex: 1 1 20rem;
+    min-width: min(16rem, 100%);
+}
+
+.lx-schema-grid.is-narrow > .lx-schema-listcol {
+    flex: 0 1 auto;
+    max-width: 30rem;
+}
+
+.lx-schema-grid.is-narrow > .lx-schema-formcol {
+    flex: 0 1 28rem;
+}
+
+.lx-schema-listhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--lx-space-4);
+}
+
+/* --------------------------------------------------------------------------
+   Typography.
+   -------------------------------------------------------------------------- */
+.lx-schema-title {
+    margin: var(--lx-space-3) 0 var(--lx-space-1);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-text);
+}
+
+.lx-schema-subtitle {
+    margin: var(--lx-space-4) 0 var(--lx-space-1);
+    font-size: var(--lx-text-caption);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-schema-sub {
+    display: block;
+    margin: 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-schema-note {
+    margin: 0;
+    font-size: var(--lx-text-micro);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-schema-empty {
+    margin: 0;
+    font-size: var(--lx-text-body);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-schema-state {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    padding: var(--lx-space-7) var(--lx-space-5);
+    margin: 0;
+    font-size: var(--lx-text-small);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-schema-state.is-error {
+    color: var(--lx-color-danger);
+}
+
+/* --------------------------------------------------------------------------
+   Status banners. Advisory only: the server is the enforcement point, so a
+   denial is styled as information rather than as an error the user caused.
+   -------------------------------------------------------------------------- */
+.lx-schema-result {
+    margin: 0;
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border-radius: var(--lx-radius-sm);
+    font-size: var(--lx-text-small);
+}
+
+.lx-schema-result.is-success {
+    color: var(--lx-color-success);
+}
+
+.lx-schema-result.is-denied {
+    color: var(--lx-color-warning);
+}
+
+.lx-schema-result.is-failed {
+    color: var(--lx-color-danger);
+    background: var(--lx-color-danger-surface);
+}
+
+.lx-schema-compliant {
+    margin: var(--lx-space-1) 0;
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-success);
+}
+
+.lx-schema-noncompliant {
+    margin: var(--lx-space-1) 0;
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-danger);
+}
+
+/* --------------------------------------------------------------------------
+   Cards and disclosures.
+   -------------------------------------------------------------------------- */
+
+/* State-first status card leading the Policy and Versions list columns: a
+   bordered panel stating the tree's current schema state in plain words, hosting
+   the primary next-step action, so the user sees "where am I / what next" before
+   any raw admin control. */
+.lx-schema-statuscard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    padding: var(--lx-space-5) var(--lx-space-5);
+    margin: var(--lx-space-1) 0;
+}
+
+/* The collapsed-by-default advanced operations revealed under a versioned
+   tree's status card (set config directly, migrate stored values), separated
+   from the primary action by a hairline rule. */
+.lx-schema-advanced {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--lx-space-3);
+    margin-top: var(--lx-space-3);
+    padding-top: var(--lx-space-4);
+    border-top: 1px solid var(--lx-color-border);
+}
+
+.lx-schema-ruleform {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--lx-space-3);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    padding: var(--lx-space-5);
+    margin: var(--lx-space-2) 0;
+}
+
+/* --------------------------------------------------------------------------
+   Forms.
+   -------------------------------------------------------------------------- */
+.lx-schema-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    width: 100%;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-schema-field input,
+.lx-schema-field select {
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-3) var(--lx-space-4);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text);
+    font-family: inherit;
+    font-size: var(--lx-text-small);
+}
+
+.lx-schema-field input:focus-visible,
+.lx-schema-field select:focus-visible {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-schema-check {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text);
+}
+
+.lx-schema-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-3);
+    align-items: center;
+    margin-top: var(--lx-space-3);
+}
+
+.lx-schema-rulelist {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.lx-schema-rulelist li {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+}
+
+.lx-schema-rulelabel {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    word-break: break-word;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons. The area owns its own, so the plugin is styleable without the
+   Explorer's legacy stylesheet being loaded at all.
+   -------------------------------------------------------------------------- */
+.lx-schema-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-4) var(--lx-space-6);
+    font-family: var(--lx-font-ui);
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-medium);
+    color: var(--lx-color-text);
+    background: transparent;
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    cursor: pointer;
+    transition: border-color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-schema-btn:hover:not(:disabled) {
+    border-color: var(--lx-color-text-muted);
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-schema-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+/* A denied action renders disabled and visible, never hidden: the operator can
+   see the surface exists and is not theirs. */
+.lx-schema-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.lx-schema-btn-primary {
+    color: var(--lx-color-accent-contrast);
+    background: var(--lx-color-accent);
+    border-color: var(--lx-color-accent);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-schema-btn-primary:hover:not(:disabled) {
+    background: var(--lx-color-accent-hover);
+    border-color: var(--lx-color-accent-hover);
+}
+
+.lx-schema-btn-icon {
+    min-height: 0;
+    padding: var(--lx-space-1) var(--lx-space-3);
+    font-size: var(--lx-text-micro);
+}
+
+.lx-schema-btn-link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--lx-color-accent);
+    font: inherit;
+    cursor: pointer;
+}
+
+.lx-schema-btn-link:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-schema-danger {
+    color: var(--lx-color-danger);
+}
+
+.lx-schema-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--lx-target-min);
+    height: var(--lx-target-min);
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-schema-refresh:hover:not(:disabled) {
+    color: var(--lx-color-text);
+    border-color: var(--lx-color-border);
+}
+
+.lx-schema-refresh:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-schema-refresh:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+/* --------------------------------------------------------------------------
+   The tree selection list.
+   -------------------------------------------------------------------------- */
+.lx-schema-treeitems {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-1);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.lx-schema-treeitem {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    width: 100%;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-3) var(--lx-space-4);
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-schema-treeitem:hover:not(:disabled) {
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-schema-treeitem:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-schema-treeitem:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.lx-schema-treeitem.is-selected {
+    background: var(--lx-color-surface-raised);
+    border-color: var(--lx-color-accent);
+}
+
+.lx-schema-treeitem-id {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    word-break: break-all;
+}
+
+.lx-schema-treeitem-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+}
+
+.lx-schema-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--lx-space-3);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-pill);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+    color: var(--lx-color-text-muted);
+    text-transform: lowercase;
+}
+
+/* --------------------------------------------------------------------------
+   The "policy must have a rule" alert dialog.
+   -------------------------------------------------------------------------- */
+.lx-schema-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--lx-color-scrim);
+    z-index: var(--lx-layer-dialog);
+}
+
+.lx-schema-modal {
+    max-width: 30rem;
+    padding: var(--lx-space-7) var(--lx-space-8);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+    box-shadow: var(--lx-elevation-3);
+}
+
+.lx-schema-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--lx-space-4);
+    margin-top: var(--lx-space-6);
+}

@@ -1,18 +1,23 @@
-using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Plugins.Schema.Components;
+using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
-using Orleans.Lattice.Explorer.UI.Schema;
 
-namespace Orleans.Lattice.Explorer.UI.Plugins;
+namespace Orleans.Lattice.Explorer.Plugins.Schema;
 
 /// <summary>
 /// The Schema management area as a plugin: its descriptor, the panel the shell
-/// renders for it, and the access gate the Schema feature owns. The shell
-/// learns of it only through <see cref="IExplorerPlugin"/>, so registering or
-/// withholding this type is the whole of the head's opt-in - which is what the
-/// former per-area navigation flag was emulating.
+/// renders for it, the access gate the Schema feature owns, and the single
+/// controlled domain contract it is allowed to reach.
+/// <para>
+/// The shell learns of this area only through <see cref="IExplorerPlugin"/>, so
+/// registering or withholding this type <em>is</em> the whole of a head's
+/// opt-in. That replaces the retired <c>EnableSchemaArea</c> flag, which existed
+/// only to let a head withhold this one area and had to be special-cased by name
+/// inside the shared navigation layer.
+/// </para>
 /// </summary>
 /// <param name="gate">The Schema feature's own access gate.</param>
-public sealed class SchemaAreaPlugin(ISchemaAdminCapabilityService gate) : IExplorerPlugin
+public sealed class SchemaAreaPlugin(ISchemaAdminCapabilityService gate) : IExplorerPlugin<ISchemaPluginDomain>
 {
     private static readonly ExplorerPluginDescriptor Registration = new()
     {
@@ -29,14 +34,6 @@ public sealed class SchemaAreaPlugin(ISchemaAdminCapabilityService gate) : IExpl
 
     /// <inheritdoc />
     public Type ViewType => typeof(SchemaPanel);
-
-    /// <inheritdoc />
-    /// <remarks>
-    /// The panel still resolves its own feature services directly, so it
-    /// declares no controlled domain contract yet; that lands with its
-    /// conversion to a standalone plugin project.
-    /// </remarks>
-    public Type? DomainContract => null;
 
     /// <inheritdoc />
     public IExplorerPluginAccessGate AccessGate => _gate;
