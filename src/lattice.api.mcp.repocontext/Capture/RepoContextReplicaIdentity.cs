@@ -2,7 +2,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 
 /// <summary>
 /// Supplies the stable replica identity every agent-memory write is authored under
-/// in the memory <see cref="Orleans.Lattice.Primitives.MvRegister"/>. The identity
+/// in the memory <see cref="Orleans.Lattice.MvRegister"/>. The identity
 /// is the CRDT dot's replica id: each cluster must present a distinct, stable value
 /// so two clusters' concurrent writes mint distinct dots and both survive the merge,
 /// while a single cluster's repeated writes reuse one id and advance one dot lineage.

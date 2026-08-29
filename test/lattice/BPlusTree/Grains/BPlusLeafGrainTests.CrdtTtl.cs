@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Leaf-seam coverage for per-entry (whole-key) TTL on the CRDT write path.
-/// Drives the expiry-carrying <see cref="BPlusLeafGrain.ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], long)"/>
+/// Drives the expiry-carrying <see cref="Orleans.Lattice.BPlusTree.Grains.BPlusLeafGrain.ApplyCrdtDeltaAsync"/>
 /// overload directly with absolute past / future ticks (no wall-clock advance,
 /// no <see cref="System.Threading.Tasks.Task.Delay(int)"/>, no GC or ordering
 /// dependence) so every assertion is deterministic. Reuses the CRDT-replay

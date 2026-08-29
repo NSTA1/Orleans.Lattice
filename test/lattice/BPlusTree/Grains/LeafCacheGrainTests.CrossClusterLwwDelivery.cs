@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// entry's preserved source HLC, the cache's HLC-based delta filter
 /// (<c>lww.Timestamp &gt; callerClock</c>) silently dropped the
 /// incoming value. The cache then served the stale local snapshot
-/// indefinitely, even though the leaf's <see cref="System.Collections.Generic.SortedDictionary{TKey, TValue}.Entries"/>
+/// indefinitely, even though the leaf's <c>Entries</c>
 /// projection had merged the cross-cluster value correctly. The
 /// destination cluster therefore failed the "0-or-all" visibility
 /// invariant that <c>SetManyAtomicAsync</c> must guarantee end-to-end.

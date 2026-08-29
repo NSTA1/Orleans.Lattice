@@ -5,8 +5,8 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Coverage for <see cref="LeafCacheGrain"/> honouring the per-tree runtime
-/// <see cref="State.TreeRegistryEntry.MaxCacheValueBytes"/> override resolved
+/// Coverage for <see cref="Orleans.Lattice.BPlusTree.Grains.LeafCacheGrain"/> honouring the per-tree runtime
+/// <see cref="Orleans.Lattice.BPlusTree.State.TreeRegistryEntry.MaxCacheValueBytes"/> override resolved
 /// through <see cref="LatticeOptionsResolver"/>. The cache resolves its payload
 /// budget on each refresh, so a registry override caps the resident payload
 /// bytes exactly as the static option would - and wins over the static option

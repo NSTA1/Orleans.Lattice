@@ -65,7 +65,7 @@ On a cluster running the tenancy add-on, what `lattice_list_regions` returns dep
 - **A non-default tenant asserted** - the current region plus only those peers in the tenant's **actionable set**: the regions its operator has authorized it into, plus the regions it is resident in. Each entry gains an additive `tenantScope` object reporting `tenantId`, `isAllowed`, `status`, and `isResident`. The current region is always listed (the caller is already talking to it) and is annotated truthfully, which may say the tenant is neither allowed into nor resident in it.
 - **A tenant asserted whose standing cannot be resolved** - the current region alone, fail-closed. It never falls back to the full topology.
 
-A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`. See [the three region sets](../lattice.tenancy/README.md#the-three-region-sets).
+A region reported with `isResident: false` is a legitimate `lattice_tenant_set_residency` destination but **not** yet a routing destination: targeting it with a `region` argument is refused by the residency gate until its status reaches `Online`. See [the region sets](../lattice.tenancy/README.md#the-region-sets).
 
 ## State tools (`lattice_state_*`)
 
@@ -323,7 +323,7 @@ This module is served under both topologies. In-silo it delegates to the co-host
 
 ## Tenant region residency (`lattice_tenant_authorize_regions`, `lattice_tenant_set_residency`, `lattice_tenant_region_status`)
 
-Per-tenant region-residency control over the region-residency facade, contributed by the same `AddTenantAdminTools(enableControl)` registration and gated behind the same `enableControl` opt-in. They author two of the [three region sets](../lattice.tenancy/README.md#the-three-region-sets): the operator-owned **allowed** set and the tenant-owned **resident** set.
+Per-tenant region-residency control over the region-residency facade, contributed by the same `AddTenantAdminTools(enableControl)` registration and gated behind the same `enableControl` opt-in. Of the [region sets](../lattice.tenancy/README.md#the-region-sets), they author the operator-owned **allowed** set and the tenant-owned **resident** set.
 
 | Tool | Kind | Arguments | Purpose |
 |---|---|---|---|

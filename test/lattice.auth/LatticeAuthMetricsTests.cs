@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Auth.Tests;
 /// <c>orleans.lattice.auth</c> meter: the canonical meter name, the effect tag
 /// helper, the snapshot-rebuild counter, and the compiled-snapshot epoch / age
 /// observable gauges. Each counter is asserted through a
-/// <see cref="MeterListener"/> so the wiring - not just the method - is covered.
+/// <see cref="System.Diagnostics.Metrics.MeterListener"/> so the wiring - not just the method - is covered.
 /// </summary>
 [TestFixture]
 public sealed class LatticeAuthMetricsTests

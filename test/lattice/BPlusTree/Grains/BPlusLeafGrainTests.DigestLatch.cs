@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// observes its first mutation while the resolved
 /// <see cref="LatticeOptions.MaintainProjectionDigest"/> is <c>false</c>,
 /// it stamps
-/// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
+/// <see cref="Orleans.Lattice.BPlusTree.State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
 /// to <c>true</c> via the registry so a later config flip cannot expose
 /// a stale digest. System trees and trees with empty / null tree ids
 /// skip the stamp.

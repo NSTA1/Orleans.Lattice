@@ -48,7 +48,7 @@ public partial class BPlusLeafGrainTests
     /// the sibling <see cref="LeafCacheGrainTests"/> partial can wire a
     /// real <see cref="BPlusLeafGrain"/> whose writes populate the
     /// process-wide revision registry while the cache itself talks to
-    /// a separate mocked <see cref="IBPlusLeafGrain"/>. Internal so it
+    /// a separate mocked <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain"/>. Internal so it
     /// stays inside the test assembly's own namespace surface.
     /// </summary>
     internal static BPlusLeafGrain CreateLeafGrainForCrossFixtureUse(string replicaId)

@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// End-to-end integration tests for cross-cluster usage-fold convergence over the
 /// real dogfooded <c>sys-tenant-usage</c> tree. Two clusters publishing into the
 /// same tenant's usage record are simulated by publishing records that each carry a
-/// distinct <see cref="ClusterId"/> slot; the store's CRDT merge is expected to
+/// distinct <c>clusterId</c> slot; the store's CRDT merge is expected to
 /// converge them so the global <see cref="TenantUsageRecord.Fold"/> sums every
 /// cluster's slot, a slower cluster's stale slot never regresses a fresher one, and
 /// re-publishing a slot is idempotent. Convergence is asserted by writing

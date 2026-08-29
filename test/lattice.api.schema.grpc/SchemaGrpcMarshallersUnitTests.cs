@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Api.Schema.Grpc.Tests;
 /// Direct unit tests for the hand-written <see cref="LatticeSchemaGrpcMarshallers"/>
 /// serializer/deserializer hand-off, driving both the single-segment fast path and
 /// the multi-segment rented-buffer path of the deserializer through a fake
-/// <see cref="Grpc.Core.DeserializationContext"/> - with no gRPC stream. The single-segment
+/// <c>Grpc.Core.DeserializationContext</c> - with no gRPC stream. The single-segment
 /// path is also exercised indirectly by the client/service fixtures; this fixture
 /// pins the multi-segment branch and the null guard deterministically.
 /// </summary>

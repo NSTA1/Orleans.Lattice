@@ -43,7 +43,7 @@ namespace Orleans.Lattice.Replication.Tests;
 ///   <see cref="ReplicationApplier.ApplyBatchAsync"/>'s batched
 ///   per-entry pass mirrors both bypasses (the batched path is the
 ///   shipper's hot path; see
-///   <see cref="ReplicationApplier.Batch"/>).
+///   <c>ReplicationApplier.Batch.cs</c>).
 ///   </description></item>
 ///   <item><description>
 ///   The producer-side <c>ReplicationShipperGrain</c> bypasses its

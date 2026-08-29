@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// Integration tests for <see cref="IReplicationApplyGrain"/> exercised
 /// through a single <c>TestCluster</c>: verifies the apply seam preserves
 /// the source <see cref="HybridLogicalClock"/> and origin cluster id
-/// verbatim on the persisted <see cref="Primitives.LwwValue{T}"/>.
+/// verbatim on the persisted <see cref="Orleans.Lattice.Primitives.LwwValue{T}"/>.
 /// </summary>
 [TestFixture]
 [Category("Integration")]

@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Testing.Coyote;
 /// scenario as explicit cooperative interleaving driven by the supplied
 /// <see cref="ICoyoteRuntime"/>'s controlled nondeterminism (for example
 /// <see cref="ICoyoteRuntime.RandomBoolean()"/>), and asserts its safety
-/// property with <see cref="Microsoft.Coyote.Specifications.Specification.Assert(bool, string)"/>.
+/// property with <see cref="Microsoft.Coyote.Specifications.Specification.Assert(bool, string, object)"/>.
 /// </summary>
 /// <remarks>
 /// The model is re-run once per exploration iteration <b>on the same instance</b>,

@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests.Chaos;
 /// <remarks>
 /// <para>
 /// <b>What this test pins.</b> The Azure Table WAL provider's
-/// <see cref="AzureTableWalStorageProvider.PhaseTwoWorker"/> coalesces
+/// <c>PhaseTwoWorker</c> coalesces
 /// per-shard batches into bounded Azure Table transactions; the chaos
 /// workload runs many shards in parallel so the pipeline is genuinely
 /// under load, and validates post-window that every shard's dense

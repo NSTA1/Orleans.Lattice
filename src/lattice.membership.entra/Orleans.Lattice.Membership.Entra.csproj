@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Membership.Entra</PackageId>
-    <Version>9.3.0</Version>
+    <Version>9.4.0</Version>
     <Description>Microsoft Entra ID (Azure AD) credential authenticator for Orleans.Lattice.Membership. Specializes the built-in JWT authenticator with tenant-aware OIDC/JWKS discovery and signing-key rotation, Entra v2.0 claim conventions (oid subject, tid tenant, groups, app roles), single- and multi-tenant issuer allow-listing, and pluggable groups-overage resolution. Keeps the Entra dependency stack out of the core membership package.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

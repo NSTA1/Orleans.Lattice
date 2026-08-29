@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// so the cache cannot serve stale reads after a shard split.
 /// Subsequent reads for those keys must surface a
 /// <see cref="StaleShardRoutingException"/> rather than returning
-/// a silent <c>null</c>, so <see cref="LatticeGrain"/>'s retry loop
+/// a silent <c>null</c>, so <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain"/>'s retry loop
 /// can invalidate its shard map and re-route to the new owner.
 /// </summary>
 public partial class LeafCacheGrainTests

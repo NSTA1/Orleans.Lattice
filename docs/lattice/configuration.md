@@ -119,6 +119,7 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`StorageUsageCacheTtl`](#storageusagecachettl) | `TimeSpan` | 10 seconds | Yes |
 | [`StorageUsagePollInterval`](#storageusagepollinterval) | `TimeSpan` | 15 seconds | No (global; read from the default options) |
 | [`StorageUsageDeepPollInterval`](#storageusagedeeppollinterval) | `TimeSpan` | `TimeSpan.Zero` (disabled) | No (global; read from the default options) |
+| [`StorageUsageRollupBudget`](#storageusagerollupbudget) | `TimeSpan` | 20 seconds | No (cluster-wide; read from the default options) |
 | [`TombstoneGracePeriod`](#tombstonegraceperiod) | `TimeSpan` | 24 hours | Yes |
 | [`TxDecisionRetention`](#txdecisionretention) | `TimeSpan` | 60 seconds | Yes |
 | [`VersionVectorRetention`](#versionvectorretention) | `TimeSpan` | `InfiniteTimeSpan` (disabled) | Yes |
@@ -725,6 +726,25 @@ siloBuilder.ConfigureLattice(o => o.StorageUsageDeepPollInterval = TimeSpan.Zero
 
 This option is read once when the poller starts on each silo.
 
+### `StorageUsageRollupBudget`
+
+Wall-clock budget a cluster-wide storage-usage roll-up may spend sampling trees before it stops dispatching and returns what it has (default: 20 seconds). Applies to `ILatticeAdmin.GetTotalStorageUsageAsync` and `ILatticeAdmin.RefreshStorageUsageAsync`.
+
+Bounding the fan-out with [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees) and [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces) caps the *burst* a roll-up imposes, but it cannot cap the *total* work: a deep refresh re-walks every shard of every tree, so a large enough catalogue cannot be sampled inside one Orleans response deadline however gently it is dispatched. Without a budget the whole call then fails on the deadline and the caller learns nothing at all. With one, the trees sampled so far report real figures, the remainder report as not-answered, and `ClusterStorageUsageReport.Partial` is set - the same "an honest flagged lower bound beats a silently wrong or absent answer" rule the per-surface reporting follows.
+
+Set it comfortably below the response deadline of the transport carrying the call, so the truncated report can still be returned. A non-positive value **disables** the budget, restoring run-to-completion behaviour.
+
+This is a cluster-wide knob read from the default (unnamed) options by the admin grain that drives the roll-up; per-tree overrides do not apply, because that grain is not keyed by tree.
+
+```csharp verify
+// Allow a larger catalogue longer to sample before the roll-up truncates.
+siloBuilder.ConfigureLattice(o => o.StorageUsageRollupBudget = TimeSpan.FromSeconds(45));
+
+// Disable the budget: sample every tree however long it takes.
+siloBuilder.ConfigureLattice(o => o.StorageUsageRollupBudget = TimeSpan.Zero);
+```
+
+This option can be changed freely at any time; a new value applies to the next roll-up.
 ### `TombstoneGracePeriod`
 
 How long a deleted key's tombstone is retained before it becomes eligible for permanent removal by the compaction process. The grace period exists so that all cache replicas (`LeafCacheGrain` activations across silos) have time to observe the delete via delta replication before the tombstone disappears.

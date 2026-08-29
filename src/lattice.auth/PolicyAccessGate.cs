@@ -193,7 +193,7 @@ internal sealed class PolicyAccessGate(
     /// tenant-administration capability namespace
     /// (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/>), or the
     /// tenant-registry system-data namespace
-    /// (<see cref="LatticeConstants.TenantRegistryTreePrefix"/>) - with
+    /// (<c>sys-tenant-</c>) - with
     /// <b>control-plane isolation</b>: the decision is forced closed (Deny) on every
     /// outcome that is not an explicit matched Allow, so the data-plane
     /// <see cref="LatticeAuthOptions.DefaultEffect"/> can never grant a control-plane

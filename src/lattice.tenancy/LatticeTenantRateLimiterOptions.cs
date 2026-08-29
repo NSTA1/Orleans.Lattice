@@ -5,8 +5,11 @@ namespace Orleans.Lattice.Tenancy;
 /// coordinator: how often each silo re-leases its share of every tenant's
 /// cluster-wide rate, which apportionment strategy the coordinator uses, and the
 /// reserve floor for demand-proportional leasing. Resolved through the standard
-/// options system and configured via <c>AddLatticeTenancy(...)</c> or
-/// <c>ConfigureLatticeTenancy(...)</c>.
+/// options system. Unlike <see cref="LatticeTenancyOptions"/>, this type is
+/// <b>not</b> bound by the <c>AddLatticeTenancy(...)</c> /
+/// <c>ConfigureLatticeTenancy(...)</c> delegate, which accepts only
+/// <see cref="LatticeTenancyOptions"/>; configure it with
+/// <c>services.Configure&lt;LatticeTenantRateLimiterOptions&gt;(...)</c>.
 /// </summary>
 /// <remarks>
 /// These options never touch the per-op hot path; they govern only the

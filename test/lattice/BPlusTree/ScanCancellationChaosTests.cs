@@ -7,8 +7,8 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// Chaos coverage of mid-flight scan cancellation. N scanner workers
-/// each repeatedly open <see cref="ILattice.KeysAsync(string?, string?, bool, int?, int?, CancellationToken)"/>
-/// or <see cref="ILattice.EntriesAsync(string?, string?, bool, int?, int?, CancellationToken)"/>,
+/// each repeatedly open <see cref="Orleans.Lattice.ILattice.KeysAsync"/>
+/// or <see cref="Orleans.Lattice.ILattice.EntriesAsync"/>,
 /// cancel after a small random interval, and re-open. Meanwhile a
 /// writer worker keeps churning the universe so the scanner's
 /// underlying enumerator is genuinely live and not just iterating

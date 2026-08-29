@@ -1105,7 +1105,7 @@ public class LatticeMicroBenchmarks
     /// <summary>
     /// Extracts the deterministic <see cref="Guid"/> embedded in a leaf
     /// <see cref="GrainId"/>. Leaves are created via
-    /// <see cref="IGrainFactory.GetGrain{T}(Guid)"/> so the GrainId's key is
+    /// <c>IGrainFactory.GetGrain&lt;T&gt;(Guid)</c> so the GrainId's key is
     /// the GUID's hex representation.
     /// </summary>
     private static Guid GuidFromGrainId(GrainId id)

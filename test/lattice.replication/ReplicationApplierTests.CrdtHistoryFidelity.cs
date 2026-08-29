@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// steady-state delta-carrying replicated CRDT entry that falls onto the
 /// per-entry applier path must be recorded as a <c>CrdtDelta</c> (member
 /// diff + origin) through
-/// <see cref="Grains.IReplicationApplyGrain.ApplyCrdtDeltaWithExpiryAsync"/>,
+/// <see cref="Orleans.Lattice.BPlusTree.IReplicationApplyGrain.ApplyCrdtDeltaWithExpiryAsync"/>,
 /// not flattened to a full-value <see cref="MutationKind.Set"/> via a
 /// read-merge-write fold. Bootstrap committed-projection rows (no Delta)
 /// keep their full-state merge.

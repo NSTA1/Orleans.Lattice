@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Scaling;
 /// <remarks>
 /// The published state is a set of individual scalar fields rather than a single
 /// struct so that each gauge callback can read its one field with an atomic,
-/// tear-free <see cref="Volatile.Read(ref double)"/> / <see cref="Volatile.Read(ref long)"/>.
+/// tear-free <see cref="System.Threading.Volatile"/> read (<c>Volatile.Read(ref double)</c> / <c>Volatile.Read(ref long)</c>).
 /// Cross-field consistency is not required (each gauge reports one dimension
 /// independently), so no lock is taken on the scrape path. The facade is the
 /// single writer; the last silo to sample in a shared process wins, which is the

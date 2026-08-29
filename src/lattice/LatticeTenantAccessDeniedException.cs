@@ -3,8 +3,8 @@ namespace Orleans.Lattice;
 /// <summary>
 /// The fail-closed denial surfaced at the <see cref="ILattice"/> tenant-resolution
 /// boundary when the active-tenant context resolver denies an operation because
-/// the caller has no valid active tenant (an absent or invalid active tenant, or
-/// - for a multi-membership subject - none asserted). Composing a tenant-scoped
+/// the caller has no valid active tenant (the caller asserted a tenant it may not
+/// act as, or asserted a syntactically invalid one). Composing a tenant-scoped
 /// tree id is refused rather than silently defaulting, so a request that cannot
 /// be attributed to a tenant never resolves an ambiguous or cross-tenant tree.
 /// </summary>
@@ -13,11 +13,11 @@ namespace Orleans.Lattice;
 /// The core no-op <see cref="NullTenantContextResolver"/> always resolves the
 /// reserved <see cref="TenantId.Default"/> and therefore never raises this
 /// exception, so a cluster with no tenancy add-on behaves byte-for-byte as it
-/// did before tenancy existed. The tenancy add-on's real resolver applies the
-/// membership rules (a single-membership subject defaults implicitly; a
-/// multi-membership subject must assert one; absent or invalid is denied) and
-/// signals a denial by resolving the uninitialised "no tenant" value, which the
-/// resolution boundary turns into this exception.
+/// did before tenancy existed. The tenancy add-on's real resolver resolves the
+/// reserved <see cref="TenantId.Default"/> when no tenant is asserted, whatever
+/// the caller's membership set, and validates an asserted tenant against the
+/// caller's subject membership; it signals a denial by resolving the uninitialised
+/// "no tenant" value, which the resolution boundary turns into this exception.
 /// </para>
 /// <para>
 /// It derives directly from <see cref="Exception"/> so its

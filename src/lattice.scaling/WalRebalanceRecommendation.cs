@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Scaling;
 /// <see cref="Orleans.Lattice.ILatticeAdmin"/> move surface
 /// (<see cref="Orleans.Lattice.ILatticeAdmin.PlanWalMoveAsync(string, int, string, System.Threading.CancellationToken)"/>
 /// then
-/// <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, Orleans.Lattice.WalMoveOptions, System.Threading.CancellationToken)"/>,
+/// <see cref="Orleans.Lattice.ILatticeAdmin.ExecuteWalMoveAsync(string, int, string, Orleans.Lattice.WalMoveOptions?, System.Threading.CancellationToken)"/>,
 /// and later
 /// <see cref="Orleans.Lattice.ILatticeAdmin.ReclaimMovedWalSourceAsync(string, int, string, System.Threading.CancellationToken)"/>).
 /// The collector never performs the move itself.

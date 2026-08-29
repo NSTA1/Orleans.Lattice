@@ -5,16 +5,19 @@ Optional, opt-in **gRPC transport binding** for
 transport-agnostic tenant-administration control facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
-strongly-typed clients. `LatticeTenantAdminApiGrpcClient` binds the four tenant
-lifecycle operations - **create**, **suspend**, **resume**, and **delete** (which
-cascades the tenant's trees) - alongside the unauthenticated auth-scheme discovery
-RPC. A read-only `LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted
-self-service reads - **current tenant**, **list accessible tenants**, and **get
-tenant** - which any authenticated caller may invoke and which the facade scopes
-fail-closed to that caller. Every wire message rides the Orleans serializer, so the
-contract stays versioned and additive-only.
+strongly-typed clients. `LatticeTenantAdminApiGrpcClient` binds the
+administrative surface: the tenant lifecycle operations - **create**,
+**suspend**, **resume**, and **delete** (which cascades the tenant's trees) -
+plus **set quotas**, and the per-tenant region-residency operations
+(**authorize allowed regions**, **set residency**, and **get region status**),
+alongside the unauthenticated auth-scheme discovery RPC. A read-only
+`LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted self-service reads -
+**current tenant**, **list accessible tenants**, and **get tenant** - which any
+authenticated caller may invoke and which the facade scopes fail-closed to that
+caller. Every wire message rides the Orleans serializer, so the contract stays
+versioned and additive-only.
 
-Wiring is two calls on the co-hosting silo:
+Wiring on the co-hosting silo:
 
 ```csharp
 builder.Services.AddLatticeTenantAdminApiGrpc(o => o.RequireAuthorization = true);
@@ -28,3 +31,12 @@ authentication boundary), every call is rejected. The unauthenticated
 to sign in before it holds a credential. The facade itself re-derives and
 authorizes the caller server-side, so the surface fails closed for an
 unauthenticated caller even when the transport gate is disabled.
+
+The binding establishes the caller's asserted active tenant from the
+`lattice-active-tenant` header, so tenant scoping holds on a split-head
+deployment, and a tenant denial is reported as `PermissionDenied` rather than an
+opaque `Internal` fault.
+
+See the
+[tenant-administration gRPC documentation](https://github.com/NSTA1/Orleans.Lattice/blob/main/docs/lattice.api.tenantadmin.grpc/README.md)
+for the full guide.
