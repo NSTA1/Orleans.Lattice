@@ -19,9 +19,9 @@ every activation. Two operational concerns naturally arise:
 
 This document covers the two surfaces that answer those questions:
 `ILattice.GetLeafProjectionDigestAsync` (drift detection) and
-`ProjectionRebuildPolicy` together with the supporting
-`MaxLeafReplayEntries` / `LeafProjectionRetention`
-options (recovery).
+`ProjectionRebuildPolicy` (recovery from genuine loss), together with
+the `MaxLeafReplayEntries` / `LeafProjectionRetention` cost thresholds
+that govern when a long or stale cold replay is flagged.
 
 ## Drift detection: `GetLeafProjectionDigestAsync`
 
@@ -379,8 +379,8 @@ back-compat slot) and decides how to recover. The classifier runs
 **once per partition** in `[0, WalPartitions)`; the leaf is treated
 as fall-off-log if **any** partition's classifier raises a non-
 `TailReplay` decision. Three triggers classify an individual
-partition as fall-off-log - the leaf cannot or should not resume
-that partition by tail-replay alone:
+partition - but only the **first** indicates missing data, and only
+the first is fatal:
 
 1. **WAL trimmed past checkpoint.** Partition `p`'s per-shard WAL
    has GC'd entries the leaf still considers unapplied. A tail
@@ -388,24 +388,41 @@ that partition by tail-replay alone:
    Skipped when the partition's checkpoint is the -1 "nothing
    applied" sentinel, because a leaf with no in-memory state has
    nothing to lose to a trimmed prefix on that partition.
+   **This is the only trigger that routes to `ProjectionRebuildPolicy`.**
+   The exact loss boundary is `tail > checkpoint + 1`: the entry *at*
+   the checkpoint is already applied, so trimming it loses nothing.
 2. **Replay budget exceeded.** The gap `walHead[p] - checkpoint[p]`
    exceeds `LatticeOptions.MaxLeafReplayEntries` (default `10 000`).
-   Replaying in the activation path would produce a long cold-start;
-   the operator has elected to take the snapshot-then-WAL path
-   instead. Also skipped for the -1 sentinel: a fresh leaf has
-   nothing in cache to recover, and the per-leaf range filter inside
-   the materialiser (`ShouldApplyDuringReplay`) drops every WAL
-   entry outside the leaf's ownership range on iteration, so the
-   effective work is bounded by the leaf's own range rather than by
-   the apparent gap. The per-slice `ReplaySliceBudget` still bounds
-   individual coordinator reads on this path.
+   This is a **cost** signal, not a loss signal: when the WAL still
+   covers the needed window the leaf replays anyway and converges to
+   exactly the same projection, emitting a warning and the
+   `orleans.lattice.leaf.activation_replays_over_budget` counter
+   (decision `TailReplayOverBudget`). Also skipped for the -1
+   sentinel: a fresh leaf has nothing in cache to recover, and the
+   per-leaf range filter inside the materialiser
+   (`ShouldApplyDuringReplay`) drops every WAL entry outside the
+   leaf's ownership range on iteration, so the effective work is
+   bounded by the leaf's own range rather than by the apparent gap.
+   The per-slice `ReplaySliceBudget` still bounds individual
+   coordinator reads on this path.
 3. **Cold past retention.** The persisted projection age exceeds
-   `LatticeOptions.LeafProjectionRetention` (default 7 days) - long
-   enough that even a healthy WAL has likely been trimmed beneath
-   the leaf's checkpoint. Forcing a snapshot-based recovery here
-   avoids a silent miss of trim-induced gaps. Evaluated once for
-   the leaf as a whole (age is a property of the leaf, not of any
-   one partition).
+   `LatticeOptions.LeafProjectionRetention` (default 7 days). Also a
+   cost signal only - an old checkpoint does not imply a trimmed WAL,
+   so it degrades to the same non-fatal `TailReplayOverBudget` replay.
+   Evaluated once for the leaf as a whole (age is a property of the
+   leaf, not of any one partition). Note the activation path currently
+   supplies `TimeSpan.Zero` as the age, so this trigger does not fire
+   from activation today (tracked in #1738).
+
+> **Why triggers 2 and 3 are not fatal (issue #1738).** They were,
+> until a tree holding fully intact data was permanently bricked by a
+> replay gap of 10,648 against the 10,000 default - 648 entries, 6.5%
+> over budget - while every offset it needed was still readable in the
+> WAL. A cost guardrail must never be more destructive than the cost it
+> guards against: a slow activation is recoverable, a tree that refuses
+> to activate is not. Replay cost is bounded on the read side instead,
+> by `WalReplayMaxRecordsPerTurn` (which yields between turns) and
+> `WalMaterialiserMaxConcurrentReplays`.
 
 On the healthy multi-partition path every partition's classifier
 returns `TailReplay`, and the leaf executes a two-pass replay across
@@ -421,24 +438,27 @@ the leaf does once a trigger fires:
 
 | Policy | Behaviour |
 |---|---|
-| `SnapshotThenWal` *(default)* | Drains the per-leaf snapshot via `ILeafSnapshotProvider` as the recovery base, persists the snapshot offset as the new checkpoint, then tail-replays the remaining WAL entries since the snapshot. Reliable: works even when the WAL has been trimmed below the leaf's previous checkpoint. |
+| `SnapshotThenWal` *(default)* | The per-leaf snapshot rehydrate already runs in core at activation Step 0 (`TryRehydrateFromSnapshotAsync`), covering the prefix and letting the tail replay handle the remainder. What is not yet integrated is a recovery for the case where that rehydrate has *already declined* and the WAL is genuinely short: there the leaf surfaces `LeafProjectionStaleException` rather than reconstructing the lost prefix. |
 | `FullRebuildFromWal` | Replays from the absolute tail of the WAL. Fails fast with `LeafProjectionStaleException` if the WAL has been trimmed and a complete history is unavailable. Diagnostic. |
 | `Fail` | Surfaces a `LeafProjectionStaleException` at activation time and waits for an operator-driven rebuild. |
+
+> This policy is reached **only** on genuine loss (the WAL trimmed past
+> `checkpoint + 1`). A replay-budget or projection-age overrun against an
+> intact WAL never consults it - see the trigger list above.
 
 ### Configuration
 
 ```csharp verify
 siloBuilder.ConfigureLattice(o =>
 {
-    // Allow a cold leaf to replay up to 100 000 entries before
-    // taking the snapshot-then-WAL path:
+    // Expected replay size before a cold activation is flagged as
+    // over-budget (a warning plus a counter - never a failure):
     o.MaxLeafReplayEntries = 100_000;
 
-    // Trust the WAL retention for a full month before forcing
-    // a snapshot-based recovery on stale projections:
+    // Age at which a cold projection is flagged as stale:
     o.LeafProjectionRetention = TimeSpan.FromDays(30);
 
-    // Strictest default - try the snapshot path before tailing:
+    // How to recover when the WAL is genuinely short:
     o.ProjectionRebuildPolicy = ProjectionRebuildPolicy.SnapshotThenWal;
 });
 ```
@@ -694,7 +714,8 @@ Error surface:
 
 | Scenario | Surface |
 |---|---|
-| Leaf cold-starts and finds itself past `MaxLeafReplayEntries` or older than `LeafProjectionRetention`, or the WAL has been trimmed past its checkpoint | `ProjectionRebuildPolicy` (automatic, activation-time) |
+| Leaf cold-starts and the WAL has been trimmed past its checkpoint with no covering snapshot (genuine loss) | `ProjectionRebuildPolicy` (automatic, activation-time) |
+| Leaf cold-starts past `MaxLeafReplayEntries` or older than `LeafProjectionRetention` with the WAL intact | Non-fatal: the leaf tail-replays and warns (`TailReplayOverBudget`); no operator action needed |
 | Operator detects a digest mismatch across silos, or an integrity check flagged a corrupted projection, or a bug fix to `ILeafProjection.Apply` requires re-materialisation | `RebuildLeafProjectionAsync` (manual, while live) |
 | Operator wants a steady-state gauge to know whether the materialiser is keeping up | `GetMaterialiserLagAsync` |
 

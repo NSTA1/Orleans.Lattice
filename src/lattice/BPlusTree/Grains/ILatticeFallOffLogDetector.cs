@@ -55,6 +55,29 @@ internal enum FallOffLogDecision
     /// storage grain before the WAL trims past the checkpoint.
     /// </summary>
     SnapshotPending = 4,
+
+    /// <summary>
+    /// Non-fatal advisory: a <b>cost</b> trigger fired - the replay gap
+    /// exceeds <see cref="LatticeOptions.MaxLeafReplayEntries"/>, or the
+    /// projection is older than
+    /// <see cref="LatticeOptions.LeafProjectionRetention"/> - but the WAL
+    /// still covers every offset the leaf needs, so a tail replay
+    /// converges to exactly the same projection.
+    /// <para>
+    /// The leaf replays as it would for <see cref="TailReplay"/>. The
+    /// distinct value exists so the activation path can warn and meter
+    /// the over-budget replay rather than silently absorbing it.
+    /// </para>
+    /// <para>
+    /// This decision must never be fatal. A cost signal is not data loss:
+    /// the genuine-loss condition is the WAL having been trimmed past the
+    /// leaf's checkpoint, which is the only trigger that routes to the
+    /// configured <see cref="ProjectionRebuildPolicy"/>. Treating a budget
+    /// overrun as unrecoverable corruption permanently bricks a tree whose
+    /// data is entirely intact (issue #1738).
+    /// </para>
+    /// </summary>
+    TailReplayOverBudget = 5,
 }
 
 /// <summary>

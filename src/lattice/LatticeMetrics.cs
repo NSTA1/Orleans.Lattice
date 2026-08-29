@@ -832,6 +832,27 @@ public static class LatticeMetrics
             description: "Activation-time leaf materialiser replays started, tagged by tree.");
 
     /// <summary>
+    /// Counter of activation-time leaf materialiser replays that ran <b>beyond</b>
+    /// the configured <see cref="LatticeOptions.MaxLeafReplayEntries"/> budget (or
+    /// past <see cref="LatticeOptions.LeafProjectionRetention"/>) while the
+    /// write-ahead log still covered the whole needed window. Tagged with
+    /// <see cref="TagTree"/>.
+    /// <para>
+    /// These replays converge correctly - they are simply longer than the budget
+    /// anticipated - so the condition is a capacity signal, not a fault. A tree
+    /// that trips this persistently is checkpointing too slowly relative to its
+    /// write rate: raise the budget, shorten the materialiser checkpoint cadence
+    /// (<see cref="LatticeOptions.MaterialiserCheckpointInterval"/> /
+    /// <see cref="LatticeOptions.MaterialiserCheckpointEntries"/>), or accept the
+    /// longer activation. Before issue #1738 this condition was fatal and bricked
+    /// the tree, so this counter also measures how often that would have fired.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> LeafActivationOverBudgetReplays =
+        Meter.CreateCounter<long>("orleans.lattice.leaf.activation_replays_over_budget", unit: "{replay}",
+            description: "Activation-time leaf replays that exceeded the configured replay budget with an intact WAL, tagged by tree.");
+
+    /// <summary>
     /// Counter of activation-time eager cursor-publish failures, emitted by
     /// <c>BPlusLeafGrain.OnActivateAsync</c> when the post-replay cursor report
     /// throws (a non-fatal failure the next foreground flush recovers from).

@@ -928,18 +928,30 @@ public class LatticeOptions
     public const string DefaultEventStreamProviderName = "Default";
 
     /// <summary>
-    /// Maximum number of entries a leaf grain will replay through its
-    /// projection rebuild seam (<c>ILeafProjection.Apply</c>) at activation
-    /// time before falling back to a full projection rebuild from the
-    /// authoritative source. Bounds the worst-case replay cost when a leaf
-    /// reactivates after an extended outage and the gap between its
-    /// persisted projection checkpoint and the current write-ahead-log
-    /// head exceeds this budget.
+    /// Soft budget on the number of entries a leaf grain expects to replay
+    /// through its projection rebuild seam (<c>ILeafProjection.Apply</c>) at
+    /// activation time. Bounds the <i>expected</i> replay cost when a leaf
+    /// reactivates after an extended outage and the gap between its persisted
+    /// projection checkpoint and the current write-ahead-log head grows large.
     /// <para>
-    /// The seam itself ships dormant - the leaf grain still writes through
-    /// its existing storage provider on every commit. This budget becomes
-    /// observable when the WAL-as-sole-commit-point promotion lands and
-    /// the activation path begins consulting the persisted checkpoint.
+    /// <b>Exceeding this budget is not an error.</b> When the gap is larger
+    /// than the budget but the WAL still covers every offset the leaf needs,
+    /// the leaf replays anyway - the result is identical, just slower - and
+    /// the overrun is reported as a warning plus the
+    /// <c>orleans.lattice.leaf.activation_replays_over_budget</c> counter.
+    /// Replay cost is bounded on the read side by
+    /// <see cref="WalReplayMaxRecordsPerTurn"/> (which yields between turns)
+    /// and by <see cref="WalMaterialiserMaxConcurrentReplays"/>.
+    /// </para>
+    /// <para>
+    /// Before issue #1738 an overrun was fatal: it surfaced
+    /// <see cref="LeafProjectionStaleException"/> and left the tree
+    /// permanently un-activatable even though its data was fully intact. A
+    /// cost guardrail must never be more destructive than the cost it guards
+    /// against, so the budget is now advisory. Persistent overruns mean the
+    /// materialiser is checkpointing too slowly for the write rate - tune
+    /// <see cref="MaterialiserCheckpointInterval"/> /
+    /// <see cref="MaterialiserCheckpointEntries"/>, or raise this budget.
     /// </para>
     /// </summary>
     public int MaxLeafReplayEntries { get; set; } = DefaultMaxLeafReplayEntries;
@@ -996,19 +1008,28 @@ public class LatticeOptions
     public const int DefaultMaterialiserCheckpointEntries = 5_000;
 
     /// <summary>
-    /// Maximum age beyond which a leaf grain's persisted projection
-    /// checkpoint is considered stale and triggers a fall-off-log
-    /// recovery on the next activation. Compared against the wall-clock
-    /// age of the persisted checkpoint at activation time. Long enough
-    /// that even a healthy WAL has likely been trimmed past the
-    /// checkpoint, so a tail replay would fail to converge - the leaf
-    /// must take the rebuild path indicated by
-    /// <see cref="ProjectionRebuildPolicy"/>.
+    /// Age beyond which a leaf grain's persisted projection checkpoint is
+    /// considered stale enough to warrant a warning at activation time.
+    /// Compared against the wall-clock age of the persisted checkpoint.
+    /// <para>
+    /// <b>Advisory only, like <see cref="MaxLeafReplayEntries"/>.</b> An old
+    /// checkpoint does not imply the WAL has been trimmed; when the log still
+    /// covers the needed window the leaf tail-replays and converges normally.
+    /// Only a genuine trim past the checkpoint routes to
+    /// <see cref="ProjectionRebuildPolicy"/> (issue #1738).
+    /// </para>
+    /// <para>
+    /// <b>Known gap:</b> the activation path currently passes
+    /// <see cref="TimeSpan.Zero"/> as the checkpoint age
+    /// (<c>BPlusLeafGrain.ReplayWalSinceCheckpointAsync</c>), because the
+    /// persisted checkpoint carries no capture timestamp, so this trigger
+    /// never fires from activation today. It is retained because the option is
+    /// public API and the detector honours it for any caller that does supply
+    /// a real age. Tracked in #1738.
+    /// </para>
     /// <para>
     /// Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable the
-    /// age-based trigger; the offset-gap trigger
-    /// (<see cref="MaxLeafReplayEntries"/>) and the WAL-trim trigger
-    /// continue to apply.
+    /// age-based trigger entirely.
     /// </para>
     /// </summary>
     public TimeSpan LeafProjectionRetention { get; set; } = DefaultLeafProjectionRetention;

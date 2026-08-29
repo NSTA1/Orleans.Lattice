@@ -668,7 +668,7 @@
     {
       "id": 124,
       "title": "Leaf-materialiser durable pin path (rate) - issue #1030",
-      "description": "Health of the durable leaf-materialiser pin store (issue #1030 fan-in hotspot fix). durable_writes by outcome (birth = synchronous through-write at leaf birth; coalesced = debounced flush draining advancing reports) - a coalesced rate far below the activation_replays rate confirms write coalescing is collapsing the report burst. activation_replays is the per-silo leaf reactivation rate; cursor_publish_failures should stay flat-zero (a non-zero rate signals reactivation-storm pressure).",
+      "description": "Health of the durable leaf-materialiser pin store (issue #1030 fan-in hotspot fix). durable_writes by outcome (birth = synchronous through-write at leaf birth; coalesced = debounced flush draining advancing reports) - a coalesced rate far below the activation_replays rate confirms write coalescing is collapsing the report burst. activation_replays is the per-silo leaf reactivation rate; cursor_publish_failures should stay flat-zero (a non-zero rate signals reactivation-storm pressure). activation_replays_over_budget counts cold replays that exceeded MaxLeafReplayEntries with an intact WAL (issue #1738) - these converge normally, so a sustained rate is a capacity signal that the materialiser is checkpointing too slowly for the write rate, not a fault.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 142 },
@@ -676,7 +676,8 @@
       "targets": [
         { "refId": "A", "expr": "sum by (outcome) (rate(orleans_lattice_materialiser_pin_durable_writes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "pin writes {{outcome}}/s" },
         { "refId": "B", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_replays_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "activation replays {{tree}}/s" },
-        { "refId": "C", "expr": "sum (rate(orleans_lattice_leaf_activation_cursor_publish_failures_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "cursor publish failures/s" }
+        { "refId": "C", "expr": "sum (rate(orleans_lattice_leaf_activation_cursor_publish_failures_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "cursor publish failures/s" },
+        { "refId": "D", "expr": "sum by (tree) (rate(orleans_lattice_leaf_activation_replays_over_budget_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "over-budget replays {{tree}}/s" }
       ]
     },
     {

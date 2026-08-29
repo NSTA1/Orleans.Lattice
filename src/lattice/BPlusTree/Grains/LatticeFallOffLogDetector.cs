@@ -111,7 +111,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
 
         if (!walTrimmedPastCheckpoint && !budgetExceeded && !ageExceeded)
         {
-            // No hard trigger fired. Evaluate the SnapshotPending
+            // No trigger fired. Evaluate the SnapshotPending
             // advisory: when the leaf's checkpoint sits within the
             // trailing LeafSnapshotMargin fraction of the readable WAL
             // window, signal the maintenance grain to capture a
@@ -136,13 +136,36 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
             return FallOffLogDecision.TailReplay;
         }
 
-        return options.ProjectionRebuildPolicy switch
+        // Only GENUINE LOSS routes to the configured rebuild policy (every
+        // branch of which is currently fatal). The WAL no longer holds an
+        // offset this leaf needs, so replaying the surviving suffix would
+        // rebuild the leaf over the lost prefix and advance the materialiser
+        // pin past unrecoverable data - the #945 laundering hazard the
+        // activation-time guard also defends.
+        if (walTrimmedPastCheckpoint)
         {
-            ProjectionRebuildPolicy.SnapshotThenWal => FallOffLogDecision.SnapshotThenWal,
-            ProjectionRebuildPolicy.FullRebuildFromWal => FallOffLogDecision.FullRebuildFromWal,
-            ProjectionRebuildPolicy.Fail => FallOffLogDecision.Fail,
-            _ => FallOffLogDecision.SnapshotThenWal,
-        };
+            return options.ProjectionRebuildPolicy switch
+            {
+                ProjectionRebuildPolicy.SnapshotThenWal => FallOffLogDecision.SnapshotThenWal,
+                ProjectionRebuildPolicy.FullRebuildFromWal => FallOffLogDecision.FullRebuildFromWal,
+                ProjectionRebuildPolicy.Fail => FallOffLogDecision.Fail,
+                _ => FallOffLogDecision.SnapshotThenWal,
+            };
+        }
+
+        // A COST trigger fired (replay budget or projection age) but the WAL
+        // still covers the entire (checkpoint, head] window, so a plain tail
+        // replay reconstructs exactly the same projection - it is merely
+        // longer than the configured budget wanted. Returning a fatal
+        // decision here is what bricked a tree holding fully intact data in
+        // issue #1738 (gap 10,648 against a 10,000 budget, nothing trimmed).
+        //
+        // Cost is bounded on the read side instead of by refusing the work:
+        // ReplayPartitionAsync honours WalReplayMaxRecordsPerTurn (yielding
+        // between turns so a long replay never monopolises the scheduler) and
+        // the activation replay permit (#1030) caps concurrent replays. A slow
+        // activation is recoverable; a bricked tree is not.
+        return FallOffLogDecision.TailReplayOverBudget;
     }
 }
 
