@@ -11,7 +11,7 @@ using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
-using Orleans.Lattice.Explorer.Tenants;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.Web;
 
 namespace Orleans.Lattice.Explorer.Tests.Hosting;

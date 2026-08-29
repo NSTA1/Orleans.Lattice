@@ -1,4 +1,4 @@
-# Orleans.Lattice.Explorer.Tenants
+# Orleans.Lattice.Explorer.Plugins.Tenants
 
 The **Tenants** plugin for the [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice)
 Explorer: the platform-operator surface for managing every tenant on a cluster.
@@ -45,7 +45,7 @@ services.AddExplorerTenantsPlugin();   // must follow the operator-gate provider
 and link the plugin stylesheet from the head's document head:
 
 ```html
-<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Tenants/lattice-tenants.css" />
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Tenants/lattice-tenants.css" />
 ```
 
 Withholding `AddExplorerTenantsPlugin()` ships no Tenants area at all;

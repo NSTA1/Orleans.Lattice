@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// One quota dimension projected for display: its label, which of the four

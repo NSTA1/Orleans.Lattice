@@ -4,7 +4,7 @@ using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// Registration helpers for the Explorer's Tenants (platform-operator tenant

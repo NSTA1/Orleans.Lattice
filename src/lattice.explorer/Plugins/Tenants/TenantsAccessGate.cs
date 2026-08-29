@@ -1,7 +1,7 @@
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// The Tenants plugin's own four-state access gate: the surface exists only on a

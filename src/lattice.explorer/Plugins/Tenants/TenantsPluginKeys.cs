@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// The Tenants plugin's own key vocabulary: the stable id its access decision is

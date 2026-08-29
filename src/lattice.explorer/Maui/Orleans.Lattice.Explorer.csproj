@@ -80,7 +80,7 @@
       seam transitively, so a head that surfaces tenant administration takes
       this one reference. Withholding it ships no Tenants area.
     -->
-    <ProjectReference Include="..\Plugins\Tenants\Orleans.Lattice.Explorer.Tenants.csproj" />
+    <ProjectReference Include="..\Plugins\Tenants\Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
   </ItemGroup>
 
 </Project>

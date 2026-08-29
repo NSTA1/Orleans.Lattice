@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// Which side of a cross-tenant grant the tenant in view is on. The two

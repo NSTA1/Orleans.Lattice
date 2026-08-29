@@ -1,7 +1,7 @@
 using System.Globalization;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// The display vocabulary for tenant quota figures: the labels, the byte and

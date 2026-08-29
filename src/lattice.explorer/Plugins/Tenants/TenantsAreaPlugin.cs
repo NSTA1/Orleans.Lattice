@@ -1,8 +1,8 @@
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
-using Orleans.Lattice.Explorer.Tenants.Views;
+using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// The Tenants (platform-operator tenant management) area as a plugin: its

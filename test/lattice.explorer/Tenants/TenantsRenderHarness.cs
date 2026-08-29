@@ -7,8 +7,8 @@ using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
-using Orleans.Lattice.Explorer.Tenants;
-using Orleans.Lattice.Explorer.Tenants.Views;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
+using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenants;
 

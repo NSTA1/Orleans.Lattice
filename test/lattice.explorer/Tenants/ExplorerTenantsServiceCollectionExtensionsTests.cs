@@ -3,8 +3,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
-using Orleans.Lattice.Explorer.Tenants;
-using Orleans.Lattice.Explorer.Tenants.Views;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
+using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenants;
 

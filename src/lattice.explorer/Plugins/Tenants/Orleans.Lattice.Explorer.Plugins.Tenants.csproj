@@ -5,14 +5,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!--
-      Package id, assembly name, and root namespace agree, matching the Access
-      and Backups plugin packages: a concrete plugin package is
-      Orleans.Lattice.Explorer.<Area>.
+      A new Explorer plugin package is Orleans.Lattice.Explorer.Plugins.<Area>.
+      Package id, assembly name (defaulted from the project file name), and root
+      namespace all agree.
+
+      The three ids without the Plugins. segment - Access, Backup, and Schema -
+      predate the plugin model and keep their shipped names for consumer
+      compatibility; they are frozen, not a pattern to copy.
     -->
-    <RootNamespace>Orleans.Lattice.Explorer.Tenants</RootNamespace>
-    <PackageId>Orleans.Lattice.Explorer.Tenants</PackageId>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.Tenants</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Tenants</PackageId>
     <Version>9.4.0</Version>
-    <Description>The Tenants plugin for the Orleans.Lattice Explorer: the platform-operator tenant-management area. Lists every tenant with its lifecycle state, default flag, and headline usage; drives create / suspend / resume / delete with explicit confirmation and the cascaded tree count; authors quota ceilings across every dimension, rendering unbounded and unmeasured as themselves rather than as zero; authorizes allowed regions and surfaces a still-resident revocation refusal specifically; and administers admin subjects and cross-tenant grants with each grant's lifecycle state made explicit. Gated to platform operators and reports unavailable on a cluster without the tenancy add-on. Registered with AddExplorerTenantsPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Tenants.</Description>
+    <Description>The Tenants plugin for the Orleans.Lattice Explorer: the platform-operator tenant-management area. Lists every tenant with its lifecycle state, default flag, and headline usage; drives create / suspend / resume / delete with explicit confirmation and the cascaded tree count; authors quota ceilings across every dimension, rendering unbounded and unmeasured as themselves rather than as zero; authorizes allowed regions and surfaces a still-resident revocation refusal specifically; and administers admin subjects and cross-tenant grants with each grant's lifecycle state made explicit. Gated to platform operators and reports unavailable on a cluster without the tenancy add-on. Registered with AddExplorerTenantsPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.Tenants.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

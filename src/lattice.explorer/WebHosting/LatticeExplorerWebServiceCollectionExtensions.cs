@@ -16,7 +16,7 @@ using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Schema;
-using Orleans.Lattice.Explorer.Tenants;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;
 

@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.Tenancy;
-using Orleans.Lattice.Explorer.Tenants;
-using Orleans.Lattice.Explorer.Tenants.Views;
-using Orleans.Lattice.Explorer.Tenants.Workspace;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
+using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
+using Orleans.Lattice.Explorer.Plugins.Tenants.Workspace;
 using Orleans.Lattice.Explorer.Tests.DesignSystem;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenants;

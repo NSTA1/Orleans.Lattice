@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// A destructive operation held for explicit confirmation: what it will do, what

@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// How one quota dimension's reading should be presented. The four members are

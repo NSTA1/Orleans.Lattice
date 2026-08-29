@@ -1,7 +1,7 @@
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
-using Orleans.Lattice.Explorer.Tenants;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenants;
 

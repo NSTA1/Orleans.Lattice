@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants.Workspace;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants.Workspace;
 
 /// <summary>
 /// The tenant-access surface: the subjects holding tenant-admin authority over

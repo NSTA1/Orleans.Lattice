@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// Which destructive operation a pending confirmation is guarding. Every

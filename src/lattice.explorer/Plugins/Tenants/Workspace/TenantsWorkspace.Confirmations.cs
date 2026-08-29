@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenants.Workspace;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants.Workspace;
 
 /// <summary>
 /// The confirmation gate every destructive operation on the surface passes

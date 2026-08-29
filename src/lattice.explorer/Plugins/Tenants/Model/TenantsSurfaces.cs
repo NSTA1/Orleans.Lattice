@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 
-namespace Orleans.Lattice.Explorer.Tenants;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
 /// The Tenants plugin's internal sub-surfaces: the stable ids they are keyed by

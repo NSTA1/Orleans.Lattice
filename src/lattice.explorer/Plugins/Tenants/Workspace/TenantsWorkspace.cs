@@ -1,7 +1,7 @@
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tenancy;
 
-namespace Orleans.Lattice.Explorer.Tenants.Workspace;
+namespace Orleans.Lattice.Explorer.Plugins.Tenants.Workspace;
 
 /// <summary>
 /// The Tenants plugin's view state and operations, lifted out of the panel's
