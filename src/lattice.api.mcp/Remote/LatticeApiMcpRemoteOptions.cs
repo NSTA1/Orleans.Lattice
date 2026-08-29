@@ -10,9 +10,12 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <para>
 /// A group is served remotely only when its per-group endpoint
 /// (<see cref="State"/> / <see cref="Data"/> / <see cref="Auth"/> /
-/// <see cref="Backup"/> / <see cref="Replication"/>) is supplied; an unset group is
-/// not registered and is reported unavailable with a <see langword="null"/>
-/// endpoint in the capabilities report, exactly as in the in-silo topology.
+/// <see cref="Backup"/> / <see cref="Replication"/> / <see cref="TreeAdmin"/> /
+/// <see cref="TenantAdmin"/> / <see cref="Telemetry"/>) is supplied; an unset group
+/// is not registered and is reported unavailable with a <see langword="null"/>
+/// endpoint in the capabilities report, exactly as in the in-silo topology. The one
+/// nuance is <see cref="Telemetry"/>, which a head may alternatively serve from the
+/// co-located telemetry tool module - see that property.
 /// </para>
 /// <para>
 /// The caller credential the MCP credential bridge resolves for a session flows
@@ -142,6 +145,26 @@ public sealed class LatticeApiMcpRemoteOptions
     /// advertises no tenant tools and is byte-for-byte unchanged.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? TenantAdmin { get; set; }
+
+    /// <summary>
+    /// The remote endpoint for the read-only telemetry facade
+    /// (<c>ILatticeTelemetry</c>), or <see langword="null"/> to not serve the
+    /// telemetry group over a routable facade in the default region. Telemetry is
+    /// routable per region exactly like every sibling group, so a client that
+    /// cannot be trusted to scope itself - a desktop head, whose local enforcement
+    /// would be trivially bypassable - reaches a facade that applies the tenant
+    /// scope server-side.
+    /// </summary>
+    /// <remarks>
+    /// Additive, not a replacement: a head that instead wires the co-located
+    /// telemetry tool module (<c>AddTelemetryTools</c>) keeps serving telemetry
+    /// from that module and advertises the group at a <see langword="null"/>
+    /// (in-process) endpoint, exactly as a co-hosted in-silo group does. The
+    /// current region advertises telemetry when either is present; when both are,
+    /// this endpoint is the advertised one, because it is the one another process
+    /// can route to.
+    /// </remarks>
+    public LatticeApiMcpRemoteEndpoint? Telemetry { get; set; }
 
     /// <summary>
     /// The request header the resolved caller credential is stamped onto for the
