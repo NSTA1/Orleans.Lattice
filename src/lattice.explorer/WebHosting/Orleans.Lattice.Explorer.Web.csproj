@@ -47,6 +47,13 @@
       a head takes it directly. Withholding this reference ships no Access area.
     -->
     <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <!--
+      The Schema plugin is referenced but deliberately NOT registered: that ships
+      its stylesheet and its registration extension with this head, so a consumer
+      opts the area in with a single services.AddExplorerSchemaPlugin() call and
+      no extra package reference, while the area stays absent by default.
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
     <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.MyTenant.csproj" />
   </ItemGroup>
 

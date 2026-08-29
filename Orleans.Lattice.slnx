@@ -17,6 +17,7 @@
   <Project Path="src/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
   <Project Path="src/lattice.api.mcp/Orleans.Lattice.Api.Mcp.csproj" />
   <Project Path="src/lattice.api.telemetry/Orleans.Lattice.Api.Telemetry.csproj" />
+  <Project Path="src/lattice.api.telemetry.grpc/Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
   <Project Path="src/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.csproj" />
   <Project Path="src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj" />
   <Project Path="src/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.csproj" />
@@ -40,11 +41,18 @@
   <Project Path="src/lattice.explorer/DesignSystem/Orleans.Lattice.Explorer.DesignSystem.csproj" />
   <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Selection/Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Metrics/Orleans.Lattice.Explorer.Plugins.Metrics.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Topology/Orleans.Lattice.Explorer.Plugins.Topology.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Data/Orleans.Lattice.Explorer.Plugins.Data.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/History/Orleans.Lattice.Explorer.Plugins.History.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/DeadLetter/Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/TagIndex/Orleans.Lattice.Explorer.Plugins.TagIndex.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Backups/Orleans.Lattice.Explorer.Backup.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Access/Orleans.Lattice.Explorer.Access.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Tenancy/Orleans.Lattice.Explorer.Tenancy.csproj" />
   <Project Path="src/lattice.explorer/Plugins/MyTenant/Orleans.Lattice.Explorer.MyTenant.csproj" />
-  <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />
   <Project Path="src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj" />
   <Project Path="src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj" />
@@ -72,6 +80,7 @@
   <Project Path="test/lattice.api.treeadmin.grpc/Orleans.Lattice.Api.TreeAdmin.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.mcp/Orleans.Lattice.Api.Mcp.Tests.csproj" />
   <Project Path="test/lattice.api.telemetry/Orleans.Lattice.Api.Telemetry.Tests.csproj" />
+  <Project Path="test/lattice.api.telemetry.grpc/Orleans.Lattice.Api.Telemetry.Grpc.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.telemetry/Orleans.Lattice.Api.Mcp.Telemetry.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Tests.csproj" />

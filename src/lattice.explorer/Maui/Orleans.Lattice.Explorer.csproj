@@ -69,6 +69,12 @@
       a head takes it directly. Withholding this reference ships no Access area.
     -->
     <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <!--
+      The Schema plugin is referenced but deliberately NOT registered (see
+      MauiProgram): the desktop head wires the schema services and renders no
+      Schema tab until it calls AddExplorerSchemaPlugin().
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
     <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.MyTenant.csproj" />
   </ItemGroup>
 

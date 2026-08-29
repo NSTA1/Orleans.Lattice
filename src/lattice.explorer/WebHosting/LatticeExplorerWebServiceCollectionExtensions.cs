@@ -151,14 +151,14 @@ public static class LatticeExplorerWebServiceCollectionExtensions
 
         // The Schema management area: the schema control-API client, its policy,
         // versioning, and compliance services, and the access gate that gates the
-        // area. The head opts the area into the shell by registering its plugin,
-        // so withholding it renders no Schema tab at all - the services stay wired
-        // either way, so it can be surfaced without new plumbing.
+        // area. Its services are wired here, but its plugin deliberately is not
+        // registered, so this head renders no Schema tab. A head opts the area in
+        // with one call - services.AddExplorerSchemaPlugin() from
+        // Orleans.Lattice.Explorer.Schema - which is the whole of the
+        // opt-in now that the per-area flag is retired. The area stays withheld by
+        // default because its versioning UI cannot yet express what differs
+        // between schema versions.
         services.AddExplorerSchema();
-        if (options.EnableSchemaArea)
-        {
-            services.AddExplorerSchemaPlugin();
-        }
 
         return services;
     }

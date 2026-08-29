@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
@@ -337,18 +339,78 @@ public static class PromQlMetricExtractor
         var quote = text[quoteIndex];
         var start = quoteIndex + 1;
         var i = start;
+
+        // Backtick strings are raw in PromQL: no escape processing, so the value is
+        // the literal span between the backticks verbatim.
+        if (quote == '`')
+        {
+            while (i < text.Length)
+            {
+                if (text[i] == '`')
+                {
+                    value = text.Substring(start, i - start);
+                    return i + 1;
+                }
+
+                i++;
+            }
+
+            value = null;
+            return i;
+        }
+
+        // Double- and single-quoted strings process escape sequences. A metric name
+        // is compared literally against the deny-all allow-list, so the value must
+        // be the unescaped name: {__name__="a\"b"} designates the metric a"b, not
+        // a\"b, and returning the raw span with the backslash left in wrongly denies
+        // a legitimately allow-listed name. Only the unambiguous backslash and
+        // matching-quote escapes - whose expansion is byte-identical to Prometheus -
+        // are unescaped here. Any other escape (\n, \x41, \u00e9, octal, ...) leaves
+        // the value unresolved so the deny-all gate fails closed rather than risk
+        // resolving to a name that diverges from Prometheus's own interpretation.
+        StringBuilder? builder = null;
+        var segmentStart = start;
         while (i < text.Length)
         {
             var c = text[i];
-            if (c == '\\' && quote != '`')
+            if (c == '\\')
             {
+                if (i + 1 >= text.Length)
+                {
+                    // Trailing backslash: the literal is unterminated.
+                    value = null;
+                    return text.Length;
+                }
+
+                var escaped = text[i + 1];
+                if (escaped != '\\' && escaped != quote)
+                {
+                    // An escape this extractor does not model unambiguously. Skip to
+                    // the end of the literal and leave the value unresolved.
+                    value = null;
+                    return SkipString(text, quoteIndex);
+                }
+
+                builder ??= new StringBuilder(text.Length - start);
+                builder.Append(text, segmentStart, i - segmentStart);
+                builder.Append(escaped);
                 i += 2;
+                segmentStart = i;
                 continue;
             }
 
             if (c == quote)
             {
-                value = text.Substring(start, i - start);
+                if (builder is null)
+                {
+                    value = text.Substring(start, i - start);
+                }
+                else
+                {
+                    builder.Append(text, segmentStart, i - segmentStart);
+                    value = builder.ToString();
+                }
+
                 return i + 1;
             }
 

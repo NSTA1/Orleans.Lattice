@@ -67,8 +67,13 @@ Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
 builder.Services.AddLatticeExplorerWeb(options =>
 {
     options.ConfigFilePath = configFilePath;
-    options.EnableSchemaArea = config.GetValue("Explorer:EnableSchemaArea", false);
 });
+
+// The Schema management area is an opt-in plugin, not an option flag: a head
+// surfaces it by referencing Orleans.Lattice.Explorer.Schema and calling
+// services.AddExplorerSchemaPlugin(), and renders no Schema tab by not doing so.
+// This head keeps the area withheld, as it always has, because the versioning UI
+// cannot yet express what differs between schema versions.
 
 // Hosted-web Entra (OpenID Connect) sign-in provider, offered alongside the
 // built-in Basic provider when Entra is enabled.

@@ -7,7 +7,7 @@
     <RootNamespace>Orleans.Lattice.Explorer.UI</RootNamespace>
     <PackageId>Orleans.Lattice.Explorer.UI</PackageId>
     <Version>9.4.0</Version>
-    <Description>Shared Razor component class library (RCL) for the Orleans.Lattice Explorer: the routable pages, layout, navigation, detail, backup, and authentication components rendered identically by every explorer head, plus the packaged static web assets (css, favicon, topology interop). Served by a referencing app at _content/Orleans.Lattice.Explorer.UI.</Description>
+    <Description>Shared Razor component class library (RCL) for the Orleans.Lattice Explorer: the routable pages, layout, navigation, detail, and authentication components rendered identically by every explorer head, plus the packaged static web assets (css, favicon). Served by a referencing app at _content/Orleans.Lattice.Explorer.UI.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -34,7 +34,22 @@
     <ProjectReference Include="..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
     <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\Plugins\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
-    <ProjectReference Include="..\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+  </ItemGroup>
+
+  <!--
+    The per-selection plugin set the shared UI composes for a head through
+    AddExplorerSelectionPlugins. Each is an independent package that could be
+    referenced on its own instead; this reference exists only so the shared UI
+    can offer the one-call composite.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Plugins\Selection\Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+    <ProjectReference Include="..\Plugins\Metrics\Orleans.Lattice.Explorer.Plugins.Metrics.csproj" />
+    <ProjectReference Include="..\Plugins\Topology\Orleans.Lattice.Explorer.Plugins.Topology.csproj" />
+    <ProjectReference Include="..\Plugins\Data\Orleans.Lattice.Explorer.Plugins.Data.csproj" />
+    <ProjectReference Include="..\Plugins\History\Orleans.Lattice.Explorer.Plugins.History.csproj" />
+    <ProjectReference Include="..\Plugins\DeadLetter\Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj" />
+    <ProjectReference Include="..\Plugins\TagIndex\Orleans.Lattice.Explorer.Plugins.TagIndex.csproj" />
   </ItemGroup>
 
 </Project>

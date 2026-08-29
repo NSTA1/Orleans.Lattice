@@ -108,6 +108,73 @@ public sealed class PromQlMetricExtractorTests
     }
 
     [Test]
+    public void An_exact_name_matcher_unescapes_an_escaped_quote()
+    {
+        // PromQL {__name__="a\"b"} designates the metric named a"b. The extractor
+        // must unescape the value so it matches an allow-listed UTF-8 metric name;
+        // the pre-fix code returned the raw span a\"b (backslash retained), which
+        // never matched the allow-list and wrongly denied a legitimate query.
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__=\"a\\\"b\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "a\"b" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+        });
+    }
+
+    [Test]
+    public void An_exact_name_matcher_unescapes_an_escaped_backslash()
+    {
+        // {__name__="a\\b"} designates the metric a\b (one backslash).
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__=\"a\\\\b\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "a\\b" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+        });
+    }
+
+    [Test]
+    public void An_exact_single_quoted_name_matcher_unescapes_an_escaped_quote()
+    {
+        // {__name__='a\'b'} designates the metric a'b.
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__='a\\'b'}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "a'b" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+        });
+    }
+
+    [Test]
+    public void An_exact_name_matcher_with_an_unmodeled_escape_is_unresolvable()
+    {
+        // A \n (like \x, \u, \U, and octal) escape is not modelled by the
+        // conservative extractor. Rather than resolve to a name that could diverge
+        // from Prometheus's own unescaping, it leaves the value unresolved so the
+        // deny-all gate fails closed.
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__=\"a\\nb\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.Empty);
+            Assert.That(references.HasUnresolvableNameMatcher, Is.True);
+        });
+    }
+
+    [Test]
+    public void An_exact_name_matcher_in_a_raw_backtick_string_keeps_backslashes_literal()
+    {
+        // Backtick strings are raw in PromQL: `a\b` is the literal name a\b, with no
+        // escape processing, so the backslash is preserved verbatim.
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__=`a\\b`}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "a\\b" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+        });
+    }
+
+    [Test]
     public void A_label_only_selector_names_no_metric()
     {
         var references = PromQlMetricExtractor.ExtractReferences("{job=\"api\"}");
