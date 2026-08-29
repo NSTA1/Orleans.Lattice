@@ -1,8 +1,9 @@
-using Orleans.Lattice.Explorer.Plugins.Schema.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Components;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema;
+namespace Orleans.Lattice.Explorer.Schema;
 
 /// <summary>
 /// The Schema management area as a plugin: its descriptor, the panel the shell

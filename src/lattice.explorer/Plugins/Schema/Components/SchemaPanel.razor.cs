@@ -1,8 +1,9 @@
 using Microsoft.AspNetCore.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Components;
+namespace Orleans.Lattice.Explorer.Schema.Components;
 
 /// <summary>
 /// The Schema management area's shell component: tree selection, the sub-tab

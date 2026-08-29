@@ -39,7 +39,7 @@
     <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
     <!-- The Schema area ships as its own plugin package; the sample registers it
          only when LATTICE_EXPLORER_ENABLE_SCHEMA=true (see Program.cs). -->
-    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Schema\Orleans.Lattice.Explorer.Plugins.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
   </ItemGroup>
 
 </Project>

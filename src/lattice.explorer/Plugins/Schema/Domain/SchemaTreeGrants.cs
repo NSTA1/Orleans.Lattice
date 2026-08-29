@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// The per-tree, per-action grey-out for one governed tree, read straight from

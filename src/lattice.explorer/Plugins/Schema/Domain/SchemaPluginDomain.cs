@@ -1,8 +1,9 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// The host-side adapter behind <see cref="ISchemaPluginDomain"/>: it composes

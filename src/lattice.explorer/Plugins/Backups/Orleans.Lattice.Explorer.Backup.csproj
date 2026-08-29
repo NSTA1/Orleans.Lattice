@@ -11,10 +11,10 @@
       moves. The package id follows the plugin layout instead.
     -->
     <RootNamespace>Orleans.Lattice.Explorer.Backup</RootNamespace>
-    <AssemblyName>Orleans.Lattice.Explorer.Plugins.Backups</AssemblyName>
-    <PackageId>Orleans.Lattice.Explorer.Plugins.Backups</PackageId>
+    <AssemblyName>Orleans.Lattice.Explorer.Backup</AssemblyName>
+    <PackageId>Orleans.Lattice.Explorer.Backup</PackageId>
     <Version>9.4.0</Version>
-    <Description>The Backups plugin for the Orleans.Lattice Explorer: a self-contained plugin package carrying its own services, Razor components, and scoped stylesheet. It reaches the backup control API over its own gRPC binding, owns the access gate that files the plugin-level and per-tree backup decisions into the Explorer's keyed plugin access store, and renders its catalogue through the design system's adaptive table so a wide backup list reflows to cards on a narrow viewport. Registered with AddExplorerBackup() and AddExplorerBackupsPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.Backups.</Description>
+    <Description>The Backups plugin for the Orleans.Lattice Explorer: a self-contained plugin package carrying its own services, Razor components, and scoped stylesheet. It reaches the backup control API over its own gRPC binding, owns the access gate that files the plugin-level and per-tree backup decisions into the Explorer's keyed plugin access store, and renders its catalogue through the design system's adaptive table so a wide backup list reflows to cards on a narrow viewport. Registered with AddExplorerBackup() and AddExplorerBackupsPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Backup.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>

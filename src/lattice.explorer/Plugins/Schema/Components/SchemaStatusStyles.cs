@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Components;
+namespace Orleans.Lattice.Explorer.Schema.Components;
 
 /// <summary>
 /// The Schema area's status-banner styling: the modifier class one

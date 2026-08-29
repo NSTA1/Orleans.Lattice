@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Schema;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Components;
+namespace Orleans.Lattice.Explorer.Schema.Components;
 
 /// <summary>
 /// The envelope-versioning and remediation concern of the Schema area: opting a

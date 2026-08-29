@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.Plugins.Schema.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Components;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 
 // The harness reads the render tree to assert what a component actually

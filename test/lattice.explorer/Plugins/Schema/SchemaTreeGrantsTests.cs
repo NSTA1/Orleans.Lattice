@@ -1,5 +1,5 @@
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 
 namespace Orleans.Lattice.Explorer.Tests.Plugins.Schema;

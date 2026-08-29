@@ -70,7 +70,7 @@ builder.Services.AddLatticeExplorerWeb(options =>
 });
 
 // The Schema management area is an opt-in plugin, not an option flag: a head
-// surfaces it by referencing Orleans.Lattice.Explorer.Plugins.Schema and calling
+// surfaces it by referencing Orleans.Lattice.Explorer.Schema and calling
 // services.AddExplorerSchemaPlugin(), and renders no Schema tab by not doing so.
 // This head keeps the area withheld, as it always has, because the versioning UI
 // cannot yet express what differs between schema versions.

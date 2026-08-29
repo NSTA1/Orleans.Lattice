@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// The result of listing the trees the Schema area can govern: the projected

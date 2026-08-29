@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Schema;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// The state one operator's Schema area shares across its concern-scoped

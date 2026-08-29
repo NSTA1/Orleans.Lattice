@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Schema;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Components;
+namespace Orleans.Lattice.Explorer.Schema.Components;
 
 /// <summary>
 /// The enforcement-policy concern of the Schema area: reading the selected

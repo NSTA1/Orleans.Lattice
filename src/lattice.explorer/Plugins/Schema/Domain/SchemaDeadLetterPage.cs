@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Schema;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// A dead-letter page together with the tree it was read for.

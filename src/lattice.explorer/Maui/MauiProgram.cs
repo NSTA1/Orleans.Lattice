@@ -100,7 +100,7 @@ public static class MauiProgram
         // The Schema management area (see the web head). Its services are wired
         // but its plugin is not registered, so the desktop head renders no Schema
         // tab - a head opts in with AddExplorerSchemaPlugin() from
-        // Orleans.Lattice.Explorer.Plugins.Schema, which is the whole of the
+        // Orleans.Lattice.Explorer.Schema, which is the whole of the
         // opt-in now that the per-area flag is retired.
         builder.Services.AddExplorerSchema();
 

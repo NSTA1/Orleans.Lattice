@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Components;
+namespace Orleans.Lattice.Explorer.Schema.Components;
 
 /// <summary>
 /// The Schema area's tree selection list: the governance subject picker. It

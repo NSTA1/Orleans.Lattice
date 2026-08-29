@@ -141,7 +141,7 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // area. Its services are wired here, but its plugin deliberately is not
         // registered, so this head renders no Schema tab. A head opts the area in
         // with one call - services.AddExplorerSchemaPlugin() from
-        // Orleans.Lattice.Explorer.Plugins.Schema - which is the whole of the
+        // Orleans.Lattice.Explorer.Schema - which is the whole of the
         // opt-in now that the per-area flag is retired. The area stays withheld by
         // default because its versioning UI cannot yet express what differs
         // between schema versions.

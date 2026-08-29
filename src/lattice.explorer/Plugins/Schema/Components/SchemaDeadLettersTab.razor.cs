@@ -1,11 +1,11 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Schema;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Components;
+namespace Orleans.Lattice.Explorer.Schema.Components;
 
 /// <summary>
 /// The dead-letter concern of the Schema area: the read-only, bounded page of

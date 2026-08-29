@@ -1,10 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Catalog;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema;
+namespace Orleans.Lattice.Explorer.Schema;
 
 /// <summary>
 /// The Schema plugin's registration surface, and the single place a head opts

@@ -1,4 +1,4 @@
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Domain;
 
 namespace Orleans.Lattice.Explorer.Tests.Plugins.Schema;
 

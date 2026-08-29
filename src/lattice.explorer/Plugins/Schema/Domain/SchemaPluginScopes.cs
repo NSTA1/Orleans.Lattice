@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// The Schema plugin's scope vocabulary: how a per-tree, per-action decision is

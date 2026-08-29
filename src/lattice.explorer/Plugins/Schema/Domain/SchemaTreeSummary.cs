@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// One governable tree as the Schema plugin sees it: the id it addresses the

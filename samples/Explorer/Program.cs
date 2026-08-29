@@ -10,7 +10,7 @@ using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
 using Orleans.Lattice.Auth;
-using Orleans.Lattice.Explorer.Plugins.Schema;
+using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.Membership;
 using Orleans.Lattice.Membership.Entra;

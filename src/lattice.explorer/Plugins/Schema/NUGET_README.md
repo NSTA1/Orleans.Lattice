@@ -1,4 +1,4 @@
-# Orleans.Lattice.Explorer.Plugins.Schema
+# Orleans.Lattice.Explorer.Schema
 
 The Schema management area of the [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice)
 Explorer, packaged as a self-contained **plugin**: its registration, its
@@ -35,7 +35,7 @@ layer and free of any width media query (breakpoints live in exactly one file).
 Reference it from the host document after the design-system stylesheets:
 
 ```html
-<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Schema/lattice-schema.css" />
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Schema/lattice-schema.css" />
 ```
 
 ## Gating

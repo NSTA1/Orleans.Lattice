@@ -4,10 +4,9 @@ using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.Plugins.Schema;
-using Orleans.Lattice.Explorer.Plugins.Schema.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Schema.Components;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 using Orleans.Lattice.Explorer.UI.Plugins;
 

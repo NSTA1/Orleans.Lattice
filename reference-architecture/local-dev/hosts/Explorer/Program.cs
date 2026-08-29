@@ -4,7 +4,7 @@ using Microsoft.Identity.Abstractions;
 using Orleans.Lattice.Caching.AzureBlob;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Entra.Web;
-using Orleans.Lattice.Explorer.Plugins.Schema;
+using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 using Orleans.Lattice.ReferenceArchitecture.Explorer;
 using Orleans.Lattice.ReferenceArchitecture.Hosting;

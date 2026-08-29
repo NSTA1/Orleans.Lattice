@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// One schema-management action the per-tree capability probe reports on, and

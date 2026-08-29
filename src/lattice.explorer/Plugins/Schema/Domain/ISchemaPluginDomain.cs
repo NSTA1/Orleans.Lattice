@@ -1,7 +1,8 @@
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+namespace Orleans.Lattice.Explorer.Schema.Domain;
 
 /// <summary>
 /// The Schema plugin's <em>controlled domain model</em>: the single contract the

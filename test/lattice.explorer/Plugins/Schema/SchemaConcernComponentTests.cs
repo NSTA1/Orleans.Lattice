@@ -1,5 +1,5 @@
-using Orleans.Lattice.Explorer.Plugins.Schema.Components;
-using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema.Components;
+using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 
 #pragma warning disable BL0006

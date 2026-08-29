@@ -2,7 +2,7 @@
   Orleans.Lattice Explorer - Backups plugin stylesheet.
 
   Everything the Backups surface needs, owned by the Backups package and served
-  at _content/Orleans.Lattice.Explorer.Plugins.Backups/lattice-backups.css. It
+  at _content/Orleans.Lattice.Explorer.Backup/lattice-backups.css. It
   replaces the `.explorer-backups-*` and `.explorer-health-*` blocks that used
   to sit in the shared `app.css` monolith (epic decision D5: a plugin carries
   its own scoped CSS, which is what actually decomposes the stylesheet).
