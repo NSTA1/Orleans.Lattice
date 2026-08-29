@@ -1,0 +1,381 @@
+/*
+  Orleans.Lattice Explorer - Backups plugin stylesheet.
+
+  Everything the Backups surface needs, owned by the Backups package and served
+  at _content/Orleans.Lattice.Explorer.Plugins.Backups/lattice-backups.css. It
+  replaces the `.explorer-backups-*` and `.explorer-health-*` blocks that used
+  to sit in the shared `app.css` monolith (epic decision D5: a plugin carries
+  its own scoped CSS, which is what actually decomposes the stylesheet).
+
+  Two rules it keeps:
+
+  1. Every value is a design token from `lattice-tokens.css`. No literal
+     spacing, colour, radius, or type size, so the plugin inherits the product's
+     visual language and a theme change reaches it for free.
+  2. Not one width media query. Responsive behaviour comes from the breakpoint
+     layer's named utilities and from the design system's adaptive primitives -
+     the catalogue reflows because `LatticeAdaptiveTable` chooses a card list at
+     compact, and the forms reflow because they are wrapping flex flows rather
+     than layout tables. `BreakpointTokenHygieneTests` fails the build if a
+     width media query appears here (epic decision D7).
+*/
+
+/* ==========================================================================
+   Area frame
+   ========================================================================== */
+
+.lx-backups {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    min-width: 0;
+    padding: var(--lx-space-6) var(--lx-shell-padding-inline);
+    overflow: auto;
+}
+
+.lx-backups-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--lx-space-6);
+}
+
+.lx-backups-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    min-width: 0;
+}
+
+.lx-backups-result {
+    margin: 0;
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border-radius: var(--lx-radius-md);
+    font-size: var(--lx-text-small);
+}
+
+.lx-backups-result.is-success {
+    background: color-mix(in srgb, var(--lx-color-success) 15%, transparent);
+    color: var(--lx-color-success);
+}
+
+.lx-backups-result.is-denied,
+.lx-backups-result.is-failed {
+    background: var(--lx-color-danger-surface);
+    color: var(--lx-color-danger);
+}
+
+.lx-backups-empty {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-body);
+}
+
+.lx-backups-note {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+}
+
+.lx-backups-hint {
+    margin: var(--lx-space-2) 0 0;
+    color: var(--lx-color-warning);
+    font-size: var(--lx-text-caption);
+}
+
+.lx-backups-warning {
+    color: var(--lx-color-warning);
+    font-size: var(--lx-text-caption);
+}
+
+/* ==========================================================================
+   Field flow
+
+   A wrapping label/control flow, used by both the capture form and the row
+   actions. The control's flex basis is what makes it drop under its label on a
+   narrow viewport, so the forms stack without a media query and without a
+   second markup branch.
+   ========================================================================== */
+
+.lx-backups-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--lx-space-3) var(--lx-space-5);
+    min-width: 0;
+}
+
+.lx-backups-field-label {
+    flex: 0 1 9rem;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}
+
+.lx-backups-field-control {
+    display: flex;
+    flex: 1 1 16rem;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--lx-space-4);
+    min-width: 0;
+}
+
+.lx-backups-field-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--lx-space-3);
+}
+
+.lx-backups-text,
+.lx-backups-select {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 18rem;
+    min-height: var(--lx-target-min);
+}
+
+/* ==========================================================================
+   New Backup
+   ========================================================================== */
+
+.lx-backups-new {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--lx-space-6);
+    min-width: 0;
+}
+
+.lx-backups-treecol {
+    display: flex;
+    flex: 1 1 12rem;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    max-width: 16rem;
+    max-height: 22rem;
+    min-width: 0;
+    overflow: auto;
+}
+
+.lx-backups-form {
+    display: flex;
+    flex: 1 1 18rem;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    min-width: 0;
+}
+
+.lx-backups-picker-label {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-wide);
+    text-transform: uppercase;
+}
+
+.lx-backups-treegroup {
+    padding: var(--lx-space-3) var(--lx-space-4) var(--lx-space-1);
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-micro);
+    letter-spacing: var(--lx-tracking-wide);
+    list-style: none;
+    text-transform: uppercase;
+}
+
+.lx-backups-selected-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lx-backups-selected-list li {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+}
+
+.lx-backups-selected-id {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    overflow-wrap: anywhere;
+}
+
+.lx-backups-remove {
+    flex: 0 0 auto;
+    color: var(--lx-color-danger);
+    line-height: var(--lx-leading-tight);
+}
+
+.lx-backups-kind,
+.lx-backups-schedule {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--lx-space-5);
+    margin: 0;
+    padding: var(--lx-space-3) var(--lx-space-4);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+}
+
+.lx-backups-kind label,
+.lx-backups-schedule label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--lx-space-2);
+}
+
+.lx-backups-schedule input[type="number"] {
+    width: 4rem;
+    min-height: var(--lx-target-min);
+}
+
+/* ==========================================================================
+   Existing Backups
+   ========================================================================== */
+
+.lx-backups-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--lx-space-4);
+    min-width: 0;
+}
+
+.lx-backups-filter {
+    display: flex;
+    flex: 1 1 11rem;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    min-width: 0;
+}
+
+.lx-backups-filter-label {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-wide);
+    text-transform: uppercase;
+}
+
+.lx-backups-filter-select {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: var(--lx-target-min);
+}
+
+/*
+  The catalogue's selection control. It replaces the click handler the table row
+  used to carry: a button is keyboard reachable, announces its pressed state,
+  and survives the reflow into the card title.
+*/
+.lx-backups-rowbutton {
+    min-height: var(--lx-target-min);
+    padding: 0;
+    border: 0;
+    border-radius: var(--lx-radius-sm);
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+
+.lx-backups-rowbutton:hover {
+    color: var(--lx-color-accent);
+}
+
+.lx-backups-rowbutton:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-backups-rowbutton.is-selected {
+    color: var(--lx-color-accent);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-backups-rowbutton.is-new {
+    background: color-mix(in srgb, var(--lx-color-success) 15%, transparent);
+}
+
+.lx-backups-pager {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+}
+
+.lx-backups-actionpanel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    padding: var(--lx-space-6);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-backups-actionpanel-title {
+    margin: 0;
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-semibold);
+}
+
+/* ==========================================================================
+   Backup health
+   ========================================================================== */
+
+.lx-backups-health {
+    display: inline-block;
+    min-width: 1.6rem;
+    padding: var(--lx-space-1) var(--lx-space-3);
+    border-radius: var(--lx-radius-sm);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    line-height: var(--lx-leading-normal);
+    text-align: center;
+}
+
+.lx-backups-health-unknown {
+    border: 1px solid var(--lx-color-border);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-backups-health-ok {
+    border: 1px solid var(--lx-color-success);
+    background: color-mix(in srgb, var(--lx-color-success) 12%, transparent);
+    color: var(--lx-color-success);
+}
+
+.lx-backups-health-warn {
+    border: 1px solid var(--lx-color-warning);
+    background: color-mix(in srgb, var(--lx-color-warning) 15%, transparent);
+    color: var(--lx-color-warning);
+    cursor: pointer;
+}
+
+.lx-backups-health-warn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--lx-color-warning) 30%, transparent);
+}
+
+.lx-backups-health-warn:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-backups-health-list {
+    margin: 0 0 var(--lx-space-6);
+    padding-left: var(--lx-space-7);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+    overflow-wrap: anywhere;
+}

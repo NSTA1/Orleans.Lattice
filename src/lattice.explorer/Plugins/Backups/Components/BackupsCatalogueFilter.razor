@@ -1,0 +1,56 @@
+@*
+    The Existing Backups filter bar: a debounced starts-with box for the name
+    and the created timestamp, and a facet drop-down for the kind and the scope.
+
+    The filters were a second header row inside the catalogue table. Above the
+    table instead, they survive the reflow to a card list at compact and each
+    control carries its own label rather than inheriting one from the column it
+    sat under.
+*@
+
+<div class="lx-backups-filters" role="group" aria-label="Filter backups">
+    <div class="lx-backups-filter">
+        <span class="lx-backups-filter-label" id="lx-backups-filter-name">Name</span>
+        <BackupFilterBox Placeholder="Name starts with..." InitialValue="@Owner.FilterName"
+                         OnFilter="Owner.OnNameFilterChangedAsync" />
+    </div>
+
+    <div class="lx-backups-filter">
+        <span class="lx-backups-filter-label">Kind</span>
+        <select class="lx-backups-filter-select" value="@Owner.FilterKind"
+                disabled="@Owner.Busy" @onchange="OnKindChangedAsync" aria-label="Filter by kind">
+            <option value="">(any)</option>
+            @foreach (var kind in Owner.Summary.Kinds)
+            {
+                <option value="@kind" @key="kind">@kind</option>
+            }
+        </select>
+    </div>
+
+    <div class="lx-backups-filter">
+        <span class="lx-backups-filter-label">Scope</span>
+        <select class="lx-backups-filter-select" value="@Owner.FilterScope"
+                disabled="@Owner.Busy" @onchange="OnScopeChangedAsync" aria-label="Filter by scope">
+            <option value="">(any)</option>
+            @foreach (var scope in Owner.Summary.Scopes)
+            {
+                <option value="@scope" @key="scope">@scope</option>
+            }
+        </select>
+    </div>
+
+    <div class="lx-backups-filter">
+        <span class="lx-backups-filter-label" id="lx-backups-filter-created">Created</span>
+        <BackupFilterBox Placeholder="Created starts with..." InitialValue="@Owner.FilterCreated"
+                         OnFilter="Owner.OnCreatedFilterChangedAsync" />
+    </div>
+</div>
+
+@code {
+    /// <summary>The Backups panel this filter bar reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    private Task OnKindChangedAsync(ChangeEventArgs e) => Owner.OnKindFilterChangedAsync(e.Value?.ToString());
+
+    private Task OnScopeChangedAsync(ChangeEventArgs e) => Owner.OnScopeFilterChangedAsync(e.Value?.ToString());
+}

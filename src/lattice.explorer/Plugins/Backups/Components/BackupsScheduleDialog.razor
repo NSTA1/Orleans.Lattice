@@ -1,0 +1,125 @@
+@*
+    The schedule-management modal for a single-scope row: the recurring capture
+    cadence of the row's own kind, and - where the server supports it - the
+    per-backup health-monitor override.
+*@
+
+@if (Owner.PendingSchedule is { } pending)
+{
+    <div class="explorer-modal-backdrop" role="presentation">
+        <div class="explorer-modal" role="dialog" aria-modal="true" aria-labelledby="explorer-schedule-title">
+            <h3 id="explorer-schedule-title">Manage schedule</h3>
+            <p>
+                Recurring backup schedule for tree
+                <strong>@pending.Members[0].Scope.TreeId</strong>.
+            </p>
+            @if (Owner.ScheduleLoading)
+            {
+                <p class="lx-backups-hint">Loading schedule...</p>
+            }
+            else
+            {
+                var scheduleIncremental = pending.Kind == BackupKind.Incremental;
+                if (!scheduleIncremental)
+                {
+                    <fieldset class="lx-backups-schedule" aria-label="Full backup schedule">
+                        <legend>Full backup @((Owner.ScheduleStatus?.FullScheduleRegistered ?? false) ? "(scheduled)" : "(not scheduled)")</legend>
+                        <label>
+                            Every
+                            <input type="number" min="0" max="168" value="@Owner.EditFullHours"
+                                   @oninput="e => Owner.SetEditFullHours(e.Value)"
+                                   disabled="@Owner.Busy" aria-label="Full interval hours" /> h
+                        </label>
+                        <label>
+                            <input type="number" min="0" max="59" value="@Owner.EditFullMinutes"
+                                   @oninput="e => Owner.SetEditFullMinutes(e.Value)"
+                                   disabled="@Owner.Busy" aria-label="Full interval minutes" /> m
+                        </label>
+                        <button type="button" class="explorer-btn explorer-btn-primary"
+                                disabled="@(Owner.Busy || Owner.EditFullInterval <= TimeSpan.Zero)"
+                                @onclick="@(() => Owner.SaveScheduleAsync(incremental: false))">Save</button>
+                        @if (Owner.ScheduleStatus?.FullScheduleRegistered ?? false)
+                        {
+                            <button type="button" class="explorer-btn explorer-btn-danger"
+                                    disabled="@Owner.Busy"
+                                    @onclick="@(() => Owner.RemoveScheduleAsync(incremental: false))">Remove</button>
+                        }
+                    </fieldset>
+                }
+                else
+                {
+                    <fieldset class="lx-backups-schedule" aria-label="Incremental backup schedule">
+                        <legend>Incremental backup @((Owner.ScheduleStatus?.IncrementalScheduleRegistered ?? false) ? "(scheduled)" : "(not scheduled)")</legend>
+                        <label>
+                            Every
+                            <input type="number" min="0" max="168" value="@Owner.EditIncHours"
+                                   @oninput="e => Owner.SetEditIncHours(e.Value)"
+                                   disabled="@Owner.Busy" aria-label="Incremental interval hours" /> h
+                        </label>
+                        <label>
+                            <input type="number" min="0" max="59" value="@Owner.EditIncMinutes"
+                                   @oninput="e => Owner.SetEditIncMinutes(e.Value)"
+                                   disabled="@Owner.Busy" aria-label="Incremental interval minutes" /> m
+                        </label>
+                        <button type="button" class="explorer-btn explorer-btn-primary"
+                                disabled="@(Owner.Busy || Owner.EditIncrementalInterval <= TimeSpan.Zero)"
+                                @onclick="@(() => Owner.SaveScheduleAsync(incremental: true))">Save</button>
+                        @if (Owner.ScheduleStatus?.IncrementalScheduleRegistered ?? false)
+                        {
+                            <button type="button" class="explorer-btn explorer-btn-danger"
+                                    disabled="@Owner.Busy"
+                                    @onclick="@(() => Owner.RemoveScheduleAsync(incremental: true))">Remove</button>
+                        }
+                    </fieldset>
+                }
+
+                var relevantRegistered = scheduleIncremental
+                    ? (Owner.ScheduleStatus?.IncrementalScheduleRegistered ?? false)
+                    : (Owner.ScheduleStatus?.FullScheduleRegistered ?? false);
+                if (!relevantRegistered)
+                {
+                    <p class="lx-backups-hint">
+                        No @(scheduleIncremental ? "incremental" : "full") backup schedule is registered for
+                        this scope. Set an interval and click Save to register one, or create a scheduled
+                        backup from the New Backup tab.
+                    </p>
+                }
+
+                @if (Owner.HealthAvailable)
+                {
+                    <fieldset class="lx-backups-schedule" aria-label="Health monitoring">
+                        <legend>Health monitoring</legend>
+                        <label>
+                            <input type="checkbox" checked="@Owner.EditHealthEnabled"
+                                   @onchange="e => Owner.SetEditHealthEnabled((bool)(e.Value ?? false))"
+                                   disabled="@Owner.Busy" aria-label="Enable health monitoring" />
+                            Verify this backup's sink payload periodically
+                        </label>
+                        <label>
+                            Every
+                            <input type="number" min="0" max="168" value="@Owner.EditHealthHours"
+                                   @oninput="e => Owner.SetEditHealthHours(e.Value)"
+                                   disabled="@(Owner.Busy || !Owner.EditHealthEnabled)" aria-label="Health interval hours" /> h
+                        </label>
+                        <label>
+                            <input type="number" min="0" max="59" value="@Owner.EditHealthMinutes"
+                                   @oninput="e => Owner.SetEditHealthMinutes(e.Value)"
+                                   disabled="@(Owner.Busy || !Owner.EditHealthEnabled)" aria-label="Health interval minutes" /> m
+                        </label>
+                        <button type="button" class="explorer-btn explorer-btn-primary"
+                                disabled="@(Owner.Busy || (Owner.EditHealthEnabled && Owner.EditHealthInterval <= TimeSpan.Zero))"
+                                @onclick="Owner.SaveHealthConfigAsync">Save</button>
+                    </fieldset>
+                }
+            }
+            <div class="explorer-modal-actions">
+                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CloseSchedule">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>The Backups panel this dialog reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+}
