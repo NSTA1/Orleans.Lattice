@@ -94,7 +94,7 @@ public sealed class AppShellCouplingTests
             "Orleans.Lattice.Explorer.Access",
             "Orleans.Lattice.Explorer.Schema",
             "Orleans.Lattice.Explorer.UI.Backup",
-            "Orleans.Lattice.Explorer.UI.Access",
+            "Orleans.Lattice.Explorer.Access.Views",
             "Orleans.Lattice.Explorer.UI.Schema",
         ];
 

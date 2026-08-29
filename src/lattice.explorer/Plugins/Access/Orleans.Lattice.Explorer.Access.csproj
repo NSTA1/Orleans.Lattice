@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Access</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Access</PackageId>
+    <Version>9.4.0</Version>
+    <Description>The Access (membership and access-control) Explorer plugin: a self-contained plugin package carrying its own auth-admin control-API gRPC client, its membership / policy / directory domain model, its Razor views, and its plugin-scoped stylesheet. Registered with AddExplorerPlugin, gated by its own four-state access gate, and styled against Orleans.Lattice.Explorer.DesignSystem. Served by a referencing app at _content/Orleans.Lattice.Explorer.Access.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    Unlike Explorer.Core (which is walled off to the state-API client), this
+    plugin project is allowed to reference the auth-API (control plane) gRPC
+    client, which transitively pulls in the authorization / membership model and
+    core. It bridges that client to its own domain model, and carries the Razor
+    views and the scoped stylesheet that render it, so the shared UI library
+    needs no reference to it at all (epic decision D5).
+
+    It takes the design system for the tokens, the breakpoint set, and the
+    adaptive primitives, and the plugin abstractions for the contract it
+    registers through. It must never reference Orleans.Lattice.Explorer.UI: the
+    dependency runs the other way round, from a head to a plugin.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+    <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\lattice.api.auth.grpc\Orleans.Lattice.Api.Auth.Grpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>

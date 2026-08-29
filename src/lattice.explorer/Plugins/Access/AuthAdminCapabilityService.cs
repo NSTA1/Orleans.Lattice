@@ -1,7 +1,6 @@
 using Grpc.Core;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Access;

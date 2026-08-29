@@ -1,4 +1,3 @@
-using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Access;
