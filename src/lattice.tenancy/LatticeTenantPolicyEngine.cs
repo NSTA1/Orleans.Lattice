@@ -76,7 +76,19 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
             for (var i = 0; i < grants.Length; i++)
             {
                 var grant = grants[i];
-                if ((grant.Operations & operation) == operation && ScopeCovers(grant.Scope, scope))
+
+                // The single seam at which a cross-tenant grant becomes an allow,
+                // and therefore the single place the lifecycle gate belongs. Only
+                // an Active grant authorizes: an offered-but-unapproved (Pending),
+                // declined (Rejected), or withdrawn (Revoked) grant resolves to a
+                // denial. Without this the approval step would be decorative and a
+                // granting tenant could widen a grantee's access unilaterally by
+                // offering alone. The compiled snapshot deliberately indexes every
+                // live grant rather than pre-filtering, so this decision has
+                // exactly one home.
+                if (TenantGrantLifecycle.Authorizes(grant.State)
+                    && (grant.Operations & operation) == operation
+                    && ScopeCovers(grant.Scope, scope))
                 {
                     return TenantAccessDecision.Allow();
                 }
@@ -84,7 +96,7 @@ internal sealed class LatticeTenantPolicyEngine(CompiledTenantPolicySnapshotMain
         }
 
         return TenantAccessDecision.Deny(
-            $"Tenant '{targetTenant}' holds no grant for tenant '{sourceTenant}' covering scope '{scope}' with operation '{operation}'.");
+            $"Tenant '{targetTenant}' holds no active grant for tenant '{sourceTenant}' covering scope '{scope}' with operation '{operation}'.");
     }
 
     /// <summary>

@@ -55,6 +55,10 @@ public sealed class LatticeApiTenantAdminServiceCollectionExtensionsTests
                 Is.EqualTo(1),
                 "The tenant access-administration facade is wired exactly once alongside the lifecycle facade.");
             Assert.That(
+                builder.Services.Count(d => d.ServiceType == typeof(ILatticeTenantGrantAdmin)),
+                Is.EqualTo(1),
+                "The cross-tenant grant facade is wired exactly once alongside the lifecycle facade.");
+            Assert.That(
                 builder.Services.Count(d => d.ServiceType == typeof(TenantRegionResidencyAuthorizer)),
                 Is.EqualTo(1),
                 "Both tenant-tier facades share the one two-tier authorizer.");

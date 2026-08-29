@@ -281,6 +281,101 @@ internal sealed class FixedAuthSchemeSource(AuthSchemeAdvertisement advertisemen
 }
 
 /// <summary>
+/// Configurable in-memory <see cref="ILatticeTenantGrantAdmin"/> facade for the
+/// gRPC cross-tenant grant tests. It records the arguments each RPC delivered - so
+/// a test can prove the two tenant ids and the scope reach the facade unaltered
+/// and in the right roles - and returns a canned result in a configurable
+/// lifecycle state, or throws a pre-seeded exception so the
+/// exception-to-<see cref="StatusCode"/> translation can be exercised without a
+/// real tenancy engine.
+/// </summary>
+internal sealed class FakeTenantGrantAdmin : ILatticeTenantGrantAdmin
+{
+    public Exception? Throw { get; set; }
+
+    public string? LastTenantId { get; private set; }
+
+    public string? LastGranterTenantId { get; private set; }
+
+    public string? LastGranteeTenantId { get; private set; }
+
+    public string? LastScope { get; private set; }
+
+    public TenantGrantAccess LastOperations { get; private set; }
+
+    /// <summary>The state the canned change result reports; set it per test.</summary>
+    public TenantGrantLifecycleState State { get; set; } = TenantGrantLifecycleState.Pending;
+
+    public Task<TenantGrantReport> ListGrantsAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        return Throw is not null
+            ? Task.FromException<TenantGrantReport>(Throw)
+            : Task.FromResult(new TenantGrantReport
+            {
+                TenantId = tenantId,
+                Issued = [Descriptor(tenantId, "beta", "orders", TenantGrantLifecycleState.Active)],
+                Received = [Descriptor("gamma", tenantId, "ledger", TenantGrantLifecycleState.Pending)],
+            });
+    }
+
+    public Task<TenantGrantChangeResult> OfferGrantAsync(
+        string granterTenantId,
+        string granteeTenantId,
+        string scope,
+        TenantGrantAccess operations,
+        CancellationToken cancellationToken = default)
+    {
+        LastOperations = operations;
+        return Record(granterTenantId, granteeTenantId, scope, operations);
+    }
+
+    public Task<TenantGrantChangeResult> ApproveGrantAsync(
+        string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)
+        => Record(granterTenantId, granteeTenantId, scope, TenantGrantAccess.Read);
+
+    public Task<TenantGrantChangeResult> RejectGrantAsync(
+        string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)
+        => Record(granterTenantId, granteeTenantId, scope, TenantGrantAccess.Read);
+
+    public Task<TenantGrantChangeResult> RevokeGrantAsync(
+        string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)
+        => Record(granterTenantId, granteeTenantId, scope, TenantGrantAccess.Read);
+
+    private Task<TenantGrantChangeResult> Record(
+        string granterTenantId, string granteeTenantId, string scope, TenantGrantAccess operations)
+    {
+        LastGranterTenantId = granterTenantId;
+        LastGranteeTenantId = granteeTenantId;
+        LastScope = scope;
+
+        return Throw is not null
+            ? Task.FromException<TenantGrantChangeResult>(Throw)
+            : Task.FromResult(new TenantGrantChangeResult
+            {
+                Grant = Descriptor(granterTenantId, granteeTenantId, scope, State, operations),
+                Changed = true,
+            });
+    }
+
+    private static TenantGrantDescriptor Descriptor(
+        string granter,
+        string grantee,
+        string scope,
+        TenantGrantLifecycleState state,
+        TenantGrantAccess operations = TenantGrantAccess.Read) =>
+        new()
+        {
+            GranterTenantId = granter,
+            GranteeTenantId = grantee,
+            Scope = scope,
+            Operations = operations,
+            State = state,
+            GrantId = $"1:{grantee}\u001f{scope}",
+        };
+}
+
+/// <summary>
 /// Configurable in-memory <see cref="ILatticeTenantQuotaUsage"/> facade for the
 /// gRPC usage-against-quota tests. Returns a canned report built from fixed
 /// figures - deliberately mixing a bounded, an unbounded, and a capped-at-zero
@@ -401,6 +496,11 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "ListTenantAdminSubjects" => await service.ListTenantAdminSubjects((TenantAdminTenantRequest)(object)wireRequest, context),
             "AddTenantAdminSubject" => await service.AddTenantAdminSubject((TenantAdminSubjectRequest)(object)wireRequest, context),
             "RemoveTenantAdminSubject" => await service.RemoveTenantAdminSubject((TenantAdminSubjectRequest)(object)wireRequest, context),
+            "ListCrossTenantGrants" => await service.ListCrossTenantGrants((TenantAdminTenantRequest)(object)wireRequest, context),
+            "OfferCrossTenantGrant" => await service.OfferCrossTenantGrant((TenantAdminGrantOfferRequest)(object)wireRequest, context),
+            "ApproveCrossTenantGrant" => await service.ApproveCrossTenantGrant((TenantAdminGrantRequest)(object)wireRequest, context),
+            "RejectCrossTenantGrant" => await service.RejectCrossTenantGrant((TenantAdminGrantRequest)(object)wireRequest, context),
+            "RevokeCrossTenantGrant" => await service.RevokeCrossTenantGrant((TenantAdminGrantRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };
 
