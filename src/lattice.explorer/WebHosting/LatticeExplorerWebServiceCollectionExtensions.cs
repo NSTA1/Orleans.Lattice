@@ -14,6 +14,7 @@ using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
 
@@ -94,6 +95,10 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         services.AddExplorerDeadLetter();
         services.AddExplorerHistory();
         services.AddExplorerSession();
+
+        // The adaptive shell's viewport seam: one breakpoint per circuit, driven
+        // by LatticeAdaptiveRoot and read by every design-system primitive.
+        services.AddLatticeExplorerDesignSystem();
 
         // The web head persists UI preferences to the browser's localStorage (Data
         // Protection-encrypted), overriding the in-memory fallback backing store.
