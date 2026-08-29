@@ -75,10 +75,20 @@ public readonly record struct TenantGrantRow
     /// What the grant does and does not currently permit, in words. Rendered
     /// beside the state label so an operator reads the consequence and not just
     /// the state name.
+    /// <para>
+    /// Every branch is a compile-time literal rather than a concatenation, so a
+    /// grant list costs no string per row per render.
+    /// </para>
     /// </summary>
     public string AuthorityText => State switch
     {
-        ExplorerTenantGrantState.Active => "Authorizes " + OperationsText + " now.",
+        ExplorerTenantGrantState.Active => Grant.Operations switch
+        {
+            ExplorerTenantGrantAccess.ReadWrite => "Authorizes read and write now.",
+            ExplorerTenantGrantAccess.Read => "Authorizes read now.",
+            ExplorerTenantGrantAccess.Write => "Authorizes write now.",
+            _ => "Authorizes no operations at all, though it is active.",
+        },
         ExplorerTenantGrantState.Pending =>
             "Authorizes nothing yet. Offered, and awaiting the grantee tenant's approval.",
         ExplorerTenantGrantState.Rejected => "Authorizes nothing. The grantee declined the offer.",

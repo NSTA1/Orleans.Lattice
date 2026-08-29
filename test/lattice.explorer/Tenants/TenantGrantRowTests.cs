@@ -96,6 +96,40 @@ public sealed class TenantGrantRowTests
     }
 
     [Test]
+    public void Every_active_authority_line_is_an_interned_literal_rather_than_a_concatenation()
+    {
+        // Read once per row per render, so a concatenation here would allocate a
+        // string per grant on every render of the list.
+        foreach (var operations in new[]
+                 {
+                     ExplorerTenantGrantAccess.Read,
+                     ExplorerTenantGrantAccess.Write,
+                     ExplorerTenantGrantAccess.ReadWrite,
+                     ExplorerTenantGrantAccess.None,
+                 })
+        {
+            var row = Row(ExplorerTenantGrantState.Active, operations);
+
+            Assert.That(
+                row.AuthorityText,
+                Is.SameAs(row.AuthorityText),
+                $"{operations} must return the same instance on each read");
+        }
+    }
+
+    [Test]
+    public void An_active_grant_that_names_no_operations_still_says_so()
+    {
+        var row = Row(ExplorerTenantGrantState.Active, ExplorerTenantGrantAccess.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Authorizes, Is.True, "the grant is active");
+            Assert.That(row.AuthorityText, Does.Contain("no operations at all"));
+        });
+    }
+
+    [Test]
     public void Only_an_active_grant_reads_as_authorizing_in_words()
     {
         // A surface could omit the state badge and still not mislead, because
