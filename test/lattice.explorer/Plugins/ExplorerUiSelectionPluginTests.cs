@@ -380,7 +380,7 @@ public sealed class ExplorerUiSelectionPluginTests
     public void AddExplorerSelectionPlugins_rejects_a_null_service_collection()
     {
         Assert.That(
-            () => ExplorerUiPluginServiceCollectionExtensions.AddExplorerSelectionPlugins(null!),
+            () => ExplorerSelectionPluginServiceCollectionExtensions.AddExplorerSelectionPlugins(null!),
             Throws.ArgumentNullException);
     }
 

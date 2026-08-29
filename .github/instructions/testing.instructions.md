@@ -143,7 +143,7 @@ Run the non-chaos suite for **each test project that covers a package the PR tou
 # Example: a PR scoped to src/lattice.replication/ (plus repo-level CHANGELOG/docs edits)
 dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --filter "TestCategory!=Chaos&TestCategory!=AzureStorageEmulator" --blame-hang --blame-hang-timeout 3m
 # repo-level files (CHANGELOG/docs) - just the core project's hygiene gates, not its whole suite
-dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene|FullyQualifiedName~DocsSnippet"
+dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene|FullyQualifiedName~SliceCoverage|FullyQualifiedName~DocsSnippet"
 ```
 
 Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI runs the Azure Table suite separately against an emulator that's spun up as part of the pipeline.
@@ -494,13 +494,19 @@ TLA+ toolchain. `spec/` is outside `Orleans.Lattice.slnx` and is not built by
 
 The repository enforces a set of *hygiene gates* - structural regression tests that fail the build at PR time rather than letting a leak reach `main`. They run as ordinary tests inside the non-chaos suite, so any violation breaks the required `build-and-test` check.
 
-The fast text- and structure-hygiene gates all carry `Hygiene` in their type name, so the core project's set runs with:
+Most fast text- and structure-hygiene gates carry `Hygiene` in their type name, so the core project's set runs with:
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene"
 ```
 
-Two things that filter does **not** cover, so do not treat it as "all gates":
+Three things that filter does **not** cover, so do not treat it as "all gates":
+
+- `SliceCoverageCompletenessTests` is **not** matched - its name has no `Hygiene`, even though it lives under `test/lattice/Hygiene/`. It is the guard that asserts every slice is scanned exactly once, so it is precisely the test that fails when you add or move a per-package hygiene fixture. Filtering on `~Hygiene` alone gives a **false green** in exactly that situation. Whenever you add a `Hygiene/` fixture to a package, you must also add that package's `src/` and `test/` roots to `CoreHygieneScope.AllPackageSliceRoots`, and verify with:
+
+  ```powershell
+  dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~SliceCoverage"
+  ```
 
 - `DocsSnippetCompilationTests` is **not** matched - its name has no `Hygiene` and it is `[Category("Docs")]`. It is also far heavier (it Roslyn-compiles every `csharp verify` snippet under `docs/`). Run it when you have touched docs, either by name or by category:
 
@@ -521,4 +527,4 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every C# snippet under `docs/` uses the ` ```csharp verify ` fence and compiles against the real `Orleans.Lattice` surface. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
 | `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`) in `docs/lattice/performance-single-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
 
-Additional code-shape gates run in the same suite (for example `AuditHygieneRegressionTests` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). They live under `test/lattice/` and are caught by the same `FullyQualifiedName~Hygiene` filter.
+Additional code-shape gates run in the same suite (for example `AuditHygieneRegressionTests` requires every grain to use `ILogger<TSelf>` rather than a non-generic `ILogger`). They live under `test/lattice/` and are caught by the same `FullyQualifiedName~Hygiene` filter - with the exception of `SliceCoverageCompletenessTests`, which must be filtered by its own name (see above).
