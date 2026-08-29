@@ -10,6 +10,7 @@ using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Access;
+using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;
@@ -62,6 +63,11 @@ public static class MauiProgram
         builder.Services.AddExplorerDeadLetter();
         builder.Services.AddExplorerHistory();
         builder.Services.AddExplorerSession();
+
+        // The adaptive shell's viewport seam: one breakpoint per rendered shell,
+        // driven by LatticeAdaptiveRoot and read by every design-system
+        // primitive.
+        builder.Services.AddLatticeExplorerDesignSystem();
 
         // The desktop head persists UI preferences to the platform preference
         // store, overriding the in-memory fallback backing store.

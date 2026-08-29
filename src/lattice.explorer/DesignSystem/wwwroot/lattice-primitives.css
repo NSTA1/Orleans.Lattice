@@ -1,0 +1,567 @@
+/*
+  Orleans.Lattice Explorer - adaptive shell primitives.
+
+  Styles for the three primitives every plugin composes: the adaptive
+  navigation, the adaptive tab strip, and the adaptive table-or-card list.
+
+  Two rules hold throughout:
+
+  1. NO width media query. A primitive's shape is decided in .NET from the named
+     breakpoint and published on the element as `data-lx-breakpoint`; this file
+     only styles what it is told. A hygiene guard fails the build if a width
+     media query appears here.
+  2. Every value is a token from `lattice-tokens.css`. There are no literal
+     colours, spacings, radii, or durations below.
+*/
+
+/* ==========================================================================
+   Root
+   ========================================================================== */
+
+.lx-root {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    color: var(--lx-color-text);
+    font-family: var(--lx-font-ui);
+}
+
+/* ==========================================================================
+   Navigation - shared
+   ========================================================================== */
+
+.lx-nav {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--lx-color-surface);
+    color: var(--lx-color-text);
+}
+
+.lx-nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-1);
+    margin: 0;
+    padding: var(--lx-space-2);
+    list-style: none;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.lx-nav-row {
+    display: block;
+}
+
+.lx-nav-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-density-padding-block) var(--lx-density-padding-inline);
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font: inherit;
+    font-size: var(--lx-text-small);
+    text-align: left;
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-nav-item:hover:not(:disabled) {
+    color: var(--lx-color-text);
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-nav-item.is-selected {
+    color: var(--lx-color-text);
+    background: var(--lx-color-surface-raised);
+    border-color: var(--lx-color-border-strong);
+}
+
+.lx-nav-item:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-nav-item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* --------------------------------------------------------------------------
+   Navigation - expanded: a persistent sidebar
+   -------------------------------------------------------------------------- */
+
+.lx-nav-sidebar {
+    width: var(--lx-nav-sidebar-width);
+    flex-shrink: 0;
+    border-right: 1px solid var(--lx-color-border);
+}
+
+/* --------------------------------------------------------------------------
+   Navigation - medium: a dismissible drawer
+   -------------------------------------------------------------------------- */
+
+.lx-nav-drawer-host {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.lx-nav-drawer-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-3) var(--lx-space-5);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    font: inherit;
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-medium);
+    cursor: pointer;
+}
+
+.lx-nav-drawer-toggle:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--lx-layer-scrim);
+    background: var(--lx-color-scrim);
+}
+
+.lx-nav-drawer {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--lx-layer-drawer);
+    width: var(--lx-nav-drawer-width);
+    max-width: 85vw;
+    border-right: 1px solid var(--lx-color-border);
+    box-shadow: var(--lx-elevation-3);
+}
+
+.lx-nav-drawer-header {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    padding: var(--lx-space-4);
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.lx-nav-drawer-close {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: var(--lx-target-min);
+    height: var(--lx-target-min);
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    cursor: pointer;
+}
+
+.lx-nav-drawer-close::before {
+    content: "\00d7";
+    font-size: var(--lx-text-title);
+    line-height: 1;
+}
+
+.lx-nav-drawer-close:hover {
+    color: var(--lx-color-text);
+    border-color: var(--lx-color-border-strong);
+}
+
+.lx-nav-drawer-close:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+/* --------------------------------------------------------------------------
+   Navigation - compact: a bottom bar with an overflow menu
+   -------------------------------------------------------------------------- */
+
+.lx-nav-bottom {
+    position: relative;
+    border-top: 1px solid var(--lx-color-border);
+}
+
+.lx-nav-bar-list {
+    display: flex;
+    align-items: stretch;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    min-height: var(--lx-nav-bar-height);
+}
+
+.lx-nav-bar-cell {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.lx-nav-bar-item {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    /* Finger input: the breakpoint layer raises --lx-target-min at compact. */
+    min-height: var(--lx-target-min-touch);
+    min-width: var(--lx-target-min-touch);
+    padding: var(--lx-space-2) var(--lx-space-3);
+    border: none;
+    border-top: 2px solid transparent;
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font: inherit;
+    font-size: var(--lx-text-caption);
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.lx-nav-bar-item.is-selected {
+    color: var(--lx-color-accent);
+    border-top-color: var(--lx-color-accent);
+}
+
+.lx-nav-bar-item:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-nav-bar-item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.lx-nav-overflow {
+    position: absolute;
+    right: var(--lx-space-2);
+    bottom: 100%;
+    z-index: var(--lx-layer-menu);
+    display: flex;
+    flex-direction: column;
+    min-width: 12rem;
+    margin-bottom: var(--lx-space-2);
+    padding: var(--lx-space-2);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    box-shadow: var(--lx-elevation-2);
+}
+
+.lx-nav-overflow-item {
+    display: flex;
+    align-items: center;
+    min-height: var(--lx-target-min-touch);
+    padding: var(--lx-space-3) var(--lx-space-5);
+    border: none;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    font: inherit;
+    font-size: var(--lx-text-small);
+    text-align: left;
+    cursor: pointer;
+}
+
+.lx-nav-overflow-item:hover:not(:disabled) {
+    background: var(--lx-color-surface-sunken);
+}
+
+.lx-nav-overflow-item[aria-checked="true"] {
+    color: var(--lx-color-accent);
+}
+
+.lx-nav-overflow-item:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-nav-overflow-item:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Tab strip
+   ========================================================================== */
+
+.lx-tabstrip-host {
+    display: flex;
+    align-items: stretch;
+    gap: var(--lx-space-5);
+    min-width: 0;
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+}
+
+.lx-tabstrip {
+    display: flex;
+    align-items: stretch;
+    gap: var(--lx-space-2);
+    min-width: 0;
+    /* The strip never scrolls: what does not fit moves into the overflow menu,
+       which is the whole point of the primitive. */
+    overflow: hidden;
+}
+
+.lx-tab {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font: inherit;
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-tab:hover:not(:disabled) {
+    color: var(--lx-color-text);
+}
+
+.lx-tab.is-active {
+    color: var(--lx-color-accent);
+    border-bottom-color: var(--lx-color-accent);
+}
+
+.lx-tab:focus-visible {
+    outline: none;
+    color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-tab:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.lx-tabstrip-overflow-host {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+}
+
+.lx-tabstrip-overflow-toggle {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border: none;
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font: inherit;
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.lx-tabstrip-overflow-toggle:hover {
+    color: var(--lx-color-text);
+}
+
+.lx-tabstrip-overflow-toggle:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-tabstrip-overflow {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: var(--lx-layer-menu);
+    display: flex;
+    flex-direction: column;
+    min-width: 12rem;
+    margin-top: var(--lx-space-2);
+    padding: var(--lx-space-2);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    box-shadow: var(--lx-elevation-2);
+}
+
+.lx-tabstrip-overflow-item {
+    display: flex;
+    align-items: center;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-3) var(--lx-space-5);
+    border: none;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    font: inherit;
+    font-size: var(--lx-text-small);
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.lx-tabstrip-overflow-item:hover:not(:disabled) {
+    background: var(--lx-color-surface-sunken);
+}
+
+.lx-tabstrip-overflow-item[aria-checked="true"] {
+    color: var(--lx-color-accent);
+}
+
+.lx-tabstrip-overflow-item:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-tabstrip-overflow-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.lx-tabpanel {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--lx-shell-padding-inline);
+}
+
+.lx-tabpanel:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+/* ==========================================================================
+   Table and card list
+   ========================================================================== */
+
+.lx-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--lx-text-small);
+}
+
+.lx-table-caption {
+    padding-bottom: var(--lx-space-4);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-wide);
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.lx-table th,
+.lx-table td {
+    padding: var(--lx-density-padding-block) var(--lx-density-padding-inline);
+    text-align: left;
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.lx-table thead th {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-wide);
+    text-transform: uppercase;
+}
+
+.lx-table tbody th,
+.lx-table tbody td {
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-regular);
+}
+
+.lx-cell-code {
+    font-family: var(--lx-font-mono);
+}
+
+.lx-cardlist {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lx-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    padding: var(--lx-density-padding-inline);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+}
+
+.lx-card-title {
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-semibold);
+    overflow-wrap: anywhere;
+}
+
+.lx-card-fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+}
+
+.lx-card-field {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--lx-space-5);
+    min-height: var(--lx-target-min);
+}
+
+.lx-card-field-label {
+    flex-shrink: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    letter-spacing: var(--lx-tracking-wide);
+    text-transform: uppercase;
+}
+
+.lx-card-field .lx-cell {
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-small);
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.lx-datalist-empty {
+    padding: var(--lx-space-8);
+    text-align: center;
+}
+
+.lx-datalist-empty-text {
+    margin: 0;
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-small);
+}

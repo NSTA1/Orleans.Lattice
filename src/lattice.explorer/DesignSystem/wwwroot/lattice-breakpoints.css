@@ -1,0 +1,117 @@
+/*
+  Orleans.Lattice Explorer - breakpoint layer.
+
+  This is the ONLY file in the product permitted to contain a width media query.
+  Every other stylesheet - the token layer, the primitives, and each plugin's
+  scoped CSS - refers to a breakpoint by name through the utilities declared
+  here, or lets the .NET layer hand it the resolved breakpoint. The hygiene
+  guard `BreakpointTokenHygieneTests` fails the build when a width media query
+  appears anywhere else, which is what stops 40 components each inventing their
+  own breakpoints (epic decision D7).
+
+  There are exactly three named breakpoints:
+
+    compact   -                       ... 599px   phones, narrow split panes
+    medium    -  600px (--lx-breakpoint-medium-min)   ... 1023px  tablets, half-screen windows
+    expanded  - 1024px (--lx-breakpoint-expanded-min) ...         desktop windows
+
+  The two boundary widths appear exactly twice each: once as a custom property
+  below, so CSS, script, and documentation can read them back, and once in the
+  media query that applies them, because CSS cannot evaluate `var()` inside a
+  media condition. `LatticeBreakpoints` in .NET holds the same two numbers and
+  the guard asserts all three copies agree.
+
+  The utilities are hide-only: a utility is hidden in the bands it does not
+  apply to and left completely alone in the band it does, so an element keeps
+  its natural `display` and no rule ever has to guess what to restore it to.
+*/
+
+:root {
+    /* The declared breakpoint boundaries. Read by the drift guard and available
+       to script that needs to classify a viewport the same way the shell does. */
+    --lx-breakpoint-medium-min: 600px;
+    --lx-breakpoint-expanded-min: 1024px;
+}
+
+/* --------------------------------------------------------------------------
+   Band: medium and wider.
+   -------------------------------------------------------------------------- */
+@media (min-width: 600px) {
+    .lx-only-compact {
+        display: none !important;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Band: expanded.
+   -------------------------------------------------------------------------- */
+@media (min-width: 1024px) {
+    .lx-only-medium,
+    .lx-medium-down {
+        display: none !important;
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Band: narrower than medium (compact).
+
+   Also the place the compact defaults live: comfortable density, because every
+   row is a touch target at this width, and a raised minimum target size.
+   -------------------------------------------------------------------------- */
+@media not all and (min-width: 600px) {
+    .lx-medium-up,
+    .lx-only-medium,
+    .lx-expanded-up,
+    .lx-only-expanded {
+        display: none !important;
+    }
+
+    :root {
+        --lx-density-row-height: 2.75rem;
+        --lx-density-padding-block: var(--lx-space-5);
+        --lx-density-padding-inline: var(--lx-space-6);
+        --lx-density-gap: var(--lx-space-5);
+
+        /* Finger input: every interactive control gets the recommended 44px. */
+        --lx-target-min: var(--lx-target-min-touch);
+
+        --lx-shell-padding-inline: var(--lx-space-5);
+    }
+}
+
+/* --------------------------------------------------------------------------
+   Band: narrower than expanded (compact and medium).
+   -------------------------------------------------------------------------- */
+@media not all and (min-width: 1024px) {
+    .lx-expanded-up,
+    .lx-only-expanded {
+        display: none !important;
+    }
+}
+
+/*
+  Shell gutter, widening with the viewport. Declared outside the bands for the
+  default and narrowed in the compact band above, so a surface spends one token
+  instead of writing its own query.
+*/
+:root {
+    --lx-shell-padding-inline: var(--lx-space-7);
+}
+
+/*
+  Accessibility: honour a reduced-motion preference (or a future reduced-motion
+  toggle that sets the same media state) without touching individual rules. This
+  mirrors the rule the Explorer already ships in `app.css`, so the design-system
+  layer holds the guarantee on its own for a head that does not load the legacy
+  stylesheet.
+*/
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+    }
+}

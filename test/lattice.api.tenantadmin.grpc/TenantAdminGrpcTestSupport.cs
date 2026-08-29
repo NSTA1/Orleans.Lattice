@@ -218,6 +218,72 @@ internal sealed class FixedAuthSchemeSource(AuthSchemeAdvertisement advertisemen
 }
 
 /// <summary>
+/// Configurable in-memory <see cref="ILatticeTenantQuotaUsage"/> facade for the
+/// gRPC usage-against-quota tests. Returns a canned report built from fixed
+/// figures - deliberately mixing a bounded, an unbounded, and a capped-at-zero
+/// dimension plus an unmeasured one - or throws a pre-seeded exception, so both
+/// the wire round-trip of every nullable and the exception-to-<see cref="StatusCode"/>
+/// translation can be exercised without a real tenancy engine or a live sampler.
+/// </summary>
+internal sealed class FakeTenantQuotaUsage : ILatticeTenantQuotaUsage
+{
+    public Exception? Throw { get; set; }
+
+    public string? LastTenantId { get; private set; }
+
+    /// <summary>The report the fake returns; replace it to shape a specific case.</summary>
+    public TenantQuotaUsageReport Report { get; set; } = new()
+    {
+        TenantId = "acme",
+        IsDefault = false,
+        EnforcementScope = TenantQuotaEnforcementScope.PerCluster,
+        HasUsage = true,
+        Bytes = new TenantQuotaDimensionUsage
+        {
+            Usage = 4_100,
+            Limit = 10_000,
+            BurstLimit = 12_000,
+            Overage = 0,
+            MeteredOverage = 11,
+        },
+        Keys = new TenantQuotaDimensionUsage
+        {
+            Usage = 600,
+            Limit = 500,
+            BurstLimit = 600,
+            Overage = 100,
+            MeteredOverage = 22,
+        },
+
+        // Unbounded: no ceiling at all, which must survive the wire as null.
+        MemoryBytes = new TenantQuotaDimensionUsage { Usage = 9_000 },
+
+        // Capped at zero: a real ceiling of nothing, never to be confused with unbounded.
+        TreeCount = new TenantQuotaDimensionUsage
+        {
+            Usage = 3,
+            Limit = 0,
+            BurstLimit = 0,
+            Overage = 3,
+        },
+
+        // Unmeasured: a ceiling with no usage figure behind it.
+        OpsPerSecond = new TenantQuotaDimensionUsage { Limit = 250, BurstLimit = 290 },
+        BurstPercent = 20,
+        Quotas = new TenantQuotasDescriptor { MaxBytes = 10_000, MaxKeys = 500, BurstPercent = 20 },
+    };
+
+    public Task<TenantQuotaUsageReport> GetQuotaUsageAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        LastTenantId = tenantId;
+        return Throw is not null
+            ? Task.FromException<TenantQuotaUsageReport>(Throw)
+            : Task.FromResult(Report with { TenantId = tenantId });
+    }
+}
+
+/// <summary>
 /// In-memory <see cref="CallInvoker"/> that closes the loop between the
 /// <see cref="LatticeTenantAdminApiGrpcClient"/> and the
 /// <see cref="LatticeTenantAdminGrpcService"/> without a network or a host. Every
@@ -268,6 +334,7 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "AuthorizeAllowedRegions" => await service.AuthorizeAllowedRegions((TenantAdminRegionSetRequest)(object)wireRequest, context),
             "SetTenantResidency" => await service.SetTenantResidency((TenantAdminRegionSetRequest)(object)wireRequest, context),
             "GetTenantRegionStatus" => await service.GetTenantRegionStatus((TenantAdminTenantRequest)(object)wireRequest, context),
+            "GetTenantQuotaUsage" => await service.GetTenantQuotaUsage((TenantAdminTenantRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };
 

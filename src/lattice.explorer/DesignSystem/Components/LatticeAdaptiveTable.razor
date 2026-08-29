@@ -1,0 +1,206 @@
+@typeparam TItem
+
+@*
+    The adaptive data primitive: one column declaration, two presentations.
+
+    At medium and expanded it renders a real <table>, which is what a wide
+    technical surface wants - aligned columns, a scannable header row, and
+    correct table semantics for assistive technology.
+
+    At compact it reflows to a card list, so a data surface stops scrolling
+    sideways off a phone screen. Each row becomes a list item: the primary
+    column is the card's title and every other column that opted in becomes a
+    labelled field.
+
+    The presentation is chosen from the cascaded breakpoint by name, never from
+    a measurement or a media query (epic decision D7). Column visibility on a
+    card is a property of the column (ShowOnCompact), so a plugin declares the
+    reflow behaviour once alongside the column rather than in a stylesheet.
+*@
+
+@if (_columns.Count == 0 || _items.Count == 0)
+{
+    <div class="lx-datalist lx-datalist-empty"
+         data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
+        @if (EmptyContent is not null)
+        {
+            @EmptyContent
+        }
+        else
+        {
+            <p class="lx-datalist-empty-text">@EmptyText</p>
+        }
+    </div>
+}
+else if (_breakpoint == LatticeBreakpoint.Compact)
+{
+    <ul class="lx-cardlist @Class" data-lx-breakpoint="compact" aria-label="@Label">
+        @for (var r = 0; r < _items.Count; r++)
+        {
+            var item = _items[r];
+            <li class="lx-card" @key="RowKey(item)">
+                @if (_primaryColumnIndex >= 0)
+                {
+                    <div class="lx-card-title">@_columns[_primaryColumnIndex].Cell(item)</div>
+                }
+                <div class="lx-card-fields">
+                    @for (var c = 0; c < _columns.Count; c++)
+                    {
+                        var column = _columns[c];
+                        if (c == _primaryColumnIndex || !column.ShowOnCompact)
+                        {
+                            continue;
+                        }
+
+                        <div class="lx-card-field">
+                            <span class="lx-card-field-label">@column.Header</span>
+                            <span class="@(column.IsNumericOrCode ? CodeValueClass : ValueClass)">@column.Cell(item)</span>
+                        </div>
+                    }
+                </div>
+            </li>
+        }
+    </ul>
+}
+else
+{
+    <table class="lx-table @Class" data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
+        <caption class="@(ShowCaption ? "lx-table-caption" : "lx-visually-hidden")">@Label</caption>
+        <thead>
+            <tr>
+                @for (var c = 0; c < _columns.Count; c++)
+                {
+                    <th scope="col">@_columns[c].Header</th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @for (var r = 0; r < _items.Count; r++)
+            {
+                var item = _items[r];
+                <tr @key="RowKey(item)">
+                    @for (var c = 0; c < _columns.Count; c++)
+                    {
+                        var column = _columns[c];
+                        if (c == _primaryColumnIndex)
+                        {
+                            <th scope="row" class="@(column.IsNumericOrCode ? CodeValueClass : ValueClass)">@column.Cell(item)</th>
+                        }
+                        else
+                        {
+                            <td class="@(column.IsNumericOrCode ? CodeValueClass : ValueClass)">@column.Cell(item)</td>
+                        }
+                    }
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private const string ValueClass = "lx-cell";
+    private const string CodeValueClass = "lx-cell lx-cell-code";
+
+    private static readonly IReadOnlyList<TItem> NoItems = Array.Empty<TItem>();
+    private static readonly IReadOnlyList<LatticeTableColumn<TItem>> NoColumns =
+        Array.Empty<LatticeTableColumn<TItem>>();
+
+    private IReadOnlyList<TItem> _items = NoItems;
+    private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
+    private IReadOnlyList<LatticeTableColumn<TItem>> _columns = NoColumns;
+    private int _primaryColumnIndex = -1;
+
+    /// <summary>The rows to render, in display order.</summary>
+    [Parameter] public IReadOnlyList<TItem>? Items { get; set; }
+
+    /// <summary>
+    /// The columns to project each row through. The same declaration drives both
+    /// the table and the card presentation.
+    /// </summary>
+    [Parameter] public IReadOnlyList<LatticeTableColumn<TItem>>? Columns { get; set; }
+
+    /// <summary>
+    /// The surface's accessible name: the table's caption and the card list's
+    /// label. Defaults to <c>Data</c>.
+    /// </summary>
+    [Parameter] public string Label { get; set; } = "Data";
+
+    /// <summary>
+    /// Whether the table's caption is visible. When false the caption is still
+    /// rendered for assistive technology, just not shown - so a surface that
+    /// already has a heading above it does not repeat itself.
+    /// </summary>
+    [Parameter] public bool ShowCaption { get; set; }
+
+    /// <summary>
+    /// Pins the breakpoint this surface renders for, overriding the cascaded
+    /// shell context. Leave <see langword="null"/> - the intended path - to
+    /// follow <see cref="LatticeAdaptiveRoot"/>; set it when a surface knows it
+    /// is narrower than the window (a split pane), or to fix the presentation in
+    /// a preview or a component test.
+    /// </summary>
+    [Parameter] public LatticeBreakpoint? Breakpoint { get; set; }
+
+    /// <summary>
+    /// The ambient shell context cascaded by <see cref="LatticeAdaptiveRoot"/>.
+    /// Absent when the primitive is rendered standalone, in which case the
+    /// default breakpoint applies.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
+
+    /// <summary>
+    /// Projects a row to its stable diffing key. Defaults to the row itself,
+    /// which is correct whenever <typeparamref name="TItem"/> has value
+    /// equality or the same instances are reused between renders; supply an
+    /// identity projection when neither holds.
+    /// </summary>
+    /// <remarks>
+    /// The key is typed <see cref="object"/> because Blazor's <c>@key</c> is,
+    /// so a value-typed key boxes once per row per render. Supply a reference
+    /// key (a row's <see cref="string"/> id, for example) on a surface that
+    /// renders many rows often.
+    /// </remarks>
+    [Parameter] public Func<TItem, object>? KeySelector { get; set; }
+
+    /// <summary>
+    /// Content rendered instead of the surface when there are no rows or no
+    /// columns. Falls back to <see cref="EmptyText"/>.
+    /// </summary>
+    [Parameter] public RenderFragment? EmptyContent { get; set; }
+
+    /// <summary>
+    /// The message rendered when there are no rows and no
+    /// <see cref="EmptyContent"/> was supplied.
+    /// </summary>
+    [Parameter] public string EmptyText { get; set; } = "Nothing to show.";
+
+    /// <summary>Additional CSS classes appended to the table or card list.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        _items = Items ?? NoItems;
+        _columns = Columns ?? NoColumns;
+        _breakpoint = Breakpoint ?? AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default;
+        _primaryColumnIndex = IndexOfPrimaryColumn();
+    }
+
+    // The first column that claims to be primary wins, so a caller that marks
+    // several gets a deterministic result instead of an exception on a render
+    // path.
+    private int IndexOfPrimaryColumn()
+    {
+        for (var i = 0; i < _columns.Count; i++)
+        {
+            if (_columns[i].IsPrimary)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private object RowKey(TItem item) => KeySelector is null ? item! : KeySelector(item);
+}

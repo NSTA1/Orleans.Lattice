@@ -20,8 +20,11 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// configured group, wires the per-group endpoint source, and - via the discovery
 /// core - that <c>lattice_capabilities</c> reports the configured per-group
 /// endpoints while two callers with different grants still observe different tool
-/// sets over the remote adapters. Deterministic - prebuilt fake call invokers,
-/// no network.
+/// sets over the remote adapters. Also covers the telemetry group's routable
+/// per-region endpoint: the capability descriptor reports it, a region-targeted
+/// telemetry call routes to a peer that serves it, a peer that does not is rejected
+/// fail-closed, and the co-hosted telemetry tool module remains a valid deployment.
+/// Deterministic - prebuilt fake call invokers, no network.
 /// </summary>
 [TestFixture]
 public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
@@ -292,7 +295,26 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void Current_region_advertises_telemetry_when_the_tool_group_is_registered()
+    public void Endpoint_source_reports_the_configured_telemetry_endpoint()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
+            })
+            .BuildServiceProvider();
+
+        var source = provider.GetRequiredService<ILatticeApiMcpGroupEndpointSource>();
+
+        Assert.That(
+            source.EndpointFor(LatticeApiMcpGroup.Telemetry),
+            Is.EqualTo("https://telemetry:5008"),
+            "Telemetry is a routable per-region facade and must report its endpoint like every sibling group.");
+    }
+
+    [Test]
+    public void Endpoint_source_reports_no_telemetry_endpoint_when_it_is_served_co_hosted()
     {
         using var provider = new ServiceCollection()
             .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
@@ -300,19 +322,78 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
                 new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"))
             .BuildServiceProvider();
 
+        var source = provider.GetRequiredService<ILatticeApiMcpGroupEndpointSource>();
+
+        Assert.That(source.EndpointFor(LatticeApiMcpGroup.Telemetry), Is.Null);
+    }
+
+    [Test]
+    public void Current_region_advertises_the_configured_telemetry_endpoint()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
+            })
+            .BuildServiceProvider();
+
         var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
-        var current = router.Snapshot().Single(r => r.IsCurrent);
-        var telemetry = current.Groups.Single(g => g.Group == "telemetry");
+        var telemetry = router.Snapshot().Single(r => r.IsCurrent).Groups.Single(g => g.Group == "telemetry");
 
         Assert.Multiple(() =>
         {
             Assert.That(telemetry.Available, Is.True);
-            Assert.That(telemetry.Endpoint, Is.Null, "Telemetry is a head-local proxy with no per-region endpoint.");
+            Assert.That(telemetry.Endpoint, Is.EqualTo("https://telemetry:5008"));
         });
     }
 
     [Test]
-    public void Current_region_omits_telemetry_when_no_telemetry_tool_group_is_registered()
+    public void Current_region_advertises_telemetry_when_only_the_co_hosted_tool_module_is_registered()
+    {
+        // The co-located telemetry proxy remains a valid deployment: the group is
+        // still advertised, at the null (in-process) endpoint a co-hosted group
+        // reports, exactly as before this became routable.
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
+            .AddSingleton<ILatticeApiMcpToolGroup>(
+                new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"))
+            .BuildServiceProvider();
+
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+        var telemetry = router.Snapshot().Single(r => r.IsCurrent).Groups.Single(g => g.Group == "telemetry");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(telemetry.Available, Is.True);
+            Assert.That(telemetry.Endpoint, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Configured_telemetry_endpoint_wins_over_the_co_hosted_tool_module()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
+            })
+            .AddSingleton<ILatticeApiMcpToolGroup>(
+                new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"))
+            .BuildServiceProvider();
+
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+        var telemetry = router.Snapshot().Single(r => r.IsCurrent).Groups.Single(g => g.Group == "telemetry");
+
+        Assert.That(
+            telemetry.Endpoint,
+            Is.EqualTo("https://telemetry:5008"),
+            "A routable endpoint is what another process can reach, so it is the one advertised.");
+    }
+
+    [Test]
+    public void Current_region_omits_telemetry_when_neither_an_endpoint_nor_the_tool_module_is_present()
     {
         using var provider = new ServiceCollection()
             .AddLatticeMcpRemote(o => o.State = Endpoint("https://state:5001"))
@@ -325,12 +406,42 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
     }
 
     [Test]
-    public void Peer_region_never_advertises_telemetry_even_when_registered()
+    public void Peer_region_advertises_its_configured_telemetry_endpoint()
     {
         using var provider = new ServiceCollection()
             .AddLatticeMcpRemote(o =>
             {
                 o.State = Endpoint("https://state:5001");
+                o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+                {
+                    RegionId = "peer",
+                    State = Endpoint("https://peer-state:5001"),
+                    Telemetry = Endpoint("https://peer-telemetry:5008"),
+                });
+            })
+            .BuildServiceProvider();
+
+        var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
+        var telemetry = router.Snapshot().Single(r => !r.IsCurrent).Groups.Single(g => g.Group == "telemetry");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(telemetry.Available, Is.True);
+            Assert.That(telemetry.Endpoint, Is.EqualTo("https://peer-telemetry:5008"));
+        });
+    }
+
+    [Test]
+    public void Peer_region_without_a_telemetry_endpoint_omits_the_group_fail_closed()
+    {
+        // A peer that is reachable and credentialed for state but carries no
+        // telemetry route does not serve the group there, and this head's own
+        // co-hosted module must never be projected onto the peer.
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
                 o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
                 {
                     RegionId = "peer",
@@ -342,9 +453,153 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
             .BuildServiceProvider();
 
         var router = provider.GetRequiredService<ILatticeApiMcpRegionRouter>();
-        var peer = router.Snapshot().Single(r => !r.IsCurrent);
+        var telemetry = router.Snapshot().Single(r => !r.IsCurrent).Groups.Single(g => g.Group == "telemetry");
 
-        Assert.That(peer.Groups.Single(g => g.Group == "telemetry").Available, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(telemetry.Available, Is.False);
+            Assert.That(telemetry.Endpoint, Is.Null);
+        });
+    }
+
+    [Test]
+    public void Region_targeted_telemetry_routes_to_a_peer_that_serves_the_group()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.RegionId = "us";
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
+                o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+                {
+                    RegionId = "eu",
+                    State = Endpoint("https://eu-state:5001"),
+                    Telemetry = Endpoint("https://eu-telemetry:5008"),
+                });
+            })
+            .BuildServiceProvider();
+
+        var route = provider.GetRequiredService<ILatticeApiMcpRegionRouter>()
+            .Resolve("eu", LatticeApiMcpGroup.Telemetry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.IsRouted, Is.True);
+            Assert.That(route.IsDefault, Is.False);
+            Assert.That(route.ServedRegionId, Is.EqualTo("eu"));
+        });
+    }
+
+    [Test]
+    public void Region_targeted_telemetry_to_an_uncredentialed_peer_is_rejected_fail_closed()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.RegionId = "us";
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
+                o.Regions.Add(new LatticeApiMcpRemoteRegionOptions
+                {
+                    RegionId = "eu",
+                    State = Endpoint("https://eu-state:5001"),
+                });
+            })
+            .BuildServiceProvider();
+
+        var route = provider.GetRequiredService<ILatticeApiMcpRegionRouter>()
+            .Resolve("eu", LatticeApiMcpGroup.Telemetry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.IsRouted, Is.False);
+            Assert.That(route.Fault, Does.Contain("Region 'eu'"));
+            Assert.That(route.Fault, Does.Contain("telemetry"));
+        });
+    }
+
+    [Test]
+    public void Region_targeted_telemetry_to_an_unreachable_region_is_rejected_fail_closed()
+    {
+        using var provider = new ServiceCollection()
+            .AddLatticeMcpRemote(o =>
+            {
+                o.RegionId = "us";
+                o.State = Endpoint("https://state:5001");
+                o.Telemetry = Endpoint("https://telemetry:5008");
+            })
+            .BuildServiceProvider();
+
+        var route = provider.GetRequiredService<ILatticeApiMcpRegionRouter>()
+            .Resolve("mars", LatticeApiMcpGroup.Telemetry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.IsRouted, Is.False);
+            Assert.That(route.Fault, Does.Contain("Unknown region 'mars'"));
+        });
+    }
+
+    [Test]
+    public async Task Capabilities_report_the_configured_telemetry_endpoint()
+    {
+        var endpointSource = new LatticeApiMcpRemoteGroupEndpointSource(RemoteTestSupport.Options(o =>
+        {
+            o.State = Endpoint("https://state:5001");
+            o.Telemetry = Endpoint("https://telemetry:5008");
+        }));
+
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry),
+            endpointSource,
+            new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"));
+
+        var plan = await configurator.BuildSessionPlanAsync(HttpContext(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AvailableOf(plan.Capabilities, LatticeApiMcpGroup.Telemetry), Is.True);
+            Assert.That(
+                EndpointOf(plan.Capabilities, LatticeApiMcpGroup.Telemetry),
+                Is.EqualTo("https://telemetry:5008"));
+        });
+    }
+
+    [Test]
+    public async Task Discovery_tool_descriptions_carry_no_telemetry_no_endpoint_exception()
+    {
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Telemetry),
+            endpointSource: null,
+            unsupportedToolSource: null,
+            new FakeToolGroup(LatticeApiMcpGroup.Telemetry, "lattice_telemetry_query"));
+
+        var plan = await configurator.BuildSessionPlanAsync(HttpContext(), CancellationToken.None);
+        var capabilities = DescriptionOf(plan, "lattice_capabilities");
+        var regions = DescriptionOf(plan, "lattice_list_regions");
+
+        Assert.Multiple(() =>
+        {
+            // Guards against a vacuous pass: an absent or empty description would
+            // trivially satisfy every Does.Not.Contain below.
+            Assert.That(capabilities, Does.Contain("facade groups"));
+            Assert.That(regions, Does.Contain("route a tool call"));
+
+            foreach (var stale in StaleTelemetryEndpointClaims)
+            {
+                Assert.That(
+                    capabilities,
+                    Does.Not.Contain(stale).IgnoreCase,
+                    $"lattice_capabilities must not claim '{stale}': telemetry is routable per region.");
+                Assert.That(
+                    regions,
+                    Does.Not.Contain(stale).IgnoreCase,
+                    $"lattice_list_regions must not claim '{stale}': telemetry is routable per region.");
+            }
+        });
     }
 
     [Test]
@@ -593,6 +848,35 @@ public sealed class LatticeMcpRemoteServiceCollectionExtensionsTests
         }
 
         return names;
+    }
+
+    /// <summary>
+    /// The claims the pre-epic contract made about the Telemetry group having no
+    /// routable per-region endpoint. Telemetry is now routable per region like every
+    /// sibling facade, so none of these may reappear in a discovery tool's
+    /// description.
+    /// </summary>
+    private static readonly string[] StaleTelemetryEndpointClaims =
+    [
+        "head-local",
+        "no routable per-region endpoint",
+        "carries no per-region endpoint",
+        "intentionally reports no endpoint",
+        "not a per-region gRPC facade",
+    ];
+
+    private static string DescriptionOf(LatticeApiMcpSessionPlan plan, string toolName)
+    {
+        foreach (var tool in plan.Tools)
+        {
+            if (string.Equals(tool.ProtocolTool.Name, toolName, StringComparison.Ordinal))
+            {
+                return tool.ProtocolTool.Description ?? string.Empty;
+            }
+        }
+
+        Assert.Fail($"Tool '{toolName}' was not advertised.");
+        return string.Empty;
     }
 
     private sealed class StubBridge(LatticeCredential? credential) : ILatticeApiMcpCredentialBridge

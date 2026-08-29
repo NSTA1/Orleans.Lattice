@@ -31,6 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
     <ProjectReference Include="..\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\Plugins\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
     <ProjectReference Include="..\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
