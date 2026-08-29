@@ -998,9 +998,25 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private async Task<TreeReshardStatus> ReadReshardStatusAsync(
         string effectiveTreeId, string reportedTreeId, int? requestedShardCount)
     {
-        var complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .IsReshardCompleteAsync()
-            .ConfigureAwait(false);
+        // The facade has already made the authorization decision for this tree at
+        // its own boundary before any caller reaches here: a standalone status
+        // read authorizes TreeRead, and the trigger path authorizes
+        // TreeLifecycle. Projecting the status is an internal continuation of
+        // that already-authorized operation, so it enters a system-origin scope
+        // rather than re-authorizing at the grain's Read gate.
+        //
+        // This is load-bearing, not cosmetic. LatticeOperation grants are
+        // independent per-bit, so TreeLifecycle-without-Read is an expressible
+        // policy; without this scope such a subject would trigger the reshard
+        // successfully and only then be denied while projecting the result -
+        // throwing *after* the mutation had already been applied.
+        bool complete;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+                .IsReshardCompleteAsync()
+                .ConfigureAwait(false);
+        }
 
         var map = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
             .GetShardMapAsync(effectiveTreeId)
@@ -1838,9 +1854,17 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
         string? requestedDestinationTreeId,
         TreeSnapshotMode? requestedMode)
     {
-        var complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .IsSnapshotCompleteAsync()
-            .ConfigureAwait(false);
+        // Already authorized at the facade boundary (TreeRead for a standalone
+        // status read, TreeAdmin for the trigger path); see ReadReshardStatusAsync
+        // for why this internal continuation carries system origin instead of
+        // re-authorizing at the grain's Read gate.
+        bool complete;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+                .IsSnapshotCompleteAsync()
+                .ConfigureAwait(false);
+        }
 
         return new TreeSnapshotStatus
         {
@@ -1893,9 +1917,17 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
     private async Task<TreeResizeStatus> ReadResizeStatusAsync(
         string effectiveTreeId, string reportedTreeId, int? requestedMaxLeafKeys, int? requestedMaxInternalChildren)
     {
-        var complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .IsResizeCompleteAsync()
-            .ConfigureAwait(false);
+        // Already authorized at the facade boundary (TreeRead for a standalone
+        // status read, TreeLifecycle for the trigger and undo paths); see
+        // ReadReshardStatusAsync for why this internal continuation carries
+        // system origin instead of re-authorizing at the grain's Read gate.
+        bool complete;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            complete = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
+                .IsResizeCompleteAsync()
+                .ConfigureAwait(false);
+        }
 
         var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
             .GetEntryAsync(effectiveTreeId)

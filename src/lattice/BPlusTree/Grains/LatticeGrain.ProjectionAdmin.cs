@@ -83,6 +83,16 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // This call previously performed no gate call at all, unlike both of its
+        // siblings in this file (RebuildLeafProjectionAsync, CompactShardAsync),
+        // which enforce Admin. It fans out across every physical shard, so an
+        // ungated call discloses that the tree exists, reveals its shard
+        // topology through the fan-out, and forces shard-grain activation on
+        // behalf of an unauthorized caller. Read rather than Admin because the
+        // verb only observes lag and never mutates, matching the choice #1722
+        // made for the observe-only metadata verbs.
+        await EnforceWholeTreeAsync(LatticeOperation.Read, cancellationToken);
+
         var (physicalTreeId, shardMap) = await GetRoutingAsync();
         cancellationToken.ThrowIfCancellationRequested();
 

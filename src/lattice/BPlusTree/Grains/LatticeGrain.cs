@@ -1915,6 +1915,27 @@ internal sealed partial class LatticeGrain(
         ValidateWriteSize(key, value);
         EnforceAdmissionControl();
         await EnforcePointAsync(LatticeOperation.Write, key, cancellationToken);
+        // This verb discloses the stored value on the read-hit path (it returns
+        // the pre-existing bytes when the key was already present), so a Write
+        // grant alone is not sufficient authority to call it. LatticeOperation is
+        // a [Flags] enum whose per-bit grants are independent - a
+        // Write-without-Read rule is a first-class, expressible policy - so
+        // without this second check a subject explicitly denied Read could use
+        // GetOrSet as a read oracle to recover plaintext it may not see.
+        //
+        // Read is enforced unconditionally here rather than lazily on the
+        // read-hit path: deferring it until `existing` is known to be non-null
+        // would itself leak, turning the allow/deny outcome into a key-existence
+        // oracle for a Write-only subject (absent key -> success, present key ->
+        // denial). Enforcing up front makes the denial independent of content.
+        //
+        // This is deliberately a second, separate enforcement call rather than a
+        // combined `Write | Read` operation: rule matching is all-bits
+        // (CompiledTree.OperationMatches requires `(ruleOperations & requested)
+        // == requested`), so a combined request would demand a *single* rule
+        // carrying both bits and would wrongly deny a subject that legitimately
+        // holds Write and Read through two separate rules.
+        await EnforcePointAsync(LatticeOperation.Read, key, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
         {

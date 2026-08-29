@@ -114,4 +114,40 @@ public sealed class UnregisteredAccessGateZeroCostTests
             Assert.That(retention.Mode, Is.EqualTo(HistoryRetentionMode.MetadataOnly));
         });
     }
+
+    [Test]
+    public async Task With_no_auth_registered_the_lifecycle_and_projection_verbs_answer_unchanged()
+    {
+        // The lifecycle-status and projection verbs became gated in #1733, and
+        // GetOrSetAsync gained a second (Read) enforcement call. Under the default
+        // null gate all of them must still answer exactly as they did before, for
+        // an anonymous caller with no policy: every enforcement short-circuits on
+        // the null gate before the subject is ever resolved.
+        const string tree = "zerocost-lifecycle";
+        var lattice = Lattice(tree);
+
+        await lattice.SetAsync("a:1", Bytes("1"));
+
+        var merge = await lattice.IsMergeCompleteAsync();
+        var snapshot = await lattice.IsSnapshotCompleteAsync();
+        var resize = await lattice.IsResizeCompleteAsync();
+        var reshard = await lattice.IsReshardCompleteAsync();
+        var lag = await lattice.GetMaterialiserLagAsync();
+
+        // GetOrSet still round-trips both legs: insert returns null, and the
+        // read-hit path still discloses the stored value with no gate in the way.
+        var inserted = await lattice.GetOrSetAsync("a:2", Bytes("first"));
+        var hit = await lattice.GetOrSetAsync("a:2", Bytes("second"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(merge, Is.True);
+            Assert.That(snapshot, Is.True);
+            Assert.That(resize, Is.True);
+            Assert.That(reshard, Is.True);
+            Assert.That(lag, Is.GreaterThanOrEqualTo(0));
+            Assert.That(inserted, Is.Null);
+            Assert.That(Encoding.UTF8.GetString(hit!), Is.EqualTo("first"));
+        });
+    }
 }
