@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Abstractions</PackageId>
+    <!--
+      This package is pure contract, so its XML docs are the API. Generating the
+      documentation file turns "every public type and member carries a summary"
+      into a compiler-enforced fact (CS1591) rather than a review convention,
+      and ships the docs in the nupkg for consumers' IntelliSense.
+    -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>9.4.0</Version>
+    <Description>The Orleans.Lattice Explorer plugin contract: the plugin descriptor and surface discriminator, the four-state access model with its keyed, fault-isolated access store, the ambient host context a plugin may read, and the controlled domain-model seam through which a plugin declares the domain contract it operates against. Contains no UI and no cluster access; plugin packages implement these contracts and register through AddExplorerPlugin.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    This project deliberately carries NO ProjectReference. The plugin contract
+    must not be able to hand a plugin the cluster connection, the gRPC channel,
+    or another plugin's services, so it does not reference Explorer.Core (which
+    owns ILatticeStateConnection and the state-API gRPC client) at all. The
+    ambient facts a plugin may read - selection, connection status, tenant scope
+    - are re-declared here as narrow, UI-facing projections, and the shell
+    adapts the Core types onto them. That makes the rule structural rather than
+    a review convention: the assembly cannot leak what it cannot see.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>
