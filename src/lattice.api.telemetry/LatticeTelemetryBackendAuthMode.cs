@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// How the telemetry backend proxy authenticates itself to the read-only

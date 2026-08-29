@@ -1,12 +1,12 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// Decides whether a backend metric name may be read, given the configured
-/// <see cref="LatticeApiMcpTelemetryOptions.MetricAccess"/> posture and
-/// <see cref="LatticeApiMcpTelemetryOptions.AllowedMetrics"/> allow-list. The
+/// <see cref="LatticeTelemetryOptions.MetricAccess"/> posture and
+/// <see cref="LatticeTelemetryOptions.AllowedMetrics"/> allow-list. The
 /// telemetry tools consult it to filter listed metric names, gate a named
 /// metadata lookup, and reject a query that references a metric outside the
 /// allow-list.
@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// a walk over the precompiled patterns and never recompiles a pattern.
 /// </para>
 /// </remarks>
-internal sealed class TelemetryMetricAccessPolicy
+public sealed class TelemetryMetricAccessPolicy
 {
     private static readonly Regex[] NoPatterns = [];
 
@@ -41,7 +41,7 @@ internal sealed class TelemetryMetricAccessPolicy
     /// the allow-list into exact names and precompiled wildcard patterns.
     /// </summary>
     /// <param name="options">The telemetry options carrying the access posture and allow-list.</param>
-    public TelemetryMetricAccessPolicy(LatticeApiMcpTelemetryOptions options)
+    public TelemetryMetricAccessPolicy(LatticeTelemetryOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 

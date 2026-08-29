@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Api.Telemetry;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 
@@ -18,7 +19,7 @@ public static class LatticeAzureTelemetryTokenServiceCollectionExtensions
     /// <see cref="ITelemetryBackendTokenProvider"/> the telemetry proxy consults in
     /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/> mode. Call this
     /// alongside <c>AddTelemetryTools</c> (which must set
-    /// <see cref="LatticeApiMcpTelemetryOptions.AuthMode"/> to
+    /// <see cref="LatticeTelemetryOptions.AuthMode"/> to
     /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/>). Idempotent: a
     /// second call rebinds the options but registers exactly one provider, and a
     /// host that registered its own <see cref="ITelemetryBackendTokenProvider"/>

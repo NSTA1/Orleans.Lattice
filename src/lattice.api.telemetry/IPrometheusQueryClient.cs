@@ -1,14 +1,14 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
-/// The read-only backend seam the telemetry tool layer (added in Phase D) drives
-/// to answer metric queries. It covers the four operations the tools need:
+/// The read-only backend seam a telemetry binding drives to answer metric
+/// queries. It covers the four operations a binding needs:
 /// instant query, range query, metric-name listing, and metric metadata. Every
 /// implementation talks to the configured Prometheus / PromQL-compatible backend
 /// stamping the configured <b>backend</b> credential and never the caller's
 /// Lattice credential.
 /// </summary>
-internal interface IPrometheusQueryClient
+public interface IPrometheusQueryClient
 {
     /// <summary>
     /// Evaluates a PromQL expression at a single instant.

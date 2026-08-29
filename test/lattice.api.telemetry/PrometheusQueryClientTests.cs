@@ -1,7 +1,7 @@
 using System.Reflection;
 using Microsoft.Extensions.Options;
 
-namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
+namespace Orleans.Lattice.Api.Telemetry.Tests;
 
 /// <summary>
 /// Tests for <see cref="PrometheusQueryClient"/>: it targets the configured
@@ -16,7 +16,7 @@ public sealed class PrometheusQueryClientTests
     private const string BackendBase = "https://prometheus.internal:9090/";
 
     private static PrometheusQueryClient CreateClient(
-        LatticeApiMcpTelemetryOptions options,
+        LatticeTelemetryOptions options,
         out CapturingHttpMessageHandler handler,
         string responseJson = "{\"status\":\"success\",\"data\":{}}")
     {
@@ -28,7 +28,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task InstantQuery_targets_the_backend_query_endpoint()
     {
-        var client = CreateClient(new LatticeApiMcpTelemetryOptions(), out var handler);
+        var client = CreateClient(new LatticeTelemetryOptions(), out var handler);
 
         await client.InstantQueryAsync("up", time: null, CancellationToken.None);
 
@@ -39,7 +39,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task RangeQuery_targets_the_backend_range_endpoint_with_range_parameters()
     {
-        var client = CreateClient(new LatticeApiMcpTelemetryOptions(), out var handler);
+        var client = CreateClient(new LatticeTelemetryOptions(), out var handler);
         var start = DateTimeOffset.FromUnixTimeSeconds(1000);
         var end = DateTimeOffset.FromUnixTimeSeconds(2000);
 
@@ -58,7 +58,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task Bearer_mode_stamps_the_configured_backend_token()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             AuthMode = LatticeTelemetryBackendAuthMode.Bearer,
             Credential = new LatticeTelemetryBackendCredential { BearerToken = "backend-secret" },
@@ -78,7 +78,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task Basic_mode_stamps_the_configured_backend_basic_credential()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             AuthMode = LatticeTelemetryBackendAuthMode.Basic,
             Credential = new LatticeTelemetryBackendCredential
@@ -103,7 +103,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task None_mode_sends_no_authorization_header()
     {
-        var client = CreateClient(new LatticeApiMcpTelemetryOptions(), out var handler);
+        var client = CreateClient(new LatticeTelemetryOptions(), out var handler);
 
         await client.InstantQueryAsync("up", time: null, CancellationToken.None);
 
@@ -113,7 +113,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task Mutual_tls_mode_sends_no_authorization_header()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             AuthMode = LatticeTelemetryBackendAuthMode.MutualTls,
         };
@@ -128,7 +128,7 @@ public sealed class PrometheusQueryClientTests
     public async Task ListMetricNames_parses_the_backend_value_array()
     {
         var client = CreateClient(
-            new LatticeApiMcpTelemetryOptions(),
+            new LatticeTelemetryOptions(),
             out var handler,
             "{\"status\":\"success\",\"data\":[\"up\",\"lattice_wal_append_total\"]}");
 
@@ -145,7 +145,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task MetricMetadata_for_a_named_metric_targets_the_metadata_endpoint()
     {
-        var client = CreateClient(new LatticeApiMcpTelemetryOptions(), out var handler);
+        var client = CreateClient(new LatticeTelemetryOptions(), out var handler);
 
         var response = await client.MetricMetadataAsync("up", CancellationToken.None);
 
@@ -160,7 +160,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public void Null_query_is_rejected()
     {
-        var client = CreateClient(new LatticeApiMcpTelemetryOptions(), out _);
+        var client = CreateClient(new LatticeTelemetryOptions(), out _);
         Assert.ThrowsAsync<ArgumentNullException>(
             () => client.InstantQueryAsync(query: null!, time: null, CancellationToken.None));
     }
@@ -168,7 +168,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public async Task DynamicBearer_mode_stamps_a_bearer_token_from_the_provider()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer,
         };
@@ -191,7 +191,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public void DynamicBearer_mode_without_a_provider_fails_fast()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer,
         };
@@ -205,7 +205,7 @@ public sealed class PrometheusQueryClientTests
     [Test]
     public void DynamicBearer_mode_fails_closed_when_the_provider_returns_an_empty_token()
     {
-        var options = new LatticeApiMcpTelemetryOptions
+        var options = new LatticeTelemetryOptions
         {
             AuthMode = LatticeTelemetryBackendAuthMode.DynamicBearer,
         };
@@ -240,7 +240,7 @@ public sealed class PrometheusQueryClientTests
             Is.EqualTo(new[]
             {
                 typeof(HttpClient),
-                typeof(IOptions<LatticeApiMcpTelemetryOptions>),
+                typeof(IOptions<LatticeTelemetryOptions>),
                 typeof(ITelemetryBackendTokenProvider),
             }),
             "The backend client may take only its HTTP client, its own options, and the "

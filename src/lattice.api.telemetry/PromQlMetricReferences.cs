@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry;
+namespace Orleans.Lattice.Api.Telemetry;
 
 /// <summary>
 /// The metric references a conservative scan of a PromQL expression surfaced: the
@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// that selects a series by pattern or by exclusion could name an allow-listed
 /// series only by accident, so the gate fails closed rather than admit it.
 /// </remarks>
-internal readonly record struct PromQlMetricReferences
+public readonly record struct PromQlMetricReferences
 {
     /// <summary>
     /// The distinct metric names the expression references in metric-name position
