@@ -555,7 +555,7 @@ internal static class RepoContextToolHandlers
         RequestContext<CallToolRequestParams> context,
         [Description("The repository identifier whose stored index is compared.")]
         string repoId,
-        [Description("The workspace path to walk and compare against the stored index. Resolved through the mounted workspace boundary.")]
+        [Description("The repository root to compare, or a directory inside it to scope the report to that subtree. The walk is always rooted at the repository's indexed root and uses the filters it was ingested with, so the report compares the same path space the index was built in. Resolved through the mounted workspace boundary; a path outside the indexed repository root is refused.")]
         string path,
         CancellationToken cancellationToken = default)
     {
