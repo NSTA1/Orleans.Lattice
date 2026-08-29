@@ -26,7 +26,7 @@
 <div class="explorer-areastrip" role="tablist" aria-label="Application areas">
     <button type="button"
             role="tab"
-            class="explorer-area-tab @(_activePlugin is null ? "is-active" : null)"
+            class="@(_activePlugin is null ? ActiveTabClass : TabClass)"
             aria-selected="@(_activePlugin is null)"
             @onclick="_activateHome">
         @HomeLabel
@@ -44,7 +44,7 @@
         var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
         <button type="button"
                 role="tab"
-                class="explorer-area-tab @(isActive ? "is-active" : null)"
+                class="@(isActive ? ActiveTabClass : TabClass)"
                 aria-selected="@isActive"
                 disabled="@(!access.IsAllowed && !signInRequired)"
                 title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
@@ -68,10 +68,27 @@
 @code {
     private static readonly AreaTab[] NoTabs = [];
 
+    // The two class strings a tab can carry, composed once. Interpolating them
+    // per tab per render would allocate on every access change and every
+    // connection transition, and the strip re-renders on both.
+    private const string TabClass = "explorer-area-tab";
+    private const string ActiveTabClass = "explorer-area-tab is-active";
+
     private AreaTab[] _tabs = NoTabs;
     private IExplorerPlugin? _activePlugin;
     private EventCallback _activateHome;
+    private readonly Action _render;
+    private readonly Func<Task> _refresh;
     private ExplorerPluginConnectionState _lastConnectionState;
+
+    /// <summary>Creates the shell, caching the two delegates its subscriptions marshal.</summary>
+    public AppShell()
+    {
+        // Bound once rather than per notification, so a probe cycle that files
+        // several decisions does not allocate a delegate for each of them.
+        _render = StateHasChanged;
+        _refresh = RefreshAccessAsync;
+    }
 
     /// <summary>The home surface's content (the tree browser), rendered when no area plugin is active.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -155,20 +172,26 @@
 
     private void OnAccessChanged(ExplorerPluginAccessChange change)
     {
+        // The strip reads only plugin-level decisions, so a plugin's scoped
+        // sub-capability changing is not a reason to re-render the shell.
+        if (change.Key.Scope is not null)
+        {
+            return;
+        }
+
         // If the active plugin just stopped being allowed (for example after
         // sign-out), fall back to the always-available home surface.
         if (_activePlugin is not null
-            && string.Equals(change.Key.PluginId, _activePlugin.Descriptor.PluginId, StringComparison.Ordinal)
-            && change.Key.Scope is null
-            && !change.Access.IsAllowed)
+            && !change.Access.IsAllowed
+            && string.Equals(change.Key.PluginId, _activePlugin.Descriptor.PluginId, StringComparison.Ordinal))
         {
             _activePlugin = null;
         }
 
-        InvokeAsync(StateHasChanged);
+        InvokeAsync(_render);
     }
 
-    private void OnAuthenticationChanged() => _ = InvokeAsync(RefreshAccessAsync);
+    private void OnAuthenticationChanged() => _ = InvokeAsync(_refresh);
 
     private void OnHostChanged(ExplorerPluginHostChange change)
     {
@@ -189,7 +212,7 @@
         // endpoint is reachable.
         if (state == ExplorerPluginConnectionState.Connected && !wasConnected)
         {
-            _ = InvokeAsync(RefreshAccessAsync);
+            _ = InvokeAsync(_refresh);
         }
     }
 
