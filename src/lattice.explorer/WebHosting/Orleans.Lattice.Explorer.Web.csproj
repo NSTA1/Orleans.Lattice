@@ -40,7 +40,7 @@
       library no longer references, so a head that surfaces the Backups area
       takes the dependency itself. That is the whole of a head's opt-in.
     -->
-    <ProjectReference Include="..\Plugins\Backups\Orleans.Lattice.Explorer.Plugins.Backups.csproj" />
+    <ProjectReference Include="..\Plugins\Backups\Orleans.Lattice.Explorer.Backup.csproj" />
     <!--
       The Access plugin is likewise self-contained (services, Razor views, and
       its own stylesheet), so the shared UI library no longer references it and

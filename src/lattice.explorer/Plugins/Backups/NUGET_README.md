@@ -1,4 +1,4 @@
-# Orleans.Lattice.Explorer.Plugins.Backups
+# Orleans.Lattice.Explorer.Backup
 
 The **Backups plugin** for the
 [Orleans.Lattice Explorer](https://github.com/NSTA1/Orleans.Lattice): a
@@ -21,7 +21,7 @@ head and the shared UI library takes no dependency on it.
   connected cluster does not expose the backup control facade or the caller may
   not use it. The gate is advisory; the server stays the sole enforcement point.
 - A plugin-scoped stylesheet served at
-  `_content/Orleans.Lattice.Explorer.Plugins.Backups/lattice-backups.css`,
+  `_content/Orleans.Lattice.Explorer.Backup/lattice-backups.css`,
   written against the Explorer design-system tokens.
 
 ## Usage
@@ -39,7 +39,7 @@ services.AddExplorerBackupsPlugin();
 and link the plugin stylesheet from the head's document head:
 
 ```html
-<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Plugins.Backups/lattice-backups.css" />
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.Backup/lattice-backups.css" />
 ```
 
 See the
