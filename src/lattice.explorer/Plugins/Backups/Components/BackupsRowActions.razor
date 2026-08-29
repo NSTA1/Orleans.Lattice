@@ -1,0 +1,92 @@
+@*
+    The selected row's actions: where a restore lands, which point in time an
+    incremental chain restores to, how the restore installs, and the restore /
+    delete / schedule commands.
+
+    Like the capture form this is a wrapping label/control flow rather than a
+    layout table, so it stacks on a narrow viewport with no media query.
+*@
+
+<div class="lx-backups-actionpanel">
+    <h4 class="lx-backups-actionpanel-title">Actions</h4>
+
+    @if (!Row.IsSet)
+    {
+        var manifest = Row.Members[0];
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label" id="lx-backups-target-label">Target tree</span>
+            <div class="lx-backups-field-control">
+                <input type="text" class="lx-backups-text" value="@Owner.RestoreTargetFor(manifest)"
+                       aria-labelledby="lx-backups-target-label"
+                       @oninput="e => Owner.SetRestoreTarget(manifest.Id, e.Value?.ToString())"
+                       placeholder="target tree" />
+            </div>
+        </div>
+    }
+
+    @if (Row.IsIncrementalChain)
+    {
+        <div class="lx-backups-field">
+            <span class="lx-backups-field-label" id="lx-backups-point-label">Restore point</span>
+            <div class="lx-backups-field-control">
+                <select class="lx-backups-select" value="@Owner.SelectedRestorePoint(Row)"
+                        aria-labelledby="lx-backups-point-label"
+                        @onchange="OnRestorePointChanged" title="Restore point (point in time)">
+                    @foreach (var member in Owner.ChainMembersNewestFirst(Row))
+                    {
+                        <option value="@member.Id" @key="member.Id">@BackupsPanel.FormatCreated(member.CreatedAtUtc)</option>
+                    }
+                </select>
+            </div>
+        </div>
+    }
+
+    <div class="lx-backups-field">
+        <span class="lx-backups-field-label" id="lx-backups-mode-label">Restore mode</span>
+        <div class="lx-backups-field-control">
+            <select class="lx-backups-select" value="@Owner.RestoreMode"
+                    aria-labelledby="lx-backups-mode-label"
+                    @onchange="OnRestoreModeChanged" title="Restore mode">
+                <option value="@LatticeRestoreMode.InPlace">Repair missing items (non-destructive)</option>
+                <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="lx-backups-field">
+        <span class="lx-backups-field-label"></span>
+        <div class="lx-backups-field-control">
+            <button type="button" class="explorer-btn"
+                    disabled="@(Owner.Busy || (!Row.IsSet && string.IsNullOrWhiteSpace(Owner.RestoreTargetFor(Row.Members[0]))))"
+                    @onclick="Restore">Restore</button>
+            <button type="button" class="explorer-btn explorer-btn-danger"
+                    disabled="@Owner.Busy"
+                    @onclick="Delete">Delete</button>
+            @if (!Row.IsSet)
+            {
+                <button type="button" class="explorer-btn"
+                        disabled="@Owner.Busy"
+                        @onclick="OpenScheduleAsync"
+                        title="Edit or remove this scope's recurring backup schedule">Schedule</button>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>The Backups panel this action panel reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    /// <summary>The selected display row the actions apply to.</summary>
+    [Parameter, EditorRequired] public BackupRow Row { get; set; } = default!;
+
+    private void OnRestorePointChanged(ChangeEventArgs e) => Owner.SetRestorePoint(Row, e.Value?.ToString());
+
+    private void OnRestoreModeChanged(ChangeEventArgs e) => Owner.SetRestoreMode(e.Value?.ToString());
+
+    private void Restore() => Owner.RequestRestore(Row);
+
+    private void Delete() => Owner.RequestDelete(Row);
+
+    private Task OpenScheduleAsync() => Owner.OpenScheduleAsync(Row);
+}

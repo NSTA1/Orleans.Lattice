@@ -1,0 +1,47 @@
+@*
+    The delete confirmation. Spells out exactly how much a delete removes: a
+    chain row takes its whole incremental chain and a set row takes every
+    member, so the prompt never understates the blast radius.
+*@
+
+@if (Owner.PendingDelete is { } pending)
+{
+    <div class="explorer-modal-backdrop" role="presentation">
+        <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-delete-title">
+            <h3 id="explorer-delete-title">Delete backup?</h3>
+            @if (pending.IsIncrementalChain)
+            {
+                <p>
+                    This permanently deletes all @Owner.ChainMemberCount(pending) backups in the incremental
+                    chain <code>@BackupsPanel.Shorten(pending.DisplayId)</code>
+                    ('@pending.Name') - the base full backup and every increment.
+                    <strong>This action cannot be undone.</strong>
+                </p>
+            }
+            else if (pending.IsSet)
+            {
+                <p>
+                    This permanently deletes all @pending.Members.Count member backups
+                    of set <code>@BackupsPanel.Shorten(pending.DisplayId)</code>
+                    ('@pending.Name'). <strong>This action cannot be undone.</strong>
+                </p>
+            }
+            else
+            {
+                <p>
+                    This permanently deletes backup <code>@BackupsPanel.Shorten(pending.DisplayId)</code>
+                    ('@pending.Name'). <strong>This action cannot be undone.</strong>
+                </p>
+            }
+            <div class="explorer-modal-actions">
+                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CancelDelete">Cancel</button>
+                <button type="button" class="explorer-btn explorer-btn-danger" disabled="@Owner.Busy" @onclick="Owner.ConfirmDeleteAsync">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>The Backups panel this dialog reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+}

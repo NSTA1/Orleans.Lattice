@@ -40,7 +40,7 @@
   <Project Path="src/lattice.explorer/DesignSystem/Orleans.Lattice.Explorer.DesignSystem.csproj" />
   <Project Path="src/lattice.explorer/Core/Orleans.Lattice.Explorer.Core.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Abstractions/Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
-  <Project Path="src/lattice.explorer/Backup/Orleans.Lattice.Explorer.Backup.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Backups/Orleans.Lattice.Explorer.Plugins.Backups.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="src/lattice.explorer/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />

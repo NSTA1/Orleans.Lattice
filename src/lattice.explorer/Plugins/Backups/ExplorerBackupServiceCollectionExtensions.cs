@@ -5,9 +5,9 @@ using Orleans.Lattice.Explorer.Plugins;
 namespace Orleans.Lattice.Explorer.Backup;
 
 /// <summary>
-/// Registration helpers for the explorer's Backups area: the backup control
-/// client, the catalog reader, and the plugin access gate, plus the keyed
-/// plugin access store the gate publishes into.
+/// Registration helpers for the explorer's Backups plugin: the backup control
+/// client, the catalogue reader, the controlled domain model, and the plugin
+/// access gate, plus the keyed plugin access store the gate publishes into.
 /// </summary>
 public static class ExplorerBackupServiceCollectionExtensions
 {
@@ -33,6 +33,32 @@ public static class ExplorerBackupServiceCollectionExtensions
         services.TryAddScoped<IBackupControlClient, GrpcBackupControlClient>();
         services.TryAddScoped<IBackupCatalogReader, BackupCatalogReader>();
         services.TryAddScoped<IBackupCapabilityService, BackupCapabilityService>();
+
+        // The controlled domain model the plugin declares. Registered here rather
+        // than by the head, so the one contract the host may resolve for Backups
+        // ships with the package that defines it.
+        services.TryAddScoped<IBackupsDomain, BackupsDomain>();
         return services;
     }
+
+    /// <summary>
+    /// Registers the Backups area plugin, so the shell enumerates it from the
+    /// container and renders its panel. Call <see cref="AddExplorerBackup"/> as
+    /// well: that registers the control client, the domain model, and the access
+    /// gate this plugin resolves. A head that calls neither ships no Backups
+    /// area at all, which is the whole of the opt-out.
+    /// <para>
+    /// The head is also responsible for registering the two host-side plugin
+    /// adapters (<c>AddExplorerPluginAdapters</c>), which live on the shell's
+    /// side of the seam and are shared by every plugin.
+    /// </para>
+    /// </summary>
+    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
+    public static IServiceCollection AddExplorerBackupsPlugin(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return services.AddExplorerPlugin<BackupsAreaPlugin>();
+    }
 }
+
