@@ -101,6 +101,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.reshard.in_flight` | histogram (`{reshard}`) | `tree` | CommitPath | Reshard runs in flight |
 | `orleans.lattice.materialiser.pin.durable_writes` | counter | `tree`, `outcome` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.leaf.activation_replays` | counter | `tree` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
+| `orleans.lattice.leaf.activation_replays_over_budget` | counter | `tree` | CommitPath | Over-budget cold replay against an intact WAL (issue #1738) |
 | `orleans.lattice.leaf.activation_cursor_publish_failures` | counter | `tree` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.materialiser.drain_lag` | histogram (ms) | `tree` | CommitPath | Leaf-materialiser drain lag p50/p95 (issue #1030 back-pressure) |
 | `orleans.lattice.snapshot.replay.entries` | counter | `tree` | Overview | Snapshot replay throughput |

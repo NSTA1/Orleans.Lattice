@@ -54,11 +54,12 @@ On every leaf activation, the materialiser runs three steps in
 order:
 
 1. **Classify the persisted checkpoint.** The fall-off-log detector
-   reads `ProjectionCheckpointOffset` and the WAL tail; if either a
-   hard trigger fires (WAL trimmed past checkpoint, replay budget
-   exceeded, cold past retention) or the `LeafSnapshotMargin`
-   advisory fires, the detector returns the matching
-   `FallOffLogDecision`.
+   reads `ProjectionCheckpointOffset` and the WAL tail and returns
+   the matching `FallOffLogDecision`. Only a WAL trimmed past the
+   checkpoint (genuine loss) is fatal; a replay-budget or retention
+   overrun against an intact WAL returns the non-fatal
+   `TailReplayOverBudget`, and the `LeafSnapshotMargin` proximity
+   check returns the `SnapshotPending` advisory.
 2. **Prefer a snapshot when newer than the checkpoint.** If
    `LeafSnapshotStorageGrain` carries a blob whose `SnapshotOffset`
    strictly exceeds the persisted `ProjectionCheckpointOffset`, the

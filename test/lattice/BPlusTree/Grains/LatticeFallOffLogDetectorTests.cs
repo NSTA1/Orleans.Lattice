@@ -310,9 +310,10 @@ public sealed class LatticeFallOffLogDetectorTests
     [Test]
     public async Task ClassifyAsync_hard_trigger_silences_SnapshotPending()
     {
-        // Replay-budget trigger fires (gap exceeds budget). Even though
-        // the proximity would otherwise qualify, the hard trigger wins
-        // and the configured rebuild policy is returned.
+        // Replay-budget trigger fires (gap exceeds budget) while the WAL is
+        // intact. The proximity advisory is silenced, but the decision is the
+        // non-fatal over-budget replay - NOT the rebuild policy, which is
+        // reserved for genuine loss (#1738).
         var (detector, _) = CreateDetector(head: 1000, tail: 0);
         var options = await BuildOptionsAsync(new LatticeOptions
         {
@@ -327,8 +328,143 @@ public sealed class LatticeFallOffLogDetectorTests
             options,
             CancellationToken.None);
 
-        // Gap = 800 > budget 100, so the hard trigger wins.
-        Assert.That(decision, Is.EqualTo(FallOffLogDecision.SnapshotThenWal));
+        // Gap = 800 > budget 100, but tail(0) has not passed checkpoint+1(201),
+        // so every offset the leaf needs is still readable.
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplayOverBudget));
+    }
+
+    // ---------------------------------------------------------------------
+    // Issue #1738: a cost trigger must never be fatal while the WAL is intact.
+    // ---------------------------------------------------------------------
+
+    [Test]
+    public async Task ClassifyAsync_budget_overrun_with_intact_WAL_is_not_fatal()
+    {
+        // The exact production shape from #1738: repo-context-vector-membership
+        // partition 0 had tail=13031, checkpoint=17288, head=27936. The gap
+        // (10,648) exceeded the 10,000 default budget by 648 entries, but the
+        // WAL still held every offset in (17288, 27936]. The old code mapped
+        // this onto ProjectionRebuildPolicy and threw, bricking a tree whose
+        // data was completely intact.
+        var (detector, _) = CreateDetector(head: 27936, tail: 13031);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            MaxLeafReplayEntries = 10_000,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 17288,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplayOverBudget));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_budget_overrun_is_not_fatal_under_any_rebuild_policy()
+    {
+        // The rebuild policy governs genuine loss only. Whichever policy is
+        // configured - including the operator-gated Fail - a budget overrun
+        // against an intact WAL must stay a replay.
+        foreach (var policy in new[]
+        {
+            ProjectionRebuildPolicy.SnapshotThenWal,
+            ProjectionRebuildPolicy.FullRebuildFromWal,
+            ProjectionRebuildPolicy.Fail,
+        })
+        {
+            var (detector, _) = CreateDetector(head: 50_000, tail: 0);
+            var options = await BuildOptionsAsync(new LatticeOptions
+            {
+                MaxLeafReplayEntries = 10,
+                ProjectionRebuildPolicy = policy,
+            });
+
+            var decision = await detector.ClassifyAsync(
+                TreeId, ShardIndex,
+                checkpointOffset: 100,
+                checkpointAge: TimeSpan.Zero,
+                options,
+                CancellationToken.None);
+
+            Assert.That(
+                decision,
+                Is.EqualTo(FallOffLogDecision.TailReplayOverBudget),
+                $"policy {policy} must not make a budget overrun fatal");
+        }
+    }
+
+    [Test]
+    public async Task ClassifyAsync_age_overrun_with_intact_WAL_is_not_fatal()
+    {
+        // An old checkpoint does not imply a trimmed WAL. With the log intact
+        // the replay converges, so the age trigger degrades to the same
+        // non-fatal over-budget replay rather than the rebuild policy.
+        var (detector, _) = CreateDetector(head: 1000, tail: 0);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            LeafProjectionRetention = TimeSpan.FromDays(7),
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.Fail,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 500,
+            checkpointAge: TimeSpan.FromDays(30),
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplayOverBudget));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_genuine_loss_still_fails_closed_even_when_budget_also_exceeded()
+    {
+        // The critical non-regression: relaxing the cost triggers must not
+        // weaken the loss guard. Here the WAL HAS been trimmed past the
+        // checkpoint (tail 5000 > checkpoint+1 1001), so the leaf would
+        // silently rebuild over a lost prefix if this returned a replay.
+        // It must still route to the configured rebuild policy.
+        var (detector, _) = CreateDetector(head: 50_000, tail: 5_000);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            MaxLeafReplayEntries = 10,
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.Fail,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 1_000,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.Fail));
+    }
+
+    [Test]
+    public async Task ClassifyAsync_trim_of_only_the_applied_checkpoint_entry_stays_a_replay()
+    {
+        // The tail == checkpoint + 1 boundary: only the already-applied entry
+        // AT the checkpoint was trimmed, so the entire needed window
+        // (checkpoint, head] survives. This is the legitimate coverage-gated
+        // WAL GC steady state (#919) and must replay cleanly, not throw.
+        var (detector, _) = CreateDetector(head: 2_000, tail: 1_001);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.Fail,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 1_000,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
     }
 
     [Test]

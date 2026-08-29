@@ -539,15 +539,50 @@ internal sealed partial class BPlusLeafGrain
                     case FallOffLogDecision.SnapshotPending:
                         _activationSnapshotPending = true;
                         break;
+                    case FallOffLogDecision.TailReplayOverBudget:
+                        // A cost trigger fired (replay gap over
+                        // MaxLeafReplayEntries, or projection age over
+                        // LeafProjectionRetention) but the WAL still covers
+                        // every offset this leaf needs, so the replay below
+                        // converges to exactly the same projection. Warn and
+                        // meter, then replay: a long activation is
+                        // recoverable, refusing to activate is not (#1738).
+                        LatticeMetrics.LeafActivationOverBudgetReplays.Add(
+                            1,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId));
+
+                        // Gate on IsEnabled: the templated call would otherwise
+                        // allocate a params object[] and box partition,
+                        // checkpoint, and the budget on every over-budget
+                        // activation even when warnings are filtered out.
+                        var overBudgetLogger = ResolveLogger();
+                        if (overBudgetLogger is not null
+                            && overBudgetLogger.IsEnabled(LogLevel.Warning))
+                        {
+                            overBudgetLogger.LogWarning(
+                                "Leaf projection for tree '{TreeId}' partition {Partition} is replaying beyond "
+                                + "the configured budget (persistedCheckpoint {Checkpoint}, "
+                                + "MaxLeafReplayEntries {Budget}). The write-ahead log still covers the whole "
+                                + "needed window, so the replay converges - it is only longer than the budget "
+                                + "anticipated. Activation may take longer than usual.",
+                                treeId,
+                                partition,
+                                checkpoint,
+                                resolvedOptions.MaxLeafReplayEntries);
+                        }
+
+                        break;
                     case FallOffLogDecision.SnapshotThenWal:
                     case FallOffLogDecision.FullRebuildFromWal:
                     case FallOffLogDecision.Fail:
                     default:
                         throw new LeafProjectionStaleException(
                             $"Leaf projection for tree '{treeId}' partition {partition} cannot be recovered " +
-                            $"from the WAL alone (decision={decision}, persistedCheckpoint={checkpoint}). " +
-                            "Snapshot-then-WAL and full-rebuild recovery paths are not yet integrated; " +
-                            "operator-driven rebuild is required.");
+                            $"from the WAL alone (decision={decision}, persistedCheckpoint={checkpoint}): the " +
+                            "write-ahead log has been trimmed past an offset this leaf still needs and no " +
+                            "covering snapshot is available, so replaying the surviving suffix would rebuild " +
+                            "the leaf over the lost prefix. Snapshot-then-WAL and full-rebuild recovery paths " +
+                            "are not yet integrated; operator-driven rebuild is required.");
                 }
             }
 
