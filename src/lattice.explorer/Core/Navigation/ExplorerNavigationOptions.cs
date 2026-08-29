@@ -19,4 +19,18 @@ public sealed class ExplorerNavigationOptions
     /// re-surface tracking issue).
     /// </summary>
     public bool EnableSchemaArea { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), the navigation panel offers the
+    /// connection-settings affordance that edits the head's endpoint configuration.
+    /// When <see langword="false"/>, the affordance is withheld because the head's
+    /// configuration store does not accept browser writes.
+    /// </summary>
+    /// <remarks>
+    /// This is presentation only: withholding a rendered control does not make the
+    /// operation unreachable, since a component's event handlers remain invokable
+    /// over the circuit. The enforcing check lives at the configuration store, and
+    /// this flag exists so a head that refuses the write does not advertise it.
+    /// </remarks>
+    public bool AllowEndpointConfiguration { get; set; } = true;
 }

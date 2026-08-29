@@ -288,6 +288,13 @@ builder.Services.AddLatticeExplorerWeb(o =>
 {
     o.ConfigFilePath = sampleConfigPath;
 
+    // Opt in to the environment credential seed. It is withheld by default
+    // because a web head's credential store is per browser, so a seeded
+    // credential signs every anonymous visitor in as the operator. This sample
+    // is a single-operator loopback demo whose whole point is the zero-login
+    // walkthrough, so the opt-in is appropriate here and nowhere else.
+    o.AllowEnvironmentCredentialSeed = true;
+
     // The Schema area is withheld from the Explorer's default UI for the initial
     // release, so this sample hides it too - matching the shipped experience. A
     // developer working on the area can bring it back for a run by setting

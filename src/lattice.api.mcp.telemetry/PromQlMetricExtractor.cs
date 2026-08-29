@@ -31,6 +31,13 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// deny-all gate fails closed. This closes the allow-list bypass where a caller
 /// named a denied series only through <c>__name__</c>.
 /// </para>
+/// <para>
+/// A <c>#</c> comment runs to the end of the line and is discarded exactly as
+/// Prometheus's own lexer discards it, before any string or brace state is
+/// entered. A quote inside a comment therefore opens no string literal, so a
+/// comment can never be used to hide an uncommented metric selector on a later
+/// line from the deny-all gate.
+/// </para>
 /// </remarks>
 internal static class PromQlMetricExtractor
 {
@@ -88,6 +95,23 @@ internal static class PromQlMetricExtractor
         while (i < length)
         {
             var c = query[i];
+
+            if (c == '#')
+            {
+                // A PromQL comment runs to the end of the line. It must be skipped
+                // before the quote arm below, because Prometheus strips comments
+                // before parsing: an unbalanced quote inside a comment opens no
+                // string literal there. Treating it as one would let the scanner
+                // swallow the real, uncommented expression on the following lines
+                // (`up or #"` then `secret_metric #"`), hiding a denied metric name
+                // from the deny-all gate while the backend still evaluates it.
+                // Prometheus's lexer discards a comment as it does whitespace, so
+                // like the whitespace arm below this leaves metricNamePrecedes
+                // intact: `up #c` then `{job="api"}` selects the metric up, and its
+                // anchor name was itself allow-list checked when it was added.
+                i = SkipLineComment(query, i);
+                continue;
+            }
 
             if (c == '"' || c == '\'' || c == '`')
             {
@@ -308,6 +332,22 @@ internal static class PromQlMetricExtractor
         {
             (names ??= []).Add(name);
         }
+    }
+
+    /// <summary>
+    /// Skips a PromQL <c>#</c> comment, which runs to the end of the line. Returns
+    /// the index of the line terminator (so the main loop's whitespace arm consumes
+    /// it) or the end of the expression when the comment is unterminated.
+    /// </summary>
+    private static int SkipLineComment(string text, int hashIndex)
+    {
+        var i = hashIndex + 1;
+        while (i < text.Length && text[i] != '\n' && text[i] != '\r')
+        {
+            i++;
+        }
+
+        return i;
     }
 
     private static int SkipString(string text, int openIndex)

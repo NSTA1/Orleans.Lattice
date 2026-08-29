@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Explorer.Tests.Authentication;
 [TestFixture]
 public class ExplorerAuthCircuitIsolationTests
 {
-    private static ServiceProvider BuildProvider()
+    private static ServiceProvider BuildProvider(IExplorerCredentialSeed? credentialSeed = null)
     {
         var services = new ServiceCollection();
         // A path that does not exist, so the config store loads no endpoint and
@@ -29,6 +29,11 @@ public class ExplorerAuthCircuitIsolationTests
         // AddExplorerAuth so its TryAdd default (a singleton in-memory store) is
         // skipped.
         services.AddScoped<ICredentialStore, InMemoryCredentialStore>();
+        if (credentialSeed is not null)
+        {
+            services.AddSingleton(credentialSeed);
+        }
+
         services.AddExplorerAuth();
         return services.BuildServiceProvider();
     }
@@ -131,5 +136,59 @@ public class ExplorerAuthCircuitIsolationTests
             Assert.That(authB.IsAuthenticated, Is.True, "an independent circuit stays signed in");
             Assert.That(authB.Username, Is.EqualTo("bob"));
         });
+    }
+
+    [Test]
+    public async Task An_anonymous_circuit_is_not_signed_in_by_a_withheld_credential_seed()
+    {
+        // Security regression: the launcher credential seed applied whenever the
+        // credential store was empty, which in a multi-user head is true for every
+        // anonymous visitor - so each of them was silently signed in with the
+        // process-wide operator credential. A head that withholds the seed must
+        // leave such a circuit anonymous. The paired test below shows the seed is
+        // genuinely the mechanism, so this assertion is not vacuous.
+        await using var provider = BuildProvider(new WithheldCredentialSeed());
+
+        await using var circuit = provider.CreateAsyncScope();
+        var auth = circuit.ServiceProvider.GetRequiredService<IExplorerAuthSession>();
+
+        await auth.InitializeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(auth.IsAuthenticated, Is.False, "an anonymous visitor must stay anonymous");
+            Assert.That(auth.CurrentAuthentication, Is.Null);
+            Assert.That(auth.Username, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task An_anonymous_circuit_is_signed_in_by_a_present_credential_seed()
+    {
+        // The counterpart that proves the seed drives the sign-in whose absence the
+        // test above asserts. A single-operator head may opt into this; a
+        // multi-user head must not.
+        await using var provider = BuildProvider(new SeededCredentialSeed("operator", "Password1"));
+
+        await using var circuit = provider.CreateAsyncScope();
+        var auth = circuit.ServiceProvider.GetRequiredService<IExplorerAuthSession>();
+
+        await auth.InitializeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(auth.IsAuthenticated, Is.True);
+            Assert.That(auth.Username, Is.EqualTo("operator"));
+        });
+    }
+
+    private sealed class WithheldCredentialSeed : IExplorerCredentialSeed
+    {
+        public StoredCredential? TrySeed() => null;
+    }
+
+    private sealed class SeededCredentialSeed(string username, string password) : IExplorerCredentialSeed
+    {
+        public StoredCredential? TrySeed() => new(username, password);
     }
 }
