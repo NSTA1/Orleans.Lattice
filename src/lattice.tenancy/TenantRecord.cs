@@ -180,21 +180,120 @@ public sealed class TenantRecord
     }
 
     /// <summary>Issues or updates a cross-tenant grant (keyed by <see cref="CrossTenantGrant.GrantId"/>).</summary>
+    /// <remarks>
+    /// This is the direct, <b>single-step</b> in-process issue path: the grant
+    /// lands in whatever <see cref="CrossTenantGrant.State"/> the payload carries,
+    /// which is <see cref="TenantGrantState.Active"/> for a grant built by the
+    /// pre-existing <see cref="CrossTenantGrant.Create(string, TenantGranteeKind, string, TenantGrantOperations)"/>
+    /// overload, and it re-opens a terminally closed grant in a new agreement
+    /// generation. Its meaning is therefore exactly what it was before the grant
+    /// lifecycle existed. It deliberately bypasses the two-step offer/approve
+    /// agreement and is <em>not</em> used by the tenant-admin control facade,
+    /// which drives <see cref="OfferGrant"/> and <see cref="TransitionGrant"/>
+    /// instead so the grantee must opt in before anything is authorized. Reserve
+    /// it for a host that already holds registry authority and is deliberately
+    /// asserting a grant on both parties' behalf.
+    /// </remarks>
     /// <param name="grant">The grant to issue. Its <see cref="CrossTenantGrant.Grantee"/> and <see cref="CrossTenantGrant.Scope"/> must not be <c>null</c>.</param>
     /// <param name="clock">The write clock.</param>
     /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
     /// <exception cref="ArgumentException"><paramref name="grant"/> has a <c>null</c> grantee or scope.</exception>
     public void AddGrant(CrossTenantGrant grant, HybridLogicalClock clock, string? writerId)
     {
-        if (grant.Grantee is null || grant.Scope is null)
+        RequireGrantIdentity(grant);
+        ApplyGrant(
+            grant.GrantId, grant, present: true, clock, writerId, GrantGenerationPolicy.AdvanceOnTerminal);
+    }
+
+    /// <summary>
+    /// Offers a cross-tenant grant to its grantee, creating it in
+    /// <see cref="TenantGrantState.Pending"/> - the first step of the two-step
+    /// agreement. A pending grant authorizes nothing until the grantee approves it
+    /// through <see cref="TransitionGrant"/>. Every offer states terms, so every
+    /// offer begins a <b>new agreement generation</b>: an answer to the previous
+    /// terms - including an approval written concurrently on another replica - can
+    /// then never be joined onto the new ones, which is what stops a granting
+    /// tenant from widening a live grant by amending an offer the grantee is in
+    /// the middle of approving. Re-sending an <em>identical</em> unanswered offer
+    /// is a caller-side no-op that should not reach this method.
+    /// </summary>
+    /// <param name="grant">The grant to offer. Its <see cref="CrossTenantGrant.Grantee"/> and <see cref="CrossTenantGrant.Scope"/> must not be <c>null</c>; its state is ignored and replaced with <see cref="TenantGrantState.Pending"/>.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentException"><paramref name="grant"/> has a <c>null</c> grantee or scope.</exception>
+    /// <exception cref="InvalidOperationException">A live grant with the same id is already <see cref="TenantGrantState.Active"/>, which the grantee approved on its current terms and the granting tenant may not redefine unilaterally.</exception>
+    public void OfferGrant(CrossTenantGrant grant, HybridLogicalClock clock, string? writerId)
+    {
+        RequireGrantIdentity(grant);
+        var grantId = grant.GrantId;
+
+        if (GrantSlots.TryGetValue(grantId, out var existing)
+            && existing.Present
+            && !TenantGrantLifecycle.IsLegalOffer(existing.Grant.State))
         {
-            throw new ArgumentException("A grant must have a non-null grantee and scope.", nameof(grant));
+            throw new InvalidOperationException(
+                $"Cross-tenant grant '{grantId}' cannot be offered while it is "
+                + $"'{existing.Grant.State}'; revoke it before offering new terms.");
         }
 
-        ApplyGrant(grant.GrantId, grant, present: true, clock, writerId);
+        ApplyGrant(
+            grantId,
+            grant with { State = TenantGrantState.Pending },
+            present: true,
+            clock,
+            writerId,
+            GrantGenerationPolicy.Advance);
+    }
+
+    /// <summary>
+    /// Moves a live cross-tenant grant to <paramref name="state"/>, refusing any
+    /// transition <see cref="TenantGrantLifecycle.IsLegalTransition"/> does not
+    /// admit. The grant's payload and agreement generation are preserved, so the
+    /// write converges with a concurrent transition from the other party through
+    /// <see cref="TenantGrantSlot.Merge"/>'s restrictive state join.
+    /// </summary>
+    /// <param name="grantId">The grant id to transition. Must not be <c>null</c>.</param>
+    /// <param name="state">The state to move the grant to.</param>
+    /// <param name="clock">The write clock.</param>
+    /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="grantId"/> is <c>null</c>.</exception>
+    /// <exception cref="InvalidOperationException">No live grant with that id exists, or the transition is not legal from the grant's current state.</exception>
+    public void TransitionGrant(
+        string grantId, TenantGrantState state, HybridLogicalClock clock, string? writerId)
+    {
+        ArgumentNullException.ThrowIfNull(grantId);
+
+        if (!GrantSlots.TryGetValue(grantId, out var existing) || !existing.Present)
+        {
+            throw new InvalidOperationException(
+                $"No live cross-tenant grant '{grantId}' exists to transition.");
+        }
+
+        if (!TenantGrantLifecycle.IsLegalTransition(existing.Grant.State, state))
+        {
+            throw new InvalidOperationException(
+                $"Cross-tenant grant '{grantId}' cannot move from "
+                + $"'{existing.Grant.State}' to '{state}'.");
+        }
+
+        ApplyGrant(
+            grantId,
+            existing.Grant with { State = state },
+            present: true,
+            clock,
+            writerId,
+            GrantGenerationPolicy.Carry);
     }
 
     /// <summary>Revokes the grant with the given id (a tombstone by stamp).</summary>
+    /// <remarks>
+    /// This removes the grant from the record entirely rather than closing the
+    /// agreement: the slot stops being <see cref="TenantGrantSlot.Present"/> and
+    /// the grant vanishes from <see cref="Grants"/>. The control facade instead
+    /// transitions a grant to <see cref="TenantGrantState.Revoked"/> through
+    /// <see cref="TransitionGrant"/>, which keeps the closed agreement visible to
+    /// both parties.
+    /// </remarks>
     /// <param name="grantId">The grant id to revoke. Must not be <c>null</c>.</param>
     /// <param name="clock">The write clock.</param>
     /// <param name="writerId">The write writer id (may be <c>null</c>).</param>
@@ -202,8 +301,17 @@ public sealed class TenantRecord
     public void RemoveGrant(string grantId, HybridLogicalClock clock, string? writerId)
     {
         ArgumentNullException.ThrowIfNull(grantId);
+
+        // A blind remove of a grant this replica has not seen has no payload to
+        // copy, so the tombstone carries the default one. Its state is inert: a
+        // tombstone carries no lifecycle opinion, and TenantGrantSlot.Merge
+        // compares presence *before* state precisely so a synthesized state can
+        // never decide a merge. Do not reorder those comparisons to make this
+        // state load-bearing - that is exactly how an unapproved grant could be
+        // published as live.
         var payload = GrantSlots.TryGetValue(grantId, out var existing) ? existing.Grant : default;
-        ApplyGrant(grantId, payload, present: false, clock, writerId);
+
+        ApplyGrant(grantId, payload, present: false, clock, writerId, GrantGenerationPolicy.Carry);
     }
 
     /// <summary>Revokes the given grant (by its <see cref="CrossTenantGrant.GrantId"/>).</summary>
@@ -281,6 +389,31 @@ public sealed class TenantRecord
         {
             var count = 0;
             foreach (var slot in Subjects.Values)
+            {
+                if (slot.Present)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// The number of live cross-tenant grants, counted in place without
+    /// materialising the grant list (and without computing a single
+    /// <see cref="CrossTenantGrant.GrantId"/>), so a caller sweeping the registry
+    /// can skip a grant-free tenant for free. The zero-allocation counterpart of
+    /// <see cref="Grants"/>, mirroring how <see cref="AdminSubjectCount"/>
+    /// complements <see cref="AdminSubjects"/>.
+    /// </summary>
+    public int GrantCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var slot in GrantSlots.Values)
             {
                 if (slot.Present)
                 {
@@ -594,12 +727,72 @@ public sealed class TenantRecord
             : slot;
     }
 
-    private void ApplyGrant(string grantId, CrossTenantGrant grant, bool present, HybridLogicalClock clock, string? writerId)
+    private void ApplyGrant(
+        string grantId,
+        CrossTenantGrant grant,
+        bool present,
+        HybridLogicalClock clock,
+        string? writerId,
+        GrantGenerationPolicy generation)
     {
-        var slot = new TenantGrantSlot { Grant = grant, Present = present, Clock = clock, WriterId = writerId };
-        GrantSlots[grantId] = GrantSlots.TryGetValue(grantId, out var existing)
-            ? TenantGrantSlot.Merge(existing, slot)
-            : slot;
+        var hasExisting = GrantSlots.TryGetValue(grantId, out var existing);
+
+        // Carry the agreement generation forward so an ordinary write never loses
+        // the merge to a slot from a later generation, and advance it only where a
+        // write deliberately begins a new agreement - whose predecessor's sticky
+        // terminal state, or already-answered terms, must not be joined onto it.
+        var next = hasExisting ? existing.Generation : 0L;
+        if (hasExisting && generation != GrantGenerationPolicy.Carry)
+        {
+            // The predecessor is "closed" when it is terminal or already removed.
+            // Both outrank an ordinary write in the merge order, so a write that
+            // re-establishes the agreement must advance past them - otherwise a
+            // grant closed or removed once could never be issued again.
+            var closed = !existing.Present || TenantGrantLifecycle.IsTerminal(existing.Grant.State);
+            if (generation == GrantGenerationPolicy.Advance || closed)
+            {
+                next++;
+            }
+        }
+
+        var slot = new TenantGrantSlot
+        {
+            Grant = grant,
+            Present = present,
+            Clock = clock,
+            WriterId = writerId,
+            Generation = next,
+        };
+
+        GrantSlots[grantId] = hasExisting ? TenantGrantSlot.Merge(existing, slot) : slot;
+    }
+
+    /// <summary>
+    /// How a grant write treats the agreement generation on an existing slot.
+    /// </summary>
+    private enum GrantGenerationPolicy
+    {
+        /// <summary>Keep the existing generation: the write acts on the current agreement.</summary>
+        Carry,
+
+        /// <summary>Advance only over a terminally closed agreement, which cannot otherwise be re-opened.</summary>
+        AdvanceOnTerminal,
+
+        /// <summary>Always advance: the write states new terms, which no answer to the old ones may attach to.</summary>
+        Advance,
+    }
+
+    /// <summary>
+    /// Rejects a grant whose identity-bearing fields are absent, so a slot can
+    /// never be keyed by a <see cref="CrossTenantGrant.GrantId"/> built from
+    /// nulls.
+    /// </summary>
+    private static void RequireGrantIdentity(CrossTenantGrant grant)
+    {
+        if (grant.Grantee is null || grant.Scope is null)
+        {
+            throw new ArgumentException("A grant must have a non-null grantee and scope.", nameof(grant));
+        }
     }
 
     private void ApplyAllowedRegion(string regionId, bool present, HybridLogicalClock clock, string? writerId)

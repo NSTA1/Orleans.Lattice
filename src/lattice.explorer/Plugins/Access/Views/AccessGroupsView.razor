@@ -1,0 +1,66 @@
+@*
+    The Groups sub-surface: the membership directory's groups on the left, and
+    the create / edit form (with the selected group's direct members) on the
+    right. Every action stays disabled rather than hidden when the plugin's gate
+    denies, and disabled when the cluster resolves membership solely from the
+    identity-provider token, in which case the surface stays read-only viewable.
+*@
+
+<div class="lxa-grid">
+    <div class="lxa-listcol">
+        <div class="lxa-listhead">
+            <h3 class="lxa-title">Groups</h3>
+            <button type="button" class="explorer-btn"
+                    disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)"
+                    @onclick="State.NewGroup">New group</button>
+        </div>
+        @if (State.Groups.Count == 0)
+        {
+            <p class="lxa-empty">No groups to show.</p>
+        }
+        else
+        {
+            <ul class="lxa-list" role="list" aria-label="Groups">
+                @foreach (var group in State.Groups)
+                {
+                    var id = group.GroupId;
+                    <li class="@(id == State.SelectedGroupId ? SelectedRowClass : RowClass)"
+                        @onclick="@(() => State.SelectGroupAsync(group))">
+                        <span class="lxa-itemlabel" title="@id">
+                            <span class="lxa-itemid">@(string.IsNullOrWhiteSpace(group.DisplayName) ? id : group.DisplayName)</span>
+                        </span>
+                        <button type="button" class="explorer-btn lxa-edit"
+                                disabled="@(State.Busy || !State.Allowed)"
+                                @onclick="@(() => State.EditGroupAsync(group))"
+                                @onclick:stopPropagation="true">Edit</button>
+                    </li>
+                }
+            </ul>
+            @if (State.GroupsNextToken is not null)
+            {
+                <button type="button" class="explorer-btn" disabled="@(State.Busy || !State.Allowed)"
+                        @onclick="State.LoadMoreGroupsAsync">Load more</button>
+            }
+        }
+    </div>
+    @if (State.GroupFormOpen)
+    {
+        <AccessGroupForm State="State" />
+    }
+    else
+    {
+        <div class="lxa-formcol">
+            <p class="lxa-empty">Select a group to edit, or choose 'New group' to add one.</p>
+        </div>
+    }
+</div>
+
+@code {
+    // Composed once rather than interpolated per row per render: the list
+    // re-renders on every selection and every mutation.
+    private const string RowClass = "lxa-itemrow";
+    private const string SelectedRowClass = "lxa-itemrow is-selected";
+
+    /// <summary>The Access workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+}

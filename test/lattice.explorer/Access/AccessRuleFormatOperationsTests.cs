@@ -1,6 +1,6 @@
 using Orleans.Lattice;
 using Orleans.Lattice.Auth;
-using Orleans.Lattice.Explorer.UI.Access;
+using Orleans.Lattice.Explorer.Access.Views;
 
 namespace Orleans.Lattice.Explorer.Tests.Access;
 

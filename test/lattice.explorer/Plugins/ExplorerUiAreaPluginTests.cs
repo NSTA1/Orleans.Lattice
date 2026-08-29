@@ -2,22 +2,23 @@ using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
+using Orleans.Lattice.Explorer.Backup.Components;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.UI.Access;
-using Orleans.Lattice.Explorer.UI.Backup;
+using Orleans.Lattice.Explorer.Plugins.Schema;
+using Orleans.Lattice.Explorer.Plugins.Schema.Components;
+using Orleans.Lattice.Explorer.Plugins.Schema.Domain;
+using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Access.Views;
 using Orleans.Lattice.Explorer.UI.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Plugins;
 
 /// <summary>
-/// The area plugins the shared UI ships, and the registration surface a head
-/// uses to choose which of them it surfaces. Withholding an area is registering
-/// nothing, which is what the retired per-area navigation flag was emulating.
-/// <para>
-/// The Schema area no longer ships here: it lives in its own plugin project and
-/// is covered by its own fixture.
-/// </para>
+/// The three area plugins the Explorer ships - Backups, Access and Schema, each
+/// from its own plugin package now - and the registration surface a head uses to
+/// choose which of them it surfaces. Withholding an area is registering nothing,
+/// which is what the retired per-area navigation flag was emulating.
 /// </summary>
 [TestFixture]
 public sealed class ExplorerUiAreaPluginTests
@@ -29,6 +30,7 @@ public sealed class ExplorerUiAreaPluginTests
         {
             new BackupsAreaPlugin(Substitute.For<IBackupCapabilityService>()),
             new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>()),
+            new SchemaAreaPlugin(Substitute.For<ISchemaAdminCapabilityService>()),
         };
 
         Assert.Multiple(() =>
@@ -51,9 +53,11 @@ public sealed class ExplorerUiAreaPluginTests
     {
         var backupGate = Substitute.For<IBackupCapabilityService>();
         var accessGate = Substitute.For<IAuthAdminCapabilityService>();
+        var schemaGate = Substitute.For<ISchemaAdminCapabilityService>();
 
         var backups = new BackupsAreaPlugin(backupGate);
         var access = new AccessAreaPlugin(accessGate);
+        var schema = new SchemaAreaPlugin(schemaGate);
 
         Assert.Multiple(() =>
         {
@@ -66,14 +70,20 @@ public sealed class ExplorerUiAreaPluginTests
             Assert.That(access.Descriptor.Label, Is.EqualTo("Access"));
             Assert.That(access.ViewType, Is.EqualTo(typeof(AccessPanel)));
             Assert.That(access.AccessGate, Is.SameAs(accessGate));
+
+            Assert.That(schema.Descriptor.PluginId, Is.EqualTo(SchemaPluginKeys.PluginId));
+            Assert.That(schema.Descriptor.Label, Is.EqualTo("Schema"));
+            Assert.That(schema.ViewType, Is.EqualTo(typeof(SchemaPanel)));
+            Assert.That(schema.AccessGate, Is.SameAs(schemaGate));
         });
     }
 
     [Test]
-    public void The_area_plugins_sort_backups_then_access()
+    public void The_area_plugins_sort_backups_then_access_then_schema()
     {
         var catalog = new ExplorerPluginCatalog(new IExplorerPlugin[]
         {
+            new SchemaAreaPlugin(Substitute.For<ISchemaAdminCapabilityService>()),
             new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>()),
             new BackupsAreaPlugin(Substitute.For<IBackupCapabilityService>()),
         });
@@ -84,22 +94,39 @@ public sealed class ExplorerUiAreaPluginTests
             {
                 BackupsPluginKeys.PluginId,
                 AccessPluginKeys.PluginId,
+                SchemaPluginKeys.PluginId,
             }));
     }
 
     [Test]
-    public void No_ui_shipped_area_plugin_declares_a_domain_contract_yet()
+    public void Every_area_plugin_now_declares_its_controlled_domain_contract()
     {
-        // These panels still resolve their own feature services; the controlled
-        // domain-model seam lands with their conversion to standalone projects,
-        // as it already has for Schema.
-        var plugins = new IExplorerPlugin[]
-        {
-            new BackupsAreaPlugin(Substitute.For<IBackupCapabilityService>()),
-            new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>()),
-        };
+        // All three areas are converted, so each one's reach is a compile-time
+        // fact: the host resolves exactly the declared contract for it and
+        // nothing else. The contract is supplied by IExplorerPlugin<TDomain>, so
+        // it reads through the interface rather than off the concrete type.
+        IExplorerPlugin backups = new BackupsAreaPlugin(Substitute.For<IBackupCapabilityService>());
+        IExplorerPlugin access = new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>());
+        IExplorerPlugin schema = new SchemaAreaPlugin(Substitute.For<ISchemaAdminCapabilityService>());
 
-        Assert.That(plugins.Select(p => p.DomainContract), Has.All.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(backups.DomainContract, Is.Not.Null);
+            Assert.That(access.DomainContract, Is.EqualTo(typeof(IAccessDomain)));
+            Assert.That(schema.DomainContract, Is.EqualTo(typeof(ISchemaPluginDomain)));
+        });
+    }
+
+    [Test]
+    public void The_converted_access_plugin_declares_its_controlled_domain_contract()
+    {
+        // Access has been converted, so its reach is a compile-time fact: the
+        // host resolves IAccessDomain for it and nothing else. The contract is
+        // supplied by IExplorerPlugin<TDomain>, so it reads through the
+        // interface rather than off the concrete type.
+        IExplorerPlugin access = new AccessAreaPlugin(Substitute.For<IAuthAdminCapabilityService>());
+
+        Assert.That(access.DomainContract, Is.EqualTo(typeof(IAccessDomain)));
     }
 
     [Test]
@@ -109,6 +136,7 @@ public sealed class ExplorerUiAreaPluginTests
         {
             Assert.That(() => new BackupsAreaPlugin(null!), Throws.ArgumentNullException);
             Assert.That(() => new AccessAreaPlugin(null!), Throws.ArgumentNullException);
+            Assert.That(() => new SchemaAreaPlugin(null!), Throws.ArgumentNullException);
         });
     }
 
@@ -122,6 +150,7 @@ public sealed class ExplorerUiAreaPluginTests
                 Throws.ArgumentNullException);
             Assert.That(() => ((IServiceCollection)null!).AddExplorerBackupsPlugin(), Throws.ArgumentNullException);
             Assert.That(() => ((IServiceCollection)null!).AddExplorerAccessPlugin(), Throws.ArgumentNullException);
+            Assert.That(() => ((IServiceCollection)null!).AddExplorerSchemaPlugin(), Throws.ArgumentNullException);
         });
     }
 

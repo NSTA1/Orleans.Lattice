@@ -76,4 +76,19 @@ public static class ApiTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantAdminSubjectChangeResult"/>.</summary>
     public const string TenantAdminSubjectChangeResult = "oitn.su";
+
+    /// <summary>Alias for <see cref="TenantGrantAccess"/>.</summary>
+    public const string TenantGrantAccess = "oitn.ga";
+
+    /// <summary>Alias for <see cref="TenantGrantLifecycleState"/>.</summary>
+    public const string TenantGrantLifecycleState = "oitn.gl";
+
+    /// <summary>Alias for <see cref="TenantGrantDescriptor"/>.</summary>
+    public const string TenantGrantDescriptor = "oitn.gd";
+
+    /// <summary>Alias for <see cref="TenantGrantReport"/>.</summary>
+    public const string TenantGrantReport = "oitn.gr";
+
+    /// <summary>Alias for <see cref="TenantGrantChangeResult"/>.</summary>
+    public const string TenantGrantChangeResult = "oitn.gc";
 }

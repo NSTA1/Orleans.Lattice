@@ -345,6 +345,155 @@ public sealed class LatticeTenantAdminApiGrpcClient
             cancellationToken);
     }
 
+    /// <summary>
+    /// Lists <paramref name="tenantId"/>'s cross-tenant grants in both directions
+    /// - those it issued and those offered to it. A <b>tenant-admin</b> action -
+    /// the server authorizes the caller as the platform operator <b>or</b> a live
+    /// admin subject on that tenant record. Read-only.
+    /// </summary>
+    /// <param name="tenantId">The tenant id whose grants to list. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tenant's issued and received grants, in every lifecycle state.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantGrantReport> ListCrossTenantGrantsAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        return UnaryAsync(
+            _methods.ListCrossTenantGrants,
+            new TenantAdminTenantRequest { TenantId = tenantId },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Offers a cross-tenant grant from <paramref name="granterTenantId"/> to
+    /// <paramref name="granteeTenantId"/>, creating it <b>pending</b>. A
+    /// <b>tenant-admin</b> action on the <em>granting</em> tenant - the server
+    /// authorizes the caller as the platform operator <b>or</b> a live admin
+    /// subject of that tenant. The grant authorizes nothing until the grantee
+    /// approves it. Offering new terms over a live, already-approved grant is
+    /// refused with <c>FailedPrecondition</c>.
+    /// </summary>
+    /// <param name="granterTenantId">The tenant offering a scope of its own data. Must not be <c>null</c> or empty.</param>
+    /// <param name="granteeTenantId">The tenant the grant is offered to. Must not be <c>null</c> or empty.</param>
+    /// <param name="scope">The scope of the granting tenant's data the grant covers. Must not be <c>null</c> or empty.</param>
+    /// <param name="operations">The operations the grant will authorize once active.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The change result, carrying the pending grant as committed.</returns>
+    /// <exception cref="ArgumentException">A tenant id or <paramref name="scope"/> is <c>null</c> or empty.</exception>
+    public Task<TenantGrantChangeResult> OfferCrossTenantGrantAsync(
+        string granterTenantId,
+        string granteeTenantId,
+        string scope,
+        TenantGrantAccess operations,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(granterTenantId);
+        ArgumentException.ThrowIfNullOrEmpty(granteeTenantId);
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        return UnaryAsync(
+            _methods.OfferCrossTenantGrant,
+            new TenantAdminGrantOfferRequest
+            {
+                GranterTenantId = granterTenantId,
+                GranteeTenantId = granteeTenantId,
+                Scope = scope,
+                Operations = operations,
+            },
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Approves a pending cross-tenant grant so it begins to authorize. A
+    /// <b>tenant-admin</b> action on the <em>grantee</em> tenant - the server
+    /// authorizes the caller as the platform operator <b>or</b> a live admin
+    /// subject of that tenant, so an admin of the granting tenant cannot approve
+    /// its own offer. Idempotent on an already-active grant; a grant that is not
+    /// pending is refused with <c>FailedPrecondition</c>, and an unoffered grant
+    /// with <c>NotFound</c>.
+    /// </summary>
+    /// <param name="granterTenantId">The tenant that offered the grant. Must not be <c>null</c> or empty.</param>
+    /// <param name="granteeTenantId">The tenant the grant was offered to, whose admin authority this call requires. Must not be <c>null</c> or empty.</param>
+    /// <param name="scope">The scope the grant covers. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The change result, carrying the grant as committed.</returns>
+    /// <exception cref="ArgumentException">A tenant id or <paramref name="scope"/> is <c>null</c> or empty.</exception>
+    public Task<TenantGrantChangeResult> ApproveCrossTenantGrantAsync(
+        string granterTenantId,
+        string granteeTenantId,
+        string scope,
+        CancellationToken cancellationToken = default)
+        => GrantTransitionAsync(
+            _methods.ApproveCrossTenantGrant, granterTenantId, granteeTenantId, scope, cancellationToken);
+
+    /// <summary>
+    /// Declines a pending cross-tenant grant, closing it terminally. A
+    /// <b>tenant-admin</b> action on the <em>grantee</em> tenant. Idempotent on an
+    /// already-rejected grant; a grant that is not pending is refused with
+    /// <c>FailedPrecondition</c>, and an unoffered grant with <c>NotFound</c>.
+    /// </summary>
+    /// <param name="granterTenantId">The tenant that offered the grant. Must not be <c>null</c> or empty.</param>
+    /// <param name="granteeTenantId">The tenant the grant was offered to, whose admin authority this call requires. Must not be <c>null</c> or empty.</param>
+    /// <param name="scope">The scope the grant covers. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The change result, carrying the grant as committed.</returns>
+    /// <exception cref="ArgumentException">A tenant id or <paramref name="scope"/> is <c>null</c> or empty.</exception>
+    public Task<TenantGrantChangeResult> RejectCrossTenantGrantAsync(
+        string granterTenantId,
+        string granteeTenantId,
+        string scope,
+        CancellationToken cancellationToken = default)
+        => GrantTransitionAsync(
+            _methods.RejectCrossTenantGrant, granterTenantId, granteeTenantId, scope, cancellationToken);
+
+    /// <summary>
+    /// Withdraws an active cross-tenant grant, closing it terminally. A
+    /// <b>tenant-admin</b> action on <em>either</em> party - the server authorizes
+    /// the caller as the platform operator <b>or</b> a live admin subject of the
+    /// granting or the grantee tenant, so neither side is trapped in the
+    /// agreement. Idempotent on an already-revoked grant; a grant that is not
+    /// active is refused with <c>FailedPrecondition</c>.
+    /// </summary>
+    /// <param name="granterTenantId">The tenant that offered the grant. Must not be <c>null</c> or empty.</param>
+    /// <param name="granteeTenantId">The tenant the grant was offered to. Must not be <c>null</c> or empty.</param>
+    /// <param name="scope">The scope the grant covers. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The change result, carrying the grant as committed.</returns>
+    /// <exception cref="ArgumentException">A tenant id or <paramref name="scope"/> is <c>null</c> or empty.</exception>
+    public Task<TenantGrantChangeResult> RevokeCrossTenantGrantAsync(
+        string granterTenantId,
+        string granteeTenantId,
+        string scope,
+        CancellationToken cancellationToken = default)
+        => GrantTransitionAsync(
+            _methods.RevokeCrossTenantGrant, granterTenantId, granteeTenantId, scope, cancellationToken);
+
+    /// <summary>
+    /// Validates and issues one of the three grant-lifecycle transitions, which
+    /// share a request shape because all three address an existing agreement
+    /// rather than define one.
+    /// </summary>
+    private Task<TenantGrantChangeResult> GrantTransitionAsync(
+        Method<TenantAdminGrantRequest, TenantGrantChangeResult> method,
+        string granterTenantId,
+        string granteeTenantId,
+        string scope,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(granterTenantId);
+        ArgumentException.ThrowIfNullOrEmpty(granteeTenantId);
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        return UnaryAsync(
+            method,
+            new TenantAdminGrantRequest
+            {
+                GranterTenantId = granterTenantId,
+                GranteeTenantId = granteeTenantId,
+                Scope = scope,
+            },
+            cancellationToken);
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

@@ -124,6 +124,43 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
     public abstract Task<TenantAdminSubjectChangeResult> RemoveTenantAdminSubject(TenantAdminSubjectRequest request, ServerCallContext context);
 
     /// <summary>
+    /// Lists a tenant's cross-tenant grants in both directions - those it issued
+    /// and those offered to it. An <b>operator-or-tenant-admin</b> action on that
+    /// tenant, enforced fail-closed by the facade. Implemented in
+    /// <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantGrantReport> ListCrossTenantGrants(TenantAdminTenantRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Offers a cross-tenant grant, creating it pending. An
+    /// <b>operator-or-admin-of-the-granting-tenant</b> action, enforced
+    /// fail-closed by the facade. A pending grant authorizes nothing. Implemented
+    /// in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantGrantChangeResult> OfferCrossTenantGrant(TenantAdminGrantOfferRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Approves a pending cross-tenant grant so it begins to authorize. An
+    /// <b>operator-or-admin-of-the-grantee-tenant</b> action, enforced fail-closed
+    /// by the facade. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantGrantChangeResult> ApproveCrossTenantGrant(TenantAdminGrantRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Declines a pending cross-tenant grant. An
+    /// <b>operator-or-admin-of-the-grantee-tenant</b> action, enforced fail-closed
+    /// by the facade. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantGrantChangeResult> RejectCrossTenantGrant(TenantAdminGrantRequest request, ServerCallContext context);
+
+    /// <summary>
+    /// Withdraws an active cross-tenant grant. An
+    /// <b>operator-or-admin-of-either-party</b> action, enforced fail-closed by the
+    /// facade. Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantGrantChangeResult> RevokeCrossTenantGrant(TenantAdminGrantRequest request, ServerCallContext context);
+
+    /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at startup
     /// with <paramref name="serviceImpl"/> set to <see langword="null"/> to record
     /// method metadata; the actual service instance is resolved per request from
@@ -158,6 +195,11 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.ListTenantAdminSubjects, (UnaryServerMethod<TenantAdminTenantRequest, TenantAdminSubjectReport>?)null);
             binder.AddMethod(methods.AddTenantAdminSubject, (UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>?)null);
             binder.AddMethod(methods.RemoveTenantAdminSubject, (UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>?)null);
+            binder.AddMethod(methods.ListCrossTenantGrants, (UnaryServerMethod<TenantAdminTenantRequest, TenantGrantReport>?)null);
+            binder.AddMethod(methods.OfferCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantOfferRequest, TenantGrantChangeResult>?)null);
+            binder.AddMethod(methods.ApproveCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
+            binder.AddMethod(methods.RejectCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
+            binder.AddMethod(methods.RevokeCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
             return;
         }
 
@@ -177,6 +219,11 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.ListTenantAdminSubjects, new UnaryServerMethod<TenantAdminTenantRequest, TenantAdminSubjectReport>(serviceImpl.ListTenantAdminSubjects));
         binder.AddMethod(methods.AddTenantAdminSubject, new UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>(serviceImpl.AddTenantAdminSubject));
         binder.AddMethod(methods.RemoveTenantAdminSubject, new UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>(serviceImpl.RemoveTenantAdminSubject));
+        binder.AddMethod(methods.ListCrossTenantGrants, new UnaryServerMethod<TenantAdminTenantRequest, TenantGrantReport>(serviceImpl.ListCrossTenantGrants));
+        binder.AddMethod(methods.OfferCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantOfferRequest, TenantGrantChangeResult>(serviceImpl.OfferCrossTenantGrant));
+        binder.AddMethod(methods.ApproveCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.ApproveCrossTenantGrant));
+        binder.AddMethod(methods.RejectCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.RejectCrossTenantGrant));
+        binder.AddMethod(methods.RevokeCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.RevokeCrossTenantGrant));
     }
 }
 
@@ -194,6 +241,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     private readonly ILatticeTenantRegionAdmin? _regionAdmin;
     private readonly ILatticeTenantQuotaUsage? _quotaUsage;
     private readonly ILatticeTenantAccessAdmin? _accessAdmin;
+    private readonly ILatticeTenantGrantAdmin? _grantAdmin;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeTenantAdminApiGrpcOptions> _options;
@@ -210,8 +258,9 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// observes a populated holder.
     /// </summary>
     /// <remarks>
-    /// <paramref name="regionAdmin"/>, <paramref name="quotaUsage"/> and
-    /// <paramref name="accessAdmin"/> are <b>optional</b>. Each is a separate
+    /// <paramref name="regionAdmin"/>, <paramref name="quotaUsage"/>,
+    /// <paramref name="accessAdmin"/> and <paramref name="grantAdmin"/> are
+    /// <b>optional</b>. Each is a separate
     /// opt-in registration (and the usage facade may also be absent on a host
     /// running an older facade package), so a host that binds tenant
     /// administration without any of them must keep working exactly as it did
@@ -230,7 +279,8 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         ILogger<LatticeTenantAdminGrpcService> logger,
         ILatticeTenantRegionAdmin? regionAdmin = null,
         ILatticeTenantQuotaUsage? quotaUsage = null,
-        ILatticeTenantAccessAdmin? accessAdmin = null)
+        ILatticeTenantAccessAdmin? accessAdmin = null,
+        ILatticeTenantGrantAdmin? grantAdmin = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -245,6 +295,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         _regionAdmin = regionAdmin;
         _quotaUsage = quotaUsage;
         _accessAdmin = accessAdmin;
+        _grantAdmin = grantAdmin;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;
@@ -418,6 +469,128 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// <inheritdoc />
     public override Task<TenantAdminSubjectChangeResult> RemoveTenantAdminSubject(TenantAdminSubjectRequest request, ServerCallContext context)
         => InvokeAccessAdminAsync(request, context, static (admin, req, ct) => admin.RemoveAdminSubjectAsync(req.TenantId, req.SubjectId, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantGrantReport> ListCrossTenantGrants(TenantAdminTenantRequest request, ServerCallContext context)
+        => InvokeGrantAdminAsync(request, context, static (admin, req, ct) => admin.ListGrantsAsync(req.TenantId, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantGrantChangeResult> OfferCrossTenantGrant(TenantAdminGrantOfferRequest request, ServerCallContext context)
+        => InvokeGrantAdminAsync(request, context, static (admin, req, ct) =>
+            admin.OfferGrantAsync(req.GranterTenantId, req.GranteeTenantId, req.Scope, req.Operations, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantGrantChangeResult> ApproveCrossTenantGrant(TenantAdminGrantRequest request, ServerCallContext context)
+        => InvokeGrantAdminAsync(request, context, static (admin, req, ct) =>
+            admin.ApproveGrantAsync(req.GranterTenantId, req.GranteeTenantId, req.Scope, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantGrantChangeResult> RejectCrossTenantGrant(TenantAdminGrantRequest request, ServerCallContext context)
+        => InvokeGrantAdminAsync(request, context, static (admin, req, ct) =>
+            admin.RejectGrantAsync(req.GranterTenantId, req.GranteeTenantId, req.Scope, ct));
+
+    /// <inheritdoc />
+    public override Task<TenantGrantChangeResult> RevokeCrossTenantGrant(TenantAdminGrantRequest request, ServerCallContext context)
+        => InvokeGrantAdminAsync(request, context, static (admin, req, ct) =>
+            admin.RevokeGrantAsync(req.GranterTenantId, req.GranteeTenantId, req.Scope, ct));
+
+    /// <summary>
+    /// Runs a cross-tenant grant call under the caller-credential and
+    /// asserted-tenant scopes, mapping the facade's outcomes onto gRPC status
+    /// codes. Authorization stays entirely at the facade's own tenant-tier,
+    /// fail-closed gate - platform operator <b>or</b> a live admin subject of the
+    /// side the operation belongs to, which differs per operation (granting tenant
+    /// to offer, grantee to approve or reject, either to revoke) - and is
+    /// independent of the data-plane default effect; the transport interceptor
+    /// only applies the coarse per-operation host policy on top.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TenantGrantNotFoundException"/> and
+    /// <see cref="TenantGrantTransitionException"/> both derive directly from
+    /// <see cref="Exception"/>, so without explicit arms they would fall to the
+    /// catch-all and reach the caller as an opaque <c>Internal</c>. An unoffered
+    /// grant is a <c>NotFound</c>, and the facade deliberately reports an
+    /// unregistered granting tenant the same way so tenant existence cannot be
+    /// probed. An illegal transition is a precondition breach on a well-formed
+    /// request, so it maps to <c>FailedPrecondition</c>, matching the sibling
+    /// <see cref="TenantLastAdminSubjectException"/> and
+    /// <see cref="TenantLastRegionException"/> guards.
+    /// </remarks>
+    private async Task<TResponse> InvokeGrantAdminAsync<TRequest, TResponse>(
+        TRequest request,
+        ServerCallContext context,
+        Func<ILatticeTenantGrantAdmin, TRequest, CancellationToken, Task<TResponse>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        // The cross-tenant grant facade is a separate opt-in. A host that binds
+        // tenant administration without it serves every other RPC unchanged and
+        // answers these five honestly rather than faulting at startup.
+        if (_grantAdmin is not { } grantAdmin)
+        {
+            throw new RpcException(new Status(
+                StatusCode.Unimplemented,
+                "This cluster does not serve cross-tenant grant administration. Register the "
+                + "cross-tenant grant facade to enable it."));
+        }
+
+        using var activeTenantScope = StampActiveTenant(context);
+        using var credentialScope = StampCallerCredential(context);
+
+        try
+        {
+            return await handler(grantAdmin, request, context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new RpcException(new Status(StatusCode.Cancelled, "The cross-tenant grant request was cancelled."));
+        }
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (TenantNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (TenantGrantNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (TenantGrantTransitionException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (ReservedTenantOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant, or
+        // may not act as the one it asserted. An authorization outcome, not a server
+        // fault, so it must not fall through to Internal below.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.TenantAdmin: gRPC cross-tenant grant call to {Method} failed.", context.Method);
+            throw new RpcException(new Status(StatusCode.Internal, "The cross-tenant grant request failed."));
+        }
+    }
 
     /// <summary>
     /// Runs a tenant access-administration (admin-subject) call under the

@@ -126,6 +126,21 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetService<ILatticeIdentityDirectory>(),
             sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
 
+        // N2 cross-tenant grant administration. The two-step agreement surface -
+        // the granting tenant offers, the grantee approves or rejects, and either
+        // party may revoke - over the grants the tenancy engine's cross-tenant
+        // resolution already consumes but which no facade could previously reach.
+        // It reuses the same two-tier authorizer as region residency and access
+        // administration, applied per operation to the side the step belongs to,
+        // deliberately not the operator-only TenantAdminAccessAuthorizer: a grant
+        // is a tenant-to-tenant agreement, so making an operator the bottleneck
+        // for it would be the wrong shape.
+        builder.Services.TryAddSingleton<ILatticeTenantGrantAdmin>(sp => new LatticeTenantGrantAdmin(
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<ITenantAdminClock>(),
+            sp.GetRequiredService<IOptions<ClusterOptions>>()));
+
         // T21 tenant self-awareness. The read-only counterpart to the lifecycle
         // facade: it projects the caller's current tenant, the tenants it may
         // enumerate, and the read-only status/residency of one such tenant, scoped

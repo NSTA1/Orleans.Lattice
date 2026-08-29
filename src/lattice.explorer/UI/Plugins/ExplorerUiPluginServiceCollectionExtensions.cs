@@ -12,9 +12,14 @@ namespace Orleans.Lattice.Explorer.UI.Plugins;
 /// <para>
 /// A head chooses its plugin set by which of these it calls. There is no
 /// per-area option flag and no shared registry to edit: withholding a plugin is
-/// simply not registering it. An area that ships as its own plugin package - the
-/// Schema area does - is registered from that package's own extension instead of
-/// from here, so adding one needs no edit to this file at all.
+/// simply not registering it.
+/// </para>
+/// <para>
+/// A plugin that lives in its own package registers itself from that package
+/// instead - <c>AddExplorerBackupsPlugin</c> ships with the Backups plugin,
+/// <c>AddExplorerAccessPlugin</c> with the Access plugin, and
+/// <c>AddExplorerSchemaPlugin</c> with the Schema plugin - so this type shrinks
+/// as each remaining area is converted.
 /// </para>
 /// </summary>
 public static class ExplorerUiPluginServiceCollectionExtensions
@@ -46,32 +51,6 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         services.TryAddScoped<IExplorerPluginPreferences, ExplorerPluginPreferences>();
 
         return services;
-    }
-
-    /// <summary>
-    /// Registers the Backups area plugin. The Backups feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerBackupsPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<BackupsAreaPlugin>();
-    }
-
-    /// <summary>
-    /// Registers the Access area plugin. The Access feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerAccessPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<AccessAreaPlugin>();
     }
 
     /// <summary>
