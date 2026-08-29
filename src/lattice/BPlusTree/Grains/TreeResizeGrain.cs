@@ -272,9 +272,10 @@ internal sealed class TreeResizeGrain(
         //      corresponds strictly to Phase == Snapshot; once Swap begins
         //      the alias has been flipped and the destination is live.
         //   2. After swap - during the SoftDeleteDuration window, or mid
-        //      Swap/Reject/Cleanup. Recover the old physical tree, remove
-        //      the alias, restore registry entry, and delete the destination
-        //      tree. Shadow-forward state on the old-tree shards must also
+        //      Swap/Reject/Cleanup. Recover the old physical tree if the
+        //      Cleanup phase already soft-deleted it, remove the alias,
+        //      restore registry entry, and delete the destination tree.
+        //      Shadow-forward state on the old-tree shards must also
         //      be cleared so the tree becomes writable again.
         if (!state.State.InProgress && !state.State.Complete)
             throw new InvalidOperationException(
@@ -361,9 +362,25 @@ internal sealed class TreeResizeGrain(
         var postSwapSnapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(oldPhysical);
         await postSwapSnapshot.AbortAsync(opId);
 
-        // 1. Recover the old physical tree from soft-delete.
+        // 1. Recover the old physical tree from soft-delete - but only when it
+        //    was actually soft-deleted. CleanupOldTreeAsync is the sole caller
+        //    of DeleteTreeAsync on the old tree, and it runs at the very end of
+        //    the pipeline, so the old tree is still live for most of the
+        //    after-swap window: throughout Swap and Reject, and in Cleanup
+        //    itself until CleanupOldTreeAsync has run (RejectOldShardsAsync
+        //    advances the phase to Cleanup before the soft delete happens).
+        //    Calling RecoverAsync unconditionally made undo throw
+        //    "Cannot recover a tree that has not been deleted." on step 1 and
+        //    abandon every remaining compensation step, leaving the tree wedged
+        //    mid-resize with an undo that failed identically on every retry.
+        //    The probe is deliberately at the call site rather than softening
+        //    RecoverAsync into a no-op: on the public tree-recover path,
+        //    "not deleted" genuinely is a caller error and must keep throwing.
         var oldDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(oldPhysical);
-        await oldDeletion.RecoverAsync();
+        if (await oldDeletion.IsDeletedAsync())
+        {
+            await oldDeletion.RecoverAsync();
+        }
 
         // 2. Clear shadow-forward on every old-tree shard so the tree becomes
         //    writable again (lifts the Rejecting phase).

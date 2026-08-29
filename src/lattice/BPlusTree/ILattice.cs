@@ -516,12 +516,13 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Undoes the most recent resize by recovering the old physical tree,
     /// removing the alias, restoring the original registry configuration,
-    /// and deleting the new snapshot tree. Only available while the old tree
-    /// is still within its <see cref="LatticeOptions.SoftDeleteDuration"/>
-    /// window (before purge completes).
+    /// and deleting the new snapshot tree. Available while a resize is still
+    /// in flight - at any phase - and afterwards for as long as the old tree
+    /// is within its <see cref="LatticeOptions.SoftDeleteDuration"/> window
+    /// (before purge completes).
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// Thrown if no completed resize exists to undo, or if the old tree has
+    /// Thrown if no resize exists to undo, or if the old tree has
     /// already been purged.
     /// </exception>
     Task UndoResizeAsync(CancellationToken cancellationToken = default);

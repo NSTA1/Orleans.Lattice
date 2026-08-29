@@ -61,7 +61,8 @@ Different physical trees produce different leaf grain IDs, which automatically c
 
 ### Undo resize
 
-During the soft-delete window the resize can be undone:
+A resize can be undone while it is still running, at any phase, and afterwards
+for as long as the old tree remains inside the soft-delete window:
 
 ```csharp verify
 var tree = grainFactory.GetGrain<ILattice>("my-tree");
@@ -71,7 +72,7 @@ await tree.UndoResizeAsync();
 `UndoResizeAsync` is phase-aware:
 
 - **Before swap** (`Phase == Snapshot`) - aborts the snapshot coordinator, clears every source shard's `ShadowForwardState`, deletes the half-built destination tree, and returns the source to a fully-writable state. No alias was ever set, so clients never observed the destination.
-- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - recovers the old physical tree, removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree.
+- **After swap** (`Phase ∈ { Swap, Reject, Cleanup }`) - removes the alias, restores the original registry configuration, clears any residual `Rejecting` phase on source shards, defensively aborts any post-swap snapshot still attached, and deletes the new snapshot tree. The old physical tree is recovered from soft-delete only when it was actually soft-deleted: `Cleanup` is the only phase that deletes it, and it does so at the very end, so throughout `Swap` and `Reject` - and in `Cleanup` until the delete lands - the old tree is still live and is simply left alone.
 
 Once the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
 

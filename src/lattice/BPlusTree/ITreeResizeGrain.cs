@@ -45,12 +45,15 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// <summary>
     /// Undoes the most recent resize by recovering the old physical tree,
     /// removing the alias, restoring the original registry configuration,
-    /// and deleting the new snapshot tree. Only available while the old tree
-    /// is still within its soft-delete window (before purge).
+    /// and deleting the new snapshot tree. Available at every phase of the
+    /// resize: before the alias swap the destination tree is simply discarded,
+    /// and after it the old physical tree is restored - recovering it from
+    /// soft-delete only when the Cleanup phase already deleted it, since in
+    /// the earlier phases it is still live.
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// Thrown if no completed resize exists to undo, or if the old tree has
-    /// already been purged.
+    /// Thrown if no resize exists to undo, if the persisted resize state is
+    /// incomplete, or if the old tree has already been purged.
     /// </exception>
     Task UndoResizeAsync();
 
