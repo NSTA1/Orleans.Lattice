@@ -1,0 +1,182 @@
+@implements IDisposable
+@inject IExplorerPluginHostContextFactory HostContexts
+@inject IExplorerPluginAccessStore AccessStore
+
+@*
+    The Access (membership & access-control) plugin's panel: the surface the
+    shell renders through DynamicComponent for this plugin.
+
+    It reaches the cluster only through its declared domain contract
+    (IAccessDomain), resolved for it by the host from its own plugin id, so it
+    holds no connection and no container (epic decision D3).
+
+    Its three sub-surfaces - Groups, Policies, Explain - are internal to the
+    plugin and are rendered through the design system's single tab primitive
+    over the shared LatticeTabItem vocabulary, so the retired AccessTab enum and
+    its bespoke SetTab switch leave no third tab registry behind. The strip
+    carries the WAI-ARIA tabs keyboard pattern and overflows rather than
+    scrolling off a narrow window.
+
+    The plugin's own gate decides whether any of it is reachable. A denial greys
+    the surface out and says so; an unauthenticated connection instead prompts a
+    sign-in, because that is recoverable. Both states are read from the keyed
+    access store rather than from a shared capability record.
+*@
+
+@if (AdaptiveContext is null)
+{
+    @*
+        No shell above us has cascaded a breakpoint, so the plugin supplies its
+        own adaptive root and stays usable at compact on its own. It yields the
+        moment a shell provides one - the other branch renders no second root -
+        so this is a fallback, never a competing owner of the viewport. With no
+        viewport service and no JS runtime the root simply holds the default
+        breakpoint, which is the layout the Explorer already shipped.
+    *@
+    <LatticeAdaptiveRoot Class="lxa-root">
+        @_panel
+    </LatticeAdaptiveRoot>
+}
+else
+{
+    @_panel
+}
+
+@code {
+    // Composed once rather than interpolated per render: the posture line
+    // re-renders on every access change and every load.
+    private const string OnBadgeClass = "lxa-badge is-on";
+    private const string OffBadgeClass = "lxa-badge is-off";
+
+    private readonly Action _render;
+
+    private AccessWorkspace _state = null!;
+    private RenderFragment? _panel;
+
+    /// <summary>Creates the panel, caching the delegate its state subscription marshals.</summary>
+    public AccessPanel() =>
+        // Bound once rather than per notification, so a load that raises several
+        // changes does not allocate a delegate for each of them.
+        _render = StateHasChanged;
+
+    /// <summary>
+    /// The breakpoint cascaded by a shell-provided adaptive root, when there is
+    /// one. The plugin supplies its own root when this is absent.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        // Materialised once at mount rather than per render: the panel
+        // re-renders on every load, every gate change, and every breakpoint
+        // change, and a fresh template on each would allocate on all of them.
+        _panel = Panel;
+
+        // The host context is bound to this plugin's id, so GetDomain can only
+        // ever hand back this plugin's declared contract: there is no parameter
+        // through which the panel could name another plugin's domain.
+        var context = HostContexts.Create(AccessPluginKeys.PluginId);
+        _state = new AccessWorkspace(context.GetDomain<IAccessDomain>(), AccessStore);
+        _state.Changed += OnStateChanged;
+        await _state.InitializeAsync();
+    }
+
+    private void OnStateChanged() => InvokeAsync(_render);
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_state is null)
+        {
+            return;
+        }
+
+        _state.Changed -= OnStateChanged;
+        _state.Dispose();
+    }
+
+    private RenderFragment Panel => @<section class="lxa-panel" aria-label="Access">
+        @if (!_state.Allowed)
+        {
+            @if (_state.AuthenticationRequired)
+            {
+                @*
+                    Recoverable, so say so and leave the shell's sign-in prompt
+                    standing rather than collapsing it into an inert grey-out:
+                    the connection carries no accepted credential.
+                *@
+                <p class="lxa-status is-denied" role="alert">
+                    You are not signed in to the cluster, so access administration is unavailable.
+                    The connection is unauthenticated - sign in to administer access.
+                </p>
+            }
+            else
+            {
+                <p class="lxa-status is-denied" role="status">
+                    Access administration is not permitted for your account, or the cluster has no
+                    auth-admin endpoint configured.
+                </p>
+            }
+        }
+
+        @if (_state.LastResult is { } result)
+        {
+            <p class="lxa-status @AccessWorkspace.ResultClass(result.Status)" role="status">@result.Message</p>
+        }
+
+        @if (_state.Allowed && _state.AccessModel.Model.IsSuccess)
+        {
+            <p class="lxa-authmode" role="status">
+                Authentication mode: <strong>@_state.AccessModel.AuthenticationModeLabel</strong>
+            </p>
+            @if (_state.AccessModel.ShowPosture)
+            {
+                <p class="lxa-posture" role="status">
+                    <span class="@(_state.AccessModel.AllTreesGrantsEnabled ? OnBadgeClass : OffBadgeClass)"
+                          title="When off, an all-trees ('*') data grant is recorded but inert - the decision engine never consults it for an ordinary tree. Enable LatticeAuthOptions.AllTreesGrantsEnabled on the silo.">
+                        @_state.AccessModel.AllTreesGrantsLabel
+                    </span>
+                    <span class="@(_state.AccessModel.AccessAdministrationDelegationEnabled ? OnBadgeClass : OffBadgeClass)"
+                          title="When off, a whole-tree Admin delegation rule on the policy tree is unauthorable - the server rejects it. Enable LatticeAuthOptions.AccessAdministrationDelegationEnabled on the silo.">
+                        @_state.AccessModel.AccessAdministrationDelegationLabel
+                    </span>
+                </p>
+            }
+            @if (_state.AccessModel.ShowEnforcementNotice)
+            {
+                <p class="lxa-enforcement" role="status">@AccessCreateModel.EnforcementNoticeText</p>
+            }
+            @if (_state.AccessModel.ShowMembershipInertNotice)
+            {
+                <p class="lxa-enforcement" role="status">@AccessCreateModel.MembershipInertNoticeText</p>
+            }
+        }
+
+        <LatticeAdaptiveTabs Tabs="AccessSurfaces.Tabs"
+                             ActiveId="@_state.ActiveSurfaceId"
+                             OnSelect="_state.SelectSurfaceAsync"
+                             Label="Access sub-surfaces"
+                             Class="lxa-tabs">
+            <TrailingContent>
+                <button type="button" class="explorer-btn lxa-refresh-action"
+                        disabled="@(_state.Busy || !_state.Allowed)"
+                        @onclick="_state.ReloadAsync">Refresh</button>
+            </TrailingContent>
+            <ChildContent>
+                @if (_state.ActiveSurfaceId == AccessSurfaces.Groups)
+                {
+                    <AccessGroupsView State="_state" />
+                }
+                else if (_state.ActiveSurfaceId == AccessSurfaces.Policies)
+                {
+                    <AccessPolicyView State="_state" />
+                }
+                else
+                {
+                    <AccessExplainView State="_state" />
+                }
+            </ChildContent>
+        </LatticeAdaptiveTabs>
+    </section>;
+}

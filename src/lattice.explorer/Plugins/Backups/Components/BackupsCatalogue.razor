@@ -1,0 +1,124 @@
+@*
+    The Existing Backups catalogue: the filter bar, the catalogue itself, the
+    pager, and the selected row's actions.
+
+    The catalogue renders through the design system's adaptive table, so one
+    column declaration produces a real table on a wide viewport and a card list
+    at compact - the wide backup list stops scrolling sideways off a phone
+    without this file containing a single media query (epic decisions D5 and
+    D7).
+
+    Selection moved from a click handler on the row to a real toggle button in
+    the name cell: it survives the reflow to cards, and unlike a clickable table
+    row it is keyboard reachable and announces its pressed state.
+*@
+
+@if (Owner.Pager.Current.Status == BackupOperationStatus.Denied)
+{
+    <div class="lx-backups-body">
+        <p class="lx-backups-empty">You are not permitted to list backups here.</p>
+    </div>
+}
+else if (Owner.Pager.Current.Status == BackupOperationStatus.Failed)
+{
+    <div class="lx-backups-body">
+        <p class="lx-backups-empty">@Owner.Pager.Current.Message</p>
+    </div>
+}
+else
+{
+    <div class="lx-backups-body">
+        <BackupsCatalogueFilter Owner="Owner" />
+
+        <LatticeAdaptiveTable TItem="BackupCatalogueRow"
+                              Items="Owner.Rows"
+                              Columns="_columns"
+                              Label="Backups"
+                              KeySelector="RowKey"
+                              EmptyText="@Owner.EmptyMessage"
+                              Class="lx-backups-table" />
+
+        <BackupsCataloguePager Owner="Owner" />
+
+        @if (Owner.SelectedRow is { } selected)
+        {
+            <BackupsRowActions Owner="Owner" Row="selected" />
+        }
+    </div>
+}
+
+@code {
+    // The row's display id is already a string, so using it as the diffing key
+    // costs no boxing, and the delegate is a cached static rather than a lambda
+    // rebuilt on every render.
+    private static readonly Func<BackupCatalogueRow, object> RowKey = static row => row.DisplayId;
+
+    private LatticeTableColumn<BackupCatalogueRow>[] _columns = Array.Empty<LatticeTableColumn<BackupCatalogueRow>>();
+    private bool _builtWithHealth;
+    private bool _built;
+
+    /// <summary>The Backups panel this catalogue reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        // Built once, and again only if health monitoring appears or disappears
+        // (it is probed asynchronously, so the first render can precede it). The
+        // cell fragments capture the panel, so rebuilding them per render would
+        // allocate a closure per column on every keystroke and every page turn.
+        if (_built && _builtWithHealth == Owner.HealthAvailable)
+        {
+            return;
+        }
+
+        _builtWithHealth = Owner.HealthAvailable;
+        _built = true;
+        _columns = BuildColumns(_builtWithHealth);
+    }
+
+    private LatticeTableColumn<BackupCatalogueRow>[] BuildColumns(bool withHealth)
+    {
+        var name = new LatticeTableColumn<BackupCatalogueRow>
+        {
+            Header = "Name",
+            IsPrimary = true,
+            Cell = row =>@<button type="button"
+                                 class="lx-backups-rowbutton @(Owner.IsSelected(row.DisplayId) ? "is-selected" : null) @(Owner.IsHighlighted(row.DisplayId) ? "is-new" : null)"
+                                 aria-pressed="@(Owner.IsSelected(row.DisplayId) ? "true" : "false")"
+                                 @onclick="@(() => Owner.SelectRowAsync(row.Row))">@row.Name</button>,
+        };
+
+        var kind = new LatticeTableColumn<BackupCatalogueRow>
+        {
+            Header = "Kind",
+            Cell = row =>@<text>@row.Kind</text>,
+        };
+
+        var scope = new LatticeTableColumn<BackupCatalogueRow>
+        {
+            Header = "Scope",
+            Cell = row =>@<text>@row.Scope</text>,
+        };
+
+        var created = new LatticeTableColumn<BackupCatalogueRow>
+        {
+            Header = "Created",
+            IsNumericOrCode = true,
+            Cell = row =>@<span title="@row.CreatedTitle">@row.Created</span>,
+        };
+
+        if (!withHealth)
+        {
+            return [name, kind, scope, created];
+        }
+
+        var health = new LatticeTableColumn<BackupCatalogueRow>
+        {
+            Header = "Health",
+            Cell = row =>@<BackupsHealthIndicator Owner="Owner" Row="row.Row" />,
+        };
+
+        return [name, kind, scope, created, health];
+    }
+}

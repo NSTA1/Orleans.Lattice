@@ -48,9 +48,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.explorer\Core\Orleans.Lattice.Explorer.Core.csproj" />
-    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.explorer\UI\Orleans.Lattice.Explorer.UI.csproj" />
-    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.explorer\Plugins\Backups\Orleans.Lattice.Explorer.Plugins.Backups.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.explorer\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.explorer.entra.web\Orleans.Lattice.Explorer.Entra.Web.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.caching.azureblob\Orleans.Lattice.Caching.AzureBlob.csproj" />

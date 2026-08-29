@@ -1,0 +1,221 @@
+@using Orleans.Lattice.Api.Auth
+@using Orleans.Lattice.Auth
+@using Orleans.Lattice.Membership
+@implements IDisposable
+
+@*
+    Shared subject selector for the Access plugin. A debounced, server-backed
+    typeahead over the identity directory (via the plugin's domain model): a
+    User/Group kind toggle scopes the search, typing coalesces into a single
+    directory query through the injectable ISubjectSearchDebounce seam, matched
+    principals render as a bounded, load-more page, and selecting one raises the
+    chosen id exactly as before (bind-SubjectId / bind-Kind), so every call site
+    keeps working. When the directory reports itself unavailable (or a read is
+    denied / fails) the picker degrades to a free-text, explicitly-unvalidated id
+    box rather than enumerating the tenant.
+
+    The model comes from IAccessDomain rather than from the container: each
+    picker instance creates exactly one, over its own single in-flight debounce,
+    so search timing stays substitutable and the plugin never reaches past its
+    declared domain contract.
+*@
+
+<div class="lxa-subjectpicker">
+    <div class="lxa-inline">
+        <select class="lxa-subject-kind" value="@Kind" disabled="@(Disabled || KindLocked)"
+                aria-label="Subject kind"
+                @onchange="OnKindChangedAsync">
+            <option value="@nameof(LatticeSubjectSelectorKind.User)">User</option>
+            <option value="@nameof(LatticeSubjectSelectorKind.Group)">Group</option>
+        </select>
+        <input type="text" class="lxa-subject-search" value="@_model.SearchTerm"
+               disabled="@Disabled"
+               aria-label="Subject id"
+               placeholder="@(_model.DirectoryAvailable ? SearchPlaceholder : FreeTextPlaceholder)"
+               @oninput="OnTermChangedAsync" />
+    </div>
+
+    @if (_model.DirectoryAvailable)
+    {
+        @if (!string.IsNullOrEmpty(_model.SelectedId))
+        {
+            <p class="lxa-subject-selected">
+                @if (!string.IsNullOrEmpty(_model.SelectedDisplayName))
+                {
+                    <text>Selected: </text><span class="lxa-principal" title="@_model.SelectedId">@_model.SelectedDisplayName</span>
+                }
+                else
+                {
+                    <text>Selected: </text><span class="lxa-principal">@_model.SelectedId</span>
+                }
+            </p>
+        }
+
+        @if (_model.Results.Count > 0)
+        {
+            <ul class="lxa-subject-results">
+                @foreach (var principal in _model.Results)
+                {
+                    <li>
+                        <button type="button"
+                                class="@(string.Equals(principal.Id, _model.SelectedId, StringComparison.Ordinal) ? SelectedResultClass : ResultClass)"
+                                disabled="@Disabled"
+                                title="@principal.Id"
+                                @onclick="@(() => OnResultSelectedAsync(principal.Id))">
+                            @PrincipalLabel(principal)
+                        </button>
+                    </li>
+                }
+            </ul>
+            @if (_model.HasMore)
+            {
+                <button type="button" class="explorer-btn" disabled="@(Disabled || _model.IsSearching)"
+                        @onclick="OnLoadMoreAsync">Load more</button>
+            }
+        }
+        else if (!_model.IsSearching && !string.IsNullOrEmpty(_model.SearchTerm))
+        {
+            <p class="lxa-subject-note">No matching principals.</p>
+        }
+    }
+    else
+    {
+        <p class="lxa-subject-note">
+            Directory unavailable - the entered id is used as-is and is not validated.
+        </p>
+    }
+</div>
+
+@code {
+    private const string SearchPlaceholder = "Type to search subjects...";
+    private const string FreeTextPlaceholder = "Enter a subject id";
+
+    // Composed once rather than interpolated per result per keystroke: the
+    // result list re-renders on every debounce tick.
+    private const string ResultClass = "explorer-btn-link lxa-subject-result";
+    private const string SelectedResultClass = "explorer-btn-link lxa-subject-result is-selected";
+
+    private SubjectPickerModel _model = null!;
+    private bool _initialized;
+
+    /// <summary>
+    /// The plugin's domain contract, from which the picker creates its own
+    /// model. Supplied by the hosting view.
+    /// </summary>
+    [Parameter, EditorRequired] public IAccessDomain Domain { get; set; } = null!;
+
+    /// <summary>The selected subject kind (user or group).</summary>
+    [Parameter]
+    public LatticeSubjectSelectorKind Kind { get; set; }
+
+    /// <summary>Raised when the subject kind changes (supports two-way binding).</summary>
+    [Parameter]
+    public EventCallback<LatticeSubjectSelectorKind> KindChanged { get; set; }
+
+    /// <summary>The selected subject id.</summary>
+    [Parameter]
+    public string SubjectId { get; set; } = string.Empty;
+
+    /// <summary>Raised when the selected subject id changes (supports two-way binding).</summary>
+    [Parameter]
+    public EventCallback<string> SubjectIdChanged { get; set; }
+
+    /// <summary>
+    /// The selected subject's directory display name. Optional: call sites that do
+    /// not bind it are unaffected, and it is only pushed when a directory selection
+    /// carries a meaningful display name.
+    /// </summary>
+    [Parameter]
+    public string SubjectDisplayName { get; set; } = string.Empty;
+
+    /// <summary>Raised when the selected subject's display name changes (supports two-way binding).</summary>
+    [Parameter]
+    public EventCallback<string> SubjectDisplayNameChanged { get; set; }
+
+    /// <summary>Renders the picker disabled when set.</summary>
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    /// <summary>
+    /// Locks the user / group kind toggle to the bound <see cref="Kind"/> when set,
+    /// so a create form scoped to a single principal kind cannot switch it.
+    /// </summary>
+    [Parameter]
+    public bool KindLocked { get; set; }
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        _model = Domain.CreateSubjectPicker();
+        _model.Changed += OnModelChanged;
+        _model.SubjectSelected += OnModelSubjectSelected;
+        await _model.InitializeAsync(SubjectId, MapKind(Kind));
+        _initialized = true;
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (!_initialized)
+        {
+            return;
+        }
+
+        // Align quietly to parent-pushed values (for example when a rule being
+        // edited seeds both kind and subject); never re-search or wipe here.
+        var kind = MapKind(Kind);
+        if (kind != _model.Kind || !string.Equals(SubjectId, _model.SelectedId, StringComparison.Ordinal))
+        {
+            _model.SyncExternalState(kind, SubjectId ?? string.Empty);
+        }
+    }
+
+    private void OnModelChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnModelSubjectSelected(string id, string displayName) =>
+        InvokeAsync(async () =>
+        {
+            Kind = MapKind(_model.Kind);
+            await KindChanged.InvokeAsync(Kind);
+            SubjectId = id;
+            await SubjectIdChanged.InvokeAsync(id);
+            SubjectDisplayName = displayName;
+            await SubjectDisplayNameChanged.InvokeAsync(displayName);
+        });
+
+    private async Task OnKindChangedAsync(ChangeEventArgs e)
+    {
+        var kind = Enum.Parse<LatticeSubjectSelectorKind>(e.Value?.ToString() ?? nameof(LatticeSubjectSelectorKind.User));
+        await _model.SetKindAsync(MapKind(kind));
+    }
+
+    private Task OnTermChangedAsync(ChangeEventArgs e) =>
+        _model.SetSearchTermAsync(e.Value?.ToString() ?? string.Empty);
+
+    private Task OnResultSelectedAsync(string id) => _model.SelectAsync(id);
+
+    private Task OnLoadMoreAsync() => _model.LoadMoreAsync();
+
+    private static DirectoryPrincipalKind MapKind(LatticeSubjectSelectorKind kind) =>
+        kind == LatticeSubjectSelectorKind.Group ? DirectoryPrincipalKind.Group : DirectoryPrincipalKind.User;
+
+    private static LatticeSubjectSelectorKind MapKind(DirectoryPrincipalKind kind) =>
+        kind == DirectoryPrincipalKind.Group ? LatticeSubjectSelectorKind.Group : LatticeSubjectSelectorKind.User;
+
+    private static string PrincipalLabel(DirectoryPrincipalDescriptor principal) =>
+        string.IsNullOrWhiteSpace(principal.DisplayName) || string.Equals(principal.DisplayName, principal.Id, StringComparison.Ordinal)
+            ? principal.Id
+            : principal.DisplayName;
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_model is null)
+        {
+            return;
+        }
+
+        _model.Changed -= OnModelChanged;
+        _model.SubjectSelected -= OnModelSubjectSelected;
+    }
+}

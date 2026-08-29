@@ -274,7 +274,7 @@ public sealed class LatticeTenantPolicyEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(decision.Allowed, Is.False);
-            Assert.That(decision.Reason, Does.Contain("no grant"));
+            Assert.That(decision.Reason, Does.Contain("no active grant"));
         });
     }
 

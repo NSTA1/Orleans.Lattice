@@ -1,7 +1,14 @@
 <Solution>
   <Project Path="Core/Orleans.Lattice.Explorer.Core.csproj" />
-  <Project Path="Backup/Orleans.Lattice.Explorer.Backup.csproj" />
-  <Project Path="Access/Orleans.Lattice.Explorer.Access.csproj" />
+  <Project Path="Plugins/Selection/Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+  <Project Path="Plugins/Metrics/Orleans.Lattice.Explorer.Plugins.Metrics.csproj" />
+  <Project Path="Plugins/Topology/Orleans.Lattice.Explorer.Plugins.Topology.csproj" />
+  <Project Path="Plugins/Data/Orleans.Lattice.Explorer.Plugins.Data.csproj" />
+  <Project Path="Plugins/History/Orleans.Lattice.Explorer.Plugins.History.csproj" />
+  <Project Path="Plugins/DeadLetter/Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj" />
+  <Project Path="Plugins/TagIndex/Orleans.Lattice.Explorer.Plugins.TagIndex.csproj" />
+  <Project Path="Plugins/Backups/Orleans.Lattice.Explorer.Plugins.Backups.csproj" />
+  <Project Path="Plugins/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="WebHosting/Orleans.Lattice.Explorer.Web.csproj" />

@@ -1,0 +1,134 @@
+@*
+    Renders a precedence-ranked set of authorization rules.
+
+    At medium and expanded this is a real table - aligned columns and a
+    scannable header row, which is what a wide technical surface wants. At
+    compact the same column declaration reflows to a card list through
+    LatticeAdaptiveTable, so the rule set stops scrolling sideways off a narrow
+    window. The presentation follows the cascaded breakpoint by name; this file
+    contains no media query and no width (epic decision D7).
+
+    The ranking is a presentation aid only - the authoritative verdict is the
+    facade's Allowed flag, rendered separately by the Explain view. A rule that
+    denies (and so overrides a matching allow of equal specificity under
+    deny-override) is marked in its own Effect cell rather than by a row class,
+    so the signal survives the reflow into a card.
+*@
+
+<LatticeAdaptiveTable TItem="RankedRule"
+                      Items="Rules"
+                      Columns="_columns"
+                      Label="@Label"
+                      Class="lxa-ruletable"
+                      KeySelector="RuleKey"
+                      EmptyText="No rules apply." />
+
+@code {
+    private const string EffectClass = "lxa-effect";
+    private const string DenyEffectClass = "lxa-effect is-deny";
+
+    private const string DenyOverrideTitle =
+        "Deny overrides a matching allow of equal scope specificity.";
+
+    // The five fixed cell templates, bound once at mount. Each reads Labels
+    // through the field when it renders, so a later Labels change is picked up
+    // without rebuilding a delegate.
+    private RenderFragment<RankedRule>? _ruleIdCell;
+    private RenderFragment<RankedRule>? _subjectCell;
+    private RenderFragment<RankedRule>? _scopeCell;
+    private RenderFragment<RankedRule>? _operationsCell;
+    private RenderFragment<RankedRule>? _effectCell;
+
+    private LatticeTableColumn<RankedRule>[]? _columns;
+    private bool _builtWithRowActions;
+
+    /// <summary>The precedence-ranked rules to render, highest precedence first.</summary>
+    [Parameter] public IReadOnlyList<RankedRule> Rules { get; set; } = [];
+
+    /// <summary>
+    /// An optional label resolver used to render each rule's subject id as its
+    /// friendly directory display name (raw id on hover). When
+    /// <see langword="null"/>, or when an id is not yet resolved, the subject
+    /// renders as the raw <c>kind:id</c> label exactly as before.
+    /// </summary>
+    [Parameter] public PrincipalLabelResolver? Labels { get; set; }
+
+    /// <summary>The surface's accessible name.</summary>
+    [Parameter] public string Label { get; set; } = "Rules";
+
+    /// <summary>
+    /// Rendered in a trailing column when supplied - the Policies surface uses
+    /// it for the per-rule Edit control. Omitted entirely when null, so the
+    /// read-only Explain and effective-permissions tables grow no empty column.
+    /// </summary>
+    [Parameter] public RenderFragment<RankedRule>? RowActions { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        _ruleIdCell = RuleIdCell;
+        _subjectCell = SubjectCell;
+        _scopeCell = ScopeCell;
+        _operationsCell = OperationsCell;
+        _effectCell = EffectCell;
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        // The column set depends only on whether there is a row-action column,
+        // so it is built once and reused. Rebuilding it per parameter change
+        // would allocate a list, six descriptors, and an array on every busy
+        // toggle and every load, and this table re-renders on all of them.
+        var hasRowActions = RowActions is not null;
+        if (_columns is not null && _builtWithRowActions == hasRowActions)
+        {
+            return;
+        }
+
+        _columns = BuildColumns(hasRowActions);
+        _builtWithRowActions = hasRowActions;
+    }
+
+    // A rule id is unique within the loaded page and is already a string, so it
+    // is a stable reference key: @key never boxes for these rows.
+    private static object RuleKey(RankedRule ranked) => ranked.Rule.RuleId;
+
+    private LatticeTableColumn<RankedRule>[] BuildColumns(bool hasRowActions)
+    {
+        var columns = new List<LatticeTableColumn<RankedRule>>(6)
+        {
+            new() { Header = "Rule", IsPrimary = true, IsNumericOrCode = true, Cell = _ruleIdCell! },
+            new() { Header = "Subject", Cell = _subjectCell! },
+            new() { Header = "Scope", Cell = _scopeCell! },
+            new() { Header = "Ops", Cell = _operationsCell! },
+            new() { Header = "Effect", Cell = _effectCell! },
+        };
+
+        if (hasRowActions)
+        {
+            // Read through a forwarding template rather than captured directly,
+            // so a caller may swap the row action without invalidating the
+            // cached column set.
+            columns.Add(new LatticeTableColumn<RankedRule> { Header = "Actions", Cell = RowActionCell });
+        }
+
+        return [.. columns];
+    }
+
+    private RenderFragment<RankedRule> RowActionCell => ranked => RowActions!(ranked);
+
+    private RenderFragment<RankedRule> RuleIdCell => ranked => @<text>@ranked.Rule.RuleId</text>;
+
+    private RenderFragment<RankedRule> SubjectCell => ranked =>
+        @<span title="@AccessRuleFormat.SubjectLabel(ranked.Rule.Subject)">@AccessRuleFormat.SubjectDisplayLabel(ranked.Rule.Subject, Labels)</span>;
+
+    private RenderFragment<RankedRule> ScopeCell => ranked => @<text>@AccessRuleFormat.ScopeLabel(ranked.Rule.Scope)</text>;
+
+    private RenderFragment<RankedRule> OperationsCell => ranked =>
+        @<text>@AccessRuleFormat.OperationsLabel(ranked.Rule.Operations)</text>;
+
+    private RenderFragment<RankedRule> EffectCell => ranked =>
+        @<span class="@(ranked.DenyOverrides ? DenyEffectClass : EffectClass)"
+               title="@(ranked.DenyOverrides ? DenyOverrideTitle : null)">@ranked.Rule.Effect</span>;
+}

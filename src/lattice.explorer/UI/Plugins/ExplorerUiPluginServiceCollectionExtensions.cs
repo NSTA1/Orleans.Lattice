@@ -21,6 +21,12 @@ namespace Orleans.Lattice.Explorer.UI.Plugins;
 /// per-area option flag and no shared registry to edit: withholding a plugin is
 /// simply not registering it.
 /// </para>
+/// <para>
+/// A plugin that lives in its own package registers itself from that package
+/// instead - <c>AddExplorerBackupsPlugin</c> ships with the Backups plugin and
+/// <c>AddExplorerAccessPlugin</c> with the Access plugin - so this type shrinks
+/// as each remaining area is converted.
+/// </para>
 /// </summary>
 public static class ExplorerUiPluginServiceCollectionExtensions
 {
@@ -55,32 +61,6 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         services.TryAddScoped<IExplorerPluginPreferences, ExplorerPluginPreferences>();
 
         return services;
-    }
-
-    /// <summary>
-    /// Registers the Backups area plugin. The Backups feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerBackupsPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<BackupsAreaPlugin>();
-    }
-
-    /// <summary>
-    /// Registers the Access area plugin. The Access feature itself must be
-    /// registered separately (it owns the control client and the access gate).
-    /// </summary>
-    /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException"><paramref name="services"/> is <see langword="null"/>.</exception>
-    public static IServiceCollection AddExplorerAccessPlugin(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerPluginAdapters();
-        return services.AddExplorerPlugin<AccessAreaPlugin>();
     }
 
     /// <summary>

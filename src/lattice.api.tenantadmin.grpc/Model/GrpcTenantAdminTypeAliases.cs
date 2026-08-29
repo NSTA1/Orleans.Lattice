@@ -53,4 +53,10 @@ public static class GrpcTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantAdminSubjectRequest"/>.</summary>
     public const string TenantAdminSubjectRequest = "oitng.subjreq";
+
+    /// <summary>Alias for <see cref="TenantAdminGrantRequest"/>.</summary>
+    public const string TenantAdminGrantRequest = "oitng.grntreq";
+
+    /// <summary>Alias for <see cref="TenantAdminGrantOfferRequest"/>.</summary>
+    public const string TenantAdminGrantOfferRequest = "oitng.grntoff";
 }
