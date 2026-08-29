@@ -132,6 +132,7 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTenantAdminGrpcMethods.AuthorizeAllowedRegionsMethodName => LatticeTenantAdminApiOperation.AuthorizeAllowedRegions,
             LatticeTenantAdminGrpcMethods.SetTenantResidencyMethodName => LatticeTenantAdminApiOperation.SetTenantResidency,
             LatticeTenantAdminGrpcMethods.GetTenantRegionStatusMethodName => LatticeTenantAdminApiOperation.GetTenantRegionStatus,
+            LatticeTenantAdminGrpcMethods.GetTenantQuotaUsageMethodName => LatticeTenantAdminApiOperation.GetTenantQuotaUsage,
             LatticeTenantAdminGrpcMethods.ListTenantAdminSubjectsMethodName => LatticeTenantAdminApiOperation.ListTenantAdminSubjects,
             LatticeTenantAdminGrpcMethods.AddTenantAdminSubjectMethodName => LatticeTenantAdminApiOperation.AddTenantAdminSubject,
             LatticeTenantAdminGrpcMethods.RemoveTenantAdminSubjectMethodName => LatticeTenantAdminApiOperation.RemoveTenantAdminSubject,

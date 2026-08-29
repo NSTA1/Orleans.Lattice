@@ -19,7 +19,9 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// unauthenticated auth-scheme discovery RPC (<c>GetAuthScheme</c>), the read-only
 /// self-service RPCs, the three <see cref="ILatticeTenantRegionAdmin"/>
 /// region-residency RPCs (<c>AuthorizeAllowedRegions</c>,
-/// <c>SetTenantResidency</c>, <c>GetTenantRegionStatus</c>), and the three
+/// <c>SetTenantResidency</c>, <c>GetTenantRegionStatus</c>), the read-only
+/// <see cref="ILatticeTenantQuotaUsage"/> usage-against-quota RPC
+/// (<c>GetTenantQuotaUsage</c>), and the three
 /// <see cref="ILatticeTenantAccessAdmin"/> admin-subject RPCs
 /// (<c>ListTenantAdminSubjects</c>, <c>AddTenantAdminSubject</c>,
 /// <c>RemoveTenantAdminSubject</c>).
@@ -69,6 +71,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant-admin per-region status RPC method name.</summary>
     public const string GetTenantRegionStatusMethodName = "GetTenantRegionStatus";
 
+    /// <summary>The unary, read-only tenant-admin usage-against-quota RPC method name.</summary>
+    public const string GetTenantQuotaUsageMethodName = "GetTenantQuotaUsage";
+
     /// <summary>The unary, read-only tenant-admin admin-subject listing RPC method name.</summary>
     public const string ListTenantAdminSubjectsMethodName = "ListTenantAdminSubjects";
 
@@ -98,6 +103,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantRegionAuthorizationResult> regionAuthorizationResultSerializer,
         Serializer<TenantResidencyChangeResult> residencyChangeResultSerializer,
         Serializer<TenantRegionStatusReport> regionStatusReportSerializer,
+        Serializer<TenantQuotaUsageReport> quotaUsageReportSerializer,
         Serializer<TenantAdminSubjectRequest> subjectRequestSerializer,
         Serializer<TenantAdminSubjectReport> subjectReportSerializer,
         Serializer<TenantAdminSubjectChangeResult> subjectChangeResultSerializer)
@@ -120,6 +126,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(regionAuthorizationResultSerializer);
         ArgumentNullException.ThrowIfNull(residencyChangeResultSerializer);
         ArgumentNullException.ThrowIfNull(regionStatusReportSerializer);
+        ArgumentNullException.ThrowIfNull(quotaUsageReportSerializer);
         ArgumentNullException.ThrowIfNull(subjectRequestSerializer);
         ArgumentNullException.ThrowIfNull(subjectReportSerializer);
         ArgumentNullException.ThrowIfNull(subjectChangeResultSerializer);
@@ -208,6 +215,13 @@ internal sealed class LatticeTenantAdminGrpcMethods
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(regionStatusReportSerializer));
 
+        GetTenantQuotaUsage = new Method<TenantAdminTenantRequest, TenantQuotaUsageReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: GetTenantQuotaUsageMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(quotaUsageReportSerializer));
+
         ListTenantAdminSubjects = new Method<TenantAdminTenantRequest, TenantAdminSubjectReport>(
             type: MethodType.Unary,
             serviceName: ServiceName,
@@ -266,6 +280,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant-admin per-region status RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantRegionStatusReport> GetTenantRegionStatus { get; }
 
+    /// <summary>The unary, read-only tenant-admin usage-against-quota RPC.</summary>
+    public Method<TenantAdminTenantRequest, TenantQuotaUsageReport> GetTenantQuotaUsage { get; }
+
     /// <summary>The unary, read-only tenant-admin admin-subject listing RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantAdminSubjectReport> ListTenantAdminSubjects { get; }
 
@@ -303,6 +320,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantRegionAuthorizationResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantResidencyChangeResult>>(),
             serializerProvider.GetRequiredService<Serializer<TenantRegionStatusReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantQuotaUsageReport>>(),
             serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectReport>>(),
             serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectChangeResult>>());

@@ -250,6 +250,30 @@ public sealed class LatticeTenantAdminApiGrpcClient
     }
 
     /// <summary>
+    /// Reads a tenant's current usage against its quota ceilings: per dimension the
+    /// consumption, the steady-state ceiling, the burst-adjusted admission ceiling,
+    /// and the live and accrued overage, qualified by the enforcement scope the
+    /// figures were read under. Read-only, and a <b>tenant-admin</b> action - the
+    /// server authorizes the caller as the platform operator <b>or</b> a live admin
+    /// subject on the tenant record, and answers <c>NotFound</c> both when the
+    /// tenant does not exist and when the caller may not read it, so the call can
+    /// never be used to probe for tenant existence.
+    /// </summary>
+    /// <param name="tenantId">The tenant id to report on. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tenant's usage-against-quota report.</returns>
+    /// <exception cref="ArgumentException"><paramref name="tenantId"/> is <c>null</c> or empty.</exception>
+    public Task<TenantQuotaUsageReport> GetTenantQuotaUsageAsync(
+        string tenantId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tenantId);
+        return UnaryAsync(
+            _methods.GetTenantQuotaUsage,
+            new TenantAdminTenantRequest { TenantId = tenantId },
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Lists the subjects that hold tenant-admin authority over a tenant, in
     /// ordinal order. Read-only, and a <b>tenant-admin</b> action - the server
     /// authorizes the caller as the platform operator <b>or</b> a live admin

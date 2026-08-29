@@ -94,6 +94,14 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
     public abstract Task<TenantRegionStatusReport> GetTenantRegionStatus(TenantAdminTenantRequest request, ServerCallContext context);
 
     /// <summary>
+    /// Reads a tenant's current usage against its quota ceilings. Read-only, and an
+    /// <b>operator-or-tenant-admin</b> action enforced fail-closed by the facade
+    /// (an unauthorized tenant is indistinguishable from an absent one).
+    /// Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
+    /// </summary>
+    public abstract Task<TenantQuotaUsageReport> GetTenantQuotaUsage(TenantAdminTenantRequest request, ServerCallContext context);
+
+    /// <summary>
     /// Lists a tenant's live tenant-admin subjects. Read-only, and an
     /// <b>operator-or-tenant-admin</b> action enforced fail-closed by the facade.
     /// Implemented in <see cref="LatticeTenantAdminGrpcService"/>.
@@ -146,6 +154,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.AuthorizeAllowedRegions, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>?)null);
             binder.AddMethod(methods.SetTenantResidency, (UnaryServerMethod<TenantAdminRegionSetRequest, TenantResidencyChangeResult>?)null);
             binder.AddMethod(methods.GetTenantRegionStatus, (UnaryServerMethod<TenantAdminTenantRequest, TenantRegionStatusReport>?)null);
+            binder.AddMethod(methods.GetTenantQuotaUsage, (UnaryServerMethod<TenantAdminTenantRequest, TenantQuotaUsageReport>?)null);
             binder.AddMethod(methods.ListTenantAdminSubjects, (UnaryServerMethod<TenantAdminTenantRequest, TenantAdminSubjectReport>?)null);
             binder.AddMethod(methods.AddTenantAdminSubject, (UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>?)null);
             binder.AddMethod(methods.RemoveTenantAdminSubject, (UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>?)null);
@@ -164,6 +173,7 @@ internal abstract class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.AuthorizeAllowedRegions, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantRegionAuthorizationResult>(serviceImpl.AuthorizeAllowedRegions));
         binder.AddMethod(methods.SetTenantResidency, new UnaryServerMethod<TenantAdminRegionSetRequest, TenantResidencyChangeResult>(serviceImpl.SetTenantResidency));
         binder.AddMethod(methods.GetTenantRegionStatus, new UnaryServerMethod<TenantAdminTenantRequest, TenantRegionStatusReport>(serviceImpl.GetTenantRegionStatus));
+        binder.AddMethod(methods.GetTenantQuotaUsage, new UnaryServerMethod<TenantAdminTenantRequest, TenantQuotaUsageReport>(serviceImpl.GetTenantQuotaUsage));
         binder.AddMethod(methods.ListTenantAdminSubjects, new UnaryServerMethod<TenantAdminTenantRequest, TenantAdminSubjectReport>(serviceImpl.ListTenantAdminSubjects));
         binder.AddMethod(methods.AddTenantAdminSubject, new UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>(serviceImpl.AddTenantAdminSubject));
         binder.AddMethod(methods.RemoveTenantAdminSubject, new UnaryServerMethod<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult>(serviceImpl.RemoveTenantAdminSubject));
@@ -182,6 +192,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     private readonly ILatticeTenantAdmin _control;
     private readonly ILatticeTenantSelfService _selfService;
     private readonly ILatticeTenantRegionAdmin? _regionAdmin;
+    private readonly ILatticeTenantQuotaUsage? _quotaUsage;
     private readonly ILatticeTenantAccessAdmin? _accessAdmin;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
@@ -199,11 +210,13 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// observes a populated holder.
     /// </summary>
     /// <remarks>
-    /// <paramref name="regionAdmin"/> and <paramref name="accessAdmin"/> are
-    /// <b>optional</b>. Each is a separate opt-in registration, so a host that
-    /// binds tenant administration without one must keep working exactly as it did
+    /// <paramref name="regionAdmin"/>, <paramref name="quotaUsage"/> and
+    /// <paramref name="accessAdmin"/> are <b>optional</b>. Each is a separate
+    /// opt-in registration (and the usage facade may also be absent on a host
+    /// running an older facade package), so a host that binds tenant
+    /// administration without any of them must keep working exactly as it did
     /// before those RPCs existed: the binding still serves every lifetime and
-    /// self-service RPC, and the RPCs of the absent facade answer
+    /// self-service RPC, and the RPCs of an absent facade answer
     /// <see cref="StatusCode.Unimplemented"/> rather than failing container
     /// construction at startup.
     /// </remarks>
@@ -216,6 +229,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         IOptions<LatticeTenantAdminApiGrpcOptions> options,
         ILogger<LatticeTenantAdminGrpcService> logger,
         ILatticeTenantRegionAdmin? regionAdmin = null,
+        ILatticeTenantQuotaUsage? quotaUsage = null,
         ILatticeTenantAccessAdmin? accessAdmin = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
@@ -229,6 +243,7 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
         _control = control;
         _selfService = selfService;
         _regionAdmin = regionAdmin;
+        _quotaUsage = quotaUsage;
         _accessAdmin = accessAdmin;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
@@ -327,6 +342,70 @@ internal sealed class LatticeTenantAdminGrpcService : LatticeTenantAdminGrpcServ
     /// <inheritdoc />
     public override Task<TenantRegionStatusReport> GetTenantRegionStatus(TenantAdminTenantRequest request, ServerCallContext context)
         => InvokeRegionAdminAsync(request, context, static (admin, req, ct) => admin.GetTenantRegionStatusAsync(req.TenantId, ct));
+
+    /// <inheritdoc />
+    public override async Task<TenantQuotaUsageReport> GetTenantQuotaUsage(TenantAdminTenantRequest request, ServerCallContext context)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        // The usage facade ships with the tenant-administration facade package, so
+        // its absence means the host is running an older one. Answer honestly
+        // rather than faulting container construction at startup, exactly as the
+        // opt-in region-residency RPCs do.
+        if (_quotaUsage is not { } quotaUsage)
+        {
+            throw new RpcException(new Status(
+                StatusCode.Unimplemented,
+                "This cluster does not serve tenant usage against quota. Register the "
+                + "tenant usage facade to enable it."));
+        }
+
+        using var activeTenantScope = StampActiveTenant(context);
+        using var credentialScope = StampCallerCredential(context);
+
+        try
+        {
+            return await quotaUsage
+                .GetQuotaUsageAsync(request.TenantId, context.CancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw new RpcException(new Status(StatusCode.Cancelled, "The tenant usage request was cancelled."));
+        }
+        // The facade unifies an unauthorized tenant with an absent one into a
+        // single not-found, so this is the only refusal a caller can observe and
+        // the transport must not widen it back into a distinguishable denial.
+        catch (TenantNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (LatticeAuthorizationDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        // A fail-closed tenant resolution: the caller has no valid active tenant, or
+        // may not act as the one it asserted. An authorization outcome, not a server
+        // fault, so it must not fall through to Internal below.
+        catch (LatticeTenantAccessDeniedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Api.TenantAdmin: gRPC tenant-usage call to {Method} failed.", context.Method);
+            throw new RpcException(new Status(StatusCode.Internal, "The tenant usage request failed."));
+        }
+    }
 
     /// <inheritdoc />
     public override Task<TenantAdminSubjectReport> ListTenantAdminSubjects(TenantAdminTenantRequest request, ServerCallContext context)

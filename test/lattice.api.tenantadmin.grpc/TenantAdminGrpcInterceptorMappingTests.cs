@@ -34,10 +34,24 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
             Assert.That((int)LatticeTenantAdminApiOperation.AuthorizeAllowedRegions, Is.EqualTo(6));
             Assert.That((int)LatticeTenantAdminApiOperation.SetTenantResidency, Is.EqualTo(7));
             Assert.That((int)LatticeTenantAdminApiOperation.GetTenantRegionStatus, Is.EqualTo(8));
-            Assert.That((int)LatticeTenantAdminApiOperation.ListTenantAdminSubjects, Is.EqualTo(9));
-            Assert.That((int)LatticeTenantAdminApiOperation.AddTenantAdminSubject, Is.EqualTo(10));
-            Assert.That((int)LatticeTenantAdminApiOperation.RemoveTenantAdminSubject, Is.EqualTo(11));
+            Assert.That((int)LatticeTenantAdminApiOperation.GetTenantQuotaUsage, Is.EqualTo(9));
+            Assert.That((int)LatticeTenantAdminApiOperation.ListTenantAdminSubjects, Is.EqualTo(10));
+            Assert.That((int)LatticeTenantAdminApiOperation.AddTenantAdminSubject, Is.EqualTo(11));
+            Assert.That((int)LatticeTenantAdminApiOperation.RemoveTenantAdminSubject, Is.EqualTo(12));
         });
+    }
+
+    [Test]
+    public void No_two_operations_share_a_value()
+    {
+        // Two operations mapping onto one value is a security defect, not a
+        // cosmetic one: a host policy written against the enum would silently
+        // authorize one operation under another's decision. A naive "take both
+        // sides" merge of two branches that each appended a new member produces
+        // exactly that, and it compiles cleanly, so it is asserted explicitly.
+        var values = Enum.GetValues<LatticeTenantAdminApiOperation>().Cast<int>().ToList();
+
+        Assert.That(values, Is.Unique);
     }
 
     [Test]

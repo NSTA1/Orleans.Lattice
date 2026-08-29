@@ -53,6 +53,7 @@ public sealed class LatticeTenantAdminGrpcAccessAdminTests
             Options.Create(new LatticeTenantAdminApiGrpcOptions()),
             NullLogger<LatticeTenantAdminGrpcService>.Instance,
             new FakeTenantRegionAdmin(),
+            new FakeTenantQuotaUsage(),
             accessAdmin);
 
     // ---- round trips -----------------------------------------------------

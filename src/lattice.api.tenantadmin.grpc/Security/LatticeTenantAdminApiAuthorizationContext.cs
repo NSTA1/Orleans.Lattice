@@ -56,17 +56,25 @@ public enum LatticeTenantAdminApiOperation
     GetTenantRegionStatus = 8,
 
     /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b> <c>GetTenantQuotaUsage</c>
+    /// RPC that reports a tenant's current usage against its quota ceilings. The
+    /// facade unifies an unauthorized tenant with an absent one, so a host policy
+    /// applied through this value must not reintroduce a distinguishable refusal.
+    /// </summary>
+    GetTenantQuotaUsage = 9,
+
+    /// <summary>
     /// The read-only, <b>operator-or-tenant-admin</b>
     /// <c>ListTenantAdminSubjects</c> RPC that reports which subjects hold
     /// tenant-admin authority over a tenant.
     /// </summary>
-    ListTenantAdminSubjects = 9,
+    ListTenantAdminSubjects = 10,
 
     /// <summary>
     /// The mutating, <b>operator-or-tenant-admin</b> <c>AddTenantAdminSubject</c>
     /// RPC that grants a subject tenant-admin authority over a tenant.
     /// </summary>
-    AddTenantAdminSubject = 10,
+    AddTenantAdminSubject = 11,
 
     /// <summary>
     /// The mutating, <b>operator-or-tenant-admin</b>
@@ -74,7 +82,7 @@ public enum LatticeTenantAdminApiOperation
     /// authority over a tenant. The facade refuses the removal of a tenant's last
     /// admin subject.
     /// </summary>
-    RemoveTenantAdminSubject = 11,
+    RemoveTenantAdminSubject = 12,
 }
 
 /// <summary>

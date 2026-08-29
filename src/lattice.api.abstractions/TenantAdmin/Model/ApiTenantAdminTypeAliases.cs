@@ -62,6 +62,15 @@ public static class ApiTenantAdminTypeAliases
     /// <summary>Alias for <see cref="TenantQuotasUpdateResult"/>.</summary>
     public const string TenantQuotasUpdateResult = "oitn.qu";
 
+    /// <summary>Alias for <see cref="TenantQuotaEnforcementScope"/>.</summary>
+    public const string TenantQuotaEnforcementScope = "oitn.qe";
+
+    /// <summary>Alias for <see cref="TenantQuotaDimensionUsage"/>.</summary>
+    public const string TenantQuotaDimensionUsage = "oitn.qx";
+
+    /// <summary>Alias for <see cref="TenantQuotaUsageReport"/>.</summary>
+    public const string TenantQuotaUsageReport = "oitn.qr";
+
     /// <summary>Alias for <see cref="TenantAdminSubjectReport"/>.</summary>
     public const string TenantAdminSubjectReport = "oitn.sr";
 
