@@ -59,6 +59,17 @@ public interface ILatticeTenantRegionAdmin
     /// must be allowed, and the change may never remove the last resident region -
     /// both are enforced fail-closed.
     /// </summary>
+    /// <remarks>
+    /// The last-resident-region guard is enforced twice: before the write, and
+    /// again on the registry's committed CRDT join. The second check is what
+    /// holds the invariant when two callers concurrently remove <i>different</i>
+    /// regions - each passes the pre-write check, and the removals tombstone
+    /// disjoint keys, so the join would otherwise keep both and empty residency.
+    /// A call refused by the post-merge check first repairs the regions it
+    /// removed (restoring their prior status at a strictly later stamp) and
+    /// leaves the other caller's removal standing, so the operation is refused
+    /// as a whole and the tenant keeps at least one resident region.
+    /// </remarks>
     /// <param name="tenantId">The tenant id. Must be a valid, non-empty tenant id.</param>
     /// <param name="residencyRegions">The complete desired residency set. Must not be <c>null</c>; each id must be non-empty; must not be empty (a tenant must stay resident somewhere).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -67,7 +78,7 @@ public interface ILatticeTenantRegionAdmin
     /// <exception cref="ArgumentNullException"><paramref name="residencyRegions"/> is <c>null</c>.</exception>
     /// <exception cref="TenantNotFoundException">No tenant with that id is registered.</exception>
     /// <exception cref="TenantRegionNotAllowedException">A requested residency region is not in the allowed set.</exception>
-    /// <exception cref="TenantLastRegionException">The change would remove the last resident region.</exception>
+    /// <exception cref="TenantLastRegionException">The change would remove the last resident region, either as submitted or once merged with a concurrent removal.</exception>
     /// <exception cref="Orleans.Lattice.LatticeAuthorizationDeniedException">The caller is neither a platform operator nor a tenant admin.</exception>
     Task<TenantResidencyChangeResult> SetResidencyAsync(
         string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default);

@@ -64,7 +64,7 @@ The tool results are plain records projected to structured JSON by the MCP SDK (
 - `TelemetryMetricListResult` - `Success`, `Error`, and `Metrics`.
 - `TelemetryMetricMetadataResult` - `Success`, `Error`, `Metrics` (each `TelemetryMetricMetadata` carries `Metric`, `Type`, `Help`, and `Unit`), and a non-fatal `Notice` advisory. `Notice` is populated when a named lookup resolves to no metadata - typically because a Prometheus exposition name (with a `_total`/`_bucket`/`_count`/`_sum` suffix) was passed where the OTEL base instrument name is expected - so an unrecognised name is distinguishable from an admitted-but-genuinely-empty listing.
 
-A backend timeout, HTTP failure, non-success status, or malformed payload is caught and surfaced on `Error`, so the agent always observes a structured result rather than a transport fault. The one deliberate exception is `metric_metadata`: a `404` from the backend metadata endpoint degrades to `Success = true` with an empty `Metrics` list rather than an error. A genuine caller cancellation still propagates.
+A backend timeout, HTTP failure, non-success status, or malformed payload is caught and surfaced on `Error`, so the agent always observes a structured result rather than a transport fault. A backend transport or payload fault reports a fixed message and never interpolates the caught exception's text, which would be a disclosure channel for the backend credential (see [Security - fail-clean surfacing](security.md#fail-clean-surfacing)); the detail is logged server-side instead. The one deliberate exception is `metric_metadata`: a `404` from the backend metadata endpoint degrades to `Success = true` with an empty `Metrics` list rather than an error. A genuine caller cancellation still propagates.
 
 ## Next
 

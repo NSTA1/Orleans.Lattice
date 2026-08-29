@@ -14,8 +14,14 @@ namespace Orleans.Lattice;
 /// <c>grainFactory.GetGrain&lt;IAtomicActionGrain&gt;("order-4711")</c>. The
 /// operation id is the idempotency key: re-issuing the same plan under the same id
 /// after the saga is terminal returns the memoized outcome without re-running any
-/// effect. Build a plan with <see cref="AtomicActionPlanBuilder"/>, and register
-/// custom handlers at silo start with <c>AddLatticeAtomicAction</c>.
+/// effect. It must be non-empty and must not contain <c>'/'</c>, which is reserved
+/// as the grain-key separator - a tree-write step dispatches to a per-tree saga
+/// keyed <c>{treeId}/{operationId}::aa::{index}</c>, and a tree id may itself be
+/// segmented, so an operation id carrying a separator would make that key
+/// ambiguous. The same constraint applies to <c>ILattice.SetManyAtomicAsync</c>
+/// and the cross-tree coordinator. Build a plan with
+/// <see cref="AtomicActionPlanBuilder"/>, and register custom handlers at silo
+/// start with <c>AddLatticeAtomicAction</c>.
 /// </para>
 /// <para>
 /// <b>Atomicity, precisely.</b> A built-in tree-write step inherits the tree's
@@ -53,8 +59,10 @@ public interface IAtomicActionGrain : IGrainWithStringKey
     /// </returns>
     /// <exception cref="System.ArgumentNullException"><paramref name="plan"/> is <see langword="null"/>.</exception>
     /// <exception cref="System.ArgumentException">
-    /// The plan is empty, exceeds <see cref="LatticeOptions.MaxAtomicActionSteps"/>,
-    /// a custom step has an empty handler id, or a step is malformed for its kind.
+    /// This grain's operation id (its key) is empty, whitespace, or contains
+    /// <c>'/'</c>; or the plan is empty, exceeds
+    /// <see cref="LatticeOptions.MaxAtomicActionSteps"/>, a custom step has an empty
+    /// handler id, or a step is malformed for its kind.
     /// </exception>
     /// <exception cref="AtomicActionHandlerNotRegisteredException">
     /// A custom step names a handler id that is not registered on this silo. Handler

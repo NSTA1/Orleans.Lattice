@@ -63,6 +63,46 @@ internal sealed class AtomicActionGrain(
 
     private string OperationId => GrainContext.GrainId.Key.ToString()!;
 
+    /// <summary>
+    /// Rejects an operation id that cannot survive the composite saga grain key.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A per-tree write step is dispatched to an <see cref="IAtomicWriteGrain"/>
+    /// keyed <c>{treeId}/{operationId}::aa::{index}</c>, and that saga splits the
+    /// key at its <b>last</b> separator to recover the tree id and the operation
+    /// id. A tree id may itself be segmented (a tenant-composed
+    /// <c>t/{tenantId}/{name}</c>), so the last separator is the only choice that
+    /// is correct for every tree - which in turn requires that an operation id
+    /// contribute no separator of its own. The two sibling entry points that
+    /// compose the same key space (<c>LatticeGrain.SetManyAtomicAsync</c> and the
+    /// cross-tree coordinator) already enforce exactly this; the atomic-action
+    /// operation id arrives as this grain's own key, so it is enforced here at
+    /// the single point every plan funnels through.
+    /// </para>
+    /// <para>
+    /// Fail-closed and allocation-free: the check runs before any state is read
+    /// or written, and turns what would otherwise be a silently mis-keyed saga
+    /// (a plausible-but-wrong tree id and correlation id) into an actionable
+    /// caller error.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// The grain key is empty, whitespace, or contains <c>'/'</c>.
+    /// </exception>
+    private void ValidateOperationId()
+    {
+        var operationId = OperationId;
+        if (string.IsNullOrWhiteSpace(operationId) || operationId.Contains('/'))
+        {
+            throw new ArgumentException(
+                "An atomic-action operationId (this grain's key) must be non-empty and must not "
+                + "contain '/' (reserved as the grain-key separator). Resolve the grain with an "
+                + "operationId that carries no '/'.",
+                nameof(operationId));
+        }
+    }
+
     /// <inheritdoc />
     protected override string TtlReminderName => RetentionReminderName;
 
@@ -110,6 +150,7 @@ internal sealed class AtomicActionGrain(
     public async Task<AtomicActionOutcome> ExecuteAsync(AtomicActionPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ValidateOperationId();
 
         // Idempotent re-entry: a plan already accepted under this operation id must
         // match the original, and a terminal saga returns its memoized outcome.

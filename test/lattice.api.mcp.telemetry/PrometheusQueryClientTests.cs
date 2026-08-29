@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
@@ -242,9 +243,14 @@ public sealed class PrometheusQueryClientTests
                 typeof(HttpClient),
                 typeof(IOptions<LatticeApiMcpTelemetryOptions>),
                 typeof(ITelemetryBackendTokenProvider),
+                typeof(ILogger<PrometheusQueryClient>),
             }),
-            "The backend client may take only its HTTP client, its own options, and the "
-            + "backend-token seam - none of which can forward a caller's Lattice credential to the backend.");
+            "The backend client may take only its HTTP client, its own options, the "
+            + "backend-token seam, and a server-side logging sink - none of which is a source "
+            + "of, or a route for, a caller's Lattice credential reaching the backend. The "
+            + "logger is the deliberate destination for backend-fault detail, which the "
+            + "caller-facing tool result withholds so the backend credential cannot ride out "
+            + "on exception text.");
     }
 
     private sealed class StubTokenProvider(string token) : ITelemetryBackendTokenProvider
