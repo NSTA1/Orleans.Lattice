@@ -38,8 +38,84 @@ public sealed class TenantAdminGrpcInterceptorMappingTests
             Assert.That((int)LatticeTenantAdminApiOperation.ListTenantAdminSubjects, Is.EqualTo(10));
             Assert.That((int)LatticeTenantAdminApiOperation.AddTenantAdminSubject, Is.EqualTo(11));
             Assert.That((int)LatticeTenantAdminApiOperation.RemoveTenantAdminSubject, Is.EqualTo(12));
+            Assert.That((int)LatticeTenantAdminApiOperation.ListCrossTenantGrants, Is.EqualTo(13));
+            Assert.That((int)LatticeTenantAdminApiOperation.OfferCrossTenantGrant, Is.EqualTo(14));
+            Assert.That((int)LatticeTenantAdminApiOperation.ApproveCrossTenantGrant, Is.EqualTo(15));
+            Assert.That((int)LatticeTenantAdminApiOperation.RejectCrossTenantGrant, Is.EqualTo(16));
+            Assert.That((int)LatticeTenantAdminApiOperation.RevokeCrossTenantGrant, Is.EqualTo(17));
         });
     }
+
+    [Test]
+    public void DescribeCall_maps_each_cross_tenant_grant_rpc_and_decodes_the_granting_tenant()
+    {
+        // A grant call names two tenants, so the coarse transport hint uniformly
+        // reports the granting tenant - the one whose record holds the grant. The
+        // authority each operation actually requires differs per operation and is
+        // decided fail-closed at the facade, never here.
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.ListCrossTenantGrantsMethodName),
+                new TenantAdminTenantRequest { TenantId = "acme" }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.ListCrossTenantGrants, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.OfferCrossTenantGrantMethodName),
+                new TenantAdminGrantOfferRequest
+                {
+                    GranterTenantId = "acme",
+                    GranteeTenantId = "beta",
+                    Scope = "orders",
+                    Operations = TenantGrantAccess.Read,
+                }),
+                Is.EqualTo((LatticeTenantAdminApiOperation.OfferCrossTenantGrant, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.ApproveCrossTenantGrantMethodName),
+                GrantRequest()),
+                Is.EqualTo((LatticeTenantAdminApiOperation.ApproveCrossTenantGrant, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.RejectCrossTenantGrantMethodName),
+                GrantRequest()),
+                Is.EqualTo((LatticeTenantAdminApiOperation.RejectCrossTenantGrant, "acme")));
+
+            Assert.That(LatticeTenantAdminApiGrpcAuthInterceptor.DescribeCall(
+                Method(LatticeTenantAdminGrpcMethods.RevokeCrossTenantGrantMethodName),
+                GrantRequest()),
+                Is.EqualTo((LatticeTenantAdminApiOperation.RevokeCrossTenantGrant, "acme")));
+        });
+    }
+
+    [Test]
+    public void No_cross_tenant_grant_rpc_is_exempt_from_authorization()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var method in new[]
+            {
+                LatticeTenantAdminGrpcMethods.ListCrossTenantGrantsMethodName,
+                LatticeTenantAdminGrpcMethods.OfferCrossTenantGrantMethodName,
+                LatticeTenantAdminGrpcMethods.ApproveCrossTenantGrantMethodName,
+                LatticeTenantAdminGrpcMethods.RejectCrossTenantGrantMethodName,
+                LatticeTenantAdminGrpcMethods.RevokeCrossTenantGrantMethodName,
+            })
+            {
+                Assert.That(
+                    LatticeTenantAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(Method(method)),
+                    Is.False,
+                    $"{method} must not be unauthenticated.");
+                Assert.That(
+                    LatticeTenantAdminApiGrpcAuthInterceptor.IsSelfServiceMethod(Method(method)),
+                    Is.False,
+                    $"{method} must not be self-service-exempt.");
+            }
+        });
+    }
+
+    private static TenantAdminGrantRequest GrantRequest() =>
+        new() { GranterTenantId = "acme", GranteeTenantId = "beta", Scope = "orders" };
 
     [Test]
     public void No_two_operations_share_a_value()

@@ -83,6 +83,42 @@ public enum LatticeTenantAdminApiOperation
     /// admin subject.
     /// </summary>
     RemoveTenantAdminSubject = 12,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b>
+    /// <c>ListCrossTenantGrants</c> RPC that reports the cross-tenant grants a
+    /// tenant issued and those offered to it.
+    /// </summary>
+    ListCrossTenantGrants = 13,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-admin-of-the-granting-tenant</b>
+    /// <c>OfferCrossTenantGrant</c> RPC that offers another tenant access to a
+    /// scope of the granting tenant's data. The offer is created pending and
+    /// authorizes nothing until the grantee approves it.
+    /// </summary>
+    OfferCrossTenantGrant = 14,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-admin-of-the-grantee-tenant</b>
+    /// <c>ApproveCrossTenantGrant</c> RPC that activates a pending grant. This is
+    /// the step at which a cross-tenant grant begins to authorize.
+    /// </summary>
+    ApproveCrossTenantGrant = 15,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-admin-of-the-grantee-tenant</b>
+    /// <c>RejectCrossTenantGrant</c> RPC that terminally declines a pending grant.
+    /// </summary>
+    RejectCrossTenantGrant = 16,
+
+    /// <summary>
+    /// The mutating, <b>operator-or-admin-of-either-party</b>
+    /// <c>RevokeCrossTenantGrant</c> RPC that terminally withdraws an active
+    /// grant. Both sides may drive it, so a host policy keyed off this value must
+    /// not assume the call comes from the granting tenant.
+    /// </summary>
+    RevokeCrossTenantGrant = 17,
 }
 
 /// <summary>
@@ -120,7 +156,13 @@ public readonly struct LatticeTenantAdminApiAuthorizationContext
 
     /// <summary>
     /// The tenant id the call targets, or <see langword="null"/> for operations
-    /// that are not scoped to a single tenant.
+    /// that are not scoped to a single tenant. For a cross-tenant grant operation,
+    /// which names two tenants, this is the <b>granting</b> tenant - the one whose
+    /// record holds the grant. The tenant-admin authority a grant operation
+    /// actually requires differs per operation (the grantee's, to approve or
+    /// reject; either party's, to revoke), so a host policy keyed off this value
+    /// is a coarse filter on top of the facade's own fail-closed gate, never a
+    /// substitute for it.
     /// </summary>
     public string? TargetId { get; }
 }

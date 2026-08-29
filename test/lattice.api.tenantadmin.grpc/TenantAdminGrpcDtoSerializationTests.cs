@@ -39,6 +39,137 @@ public sealed class TenantAdminGrpcDtoSerializationTests
     }
 
     [Test]
+    public void TenantAdminGrantRequest_round_trips_both_tenants_and_the_scope()
+    {
+        var recovered = RoundTrip(new TenantAdminGrantRequest
+        {
+            GranterTenantId = "acme",
+            GranteeTenantId = "beta",
+            Scope = "orders",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.GranterTenantId, Is.EqualTo("acme"));
+            Assert.That(recovered.GranteeTenantId, Is.EqualTo("beta"));
+            Assert.That(recovered.Scope, Is.EqualTo("orders"));
+        });
+    }
+
+    [Test]
+    public void TenantAdminGrantOfferRequest_round_trips_its_operation_set()
+    {
+        var recovered = RoundTrip(new TenantAdminGrantOfferRequest
+        {
+            GranterTenantId = "acme",
+            GranteeTenantId = "beta",
+            Scope = "orders",
+            Operations = TenantGrantAccess.ReadWrite,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.GranterTenantId, Is.EqualTo("acme"));
+            Assert.That(recovered.GranteeTenantId, Is.EqualTo("beta"));
+            Assert.That(recovered.Scope, Is.EqualTo("orders"));
+            Assert.That(recovered.Operations, Is.EqualTo(TenantGrantAccess.ReadWrite));
+        });
+    }
+
+    [Test]
+    public void TenantGrantChangeResult_round_trips_every_field_of_its_descriptor()
+    {
+        var recovered = RoundTrip(new TenantGrantChangeResult
+        {
+            Grant = new TenantGrantDescriptor
+            {
+                GranterTenantId = "acme",
+                GranteeTenantId = "beta",
+                Scope = "orders",
+                Operations = TenantGrantAccess.Read,
+                State = TenantGrantLifecycleState.Pending,
+                GrantId = "1:beta\u001forders",
+            },
+            Changed = true,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.Changed, Is.True);
+            Assert.That(recovered.Grant.GranterTenantId, Is.EqualTo("acme"));
+            Assert.That(recovered.Grant.GranteeTenantId, Is.EqualTo("beta"));
+            Assert.That(recovered.Grant.Scope, Is.EqualTo("orders"));
+            Assert.That(recovered.Grant.Operations, Is.EqualTo(TenantGrantAccess.Read));
+            Assert.That(recovered.Grant.State, Is.EqualTo(TenantGrantLifecycleState.Pending));
+            Assert.That(recovered.Grant.GrantId, Is.EqualTo("1:beta\u001forders"));
+        });
+    }
+
+    [Test]
+    public void TenantGrantReport_round_trips_both_directions_independently()
+    {
+        var recovered = RoundTrip(new TenantGrantReport
+        {
+            TenantId = "beta",
+            Issued =
+            [
+                new TenantGrantDescriptor
+                {
+                    GranterTenantId = "beta",
+                    GranteeTenantId = "gamma",
+                    Scope = "ledger",
+                    Operations = TenantGrantAccess.Write,
+                    State = TenantGrantLifecycleState.Revoked,
+                    GrantId = "1:gamma\u001fledger",
+                },
+            ],
+            Received =
+            [
+                new TenantGrantDescriptor
+                {
+                    GranterTenantId = "acme",
+                    GranteeTenantId = "beta",
+                    Scope = "orders",
+                    Operations = TenantGrantAccess.ReadWrite,
+                    State = TenantGrantLifecycleState.Active,
+                    GrantId = "1:beta\u001forders",
+                },
+            ],
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recovered.TenantId, Is.EqualTo("beta"));
+            Assert.That(recovered.Issued, Has.Count.EqualTo(1));
+            Assert.That(recovered.Issued[0].State, Is.EqualTo(TenantGrantLifecycleState.Revoked));
+            Assert.That(recovered.Received, Has.Count.EqualTo(1));
+            Assert.That(recovered.Received[0].State, Is.EqualTo(TenantGrantLifecycleState.Active));
+            Assert.That(recovered.Received[0].Operations, Is.EqualTo(TenantGrantAccess.ReadWrite));
+        });
+    }
+
+    [Test]
+    public void Every_grant_lifecycle_state_round_trips()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var state in Enum.GetValues<TenantGrantLifecycleState>())
+            {
+                var recovered = RoundTrip(new TenantGrantDescriptor
+                {
+                    GranterTenantId = "acme",
+                    GranteeTenantId = "beta",
+                    Scope = "orders",
+                    State = state,
+                    GrantId = "1:beta\u001forders",
+                });
+
+                Assert.That(recovered.State, Is.EqualTo(state));
+            }
+        });
+    }
+
+    [Test]
     public void TenantAdminCreateRequest_round_trips_its_admin_subjects()
     {
         var copy = RoundTrip(new TenantAdminCreateRequest

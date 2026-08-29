@@ -169,6 +169,53 @@ public sealed class TenantRegionResidencyAuthorizer
             $"Administering a tenant's {action} requires platform-operator or tenant-admin authority.");
     }
 
+    /// <summary>
+    /// The non-throwing counterpart of
+    /// <see cref="AuthorizeTenantAdminAsync(TenantId, string, CancellationToken)"/>:
+    /// returns <paramref name="tenant"/>'s record when the caller holds
+    /// tenant-admin-tier authority over it (platform operator, or a live admin
+    /// subject on the record), and <see langword="null"/> when it does not - which
+    /// also covers a tenant that is not registered, so it can never be used to
+    /// distinguish the two.
+    /// </summary>
+    /// <remarks>
+    /// <b>A <see langword="null"/> result means DENIED.</b> It exists only for an
+    /// operation that admits <em>either</em> of two tenants' admins (revoking a
+    /// cross-tenant grant, which either party may do), where probing one side must
+    /// not throw before the other side has been considered. A caller must either
+    /// authorize through another tenant or refuse; treating
+    /// <see langword="null"/> as anything but a denial would open the fail-closed
+    /// posture this class exists to hold.
+    /// </remarks>
+    /// <param name="tenant">The tenant the action targets.</param>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>The tenant's record when the caller is authorized over it; otherwise <see langword="null"/>.</returns>
+    public async ValueTask<TenantRecord?> TryAuthorizeTenantAdminAsync(
+        TenantId tenant, CancellationToken cancellationToken = default)
+    {
+        if (LatticeSystemOrigin.IsActive)
+        {
+            return await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
+        }
+
+        var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            // No record means no authority to grant, for an operator as much as
+            // for anyone else, and reporting it identically keeps the caller from
+            // learning whether the tenant exists.
+            return null;
+        }
+
+        var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
+        if (await IsPlatformOperatorAsync(subject, cancellationToken).ConfigureAwait(false))
+        {
+            return record;
+        }
+
+        return !subject.IsAnonymous && record.HasAdminSubject(subject.SubjectId) ? record : null;
+    }
+
     private async ValueTask<bool> IsPlatformOperatorAsync(LatticeSubject subject, CancellationToken cancellationToken)
     {
         if (subject.IsAnonymous)

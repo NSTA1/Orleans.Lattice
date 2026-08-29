@@ -24,7 +24,11 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// (<c>GetTenantQuotaUsage</c>), and the three
 /// <see cref="ILatticeTenantAccessAdmin"/> admin-subject RPCs
 /// (<c>ListTenantAdminSubjects</c>, <c>AddTenantAdminSubject</c>,
-/// <c>RemoveTenantAdminSubject</c>).
+/// <c>RemoveTenantAdminSubject</c>), and the five
+/// <see cref="ILatticeTenantGrantAdmin"/> cross-tenant grant RPCs
+/// (<c>ListCrossTenantGrants</c>, <c>OfferCrossTenantGrant</c>,
+/// <c>ApproveCrossTenantGrant</c>, <c>RejectCrossTenantGrant</c>,
+/// <c>RevokeCrossTenantGrant</c>).
 /// Contract-versioning policy: fields on the wire messages are additive-only (new
 /// <c>[Id(n)]</c>); aliases and field numbers are never renumbered, so a newer
 /// response decodes cleanly under an older client, and new RPCs are added without
@@ -83,6 +87,21 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary tenant-admin admin-subject revoke RPC method name.</summary>
     public const string RemoveTenantAdminSubjectMethodName = "RemoveTenantAdminSubject";
 
+    /// <summary>The unary, read-only tenant-admin cross-tenant grant listing RPC method name.</summary>
+    public const string ListCrossTenantGrantsMethodName = "ListCrossTenantGrants";
+
+    /// <summary>The unary cross-tenant grant offer RPC method name (granting-tenant admin).</summary>
+    public const string OfferCrossTenantGrantMethodName = "OfferCrossTenantGrant";
+
+    /// <summary>The unary cross-tenant grant approval RPC method name (grantee-tenant admin).</summary>
+    public const string ApproveCrossTenantGrantMethodName = "ApproveCrossTenantGrant";
+
+    /// <summary>The unary cross-tenant grant rejection RPC method name (grantee-tenant admin).</summary>
+    public const string RejectCrossTenantGrantMethodName = "RejectCrossTenantGrant";
+
+    /// <summary>The unary cross-tenant grant revocation RPC method name (either party's admin).</summary>
+    public const string RevokeCrossTenantGrantMethodName = "RevokeCrossTenantGrant";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
@@ -106,7 +125,11 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantQuotaUsageReport> quotaUsageReportSerializer,
         Serializer<TenantAdminSubjectRequest> subjectRequestSerializer,
         Serializer<TenantAdminSubjectReport> subjectReportSerializer,
-        Serializer<TenantAdminSubjectChangeResult> subjectChangeResultSerializer)
+        Serializer<TenantAdminSubjectChangeResult> subjectChangeResultSerializer,
+        Serializer<TenantAdminGrantRequest> grantRequestSerializer,
+        Serializer<TenantAdminGrantOfferRequest> grantOfferRequestSerializer,
+        Serializer<TenantGrantReport> grantReportSerializer,
+        Serializer<TenantGrantChangeResult> grantChangeResultSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
         ArgumentNullException.ThrowIfNull(createRequestSerializer);
@@ -130,6 +153,10 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(subjectRequestSerializer);
         ArgumentNullException.ThrowIfNull(subjectReportSerializer);
         ArgumentNullException.ThrowIfNull(subjectChangeResultSerializer);
+        ArgumentNullException.ThrowIfNull(grantRequestSerializer);
+        ArgumentNullException.ThrowIfNull(grantOfferRequestSerializer);
+        ArgumentNullException.ThrowIfNull(grantReportSerializer);
+        ArgumentNullException.ThrowIfNull(grantChangeResultSerializer);
 
         CreateTenant = new Method<TenantAdminCreateRequest, TenantCreationResult>(
             type: MethodType.Unary,
@@ -242,6 +269,41 @@ internal sealed class LatticeTenantAdminGrpcMethods
             name: RemoveTenantAdminSubjectMethodName,
             requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(subjectRequestSerializer),
             responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(subjectChangeResultSerializer));
+
+        ListCrossTenantGrants = new Method<TenantAdminTenantRequest, TenantGrantReport>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ListCrossTenantGrantsMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(tenantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantReportSerializer));
+
+        OfferCrossTenantGrant = new Method<TenantAdminGrantOfferRequest, TenantGrantChangeResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: OfferCrossTenantGrantMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantOfferRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantChangeResultSerializer));
+
+        ApproveCrossTenantGrant = new Method<TenantAdminGrantRequest, TenantGrantChangeResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: ApproveCrossTenantGrantMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantChangeResultSerializer));
+
+        RejectCrossTenantGrant = new Method<TenantAdminGrantRequest, TenantGrantChangeResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RejectCrossTenantGrantMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantChangeResultSerializer));
+
+        RevokeCrossTenantGrant = new Method<TenantAdminGrantRequest, TenantGrantChangeResult>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: RevokeCrossTenantGrantMethodName,
+            requestMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantRequestSerializer),
+            responseMarshaller: LatticeTenantAdminGrpcMarshallers.Create(grantChangeResultSerializer));
     }
 
     /// <summary>The unary tenant-creation RPC.</summary>
@@ -292,6 +354,21 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary tenant-admin admin-subject revoke RPC.</summary>
     public Method<TenantAdminSubjectRequest, TenantAdminSubjectChangeResult> RemoveTenantAdminSubject { get; }
 
+    /// <summary>The unary, read-only tenant-admin cross-tenant grant listing RPC.</summary>
+    public Method<TenantAdminTenantRequest, TenantGrantReport> ListCrossTenantGrants { get; }
+
+    /// <summary>The unary cross-tenant grant offer RPC (granting-tenant admin).</summary>
+    public Method<TenantAdminGrantOfferRequest, TenantGrantChangeResult> OfferCrossTenantGrant { get; }
+
+    /// <summary>The unary cross-tenant grant approval RPC (grantee-tenant admin).</summary>
+    public Method<TenantAdminGrantRequest, TenantGrantChangeResult> ApproveCrossTenantGrant { get; }
+
+    /// <summary>The unary cross-tenant grant rejection RPC (grantee-tenant admin).</summary>
+    public Method<TenantAdminGrantRequest, TenantGrantChangeResult> RejectCrossTenantGrant { get; }
+
+    /// <summary>The unary cross-tenant grant revocation RPC (either party's admin).</summary>
+    public Method<TenantAdminGrantRequest, TenantGrantChangeResult> RevokeCrossTenantGrant { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -323,7 +400,11 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantQuotaUsageReport>>(),
             serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectRequest>>(),
             serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectReport>>(),
-            serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectChangeResult>>());
+            serializerProvider.GetRequiredService<Serializer<TenantAdminSubjectChangeResult>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGrantRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminGrantOfferRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantGrantReport>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantGrantChangeResult>>());
     }
 }
 

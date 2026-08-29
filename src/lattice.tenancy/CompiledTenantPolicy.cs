@@ -142,6 +142,14 @@ internal sealed class CompiledTenantPolicy
     /// Subject-grantee grants are not indexed here: the engine's cross-tenant
     /// resolution is tenant-to-tenant.
     /// </summary>
+    /// <remarks>
+    /// Every <em>live</em> grant is indexed regardless of its
+    /// <see cref="CrossTenantGrant.State"/>. The lifecycle gate that admits only
+    /// an active grant belongs on the decision path
+    /// (<see cref="LatticeTenantPolicyEngine.ResolveCrossTenantGrant"/>), so
+    /// pre-filtering here would split that authorization rule across two places;
+    /// this projection stays a faithful view of the record.
+    /// </remarks>
     private static FrozenDictionary<string, CrossTenantGrant[]> CompileTenantGrants(
         IReadOnlyList<CrossTenantGrant> grants)
     {

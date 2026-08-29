@@ -39,6 +39,9 @@ internal static class TenantTypeAliases
     /// <summary>Alias for <see cref="Tenancy.TenantGrantOperations"/>.</summary>
     internal const string TenantGrantOperations = "olt.gop";
 
+    /// <summary>Alias for <see cref="Tenancy.TenantGrantState"/>.</summary>
+    internal const string TenantGrantState = "olt.gst";
+
     /// <summary>Alias for <see cref="Tenancy.LocalUsageSample"/>.</summary>
     internal const string LocalUsageSample = "olt.lus";
 
