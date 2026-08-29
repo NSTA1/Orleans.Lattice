@@ -560,6 +560,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         CancellationToken cancellationToken)
     {
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
         var shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
         var startTicks = Stopwatch.GetTimestamp();
 
@@ -624,11 +625,16 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
                     if (!isReplay)
                     {
-                        LatticeMetrics.ProviderRetryExhausted.Add(1,
-                            treeTag,
-                            shardTag,
-                            LatticeMetrics.PhasePhase1Tag,
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(rfe)));
+                        LatticeMetrics.ProviderRetryExhausted.Add(
+                            1,
+                            new System.Diagnostics.TagList
+                            {
+                                treeTag,
+                                shardTag,
+                                LatticeMetrics.PhasePhase1Tag,
+                                new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(rfe)),
+                                tenantTag,
+                            });
                         throw;
                     }
 
@@ -639,10 +645,15 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                     // saturation classifier (which escalates on
                     // ProviderRetryExhausted) is not driven to Saturated by a
                     // write that actually succeeded.
-                    LatticeMetrics.ProviderIdempotentReplays.Add(1,
-                        treeTag,
-                        shardTag,
-                        LatticeMetrics.PhasePhase1Tag);
+                    LatticeMetrics.ProviderIdempotentReplays.Add(
+                        1,
+                        new System.Diagnostics.TagList
+                        {
+                            treeTag,
+                            shardTag,
+                            LatticeMetrics.PhasePhase1Tag,
+                            tenantTag,
+                        });
                     return;
                 }
                 catch (Exception ex) when (
@@ -667,10 +678,15 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                     // preserved, so the shard never faults and the storm cannot
                     // ignite. Jittered backoff desynchronises co-firing shards.
                     transientAttempt++;
-                    LatticeMetrics.ProviderPhaseOneTransientRetries.Add(1,
-                        treeTag,
-                        shardTag,
-                        LatticeMetrics.PhasePhase1Tag);
+                    LatticeMetrics.ProviderPhaseOneTransientRetries.Add(
+                        1,
+                        new System.Diagnostics.TagList
+                        {
+                            treeTag,
+                            shardTag,
+                            LatticeMetrics.PhasePhase1Tag,
+                            tenantTag,
+                        });
                     var delay = ComputePhaseOneTransientRetryDelay(transientAttempt);
                     if (delay > TimeSpan.Zero)
                     {
@@ -679,11 +695,16 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 }
                 catch (Exception ex)
                 {
-                    LatticeMetrics.ProviderRetryExhausted.Add(1,
-                        treeTag,
-                        shardTag,
-                        LatticeMetrics.PhasePhase1Tag,
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)));
+                    LatticeMetrics.ProviderRetryExhausted.Add(
+                        1,
+                        new System.Diagnostics.TagList
+                        {
+                            treeTag,
+                            shardTag,
+                            LatticeMetrics.PhasePhase1Tag,
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)),
+                            tenantTag,
+                        });
                     throw;
                 }
             }
@@ -697,11 +718,16 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             // free and the dashboards can still pivot the per-phase
             // duration series between sync and pipelined modes in a
             // single query.
-            LatticeMetrics.ProviderCommitDuration.Record(elapsedMs,
-                treeTag,
-                shardTag,
-                LatticeMetrics.PhasePhase1Tag,
-                _pipelinePhaseTwoTag);
+            LatticeMetrics.ProviderCommitDuration.Record(
+                elapsedMs,
+                new System.Diagnostics.TagList
+                {
+                    treeTag,
+                    shardTag,
+                    LatticeMetrics.PhasePhase1Tag,
+                    _pipelinePhaseTwoTag,
+                    tenantTag,
+                });
         }
     }
 

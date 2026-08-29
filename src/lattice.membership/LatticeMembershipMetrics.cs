@@ -105,7 +105,7 @@ public static class LatticeMembershipMetrics
     {
         if (ResolutionCacheHits.Enabled)
         {
-            ResolutionCacheHits.Add(1);
+            ResolutionCacheHits.Add(1, LatticeTenantLabel.Platform);
         }
     }
 
@@ -118,7 +118,7 @@ public static class LatticeMembershipMetrics
     {
         if (ResolutionCacheMisses.Enabled)
         {
-            ResolutionCacheMisses.Add(1);
+            ResolutionCacheMisses.Add(1, LatticeTenantLabel.Platform);
         }
     }
 
@@ -137,19 +137,19 @@ public static class LatticeMembershipMetrics
     {
         if (DirectorySearchDuration.Enabled)
         {
-            DirectorySearchDuration.Record(elapsedMilliseconds);
+            DirectorySearchDuration.Record(elapsedMilliseconds, LatticeTenantLabel.Platform);
         }
 
         if (matched)
         {
             if (DirectorySearchHits.Enabled)
             {
-                DirectorySearchHits.Add(1);
+                DirectorySearchHits.Add(1, LatticeTenantLabel.Platform);
             }
         }
         else if (DirectorySearchMisses.Enabled)
         {
-            DirectorySearchMisses.Add(1);
+            DirectorySearchMisses.Add(1, LatticeTenantLabel.Platform);
         }
     }
 }

@@ -118,6 +118,13 @@ internal sealed class WalShardGrain(
     private KeyValuePair<string, object?> _treeTag;
 
     /// <summary>
+    /// Cached derived owning-tenant tag for the same instruments as
+    /// <see cref="_treeTag"/>. Classified once at activation, so the WAL
+    /// append hot path pays nothing for the dimension.
+    /// </summary>
+    private KeyValuePair<string, object?> _tenantTag;
+
+    /// <summary>
     /// Cached <see cref="LatticeMetrics.TagShard"/> tag bound to this
     /// activation's <see cref="_shardIndex"/>. Same allocation-free
     /// rationale as <see cref="_treeTag"/>.
@@ -309,6 +316,7 @@ internal sealed class WalShardGrain(
         }
 
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeId);
+        _tenantTag = LatticeTenantLabel.ForTree(_treeId);
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
 
         var options = optionsMonitor.Get(_treeId);
@@ -402,7 +410,7 @@ internal sealed class WalShardGrain(
         {
             inFlightAtDeactivate = _inFlight.Count;
         }
-        LatticeMetrics.WalShardDeactivateInFlight.Record(inFlightAtDeactivate, _treeTag, _shardTag);
+        LatticeMetrics.WalShardDeactivateInFlight.Record(inFlightAtDeactivate, _treeTag, _shardTag, _tenantTag);
         if (inFlightAtDeactivate > 0)
         {
             Trace($"deactivate.inflight count={inFlightAtDeactivate} reason={reason}");
@@ -597,8 +605,8 @@ internal sealed class WalShardGrain(
             _stickyFailure ??= ex;
         }
 
-        LatticeMetrics.WalShardDrainBudgetExpirations.Add(1, _treeTag, _shardTag);
-        LatticeMetrics.WalShardDrainBudgetForceFaultedSlots.Record(abandoned.Count, _treeTag, _shardTag);
+        LatticeMetrics.WalShardDrainBudgetExpirations.Add(1, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalShardDrainBudgetForceFaultedSlots.Record(abandoned.Count, _treeTag, _shardTag, _tenantTag);
         Trace($"drain.budget.expired budget={budget} forceFaultedSlots={abandoned.Count}");
 
         foreach (var slot in abandoned)
@@ -777,7 +785,16 @@ internal sealed class WalShardGrain(
             throw new LatticeWalQuiescingException(
                 $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
         }
-        LatticeMetrics.WalAppendQueueDepth.Record(queueDepth, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+        LatticeMetrics.WalAppendQueueDepth.Record(
+            queueDepth,
+            new System.Diagnostics.TagList
+            {
+                _treeTag,
+                _shardTag,
+                _walPartitionsTag,
+                _walMaxPendingBatchesTag,
+                _tenantTag,
+            });
         if (kickFlush)
         {
             StartFlush();
@@ -790,7 +807,16 @@ internal sealed class WalShardGrain(
         finally
         {
             var elapsedMs = Stopwatch.GetElapsedTime(appendStartTicks).TotalMilliseconds;
-            LatticeMetrics.WalAppendTurnWait.Record(elapsedMs, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+            LatticeMetrics.WalAppendTurnWait.Record(
+                elapsedMs,
+                new System.Diagnostics.TagList
+                {
+                    _treeTag,
+                    _shardTag,
+                    _walPartitionsTag,
+                    _walMaxPendingBatchesTag,
+                    _tenantTag,
+                });
         }
     }
 
@@ -1369,9 +1395,36 @@ internal sealed class WalShardGrain(
         //   * in_flight - how parallel is this shard against the
         //     provider, given WalMaxPendingBatches?
         // The matching provider duration is recorded inside FlushAsync.
-        LatticeMetrics.WalAppendBatchEntries.Record(batchEntries, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
-        LatticeMetrics.WalAppendBatchBytes.Record(batchBytes, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
-        LatticeMetrics.WalAppendInFlight.Record(inFlightBefore, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+        LatticeMetrics.WalAppendBatchEntries.Record(
+            batchEntries,
+            new System.Diagnostics.TagList
+            {
+                _treeTag,
+                _shardTag,
+                _walPartitionsTag,
+                _walMaxPendingBatchesTag,
+                _tenantTag,
+            });
+        LatticeMetrics.WalAppendBatchBytes.Record(
+            batchBytes,
+            new System.Diagnostics.TagList
+            {
+                _treeTag,
+                _shardTag,
+                _walPartitionsTag,
+                _walMaxPendingBatchesTag,
+                _tenantTag,
+            });
+        LatticeMetrics.WalAppendInFlight.Record(
+            inFlightBefore,
+            new System.Diagnostics.TagList
+            {
+                _treeTag,
+                _shardTag,
+                _walPartitionsTag,
+                _walMaxPendingBatchesTag,
+                _tenantTag,
+            });
         // StartFlush counter + pending-segments histogram. The counter
         // is incremented per StartFlush call so a wedge cohort can
         // distinguish "new flushes are being kicked off but slots never
@@ -1381,8 +1434,8 @@ internal sealed class WalShardGrain(
         // The histogram observation of _pendingSegments.Count at the
         // moment the flush is captured gives the cohort the matching
         // back-pressure-absorption signal.
-        LatticeMetrics.WalShardStartFlushCalls.Add(1, _treeTag, _shardTag);
-        LatticeMetrics.WalShardPendingSegments.Record(pendingSegmentsBefore, _treeTag, _shardTag);
+        LatticeMetrics.WalShardStartFlushCalls.Add(1, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalShardPendingSegments.Record(pendingSegmentsBefore, _treeTag, _shardTag, _tenantTag);
         slot.Task = FlushAsync(node);
     }
 
@@ -1432,7 +1485,7 @@ internal sealed class WalShardGrain(
         TimeoutException? preflightFailure = null;
         if (preflightDeadline is not null && preflightDeadline.IsCancellationRequested)
         {
-            LatticeMetrics.WalFlushPreflightTimeouts.Add(1, _treeTag, _shardTag);
+            LatticeMetrics.WalFlushPreflightTimeouts.Add(1, _treeTag, _shardTag, _tenantTag);
             preflightFailure = new TimeoutException(
                 $"WAL flush preflight for shard {_shardIndex} of tree '{_treeId}' "
                 + $"offsets [{node.Value.StartOffset},{node.Value.EndOffsetExclusive}) "
@@ -1594,7 +1647,16 @@ internal sealed class WalShardGrain(
                 // as well as the happy path. The HandleFlushFailureAsync
                 // catch below subsumes the fault accounting downstream.
                 var providerMs = Stopwatch.GetElapsedTime(providerStartTicks).TotalMilliseconds;
-                LatticeMetrics.WalAppendProviderDuration.Record(providerMs, _treeTag, _shardTag, _walPartitionsTag, _walMaxPendingBatchesTag);
+                LatticeMetrics.WalAppendProviderDuration.Record(
+                    providerMs,
+                    new System.Diagnostics.TagList
+                    {
+                        _treeTag,
+                        _shardTag,
+                        _walPartitionsTag,
+                        _walMaxPendingBatchesTag,
+                        _tenantTag,
+                    });
 
                 // Flush-latency classifier input (opt-in via
                 // LatticeOptions.WalSaturationFlushLatencyThreshold).
@@ -2269,6 +2331,7 @@ internal sealed class WalShardGrain(
         // and the preflight-timeout counter) that the production
         // activation contract provides.
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, _treeId);
+        _tenantTag = LatticeTenantLabel.ForTree(_treeId);
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, _shardIndex);
         // Mirror OnActivateAsync's ordering: reconcile any
         // half-committed multi-phase backend state before reading the

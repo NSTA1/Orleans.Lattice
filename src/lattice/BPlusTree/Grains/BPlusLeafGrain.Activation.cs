@@ -223,7 +223,8 @@ internal sealed partial class BPlusLeafGrain
         {
             LatticeMetrics.LeafActivationReplays.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                LatticeTenantLabel.ForTree(state.State.TreeId));
         }
         try
         {
@@ -296,7 +297,8 @@ internal sealed partial class BPlusLeafGrain
             // against a saturated silo cannot self-amplify into a log flood.
             LatticeMetrics.LeafActivationCursorPublishFailures.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                LatticeTenantLabel.ForTree(state.State.TreeId));
 
             if (ShouldLogCursorPublishFailure())
             {
@@ -549,7 +551,8 @@ internal sealed partial class BPlusLeafGrain
                         // recoverable, refusing to activate is not (#1738).
                         LatticeMetrics.LeafActivationOverBudgetReplays.Add(
                             1,
-                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId));
+                            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                            LatticeTenantLabel.ForTree(treeId));
 
                         // Gate on IsEnabled: the templated call would otherwise
                         // allocate a params object[] and box partition,

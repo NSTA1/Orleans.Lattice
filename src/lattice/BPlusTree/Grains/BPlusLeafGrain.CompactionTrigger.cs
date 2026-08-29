@@ -103,6 +103,7 @@ internal sealed partial class BPlusLeafGrain
         var ratio = (double)tombstoneCount / total;
         LatticeMetrics.LeafTombstoneRatio.Record(ratio,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagLeaf, context.GrainId.ToString()));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagLeaf, context.GrainId.ToString()),
+            LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
     }
 }

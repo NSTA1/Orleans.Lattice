@@ -391,7 +391,8 @@ internal sealed class TreeDeletionGrain(
         };
         LatticeMetrics.TreeLifecycle.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kindTag));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagKind, kindTag),
+            LatticeTenantLabel.ForTree(TreeId));
 
         var opts = Options;
         if (!await _eventsGate.IsEnabledAsync(grainFactory, TreeId, opts)) return;

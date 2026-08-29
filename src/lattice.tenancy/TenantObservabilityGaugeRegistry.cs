@@ -48,7 +48,7 @@ internal static class TenantObservabilityGaugeRegistry
 
             meter.CreateObservableGauge(
                 LatticeTenantMetrics.TenantsName,
-                static () => Volatile.Read(ref _snapshot).TenantCount,
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _snapshot).TenantCount),
                 unit: "{tenant}",
                 description: "Number of tenants in the warm per-tenant usage index (cluster aggregate, not tenant-scoped).");
 

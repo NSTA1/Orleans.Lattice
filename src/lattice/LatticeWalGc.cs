@@ -256,7 +256,8 @@ public sealed class LatticeWalGc(
             LatticeMetrics.StoragePolicyTrimTriggered.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
-                LatticeMetrics.ReasonBytePressure);
+                LatticeMetrics.ReasonBytePressure,
+                LatticeTenantLabel.ForTree(treeName));
         }
 
         if (!hasCursorPredicate && !hasTtlPredicate)
@@ -297,7 +298,8 @@ public sealed class LatticeWalGc(
         {
             LatticeMetrics.WalEntriesTrimmed.Add(
                 totalTrimmed,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+                LatticeTenantLabel.ForTree(treeName));
         }
 
         var (_, retainedAfter) = await SampleRetainedBytesAsync(
@@ -591,7 +593,8 @@ public sealed class LatticeWalGc(
         {
             LatticeMetrics.StoragePolicyBytesReclaimed.Add(
                 before - after,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName),
+                LatticeTenantLabel.ForTree(treeName));
         }
 
         // Resolve the hysteresis latch against the post-trim footprint so the

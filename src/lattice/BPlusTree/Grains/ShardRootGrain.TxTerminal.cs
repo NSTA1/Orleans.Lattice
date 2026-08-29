@@ -160,6 +160,7 @@ internal sealed partial class ShardRootGrain
         // but we still need fresh KeyValuePair instances per Record
         // call to avoid mutating shared structs).
         var stageTagTree = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
+        var stageTagTenant = LatticeTenantLabel.ForTree(TreeId);
         var stageTagShard = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex);
 
         var resolveStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -188,7 +189,13 @@ internal sealed partial class ShardRootGrain
         {
             LatticeMetrics.SagaBroadcastShardStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(resolveStartTicks).TotalMilliseconds,
-                stageTagTree, stageTagShard, LatticeMetrics.StageResolveTag);
+                new System.Diagnostics.TagList
+                {
+                    stageTagTree,
+                    stageTagShard,
+                    LatticeMetrics.StageResolveTag,
+                    stageTagTenant,
+                });
         }
 
         // Step 2 (terminal HLC) - fan out GetClockAsync across the
@@ -216,7 +223,13 @@ internal sealed partial class ShardRootGrain
         {
             LatticeMetrics.SagaBroadcastShardStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(hlcStartTicks).TotalMilliseconds,
-                stageTagTree, stageTagShard, LatticeMetrics.StageHlcTag);
+                new System.Diagnostics.TagList
+                {
+                    stageTagTree,
+                    stageTagShard,
+                    LatticeMetrics.StageHlcTag,
+                    stageTagTenant,
+                });
         }
 
         // Step 3 (durability) - append the terminal mark to this
@@ -302,7 +315,13 @@ internal sealed partial class ShardRootGrain
             {
                 LatticeMetrics.SagaBroadcastShardStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(walStartTicks).TotalMilliseconds,
-                    stageTagTree, stageTagShard, LatticeMetrics.StageWalTag);
+                    new System.Diagnostics.TagList
+                    {
+                        stageTagTree,
+                        stageTagShard,
+                        LatticeMetrics.StageWalTag,
+                        stageTagTenant,
+                    });
             }
         }
 
@@ -356,7 +375,13 @@ internal sealed partial class ShardRootGrain
         {
             LatticeMetrics.SagaBroadcastShardStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(fanOutStartTicks).TotalMilliseconds,
-                stageTagTree, stageTagShard, LatticeMetrics.StageFanOutTag);
+                new System.Diagnostics.TagList
+                {
+                    stageTagTree,
+                    stageTagShard,
+                    LatticeMetrics.StageFanOutTag,
+                    stageTagTenant,
+                });
         }
         }
         finally
@@ -364,7 +389,8 @@ internal sealed partial class ShardRootGrain
             LatticeMetrics.SagaBroadcastShardDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(shardBroadcastStartTicks).TotalMilliseconds,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+                LatticeTenantLabel.ForTree(TreeId));
         }
 
         return pendingTerminal;
@@ -558,7 +584,8 @@ internal sealed partial class ShardRootGrain
             LatticeMetrics.SagaBroadcastLeafDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
+                LatticeTenantLabel.ForTree(TreeId));
         }
     }
 

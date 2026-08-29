@@ -615,7 +615,8 @@ internal sealed partial class ShardRootGrain(
         }
         LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
             Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            LatticeTenantLabel.ForTree(TreeId));
 
         if (localFailure is null)
         {
@@ -629,7 +630,8 @@ internal sealed partial class ShardRootGrain(
             {
                 LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
                     Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
             }
             return;
         }
@@ -864,14 +866,16 @@ internal sealed partial class ShardRootGrain(
                 var result = await leaf.SetManyAsync(slice);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
             }
         }
     }
@@ -914,7 +918,8 @@ internal sealed partial class ShardRootGrain(
         }
         LatticeMetrics.ShardRootSetManyLocalApplyDuration.Record(
             Stopwatch.GetElapsedTime(localApplyTs).TotalMilliseconds,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            LatticeTenantLabel.ForTree(TreeId));
 
         if (localFailure is null)
         {
@@ -927,7 +932,8 @@ internal sealed partial class ShardRootGrain(
             {
                 LatticeMetrics.ShardRootSetManyShadowForwardDuration.Record(
                     Stopwatch.GetElapsedTime(forwardTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
             }
             RecordRecordsWritten(written.Count);
             return written;
@@ -1091,14 +1097,16 @@ internal sealed partial class ShardRootGrain(
                 var result = await leaf.SetManyWherePredicateAsync(slice, predicate);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
                 return result;
             }
             catch (Exception ex) when (ex is OrleansException or TimeoutException or IOException && attempt < MaxRetries)
             {
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                    LatticeTenantLabel.ForTree(TreeId));
             }
         }
     }
@@ -1551,7 +1559,8 @@ internal sealed partial class ShardRootGrain(
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
         {
             LatticeMetrics.ActivationReadyTimeouts.Add(
-                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
             throw new ShardActivationTimeoutException(
                 $"Activation-readiness seed for shard {MyShardIndex} of tree '{TreeId}' "
                 + $"exceeded the {timeout} seed deadline "

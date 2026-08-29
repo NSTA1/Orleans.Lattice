@@ -121,7 +121,8 @@ internal sealed partial class BPlusLeafGrain
         {
             var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
             LatticeMetrics.LeafWriteDuration.Record(elapsedMs,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
+                LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
         }
 
         // Best-effort byte-footprint publish to the owning shard root so the
@@ -208,6 +209,22 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>Builds the single-tree tag used by every leaf-level instrument.</summary>
     private KeyValuePair<string, object?> LeafTreeTag() =>
         new(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty);
+
+    /// <summary>
+    /// Builds the derived owning-tenant tag emitted alongside
+    /// <see cref="LeafTreeTag"/> on every leaf-level instrument.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately derived per call rather than cached on the activation: a
+    /// leaf activation is short-lived and vastly outnumbers the shard-root and
+    /// lattice activations, so a per-leaf cache field would cost more resident
+    /// bytes across a wide tree than the derivation saves. The derivation
+    /// itself allocates nothing - it is an ordinal prefix test that returns a
+    /// frozen singleton for every bare (tenancy-off) and platform tree id, and
+    /// a span-keyed cache hit for a tenant-scoped one.
+    /// </remarks>
+    private KeyValuePair<string, object?> LeafTenantTag() =>
+        LatticeTenantLabel.ForTree(state.State.TreeId);
 
     /// <summary>
     /// Resolves the ambient compaction-trigger tag for the current call,
@@ -303,7 +320,8 @@ internal sealed partial class BPlusLeafGrain
         var elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000.0 / Stopwatch.Frequency;
         LatticeMetrics.LeafCommitDuration.Record(elapsedMs,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId ?? string.Empty),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagStep, step));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagStep, step),
+            LatticeTenantLabel.ForTree(state.State.TreeId ?? string.Empty));
     }
 
     /// <summary>
@@ -375,7 +393,7 @@ internal sealed partial class BPlusLeafGrain
     private CommitInFlightScope EnterCommitScope()
     {
         var depthBefore = Interlocked.Increment(ref _commitInFlight) - 1;
-        LatticeMetrics.LeafCommitInFlight.Record(depthBefore, LeafTreeTag());
+        LatticeMetrics.LeafCommitInFlight.Record(depthBefore, LeafTreeTag(), LeafTenantTag());
         return new CommitInFlightScope(this);
     }
 

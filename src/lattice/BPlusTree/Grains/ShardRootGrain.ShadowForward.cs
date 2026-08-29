@@ -147,7 +147,8 @@ internal sealed partial class ShardRootGrain
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
         {
             LatticeMetrics.ShardForwardTimeouts.Add(
-                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId));
+                1, new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+                LatticeTenantLabel.ForTree(TreeId));
             throw new TimeoutException(
                 $"Outbound shard forward from shard {MyShardIndex} of tree '{TreeId}' "
                 + $"exceeded the {timeout} forward deadline "

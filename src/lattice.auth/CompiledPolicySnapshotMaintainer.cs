@@ -202,7 +202,7 @@ internal sealed class CompiledPolicySnapshotMaintainer : IMutationObserver
             // Observability only: count the rebuild. Never affects the snapshot.
             if (LatticeAuthMetrics.SnapshotRebuilds.Enabled)
             {
-                LatticeAuthMetrics.SnapshotRebuilds.Add(1);
+                LatticeAuthMetrics.SnapshotRebuilds.Add(1, LatticeTenantLabel.Platform);
             }
         }
         finally

@@ -751,6 +751,7 @@ internal sealed class SnapshotLeafGrain(
         {
             new(LatticeMetrics.TagTree, _treeId),
             new(LatticeMetrics.TagShard, _shardIndex),
+            LatticeTenantLabel.ForTree(_treeId),
         };
         LatticeMetrics.SnapshotReplayDuration.Record(sw.Elapsed.TotalMilliseconds, tags);
         if (totalEntriesObserved > 0)

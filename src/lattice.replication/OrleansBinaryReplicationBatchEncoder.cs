@@ -369,10 +369,12 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                 // less baseline.
                 LatticeReplicationMetrics.CompressDictionaryBytesIn.Add(
                     uncompressedLength,
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    LatticeTenantLabel.ForTree(treeName));
                 LatticeReplicationMetrics.CompressDictionaryBytesOut.Add(
                     compressedLength,
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName));
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    LatticeTenantLabel.ForTree(treeName));
             }
             else
             {

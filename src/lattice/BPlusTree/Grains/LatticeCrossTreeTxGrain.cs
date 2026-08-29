@@ -370,11 +370,14 @@ internal sealed class LatticeCrossTreeTxGrain(
 
         LatticeMetrics.CrossTreeAtomicWriteCompleted.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTreeCount, treeCount));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTreeCount, treeCount),
+            LatticeTenantLabel.Platform);
         LatticeMetrics.CrossTreeAtomicWriteDuration.Record(elapsedMs,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag),
+            LatticeTenantLabel.Platform);
         LatticeMetrics.CrossTreeAtomicWriteParticipants.Record(treeCount,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag),
+            LatticeTenantLabel.Platform);
     }
 
     /// <summary>

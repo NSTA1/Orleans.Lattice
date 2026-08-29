@@ -43,15 +43,18 @@ public static class LatticeTenantMetrics
     /// <summary>
     /// The tag key carrying the owning tenant id on every tenant-scoped series.
     /// The single dimension by which a tenant's usage, quota, burst, and overage
-    /// series are attributable. Not emitted on the (single) cluster-aggregate
-    /// tenant-count series, which is not tenant-scoped.
+    /// series are attributable. Aliases <see cref="LatticeTenantLabel.TagTenant"/>,
+    /// the repository-wide derived tenant dimension, so this meter's per-tenant
+    /// series and the derived label every other meter emits share one key.
     /// </summary>
-    public const string TagTenant = "tenant";
+    public const string TagTenant = LatticeTenantLabel.TagTenant;
 
     /// <summary>
     /// Canonical name of the registered-tenant-count observable gauge - the number
-    /// of tenants in the warm usage index. A cluster-aggregate operator signal; it
-    /// carries no <see cref="TagTenant"/> tag because it is not tenant-scoped.
+    /// of tenants in the warm usage index. A cluster-aggregate operator signal, so
+    /// it is not attributable to any one tenant: it carries the reserved platform
+    /// sentinel (<see cref="LatticeTenantLabel.PlatformTenant"/>) as its
+    /// <see cref="TagTenant"/> value rather than a tenant id.
     /// </summary>
     public const string TenantsName = "orleans.lattice.tenancy.tenants";
 

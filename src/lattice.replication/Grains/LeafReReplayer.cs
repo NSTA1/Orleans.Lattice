@@ -284,14 +284,17 @@ internal static class LeafReReplayer
         LatticeReplicationMetrics.LeafReReplayEntries.Add(
             count,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+            LatticeTenantLabel.ForTree(tree));
 
     private static void RecordSkipped(string tree, string peer, LeafReReplaySkipReason reason) =>
         LatticeReplicationMetrics.LeafReReplaySkipped.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
-            new KeyValuePair<string, object?>(
-                LatticeReplicationMetrics.TagReason,
-                LatticeReplicationMetrics.LeafReReplaySkipReasonTag(reason)));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.LeafReReplaySkipReasonTag(reason)),
+                LatticeTenantLabel.ForTree(tree),
+            });
 }

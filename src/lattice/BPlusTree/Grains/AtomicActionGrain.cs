@@ -247,14 +247,16 @@ internal sealed class AtomicActionGrain(
             await state.WriteStateAsync();
             LatticeMetrics.AtomicActionStep.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "forward"),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "ok"));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "ok"),
+                LatticeTenantLabel.Platform);
             return true;
         }
         catch (Exception ex)
         {
             LatticeMetrics.AtomicActionStep.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "forward"),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "fault"));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "fault"),
+                LatticeTenantLabel.Platform);
             Logger.LogWarning(ex,
                 "Atomic-action saga {OperationId}: forward step {Index} faulted; compensating.",
                 OperationId, index);
@@ -297,13 +299,15 @@ internal sealed class AtomicActionGrain(
             await state.WriteStateAsync();
             LatticeMetrics.AtomicActionStep.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "compensate"),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "ok"));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "ok"),
+                LatticeTenantLabel.Platform);
         }
         catch (Exception ex)
         {
             LatticeMetrics.AtomicActionStep.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagPhase, "compensate"),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "fault"));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "fault"),
+                LatticeTenantLabel.Platform);
 
             if (state.State.CompensationRetries >= MaxCompensationRetries)
             {
@@ -408,7 +412,8 @@ internal sealed class AtomicActionGrain(
             _ => "compensation_failed",
         };
         LatticeMetrics.AtomicActionCompleted.Add(1,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag),
+            LatticeTenantLabel.Platform);
 
         if (state.State.StartedAtTicks > 0)
         {
@@ -416,7 +421,8 @@ internal sealed class AtomicActionGrain(
             if (elapsedMs >= 0)
             {
                 LatticeMetrics.AtomicActionDuration.Record(elapsedMs,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcomeTag),
+                    LatticeTenantLabel.Platform);
             }
         }
 

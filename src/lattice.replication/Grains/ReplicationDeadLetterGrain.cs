@@ -108,7 +108,8 @@ internal sealed class ReplicationDeadLetterGrain(
         LatticeReplicationMetrics.DeadLetterEnqueued.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reasonTag));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reasonTag),
+            LatticeTenantLabel.ForTree(_treeId));
 
         return assigned;
     }
@@ -175,7 +176,8 @@ internal sealed class ReplicationDeadLetterGrain(
         LatticeReplicationMetrics.DeadLetterRemoved.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason),
+            LatticeTenantLabel.ForTree(_treeId));
 
         return true;
     }
@@ -184,7 +186,8 @@ internal sealed class ReplicationDeadLetterGrain(
         LatticeReplicationMetrics.DeadLetterRemoved.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonEvicted));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonEvicted),
+            LatticeTenantLabel.ForTree(_treeId));
 
     private void EnsureInitialized()
     {

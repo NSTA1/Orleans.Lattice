@@ -188,7 +188,8 @@ internal sealed partial class LatticeCursorGrain
             if (!_snapshotPinGaugeHeld)
             {
                 LatticeMetrics.SnapshotPinCount.Add(1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                    LatticeTenantLabel.ForTree(state.State.TreeId));
                 _snapshotPinGaugeHeld = true;
             }
         }
@@ -217,7 +218,8 @@ internal sealed partial class LatticeCursorGrain
             if (_snapshotPinGaugeHeld)
             {
                 LatticeMetrics.SnapshotPinCount.Add(-1,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, state.State.TreeId),
+                    LatticeTenantLabel.ForTree(state.State.TreeId));
                 _snapshotPinGaugeHeld = false;
             }
         }

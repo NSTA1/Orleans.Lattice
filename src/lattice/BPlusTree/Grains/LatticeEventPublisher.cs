@@ -48,7 +48,8 @@ internal static class LatticeEventPublisher
                     options.EventStreamProviderName);
                 LatticeMetrics.EventsDropped.Add(1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "missing_provider"));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "missing_provider"),
+                    LatticeTenantLabel.ForTree(evt.TreeId));
                 return Task.CompletedTask;
             }
 
@@ -62,7 +63,8 @@ internal static class LatticeEventPublisher
             logger?.LogWarning(ex, "Lattice event publication threw synchronously for tree {TreeId} kind {Kind}.", evt.TreeId, evt.Kind);
             LatticeMetrics.EventsDropped.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"),
+                LatticeTenantLabel.ForTree(evt.TreeId));
             return Task.CompletedTask;
         }
     }
@@ -74,14 +76,16 @@ internal static class LatticeEventPublisher
             await stream.OnNextAsync(evt);
             LatticeMetrics.EventsPublished.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagKind, evt.Kind.ToString()));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagKind, evt.Kind.ToString()),
+                LatticeTenantLabel.ForTree(evt.TreeId));
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "Lattice event publication failed for tree {TreeId} kind {Kind}.", evt.TreeId, evt.Kind);
             LatticeMetrics.EventsDropped.Add(1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, evt.TreeId),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagReason, "publish_error"),
+                LatticeTenantLabel.ForTree(evt.TreeId));
         }
     }
 

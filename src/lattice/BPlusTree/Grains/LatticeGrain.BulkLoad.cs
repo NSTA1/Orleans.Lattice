@@ -337,7 +337,8 @@ internal sealed partial class LatticeGrain
         _eventsGate.Invalidate();
         LatticeMetrics.ConfigChanged.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "publish_events"),
+            LatticeTenantLabel.ForTree(TreeId));
     }
 
     public async Task SetHistoryRetentionAsync(HistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)
@@ -349,7 +350,8 @@ internal sealed partial class LatticeGrain
         await registry.SetHistoryRetentionAsync(TreeId, mode, window);
         LatticeMetrics.ConfigChanged.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagConfig, "history_retention"),
+            LatticeTenantLabel.ForTree(TreeId));
     }
 
     public async Task<HistoryRetentionSettings> GetHistoryRetentionAsync(CancellationToken cancellationToken = default)

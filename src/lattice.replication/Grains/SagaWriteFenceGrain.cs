@@ -257,7 +257,8 @@ internal sealed class SagaWriteFenceGrain(
         {
             LatticeReplicationMetrics.SagaFenceDuration.Record(
                 elapsedMs,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
+                LatticeTenantLabel.ForTree(tree));
         }
     }
 

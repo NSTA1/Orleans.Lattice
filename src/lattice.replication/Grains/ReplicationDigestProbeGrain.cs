@@ -334,19 +334,27 @@ internal sealed class ReplicationDigestProbeGrain(
     {
         LatticeReplicationMetrics.DigestProbeCompared.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, shard.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.DigestProbeOutcomeTag(outcome)));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, shard.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.DigestProbeOutcomeTag(outcome)),
+                LatticeTenantLabel.ForTree(tree),
+            });
     }
 
     private static void RecordMismatch(string tree, int shard, string peer)
     {
         LatticeReplicationMetrics.DigestProbeMismatch.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, shard.ToString(CultureInfo.InvariantCulture)),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagShard, shard.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                LatticeTenantLabel.ForTree(tree),
+            });
     }
 
     /// <summary>
@@ -522,11 +530,13 @@ internal sealed class ReplicationDigestProbeGrain(
         RemediationGuard.PublishDisabled(TreeName, peer, reason);
         LatticeReplicationMetrics.DigestRemediationSkipped.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
-            new KeyValuePair<string, object?>(
-                LatticeReplicationMetrics.TagReason,
-                LatticeReplicationMetrics.DigestRemediationDisabledReasonTag(reason)));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.DigestRemediationDisabledReasonTag(reason)),
+                LatticeTenantLabel.ForTree(TreeName),
+            });
     }
 
     /// <summary>
@@ -568,11 +578,13 @@ internal sealed class ReplicationDigestProbeGrain(
         {
             LatticeReplicationMetrics.LeafReReplaySkipped.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
-                new KeyValuePair<string, object?>(
-                    LatticeReplicationMetrics.TagReason,
-                    LatticeReplicationMetrics.LeafReReplaySkipReasonTag(LeafReReplaySkipReason.Disabled)));
+                new System.Diagnostics.TagList
+                {
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.LeafReReplaySkipReasonTag(LeafReReplaySkipReason.Disabled)),
+                    LatticeTenantLabel.ForTree(TreeName),
+                });
             return new LeafReReplayOutcome { SkipReason = LeafReReplaySkipReason.Disabled };
         }
 
@@ -642,11 +654,13 @@ internal sealed class ReplicationDigestProbeGrain(
         {
             LatticeReplicationMetrics.BootstrapFallbackSkipped.Add(
                 1,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
-                new KeyValuePair<string, object?>(
-                    LatticeReplicationMetrics.TagReason,
-                    LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason.Disabled)));
+                new System.Diagnostics.TagList
+                {
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(BootstrapFallbackSkipReason.Disabled)),
+                    LatticeTenantLabel.ForTree(TreeName),
+                });
             return new BootstrapFallbackOutcome { SkipReason = BootstrapFallbackSkipReason.Disabled };
         }
 

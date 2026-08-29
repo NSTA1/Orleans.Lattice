@@ -331,14 +331,14 @@ internal sealed partial class BPlusLeafGrain
                     _digestPublishTimer = this.RegisterGrainTimer(
                         OnDigestCoalesceTimerTickAsync,
                         new GrainTimerCreationOptions(dueTime: window, period: Timeout.InfiniteTimeSpan));
-                    LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedScheduledTag);
+                    LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedScheduledTag, LeafTenantTag());
                 }
                 catch
                 {
                     // Test harnesses without a grain runtime can throw
                     // here. Fall back to synchronous publish so the
                     // digest still reaches the parent on the same call.
-                    LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathInlineTag);
+                    LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathInlineTag, LeafTenantTag());
                     return PublishCurrentDigestAndClearDirtyAsync(parentId);
                 }
             }
@@ -348,13 +348,13 @@ internal sealed partial class BPlusLeafGrain
                 // mutation rides on the existing window. This is the
                 // "publish saved" surface the coalescing default exists
                 // for.
-                LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedSkippedTag);
+                LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedSkippedTag, LeafTenantTag());
             }
             return Task.CompletedTask;
         }
 
         // Coalescing disabled - pre-c2-xxviii synchronous publish.
-        LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathInlineTag);
+        LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathInlineTag, LeafTenantTag());
         return PublishCurrentDigestAndClearDirtyAsync(parentId);
     }
 
@@ -404,7 +404,7 @@ internal sealed partial class BPlusLeafGrain
         var pending = System.Threading.Interlocked.Exchange(ref _digestPublishTimer, null);
         pending?.Dispose();
 
-        LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathInlineTag);
+        LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathInlineTag, LeafTenantTag());
         return PublishCurrentDigestAndClearDirtyAsync(parentId);
     }
 
@@ -445,7 +445,7 @@ internal sealed partial class BPlusLeafGrain
         {
             await PublishCurrentDigestAsync(parentId);
             _digestDirty = false;
-            LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedFiredTag);
+            LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathCoalescedFiredTag, LeafTenantTag());
         }
         catch
         {
@@ -478,7 +478,7 @@ internal sealed partial class BPlusLeafGrain
         {
             await PublishCurrentDigestAsync(parentId);
             _digestDirty = false;
-            LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathDeactivationFlushTag);
+            LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathDeactivationFlushTag, LeafTenantTag());
         }
         catch
         {
