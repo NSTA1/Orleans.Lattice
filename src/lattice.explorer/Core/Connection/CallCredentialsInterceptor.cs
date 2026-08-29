@@ -9,8 +9,15 @@ namespace Orleans.Lattice.Explorer.Core.Connection;
 /// are resolved asynchronously by gRPC at call time, which lets a bearer-token
 /// provider refresh a near-expiry token before the <c>authorization</c> header
 /// is written.
+/// <para>
+/// Public because a plugin package builds its own channel to its own control
+/// API and must attach the Explorer's current sign-in to it, exactly as the
+/// state-API client does. Sharing this one interceptor is what keeps every
+/// channel's credential handling identical without any package seeing another's
+/// internals.
+/// </para>
 /// </summary>
-internal sealed class CallCredentialsInterceptor : Interceptor
+public sealed class CallCredentialsInterceptor : Interceptor
 {
     private readonly CallCredentials _credentials;
 

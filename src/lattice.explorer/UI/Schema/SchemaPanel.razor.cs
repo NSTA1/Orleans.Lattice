@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Schema;
 using Orleans.Lattice.Explorer.Core.Catalog;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
 
 namespace Orleans.Lattice.Explorer.UI.Schema;
@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Explorer.UI.Schema;
 /// <summary>
 /// The Schema management area's interactive panel. Drives the policy, versioning /
 /// remediation, and compliance services over the schema control plane for a single
-/// governed tree. Every action is gated on the advisory
-/// <see cref="ExplorerCapabilities.SchemaAllowed"/> coarse flag and the per-tree
+/// governed tree. Every action is gated on the Schema plugin's own advisory access
+/// decision, read from the keyed <see cref="IExplorerPluginAccessStore"/> under
+/// <see cref="SchemaPluginKeys.PluginId"/>, and on the per-tree
 /// <see cref="SchemaCapabilitySnapshot"/> probe (rendering disabled, not hidden, when
 /// denied) and folds a server denial into a clean status banner rather than
 /// surfacing an unhandled error.
@@ -108,8 +109,8 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     /// <inheritdoc />
     protected override void OnInitialized()
     {
-        _allowed = Capabilities.Current.SchemaAllowed;
-        Capabilities.Changed += OnCapabilitiesChanged;
+        _allowed = AccessStore.Get(SchemaPluginKeys.PluginId).IsAllowed;
+        AccessStore.Changed += OnAccessChanged;
     }
 
     /// <inheritdoc />
@@ -121,9 +122,17 @@ public partial class SchemaPanel : ComponentBase, IDisposable
         }
     }
 
-    private void OnCapabilitiesChanged()
+    private void OnAccessChanged(ExplorerPluginAccessChange change)
     {
-        var allowed = Capabilities.Current.SchemaAllowed;
+        // Only this plugin's own plugin-level decision gates the panel; a sibling
+        // plugin's probe completing must not re-render it.
+        if (change.Key.Scope is not null
+            || !string.Equals(change.Key.PluginId, SchemaPluginKeys.PluginId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var allowed = change.Access.IsAllowed;
         if (allowed == _allowed)
         {
             return;
@@ -707,7 +716,7 @@ public partial class SchemaPanel : ComponentBase, IDisposable
     };
 
     /// <inheritdoc />
-    public void Dispose() => Capabilities.Changed -= OnCapabilitiesChanged;
+    public void Dispose() => AccessStore.Changed -= OnAccessChanged;
 
     private readonly record struct SchemaPolicyRuleRow(string Kind, string Detail);
 }

@@ -1,0 +1,232 @@
+@using Orleans.Lattice.Explorer.Plugins
+@using Orleans.Lattice.Explorer.UI.Authentication
+@using Orleans.Lattice.Explorer.UI.Plugins
+@implements IDisposable
+@inject IExplorerPluginCatalog Catalog
+@inject IExplorerPluginAccessStore AccessStore
+@inject IExplorerPluginAccessRefresher AccessRefresher
+@inject ExplorerPluginHostState HostState
+@inject IExplorerAuthSession Auth
+
+@*
+    The app-level area switcher: a tab strip above the per-selection tier that
+    swaps the whole working surface between the shell's own home surface and one
+    registered area plugin. The shell enumerates IExplorerPlugin from the
+    container, filters to the Area surface, and renders the active one through
+    DynamicComponent, so it names no plugin and gains no per-plugin service
+    injection - a new area joins by being registered, with no change here.
+
+    Gating is advisory (the server stays the sole enforcement point) and is read
+    from the keyed access store: allowed renders active, denied renders
+    disabled-and-visible with the same grey-out and tooltip as before,
+    authentication-required stays clickable and opens the sign-in dialog, and
+    unavailable renders no entry at all.
+*@
+
+<div class="explorer-areastrip" role="tablist" aria-label="Application areas">
+    <button type="button"
+            role="tab"
+            class="explorer-area-tab @(_activePlugin is null ? "is-active" : null)"
+            aria-selected="@(_activePlugin is null)"
+            @onclick="_activateHome">
+        @HomeLabel
+    </button>
+    @for (var i = 0; i < _tabs.Length; i++)
+    {
+        var tab = _tabs[i];
+        var access = AccessStore.Get(tab.PluginId);
+        if (!access.IsVisible)
+        {
+            continue;
+        }
+
+        var signInRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
+        var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
+        <button type="button"
+                role="tab"
+                class="explorer-area-tab @(isActive ? "is-active" : null)"
+                aria-selected="@isActive"
+                disabled="@(!access.IsAllowed && !signInRequired)"
+                title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
+                @onclick="tab.Activate">
+            @tab.Label
+        </button>
+    }
+</div>
+
+<div class="explorer-area-content">
+    @if (_activePlugin is null)
+    {
+        @ChildContent
+    }
+    else
+    {
+        <DynamicComponent Type="_activePlugin.ViewType" />
+    }
+</div>
+
+@code {
+    private static readonly AreaTab[] NoTabs = [];
+
+    private AreaTab[] _tabs = NoTabs;
+    private IExplorerPlugin? _activePlugin;
+    private EventCallback _activateHome;
+    private ExplorerPluginConnectionState _lastConnectionState;
+
+    /// <summary>The home surface's content (the tree browser), rendered when no area plugin is active.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>The label of the shell's own always-available home surface.</summary>
+    [Parameter] public string HomeLabel { get; set; } = "Explore";
+
+    /// <summary>Shared dialog state used to offer a sign-in for a plugin that requires one.</summary>
+    [CascadingParameter] public LoginDialogState? Login { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Every per-tab delegate and title is built once here rather than on the
+        // render path: the strip re-renders on every access change and every
+        // connection transition, and a closure or an interpolated tooltip per tab
+        // per render would allocate on all of them.
+        var plugins = Catalog.ForSurface(ExplorerPluginSurface.Area);
+        if (plugins.Count > 0)
+        {
+            var tabs = new AreaTab[plugins.Count];
+            for (var i = 0; i < plugins.Count; i++)
+            {
+                tabs[i] = new AreaTab(this, plugins[i]);
+            }
+
+            _tabs = tabs;
+        }
+
+        _activateHome = EventCallback.Factory.Create(this, ActivateHome);
+        _lastConnectionState = HostState.Connection.State;
+
+        AccessStore.Changed += OnAccessChanged;
+        HostState.Changed += OnHostChanged;
+        Auth.AuthenticationChanged += OnAuthenticationChanged;
+
+        // Probe every registered gate once after the shell mounts.
+        await RefreshAccessAsync();
+    }
+
+    private void ActivateHome()
+    {
+        if (_activePlugin is null)
+        {
+            return;
+        }
+
+        _activePlugin = null;
+        StateHasChanged();
+    }
+
+    private void Activate(IExplorerPlugin plugin)
+    {
+        var access = AccessStore.Get(plugin.Descriptor.PluginId);
+        if (access.State == ExplorerPluginAccessState.AuthenticationRequired)
+        {
+            // A recoverable state, so offer the remedy instead of an inert
+            // grey-out. The tab stays where it is until the sign-in lands and the
+            // gate re-probes.
+            Login?.Open();
+            return;
+        }
+
+        if (!access.IsAllowed || ReferenceEquals(_activePlugin, plugin))
+        {
+            return;
+        }
+
+        _activePlugin = plugin;
+        StateHasChanged();
+    }
+
+    private async Task RefreshAccessAsync()
+    {
+        // Both refreshes are fault-isolated internally: the host state degrades a
+        // failed tenant resolution to the fail-closed scope, and the refresher
+        // contains each gate's fault so one plugin's probe can never disturb
+        // another's decision or break the shell.
+        await HostState.RefreshTenantScopeAsync();
+        await AccessRefresher.RefreshAsync();
+    }
+
+    private void OnAccessChanged(ExplorerPluginAccessChange change)
+    {
+        // If the active plugin just stopped being allowed (for example after
+        // sign-out), fall back to the always-available home surface.
+        if (_activePlugin is not null
+            && string.Equals(change.Key.PluginId, _activePlugin.Descriptor.PluginId, StringComparison.Ordinal)
+            && change.Key.Scope is null
+            && !change.Access.IsAllowed)
+        {
+            _activePlugin = null;
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnAuthenticationChanged() => _ = InvokeAsync(RefreshAccessAsync);
+
+    private void OnHostChanged(ExplorerPluginHostChange change)
+    {
+        if (change != ExplorerPluginHostChange.Connection)
+        {
+            return;
+        }
+
+        var wasConnected = _lastConnectionState == ExplorerPluginConnectionState.Connected;
+        var state = HostState.Connection.State;
+        _lastConnectionState = state;
+
+        // The gates are probed once at mount and are fail-closed, so a probe that
+        // ran while the cluster was still starting (endpoint briefly unreachable)
+        // would otherwise leave every area disabled with no retry, even though the
+        // connection later recovers for browsing. Re-probe each time the
+        // connection freshly reaches Connected so an area enables as soon as the
+        // endpoint is reachable.
+        if (state == ExplorerPluginConnectionState.Connected && !wasConnected)
+        {
+            _ = InvokeAsync(RefreshAccessAsync);
+        }
+    }
+
+    public void Dispose()
+    {
+        AccessStore.Changed -= OnAccessChanged;
+        HostState.Changed -= OnHostChanged;
+        Auth.AuthenticationChanged -= OnAuthenticationChanged;
+    }
+
+    /// <summary>
+    /// One tab's pre-computed render state: the plugin it activates, its label,
+    /// the two advisory tooltips, and the activation callback. Built once at
+    /// mount so a render reads fields instead of allocating.
+    /// </summary>
+    private sealed class AreaTab
+    {
+        public AreaTab(AppShell shell, IExplorerPlugin plugin)
+        {
+            Plugin = plugin;
+            PluginId = plugin.Descriptor.PluginId;
+            Label = plugin.Descriptor.Label;
+            DeniedTitle = $"{Label} is not available for your account.";
+            SignInTitle = $"{Label} requires you to sign in.";
+            Activate = EventCallback.Factory.Create(shell, () => shell.Activate(plugin));
+        }
+
+        public IExplorerPlugin Plugin { get; }
+
+        public string PluginId { get; }
+
+        public string Label { get; }
+
+        public string DeniedTitle { get; }
+
+        public string SignInTitle { get; }
+
+        public EventCallback Activate { get; }
+    }
+}

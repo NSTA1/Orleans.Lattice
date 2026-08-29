@@ -1,21 +1,21 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Schema;
 
 /// <summary>
 /// Registration helpers for the explorer's Schema (enforcement policy, envelope
 /// versioning &amp; remediation, and compliance) area: the schema control client,
-/// the policy / versioning / compliance services, and the capability service, plus
-/// the navigation capability store they publish into.
+/// the policy / versioning / compliance services, and the plugin access gate,
+/// plus the keyed plugin access store the gate publishes into.
 /// </summary>
 public static class ExplorerSchemaServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the Schema feature. Also calls
-    /// <see cref="ExplorerNavigationServiceCollectionExtensions.AddExplorerNavigation"/>
-    /// so the shell's capability store exists. Call after
+    /// <see cref="ExplorerPluginServiceCollectionExtensions.AddExplorerPluginHost"/>
+    /// so the keyed access store the gate publishes into exists. Call after
     /// <c>AddExplorerConfiguration</c> and <c>AddExplorerAuth</c>, whose session and
     /// sign-in the schema control client reads.
     /// </summary>
@@ -23,7 +23,7 @@ public static class ExplorerSchemaServiceCollectionExtensions
     public static IServiceCollection AddExplorerSchema(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.AddExplorerNavigation();
+        services.AddExplorerPluginHost();
         // Scoped per Blazor circuit: the schema control client reads the calling
         // scope's session and sign-in, so it must not be shared across circuits.
         // GrpcSchemaAdminClient owns its own Orleans serializer provider; it must not

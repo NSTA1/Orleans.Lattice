@@ -7,7 +7,8 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Web;
 
@@ -15,14 +16,14 @@ namespace Orleans.Lattice.Explorer.Tests.Hosting;
 
 /// <summary>
 /// End-to-end smoke / regression test for the <em>assembled</em> explorer web
-/// head. Every area (Explore, Backups, Access, Schema) has its own unit tests;
-/// this fixture is the one place that asserts the whole assembled by a single
+/// head. Every area has its own unit tests; this fixture is the one place that
+/// asserts the whole assembled by a single
 /// <see cref="LatticeExplorerWebServiceCollectionExtensions.AddLatticeExplorerWeb"/>
 /// / <see cref="LatticeExplorerWebEndpointRouteBuilderExtensions.MapLatticeExplorer"/>
-/// wiring: all four areas come up together, in order, each correctly
-/// capability-gated, each area's capability seam resolves from the one provider
-/// and fails closed when no endpoint is configured. A future area that forgets
-/// its gate, or drops out of the assembled wiring, fails here.
+/// wiring: the head's chosen area plugins come up together, in order, each
+/// carrying its own gate, each gate resolving from the one provider and failing
+/// closed when no endpoint is configured. A future area that forgets its gate,
+/// or drops out of the assembled wiring, fails here.
 /// </summary>
 [TestFixture]
 public class AssembledExplorerHostSmokeTests
@@ -30,124 +31,147 @@ public class AssembledExplorerHostSmokeTests
     // ---- 1. Navigation: the assembled area switcher --------------------------
 
     [Test]
-    public void Assembled_areas_project_to_explore_backups_access_schema_in_order()
+    public async Task Assembled_area_plugins_project_to_backups_then_access_in_order()
     {
-        var areas = AppAreas.Ordered.Select(a => a.Area).ToArray();
+        await using var provider = BuildAssembledProvider();
+        await using var scope = provider.CreateAsyncScope();
+
+        var ids = AreaPluginIds(scope.ServiceProvider);
+
+        Assert.That(ids, Is.EqualTo(new[] { BackupsPluginKeys.PluginId, AccessPluginKeys.PluginId }));
+    }
+
+    [Test]
+    public async Task Assembled_web_head_registers_no_schema_plugin_by_default()
+    {
+        await using var provider = BuildAssembledProvider();
+        await using var scope = provider.CreateAsyncScope();
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                areas,
-                Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups, AppArea.Access, AppArea.Schema }));
-            Assert.That(AppAreas.Default, Is.EqualTo(AppArea.Explore));
+                AreaPluginIds(scope.ServiceProvider),
+                Does.Not.Contain(SchemaPluginKeys.PluginId),
+                "withholding an area is simply not registering its plugin");
+
+            // Not registered is not deleted: the schema control services stay wired
+            // so the head can surface the area by registering the plugin.
+            Assert.That(scope.ServiceProvider.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null);
         });
     }
 
     [Test]
-    public async Task Assembled_web_head_hides_the_schema_area_by_default()
+    public async Task Assembled_web_head_registers_the_schema_plugin_when_the_head_opts_in()
     {
-        await using var provider = BuildAssembledProvider();
+        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var scope = provider.CreateAsyncScope();
 
-        var navOptions = provider.GetRequiredService<ExplorerNavigationOptions>();
-        var visible = AppAreas.Visible(navOptions).Select(a => a.Area).ToArray();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(navOptions.EnableSchemaArea, Is.False, "Schema is withheld from the default UI");
-            Assert.That(visible, Is.EqualTo(new[] { AppArea.Explore, AppArea.Backups, AppArea.Access }));
-            Assert.That(AppAreas.IsVisible(AppArea.Schema, navOptions), Is.False);
-
-            // Hidden, not deleted: the schema control service stays registered.
-            Assert.That(provider.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null);
-        });
+        Assert.That(
+            AreaPluginIds(scope.ServiceProvider),
+            Is.EqualTo(new[]
+            {
+                BackupsPluginKeys.PluginId,
+                AccessPluginKeys.PluginId,
+                SchemaPluginKeys.PluginId,
+            }));
     }
 
-    // ---- 2. Capability-gating parity across ALL areas at once ----------------
+    // ---- 2. Gating parity across ALL areas at once ---------------------------
 
     [Test]
-    public void Under_empty_capabilities_only_explore_is_enabled()
+    public async Task Before_any_probe_every_area_plugin_is_denied()
     {
-        var empty = ExplorerCapabilities.Empty;
+        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var scope = provider.CreateAsyncScope();
+
+        var store = scope.ServiceProvider.GetRequiredService<IExplorerPluginAccessStore>();
+        var catalog = scope.ServiceProvider.GetRequiredService<IExplorerPluginCatalog>();
 
         Assert.Multiple(() =>
         {
-            Assert.That(AppAreas.IsEnabled(AppArea.Explore, empty), Is.True, "Explore is always on");
-            Assert.That(AppAreas.IsEnabled(AppArea.Backups, empty), Is.False, "Backups must gate closed");
-            Assert.That(AppAreas.IsEnabled(AppArea.Access, empty), Is.False, "Access must gate closed");
-            Assert.That(AppAreas.IsEnabled(AppArea.Schema, empty), Is.False, "Schema must gate closed");
+            foreach (var plugin in catalog.ForSurface(ExplorerPluginSurface.Area))
+            {
+                var access = store.Get(plugin.Descriptor.PluginId);
+                Assert.That(
+                    access.IsAllowed,
+                    Is.False,
+                    $"{plugin.Descriptor.PluginId} must gate closed before it is probed");
+                Assert.That(
+                    access.IsVisible,
+                    Is.True,
+                    $"{plugin.Descriptor.PluginId} greys out rather than hides");
+            }
         });
     }
 
     [Test]
-    public void Each_gated_area_flips_on_only_under_its_own_capability()
+    public async Task Each_area_plugin_carries_its_own_gate_and_no_two_share_one()
     {
-        var backupOnly = ExplorerCapabilities.Empty with { BackupListAllowed = true };
-        var accessOnly = ExplorerCapabilities.Empty with { AuthAdminAllowed = true };
-        var schemaOnly = ExplorerCapabilities.Empty with { SchemaAllowed = true };
+        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var scope = provider.CreateAsyncScope();
+
+        var plugins = scope.ServiceProvider
+            .GetRequiredService<IExplorerPluginCatalog>()
+            .ForSurface(ExplorerPluginSurface.Area);
+
+        var gates = plugins.Select(plugin => plugin.AccessGate).ToArray();
 
         Assert.Multiple(() =>
         {
-            // Backups flips on under its own gate, and leaves the sibling areas closed.
-            Assert.That(AppAreas.IsEnabled(AppArea.Backups, backupOnly), Is.True);
-            Assert.That(AppAreas.IsEnabled(AppArea.Access, backupOnly), Is.False);
-            Assert.That(AppAreas.IsEnabled(AppArea.Schema, backupOnly), Is.False);
-
-            // Access flips on under its own gate, and leaves the sibling areas closed.
-            Assert.That(AppAreas.IsEnabled(AppArea.Access, accessOnly), Is.True);
-            Assert.That(AppAreas.IsEnabled(AppArea.Backups, accessOnly), Is.False);
-            Assert.That(AppAreas.IsEnabled(AppArea.Schema, accessOnly), Is.False);
-
-            // Schema flips on under its own gate, and leaves the sibling areas closed.
-            Assert.That(AppAreas.IsEnabled(AppArea.Schema, schemaOnly), Is.True);
-            Assert.That(AppAreas.IsEnabled(AppArea.Backups, schemaOnly), Is.False);
-            Assert.That(AppAreas.IsEnabled(AppArea.Access, schemaOnly), Is.False);
+            Assert.That(gates, Has.None.Null);
+            Assert.That(gates.Distinct().Count(), Is.EqualTo(gates.Length), "one gate per plugin");
         });
     }
 
-    // ---- 3. Service assembly: every area's capability seam, from ONE provider
+    // ---- 3. Service assembly: every area's seam, from ONE provider ----------
 
     [Test]
     public async Task Every_area_capability_service_resolves_from_the_assembled_provider()
     {
         await using var provider = BuildAssembledProvider();
+        await using var scope = provider.CreateAsyncScope();
 
         Assert.Multiple(() =>
         {
-            Assert.That(provider.GetService<IExplorerCapabilityStore>(), Is.Not.Null);
-            Assert.That(provider.GetService<IBackupCapabilityService>(), Is.Not.Null);
-            Assert.That(provider.GetService<IAuthAdminCapabilityService>(), Is.Not.Null);
-            Assert.That(provider.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IExplorerPluginAccessStore>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IExplorerPluginCatalog>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IExplorerPluginAccessRefresher>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IExplorerPluginHostState>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IExplorerPluginPreferences>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IBackupCapabilityService>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<IAuthAdminCapabilityService>(), Is.Not.Null);
+            Assert.That(scope.ServiceProvider.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null);
         });
     }
 
     [Test]
-    public async Task Every_area_capability_service_fails_closed_when_no_endpoint_is_configured()
+    public async Task The_shared_refresh_fails_every_gate_closed_when_no_endpoint_is_configured()
     {
-        await using var provider = BuildAssembledProvider();
+        await using var provider = BuildAssembledProvider(options => options.EnableSchemaArea = true);
+        await using var scope = provider.CreateAsyncScope();
 
-        var store = provider.GetRequiredService<IExplorerCapabilityStore>();
-        var backup = provider.GetRequiredService<IBackupCapabilityService>();
-        var access = provider.GetRequiredService<IAuthAdminCapabilityService>();
-        var schema = provider.GetRequiredService<ISchemaAdminCapabilityService>();
+        var store = scope.ServiceProvider.GetRequiredService<IExplorerPluginAccessStore>();
+        var refresher = scope.ServiceProvider.GetRequiredService<IExplorerPluginAccessRefresher>();
 
         // No endpoint is configured on the assembled provider, so each area's
-        // coarse probe must fail closed (yield not-allowed) rather than throw.
-        await backup.RefreshAsync();
-        await access.RefreshAsync();
-        await schema.RefreshAsync();
+        // gate must fail closed (yield not-allowed) rather than throw, and the
+        // shared refresh must contain every one of those faults.
+        await refresher.RefreshAsync();
 
-        var caps = store.Current;
         Assert.Multiple(() =>
         {
-            Assert.That(caps.BackupListAllowed, Is.False, "Backups must fail closed with no endpoint");
-            Assert.That(caps.AuthAdminAllowed, Is.False, "Access must fail closed with no endpoint");
-            Assert.That(caps.SchemaAllowed, Is.False, "Schema must fail closed with no endpoint");
-
-            // The published map must gate every non-Explore area off.
-            Assert.That(AppAreas.IsEnabled(AppArea.Explore, caps), Is.True);
-            Assert.That(AppAreas.IsEnabled(AppArea.Backups, caps), Is.False);
-            Assert.That(AppAreas.IsEnabled(AppArea.Access, caps), Is.False);
-            Assert.That(AppAreas.IsEnabled(AppArea.Schema, caps), Is.False);
+            Assert.That(
+                store.Get(BackupsPluginKeys.PluginId).IsAllowed,
+                Is.False,
+                "Backups must fail closed with no endpoint");
+            Assert.That(
+                store.Get(AccessPluginKeys.PluginId).IsAllowed,
+                Is.False,
+                "Access must fail closed with no endpoint");
+            Assert.That(
+                store.Get(SchemaPluginKeys.PluginId).IsAllowed,
+                Is.False,
+                "Schema must fail closed with no endpoint");
         });
     }
 
@@ -161,15 +185,19 @@ public class AssembledExplorerHostSmokeTests
         {
             await using var app = await CreateHostAsync(basePath);
 
-            // Coherent: the mapped host resolves every assembled area's capability
-            // seam from its live service provider.
-            Assert.Multiple(() =>
+            // Coherent: the mapped host resolves every assembled area's seam from
+            // its live service provider.
+            await using (var scope = app.Services.CreateAsyncScope())
             {
-                Assert.That(app.Services.GetService<IExplorerCapabilityStore>(), Is.Not.Null, $"store missing (basePath={basePath})");
-                Assert.That(app.Services.GetService<IBackupCapabilityService>(), Is.Not.Null, $"backups missing (basePath={basePath})");
-                Assert.That(app.Services.GetService<IAuthAdminCapabilityService>(), Is.Not.Null, $"access missing (basePath={basePath})");
-                Assert.That(app.Services.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null, $"schema missing (basePath={basePath})");
-            });
+                Assert.Multiple(() =>
+                {
+                    Assert.That(scope.ServiceProvider.GetService<IExplorerPluginAccessStore>(), Is.Not.Null, $"store missing (basePath={basePath})");
+                    Assert.That(scope.ServiceProvider.GetService<IExplorerPluginCatalog>(), Is.Not.Null, $"catalog missing (basePath={basePath})");
+                    Assert.That(scope.ServiceProvider.GetService<IBackupCapabilityService>(), Is.Not.Null, $"backups missing (basePath={basePath})");
+                    Assert.That(scope.ServiceProvider.GetService<IAuthAdminCapabilityService>(), Is.Not.Null, $"access missing (basePath={basePath})");
+                    Assert.That(scope.ServiceProvider.GetService<ISchemaAdminCapabilityService>(), Is.Not.Null, $"schema missing (basePath={basePath})");
+                });
+            }
 
             // Mapped: the server-side auth endpoint lands under the configured base
             // path (a missing antiforgery token rejects with 400, not 404).
@@ -185,15 +213,25 @@ public class AssembledExplorerHostSmokeTests
 
     // ---- harness ------------------------------------------------------------
 
-    private static ServiceProvider BuildAssembledProvider()
+    private static string[] AreaPluginIds(IServiceProvider provider) => provider
+        .GetRequiredService<IExplorerPluginCatalog>()
+        .ForSurface(ExplorerPluginSurface.Area)
+        .Select(plugin => plugin.Descriptor.PluginId)
+        .ToArray();
+
+    private static ServiceProvider BuildAssembledProvider(Action<LatticeExplorerWebOptions>? configure = null)
     {
         var services = new ServiceCollection();
-        services.AddLatticeExplorerWeb();
+        services.AddLatticeExplorerWeb(configure);
 
         // Replace the real auth session with a substitute so resolving the area
         // clients never opens a gRPC channel; the fail-closed probe throws on the
-        // unconfigured session before it ever reads the auth session.
+        // unconfigured session before it ever reads the auth session. The durable
+        // preference store is substituted for the same reason: its web-head
+        // backing store is a Blazor circuit service that only exists inside a
+        // real web host.
         services.AddSingleton(Substitute.For<IExplorerAuthSession>());
+        services.AddScoped(_ => Substitute.For<IUiPreferenceStore>());
 
         return services.BuildServiceProvider();
     }

@@ -4,7 +4,7 @@ using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Access;
 
@@ -26,7 +26,7 @@ public class ExplorerAccessServiceCollectionExtensionsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerCapabilityStore)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerPluginAccessStore)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IAuthAdminClient)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IMembershipAdminService)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IPolicyAdminService)), Is.True);
@@ -70,7 +70,7 @@ public class ExplorerAccessServiceCollectionExtensionsTests
         services.AddExplorerAccess();
         await using var provider = services.BuildServiceProvider();
 
-        Assert.That(provider.GetRequiredService<IExplorerCapabilityStore>(), Is.InstanceOf<ExplorerCapabilityStore>());
+        Assert.That(provider.GetRequiredService<IExplorerPluginAccessStore>(), Is.InstanceOf<ExplorerPluginAccessStore>());
     }
 
     [Test]

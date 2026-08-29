@@ -22,15 +22,22 @@ public static class ExplorerTenantServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the fail-closed tenant-view seam - the per-circuit tenant context,
-    /// the capability-backed platform-operator gate, the active
+    /// the platform-operator gate, the active
     /// <see cref="IExplorerTenantView"/>, the identity-to-tenant resolver that
     /// establishes the caller's active tenant from their sign-in, and the
     /// operator-gated tenant switcher behind the shell's tenant selector - so the
     /// Explorer scopes its listings to the caller's active tenant and grants the
-    /// all-tenant view only to a validated platform operator. Call after
-    /// <c>AddExplorerCatalog</c> (which registers the capability store the operator
-    /// gate reads). Registrations are scoped per Blazor circuit so each connection
-    /// carries its own active tenant.
+    /// all-tenant view only to a validated platform operator. Registrations are
+    /// scoped per Blazor circuit so each connection carries its own active tenant.
+    /// <para>
+    /// The operator gate is registered with <c>TryAdd</c> and defaults to the
+    /// fail-closed <see cref="DeniedExplorerTenantOperatorGate"/>, because a real
+    /// platform-operator signal is a probed decision owned by the plugin that
+    /// performs the probe rather than by the navigation core. Call this
+    /// <em>after</em> the administrative surface that supplies one (the Access
+    /// feature registers a gate backed by its own administrator decision), so the
+    /// real gate wins the <c>TryAdd</c>.
+    /// </para>
     /// </summary>
     /// <remarks>
     /// The identity resolver and switcher exist only when this method is called, so
@@ -50,7 +57,7 @@ public static class ExplorerTenantServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddScoped<IExplorerTenantContext, ExplorerTenantContext>();
-        services.TryAddScoped<IExplorerTenantOperatorGate, CapabilityExplorerTenantOperatorGate>();
+        services.TryAddScoped<IExplorerTenantOperatorGate>(_ => DeniedExplorerTenantOperatorGate.Instance);
         services.TryAddScoped<IExplorerTenantView, ExplorerTenantView>();
         services.TryAddScoped<IExplorerTenantIdentityResolver, DefaultExplorerTenantIdentityResolver>();
         services.TryAddScoped<IExplorerTenantSwitcher, ExplorerTenantSwitcher>();

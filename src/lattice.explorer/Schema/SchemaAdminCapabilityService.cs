@@ -1,26 +1,22 @@
 using Grpc.Core;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Schema;
 
 /// <summary>
 /// The default <see cref="ISchemaAdminCapabilityService"/>. Drives the
-/// <see cref="ISchemaAdminClient"/> probe surface and republishes a merged
-/// <see cref="ExplorerCapabilities"/> into the <see cref="IExplorerCapabilityStore"/>.
-/// All probes swallow a denial / transport failure and fall back to deny, so a probe
-/// never breaks the shell.
+/// <see cref="ISchemaAdminClient"/> probe surface. All probes swallow a denial /
+/// transport failure and fall back to deny, so a probe never breaks the shell.
 /// </summary>
 /// <remarks>
 /// The backend capability probe is fail-closed but does not itself throw on an
-/// authorization denial: it returns an all-false capability set. So the coarse Schema
-/// area gate is "the schema control endpoint is reachable" - the probe RPC completed
+/// authorization denial: it returns an all-false capability set. So the plugin-level
+/// Schema gate is "the schema control endpoint is reachable" - the probe RPC completed
 /// without a transport fault - while the per-action grey-out is driven by the
 /// per-tree <see cref="SchemaCapabilitySnapshot"/> the panel requests through
 /// <see cref="ProbeTreeAsync"/>.
 /// </remarks>
-public sealed class SchemaAdminCapabilityService(
-    ISchemaAdminClient client,
-    IExplorerCapabilityStore store) : ISchemaAdminCapabilityService
+public sealed class SchemaAdminCapabilityService(ISchemaAdminClient client) : ISchemaAdminCapabilityService
 {
     /// <summary>
     /// The reserved tree id used for the coarse reachability probe. Probing it has no
@@ -30,14 +26,16 @@ public sealed class SchemaAdminCapabilityService(
     internal const string CapabilityProbeTreeId = "__schema_capability_probe__";
 
     private readonly ISchemaAdminClient _client = client ?? throw new ArgumentNullException(nameof(client));
-    private readonly IExplorerCapabilityStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
     /// <inheritdoc />
-    public async Task RefreshAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<ExplorerPluginAccess> ProbeAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken = default)
     {
-        var allowed = await ProbeReachableAsync(cancellationToken).ConfigureAwait(false);
-        var current = _store.Current;
-        _store.Set(current with { SchemaAllowed = allowed });
+        ArgumentNullException.ThrowIfNull(context);
+
+        var reachable = await ProbeReachableAsync(cancellationToken).ConfigureAwait(false);
+        return reachable ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Denied;
     }
 
     /// <inheritdoc />

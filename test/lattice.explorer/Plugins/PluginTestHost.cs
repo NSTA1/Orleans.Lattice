@@ -67,4 +67,11 @@ internal sealed class PluginTestHost
 
     /// <summary>Builds a host over <paramref name="plugins"/>.</summary>
     public static PluginTestHost Create(params IExplorerPlugin[] plugins) => Create((IEnumerable<IExplorerPlugin>)plugins);
+
+    /// <summary>
+    /// A bound host context for <paramref name="pluginId"/> over an otherwise
+    /// empty host, for a gate test that only needs something legal to pass to
+    /// <see cref="IExplorerPluginAccessGate.ProbeAsync"/>.
+    /// </summary>
+    public static IExplorerPluginHostContext Context(string pluginId) => Create().Contexts.Create(pluginId);
 }
