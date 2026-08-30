@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
+namespace Orleans.Lattice.Api.Telemetry.Tests;
 
 /// <summary>
 /// A test <see cref="HttpMessageHandler"/> that always faults with a supplied
