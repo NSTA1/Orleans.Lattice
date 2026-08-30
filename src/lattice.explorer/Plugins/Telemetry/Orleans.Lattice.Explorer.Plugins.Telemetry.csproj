@@ -1,20 +1,24 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!--
-      Like the tenancy seam, this is a plain class library rather than a Razor
-      library: it ships the controlled domain model and the facade binding the
-      telemetry panels consume, and carries no components or stylesheet of its
-      own. The panel project brings its own Razor surface.
+      One package carries the whole telemetry surface: the client seam (the
+      controlled domain model and the facade binding) and the panels built on
+      it. The epic's package layout names exactly one telemetry entry, and
+      splitting the panels into a second project would have to invent an area
+      name for them, because "Telemetry" is already this one - the plugin
+      naming rule is Orleans.Lattice.Explorer.Plugins.<Area>, and there is only
+      one telemetry area. The seam has exactly one consumer, so the split would
+      buy nothing and cost a package.
     -->
     <RootNamespace>Orleans.Lattice.Explorer.Plugins.Telemetry</RootNamespace>
     <AssemblyName>Orleans.Lattice.Explorer.Plugins.Telemetry</AssemblyName>
     <PackageId>Orleans.Lattice.Explorer.Plugins.Telemetry</PackageId>
     <Version>9.4.0</Version>
-    <Description>The shared telemetry seam for the Orleans.Lattice Explorer: the client wrapper over the telemetry gRPC binding, server-authored catalogue discovery so panels are driven by the queries the cluster actually offers, the Explorer-term domain model the telemetry panels operate against, the fault mapping that keeps a backend outage distinct from an invalid query, and the availability probe that reports the surface unavailable on a cluster that serves no telemetry facade. Registered with AddExplorerTelemetry().</Description>
+    <Description>The Telemetry plugin for the Orleans.Lattice Explorer: the client seam over the telemetry gRPC binding plus the time-series panels built on it. Panels are composed entirely from the server-authored catalogue - the titles, units, semantics and parameter bounds the cluster publishes - so no query id, label, or limit is hard-coded in the client and no control anywhere accepts free-text query input. Every result renders the tenant scope the facade actually pinned, and says so when a requested visibility was degraded. The same panels also fill the My Tenant area's metrics section, pinned to the caller's own tenant. Registered with AddExplorerTelemetry(), AddExplorerTelemetryPlugin() and AddExplorerTelemetryMyTenantSection(); served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.Telemetry.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -40,15 +44,24 @@
     Schema -> api.schema.grpc do. Explorer.Core keeps its single
     api.state.grpc reference untouched. No dependency is taken on the shared UI
     library, so a head that ships no telemetry surface pays for none of it.
+
+    The My Tenant reference is deliberately in this direction. The tenant
+    metrics section is one adapter naming a component this package already
+    owns, so it belongs here; pointing the arrow the other way would put a
+    gRPC binding into My Tenant, whose whole shape is that it reaches the
+    cluster through the tenancy seam and references no wire contract at all.
   -->
   <ItemGroup>
     <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
     <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\MyTenant\Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
     <ProjectReference Include="..\..\..\lattice.api.telemetry.grpc\Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
     <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.2" />

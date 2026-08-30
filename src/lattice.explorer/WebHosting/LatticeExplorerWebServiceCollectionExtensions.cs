@@ -17,6 +17,7 @@ using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Plugins.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
@@ -155,6 +156,16 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         services.AddExplorerTenantView();
         services.AddExplorerMyTenant();
         services.AddExplorerMyTenantPlugin();
+
+        // The Telemetry area: time-series panels built from the server-authored
+        // catalogue. Registered after My Tenant so the metrics section has a
+        // surface to fill; the section and the area are independent opt-ins, and
+        // this head takes both. On a cluster serving no telemetry facade - or
+        // offering this caller no queries - the plugin's gate reports the
+        // surface unavailable and no Telemetry tab is rendered.
+        services.AddExplorerTelemetry();
+        services.AddExplorerTelemetryPlugin();
+        services.AddExplorerTelemetryMyTenantSection();
 
         // The Schema management area: the schema control-API client, its policy,
         // versioning, and compliance services, and the access gate that gates the

@@ -13,6 +13,7 @@ using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Access;
 using Orleans.Lattice.Explorer.DesignSystem;
 using Orleans.Lattice.Explorer.Plugins.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
@@ -110,6 +111,14 @@ public static class MauiProgram
         builder.Services.AddExplorerTenantView();
         builder.Services.AddExplorerMyTenant();
         builder.Services.AddExplorerMyTenantPlugin();
+
+        // The Telemetry area and the tenant-metrics section of My Tenant (see
+        // the web head). Both are opt-ins this head takes; on a cluster serving
+        // no telemetry facade the plugin's gate reports the surface unavailable
+        // and no Telemetry tab is rendered.
+        builder.Services.AddExplorerTelemetry();
+        builder.Services.AddExplorerTelemetryPlugin();
+        builder.Services.AddExplorerTelemetryMyTenantSection();
 
         // The Schema management area (see the web head). Its services are wired
         // but its plugin is not registered, so the desktop head renders no Schema

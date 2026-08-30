@@ -1,0 +1,157 @@
+@*
+    The bounded controls: which catalogue entry, over what window, at what
+    resolution, narrowed to which tree.
+
+    Every control is a <select> over a list someone else decided:
+
+      * the entries come from the server-authored catalogue,
+      * the ranges and steps from the bounds that entry publishes,
+      * the trees from the series the last answer actually contained.
+
+    Refresh re-reads the catalogue as well as re-evaluating, because that is
+    what a caller means by it after a reconnect or a sign-in: what the cluster
+    offers them may have changed, and rediscovery is the only way to find out.
+    A retryable backend fault offers its own, cheaper retry instead - an outage
+    does not invalidate the catalogue.
+
+    There is no text input here and there is none anywhere else in the package.
+    That is the point: a panel selects a server-authored query and bounded
+    parameters, and has no way to compose one (epic decision D1 of the telemetry
+    strand). A control also hides itself when the selected entry does not declare
+    the parameter it supplies, so the surface only offers what the entry accepts.
+
+    At compact the row wraps into a stack through a token utility class rather
+    than a media query; nothing here measures a viewport.
+
+    Every list is walked by index rather than with foreach: foreach over an
+    IReadOnlyList<T> boxes the backing array's enumerator, and this row
+    re-renders on every refresh, every gate change, and every breakpoint change.
+*@
+
+<div class="lxt-controls @StackClass" role="group" aria-label="Telemetry panel controls">
+    <label class="lxt-control">
+        <span class="lxt-control-label">Panel</span>
+        <select class="lxt-select"
+                disabled="@Disabled"
+                value="@State.Selected?.QueryId"
+                @onchange="OnQueryChanged">
+            @for (var i = 0; i < State.Catalog.Queries.Count; i++)
+            {
+                var query = State.Catalog.Queries[i];
+                <option value="@query.QueryId" @key="query.QueryId">@query.Title</option>
+            }
+        </select>
+    </label>
+
+    @if (ShowRange)
+    {
+        <label class="lxt-control">
+            <span class="lxt-control-label">Range</span>
+            <select class="lxt-select"
+                    disabled="@Disabled"
+                    value="@RangeLabel"
+                    @onchange="OnRangeChanged">
+                <option value="@TelemetryDurationChoices.ServerDefaultLabel">
+                    @TelemetryDurationChoices.ServerDefaultLabel
+                </option>
+                @for (var i = 0; i < State.RangeChoices.Count; i++)
+                {
+                    var choice = State.RangeChoices[i];
+                    <option value="@choice.Label" @key="choice.Label">@choice.Label</option>
+                }
+            </select>
+        </label>
+    }
+
+    @if (ShowStep)
+    {
+        <label class="lxt-control">
+            <span class="lxt-control-label">Step</span>
+            <select class="lxt-select"
+                    disabled="@Disabled"
+                    value="@StepLabel"
+                    @onchange="OnStepChanged">
+                <option value="@TelemetryDurationChoices.ServerDefaultLabel">
+                    @TelemetryDurationChoices.ServerDefaultLabel
+                </option>
+                @for (var i = 0; i < State.StepChoices.Count; i++)
+                {
+                    var choice = State.StepChoices[i];
+                    <option value="@choice.Label" @key="choice.Label">@choice.Label</option>
+                }
+            </select>
+        </label>
+    }
+
+    @if (ShowTrees)
+    {
+        <label class="lxt-control">
+            <span class="lxt-control-label">Tree</span>
+            <select class="lxt-select"
+                    disabled="@Disabled"
+                    value="@(State.TreeFilter ?? TelemetryTreeOptions.AllTreesValue)"
+                    @onchange="OnTreeChanged">
+                <option value="@TelemetryTreeOptions.AllTreesValue">@TelemetryTreeOptions.AllTreesLabel</option>
+                @for (var i = 0; i < State.TreeChoices.Count; i++)
+                {
+                    var tree = State.TreeChoices[i];
+                    <option value="@tree" @key="tree">@tree</option>
+                }
+            </select>
+        </label>
+    }
+
+    <button type="button"
+            class="explorer-btn lxt-refresh"
+            disabled="@Disabled"
+            @onclick="State.RefreshAsync">Refresh</button>
+</div>
+
+@code {
+    private const string StackedClass = "is-stacked";
+
+    /// <summary>The workspace these controls read and drive.</summary>
+    [Parameter, EditorRequired] public TelemetryWorkspace State { get; set; } = default!;
+
+    /// <summary>
+    /// The breakpoint cascaded by the shell's adaptive root, used to stack the
+    /// control row rather than let it overflow on a narrow viewport.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
+
+    private bool Disabled => State.Busy || !State.Allowed;
+
+    private string? StackClass =>
+        AdaptiveContext?.Breakpoint == LatticeBreakpoint.Compact ? StackedClass : null;
+
+    // A control for a parameter the entry does not accept would be a control
+    // whose value is silently discarded, so it is not rendered at all.
+    private bool ShowRange =>
+        State.Selected?.Accepts(ExplorerTelemetryParameters.TimeRange) == true
+        && State.RangeChoices.Count > 0;
+
+    // A step is only expressible as part of a window, so an entry that accepts
+    // a step but no time range has nowhere to put one. Offering the control
+    // there would silently discard whatever was chosen.
+    private bool ShowStep =>
+        ShowRange
+        && State.Selected?.Accepts(ExplorerTelemetryParameters.Step) == true
+        && State.StepChoices.Count > 0;
+
+    // The tree filter needs no declared parameter: it narrows the drawn chart
+    // among series the facade already returned, so it appears exactly when the
+    // last answer carried more than one tree to choose between.
+    private bool ShowTrees => State.TreeChoices.Count > 1;
+
+    private string RangeLabel => TelemetryDurationChoices.LabelFor(State.RangeChoices, State.Range);
+
+    private string StepLabel => TelemetryDurationChoices.LabelFor(State.StepChoices, State.Step);
+
+    private Task OnQueryChanged(ChangeEventArgs args) => State.SelectQueryAsync(args.Value as string);
+
+    private Task OnRangeChanged(ChangeEventArgs args) => State.SelectRangeAsync(args.Value as string);
+
+    private Task OnStepChanged(ChangeEventArgs args) => State.SelectStepAsync(args.Value as string);
+
+    private void OnTreeChanged(ChangeEventArgs args) => State.SelectTree(args.Value as string);
+}
