@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
-          key: nuget-uitests-${{ runner.os }}-${{ hashFiles('src/lattice.explorer/**/*.csproj', 'test/lattice.explorer.uitests/**/*.csproj', 'Directory.Packages.props') }}
+          key: nuget-uitests-${{ runner.os }}-${{ hashFiles('src/lattice.explorer/**/*.csproj', 'test/lattice.explorer.uitests/**/*.csproj') }}
           restore-keys: nuget-uitests-${{ runner.os }}-
 
       # Build before installing browsers: the Playwright install script is
@@ -70,31 +70,16 @@ jobs:
       - name: Build UI test project
         run: dotnet build "$UI_TEST_PROJECT" --configuration Release
 
-      # Cache the browser binaries themselves. Playwright pins a browser build
-      # per package version, so keying on the resolved Microsoft.Playwright
-      # version invalidates the cache exactly when the pinned build changes.
-      - name: Resolve Playwright version
-        id: pw
-        run: |
-          set -euo pipefail
-          ver=$(grep -oP '(?<=PackageVersion Include="Microsoft.Playwright" Version=")[^"]+' Directory.Packages.props || true)
-          if [ -z "$ver" ]; then
-            ver=$(grep -oRhP '(?<=Include="Microsoft.Playwright" Version=")[^"]+' "$UI_TEST_PROJECT" || true)
-          fi
-          if [ -z "$ver" ]; then
-            echo "::error::Could not resolve the Microsoft.Playwright version; the browser cache key would be unstable."
-            exit 1
-          fi
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "::notice::Playwright $ver"
-
+      # Cache the browser binaries. Keying on the project file hash invalidates
+      # the cache exactly when the pinned Microsoft.Playwright version changes,
+      # since that version lives in the csproj (this repo does not use central
+      # package management), and never otherwise.
       - name: Cache Playwright browsers
         id: pwcache
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
-
+          key: playwright-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
       # Only chromium. The suite asserts layout, reflow and accessibility, none
       # of which are engine-specific enough to justify tripling install time
       # and runtime on every PR. Add firefox/webkit here only if a real
