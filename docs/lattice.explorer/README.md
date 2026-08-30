@@ -78,7 +78,8 @@ See [Running and hosting the Explorer](running-the-explorer.md) for the full hos
 - [Adding a custom auth method](adding-a-custom-auth-method.md) - implementing `IExplorerAuthMethod` for a bespoke sign-in.
 - [Managing backups from the Explorer](managing-backups.md) - the Backups area and its capability gating.
 - [Managing access control from the Explorer](managing-access.md) - the Access area and its capability gating.
-- [Managing schema from the Explorer](managing-schema.md) - the Schema area, hidden by default.
+- [Managing schema from the Explorer](managing-schema.md) - the Schema plugin, withheld by default.
+- [Writing an Explorer plugin](writing-a-plugin.md) - the extension model: adding a tab as its own package, with its own domain contract, access gate, and styling.
 
 ## See also
 
