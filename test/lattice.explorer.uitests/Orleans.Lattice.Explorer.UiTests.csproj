@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Orleans.Lattice.Explorer.UiTests</RootNamespace>
+    <!--
+      A test project, not a runnable web app: suppress the Web SDK's implicit
+      Program entry-point expectations. The Web SDK is used purely so this project
+      composes the Explorer's referenced static web assets (its stylesheets and
+      interop scripts) into a manifest named after this assembly, which the head's
+      MapStaticAssets resolves at runtime. Without composed assets the shell renders
+      unstyled and boundingBox() would measure the wrong geometry.
+    -->
+    <OutputType>Library</OutputType>
+    <!--
+      The Explorer's Razor components (the App root and its interactive server
+      render mode) live in the referenced Orleans.Lattice.Explorer.Web hosting
+      library, not in this project, so the SDK does not auto-detect that this
+      project hosts Blazor and would omit the framework's _framework/blazor.web.js
+      bootstrap script - leaving the shell rendered but non-interactive, so the
+      breakpoint observer never runs and the compact reflow never happens. Opting
+      in explicitly (exactly as the standalone WebHost project does) pulls the
+      Blazor Web script into this project's static web assets so the interactive
+      circuit starts under the in-process test host.
+    -->
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageReference Include="NUnit" Version="4.6.1" />
+    <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.49.0" />
+    <PackageReference Include="Microsoft.Playwright.NUnit" Version="1.49.0" />
+    <PackageReference Include="Deque.AxeCore.Playwright" Version="4.7.2" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="NUnit.Framework" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
+    <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
+  </ItemGroup>
+
+</Project>
