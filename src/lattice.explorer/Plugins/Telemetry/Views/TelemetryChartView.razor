@@ -1,0 +1,82 @@
+@*
+    The chart: a plain SVG polyline per series, drawn from geometry that was
+    computed before this component was reached.
+
+    Everything here came out of TelemetryChart, which is a pure function of the
+    result - including each legend reading, already formatted with the entry's
+    unit, and each palette class, handed out from a fixed table. This component
+    allocates nothing per frame: it emits strings the model composed, and it
+    walks its list by index rather than with foreach, because foreach over an
+    IReadOnlyList<T> boxes the backing array's enumerator on every render and a
+    metrics panel re-renders on every refresh.
+
+    Neither loop uses @key. A legend label is composed from label VALUES and is
+    capped at three of them, so two series agreeing on the first three but
+    differing in a fourth would key identically - and Blazor throws on duplicate
+    sibling keys, which on a server circuit tears down the whole connection
+    rather than just this panel. Positional diffing is correct here anyway: the
+    plot array is rebuilt wholesale whenever the result changes, and a polyline
+    holds no state worth preserving across a reorder.
+
+    It carries no width. The SVG scales itself to whatever box the stylesheet
+    gives it, so a phone gets a smaller chart rather than a horizontally
+    scrolling one, and there is no media query and no measurement anywhere in
+    this package (epic decision D7).
+*@
+
+<figure class="lxt-chart">
+    @if (Chart.IsEmpty)
+    {
+        <figcaption class="lxt-muted">@EmptyText</figcaption>
+    }
+    else
+    {
+        <svg class="lxt-plot"
+             viewBox="@TelemetryChart.ViewBox"
+             preserveAspectRatio="none"
+             role="img"
+             aria-label="@Label">
+            @for (var i = 0; i < Chart.Plots.Count; i++)
+            {
+                var plot = Chart.Plots[i];
+                @if (!plot.IsEmpty)
+                {
+                    <polyline class="@TelemetryPalette.SeriesClass(plot.PaletteIndex)"
+                              points="@plot.Points" />
+                }
+            }
+        </svg>
+
+        <figcaption class="lxt-legend">
+            <ul class="lxt-legend-items">
+                @for (var i = 0; i < Chart.Plots.Count; i++)
+                {
+                    var plot = Chart.Plots[i];
+                    <li class="lxt-legend-item">
+                        <span class="@TelemetryPalette.SwatchClass(plot.PaletteIndex)" aria-hidden="true"></span>
+                        <span class="lxt-legend-label">@plot.Label</span>
+                        <span class="lxt-legend-value">@plot.Reading</span>
+                    </li>
+                }
+            </ul>
+
+            @if (Chart.IsTruncated)
+            {
+                <p class="lxt-muted" role="status">
+                    Showing @Chart.Plots.Count of @Chart.TotalSeries series. Narrow the tree filter to see the rest.
+                </p>
+            }
+        </figcaption>
+    }
+</figure>
+
+@code {
+    /// <summary>The geometry to draw, already computed from the result.</summary>
+    [Parameter, EditorRequired] public TelemetryChart Chart { get; set; } = TelemetryChart.Empty;
+
+    /// <summary>The accessible name of the plot, taken from the entry's server-authored title.</summary>
+    [Parameter] public string Label { get; set; } = "Telemetry chart";
+
+    /// <summary>What to say when there is nothing to draw.</summary>
+    [Parameter] public string EmptyText { get; set; } = "No series matched.";
+}

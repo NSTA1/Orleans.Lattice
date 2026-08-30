@@ -1,0 +1,368 @@
+/*
+  Orleans.Lattice Explorer - Telemetry plugin stylesheet.
+
+  Everything the telemetry surface renders is styled here, in the plugin's own
+  package, and served at
+  `_content/Orleans.Lattice.Explorer.Plugins.Telemetry/lattice-telemetry.css`.
+  Nothing in this file belongs to the shared shell: a head that does not
+  register the Telemetry plugin loads none of it (epic decision D5).
+
+  Two rules hold:
+
+  1. Every colour, spacing, radius, and type size is a design token from
+     `_content/Orleans.Lattice.Explorer.DesignSystem/lattice-tokens.css`.
+  2. It contains no width media query and no breakpoint number. The control row
+     stacks at compact because the .NET side sets `is-stacked` from the cascaded
+     LatticeAdaptiveContext, and the chart adapts by being an SVG that scales
+     into whatever box it is given rather than by measuring one (epic decision
+     D7). BreakpointTokenHygieneTests fails the build if that is ever broken
+     here.
+
+  Class prefix: `lxt-` (lattice explorer telemetry), so the plugin's rules
+  cannot collide with the shell's or another plugin's.
+*/
+
+/* --------------------------------------------------------------------------
+   Panel shell
+   -------------------------------------------------------------------------- */
+.lxt-root {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.lxt-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    flex: 1;
+    min-height: 0;
+    text-align: left;
+}
+
+/* The My Tenant mount. It gets the same board, so it needs only the outer
+   spacing the area panel's own shell would otherwise supply. */
+.lxt-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    text-align: left;
+}
+
+.lxt-board {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+}
+
+.lxt-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    padding: var(--lx-space-5);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+}
+
+.lxt-panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--lx-space-3);
+}
+
+.lxt-panel-title {
+    margin: 0;
+    font-size: var(--lx-text-title);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-text);
+}
+
+.lxt-panel-description {
+    margin: 0;
+    font-size: var(--lx-text-small);
+    color: var(--lx-color-text-muted);
+    line-height: var(--lx-leading-normal);
+}
+
+.lxt-instruments {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+}
+
+.lxt-muted {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}
+
+/* --------------------------------------------------------------------------
+   Controls
+
+   One row on a viewport with room for one, a stack on one without. The switch
+   is driven by `is-stacked`, which the panel adds from the cascaded breakpoint,
+   so the decision is made once in .NET rather than restated as a width here.
+   -------------------------------------------------------------------------- */
+.lxt-controls {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+}
+
+.lxt-controls.is-stacked {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.lxt-control {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    min-width: 0;
+}
+
+.lxt-controls.is-stacked .lxt-control {
+    width: 100%;
+}
+
+.lxt-control-label {
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-medium);
+    letter-spacing: var(--lx-tracking-wide);
+    text-transform: uppercase;
+    color: var(--lx-color-text-dim);
+}
+
+.lxt-select {
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-2) var(--lx-space-4);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text);
+    font-family: var(--lx-font-ui);
+    font-size: var(--lx-text-small);
+    max-width: 100%;
+}
+
+.lxt-select:focus-visible {
+    outline: 2px solid var(--lx-color-focus-ring);
+    outline-offset: 1px;
+}
+
+.lxt-select:disabled {
+    color: var(--lx-color-text-dim);
+    cursor: not-allowed;
+}
+
+/* A pointer-driven viewport can use a compact target; a touch one cannot. This
+   is a capability query, not a width query, so it is legal here. */
+@media (pointer: coarse) {
+    .lxt-select,
+    .lxt-refresh,
+    .lxt-retry {
+        min-height: var(--lx-target-min-touch);
+    }
+}
+
+.lxt-refresh,
+.lxt-retry {
+    min-height: var(--lx-target-min);
+    align-self: flex-end;
+}
+
+.lxt-controls.is-stacked .lxt-refresh {
+    align-self: stretch;
+}
+
+/* --------------------------------------------------------------------------
+   Status and scope
+
+   The scope line is the surface that stops a fail-closed degrade from being
+   invisible, so its warning state is styled to be read rather than skimmed.
+   -------------------------------------------------------------------------- */
+.lxt-status {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    margin: 0;
+    padding: var(--lx-space-4) var(--lx-space-5);
+    border: 1px solid var(--lx-color-border);
+    border-left-width: 3px;
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+    font-size: var(--lx-text-small);
+    color: var(--lx-color-text);
+}
+
+.lxt-status.is-ok {
+    border-left-color: var(--lx-color-success);
+}
+
+.lxt-status.is-warn {
+    border-left-color: var(--lx-color-warning);
+}
+
+.lxt-status.is-refused,
+.lxt-status.is-denied {
+    border-left-color: var(--lx-color-danger);
+    background: var(--lx-color-danger-surface);
+}
+
+.lxt-status.is-muted {
+    border-left-color: var(--lx-color-border-strong);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-status-message,
+.lxt-status-guidance {
+    margin: 0;
+}
+
+.lxt-status-guidance {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+}
+
+.lxt-scope {
+    margin: 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    line-height: var(--lx-leading-normal);
+}
+
+.lxt-scope.is-warn {
+    padding: var(--lx-space-3) var(--lx-space-4);
+    border-left: 3px solid var(--lx-color-warning);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-text);
+}
+
+.lxt-scope-lead {
+    margin-right: var(--lx-space-2);
+    color: var(--lx-color-warning);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lxt-badge {
+    padding: var(--lx-space-1) var(--lx-space-3);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-text-muted);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 14rem;
+}
+
+.lxt-badge.is-ok {
+    border-color: var(--lx-color-success);
+}
+
+.lxt-badge.is-warn {
+    border-color: var(--lx-color-warning);
+    color: var(--lx-color-text);
+}
+
+/* --------------------------------------------------------------------------
+   Chart
+
+   The SVG carries no width of its own: it fills its column and is given a
+   height that shrinks with the type scale, so a phone gets a smaller chart
+   rather than one that scrolls sideways. `preserveAspectRatio="none"` is what
+   lets one fixed view box serve every column width.
+   -------------------------------------------------------------------------- */
+.lxt-chart {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    margin: 0;
+}
+
+.lxt-plot {
+    display: block;
+    width: 100%;
+    height: 12rem;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+}
+
+.lxt-series {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+/* Six slots, so a legend stays distinguishable without the component knowing a
+   single colour. A seventh series wraps back to the first, which is why the
+   chart also caps how many it draws. */
+.lxt-series-0 { stroke: var(--lx-color-accent); }
+.lxt-series-1 { stroke: var(--lx-color-success); }
+.lxt-series-2 { stroke: var(--lx-color-warning); }
+.lxt-series-3 { stroke: var(--lx-color-danger); }
+.lxt-series-4 { stroke: var(--lx-color-text-muted); }
+.lxt-series-5 { stroke: var(--lx-color-border-strong); }
+
+.lxt-legend {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+}
+
+.lxt-legend-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-2) var(--lx-space-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lxt-legend-item {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-2);
+    min-width: 0;
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.lxt-swatch {
+    flex: none;
+    width: 0.75rem;
+    height: 0.2rem;
+    border-radius: var(--lx-radius-pill);
+    background: currentColor;
+}
+
+/* The swatch borrows the series stroke, so one palette drives both. */
+.lxt-swatch.lxt-series-0 { background: var(--lx-color-accent); }
+.lxt-swatch.lxt-series-1 { background: var(--lx-color-success); }
+.lxt-swatch.lxt-series-2 { background: var(--lx-color-warning); }
+.lxt-swatch.lxt-series-3 { background: var(--lx-color-danger); }
+.lxt-swatch.lxt-series-4 { background: var(--lx-color-text-muted); }
+.lxt-swatch.lxt-series-5 { background: var(--lx-color-border-strong); }
+
+.lxt-legend-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 16rem;
+}
+
+.lxt-legend-value {
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-text);
+    white-space: nowrap;
+}

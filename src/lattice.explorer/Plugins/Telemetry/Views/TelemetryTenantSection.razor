@@ -1,0 +1,82 @@
+@implements IDisposable
+@inject IExplorerPluginHostContextFactory HostContexts
+@inject IExplorerPluginAccessStore AccessStore
+
+@*
+    The tenant-metrics section of the My Tenant area: the same panels, pinned to
+    the caller's own tenant.
+
+    "The same panels" is literal - this renders TelemetryBoard, exactly as the
+    Telemetry area does. The only difference is the workspace: this one is
+    constructed pinned, so every request it sends asks for the ActiveTenant
+    visibility whatever the shell's switcher is currently asking for. A platform
+    operator who has switched the shell to a cross-tenant view still sees their
+    own tenant here, because a section headed "your tenant" that inherited
+    cross-tenant intent would be labelled with a claim it was not answering.
+
+    The pin grants nothing. The facade derives the tenant from the authenticated
+    caller and reports what it applied, and this section renders that answer -
+    including a degrade - exactly as the area panel does.
+
+    It renders no quota or usage. Those live on the My Tenant Quota surface, and
+    two answers to one question in one area is worse than one.
+*@
+
+<div class="lxt-section">
+    <TelemetryBoard State="_state" />
+</div>
+
+@code {
+    private readonly Action _render;
+
+    private TelemetryWorkspace _state = null!;
+    private IExplorerPluginHostContext _context = null!;
+
+    /// <summary>Creates the section, caching the delegate its state subscription marshals.</summary>
+    public TelemetryTenantSection() => _render = StateHasChanged;
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        // Keyed to the telemetry plugin's own id, not My Tenant's: the gate
+        // that decides whether there is any telemetry to read is the telemetry
+        // plugin's, and reading My Tenant's decision here would report the
+        // wrong surface's availability.
+        _context = HostContexts.Create(TelemetryPluginKeys.PluginId);
+        _state = new TelemetryWorkspace(
+            _context.GetDomain<ITelemetryDomain>(),
+            AccessStore,
+            clock: null,
+            pinnedToOwnTenant: true);
+
+        _state.Changed += OnStateChanged;
+        _context.Changed += OnHostChanged;
+
+        await _state.InitializeAsync();
+    }
+
+    private void OnStateChanged() => InvokeAsync(_render);
+
+    // A tenant switch changes whose tenant "your tenant" means, so the chart on
+    // screen is the previous tenant's.
+    private void OnHostChanged(ExplorerPluginHostChange change)
+    {
+        if (change == ExplorerPluginHostChange.Tenant)
+        {
+            InvokeAsync(_state.ReevaluateAsync);
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_state is null)
+        {
+            return;
+        }
+
+        _context.Changed -= OnHostChanged;
+        _state.Changed -= OnStateChanged;
+        _state.Dispose();
+    }
+}

@@ -1,0 +1,109 @@
+@implements IDisposable
+@inject IExplorerPluginHostContextFactory HostContexts
+@inject IExplorerPluginAccessStore AccessStore
+
+@*
+    The Telemetry plugin's panel: the surface the shell renders through
+    DynamicComponent for this plugin.
+
+    It reaches the cluster only through its declared domain contract
+    (ITelemetryDomain), resolved for it by the host from its own plugin id, so it
+    holds no connection, no channel, and no container (epic decision D3).
+
+    It adds no tenant control of its own. The visibility it requests is whatever
+    the shell's existing tenant switcher is asking for, read fresh on every
+    request; what was actually applied comes back on the response and is what the
+    board captions. A second toggle here would be a second thing that can
+    disagree with the shell about a question only the facade answers.
+
+    A tenant change is dispatched by the host, not polled for: the panel
+    subscribes to the host context and re-evaluates when the shell reports one.
+*@
+
+@if (AdaptiveContext is null)
+{
+    @*
+        No shell above us has cascaded a breakpoint, so the plugin supplies its
+        own adaptive root and stays usable at compact on its own. It yields the
+        moment a shell provides one - the other branch renders no second root -
+        so this is a fallback, never a competing owner of the viewport.
+    *@
+    <LatticeAdaptiveRoot Class="lxt-root">
+        @_panel
+    </LatticeAdaptiveRoot>
+}
+else
+{
+    @_panel
+}
+
+@code {
+    private readonly Action _render;
+
+    private TelemetryWorkspace _state = null!;
+    private IExplorerPluginHostContext _context = null!;
+    private RenderFragment? _panel;
+
+    /// <summary>Creates the panel, caching the delegate its state subscription marshals.</summary>
+    public TelemetryPanel() =>
+        // Bound once rather than per notification, so a load that raises several
+        // changes does not allocate a delegate for each of them.
+        _render = StateHasChanged;
+
+    /// <summary>
+    /// The breakpoint cascaded by a shell-provided adaptive root, when there is
+    /// one. The plugin supplies its own root when this is absent.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        // Materialised once at mount rather than per render: the panel
+        // re-renders on every load, every gate change, and every breakpoint
+        // change, and a fresh template on each would allocate on all of them.
+        _panel = Panel;
+
+        // The host context is bound to this plugin's id, so GetDomain can only
+        // ever hand back this plugin's declared contract: there is no parameter
+        // through which the panel could name another plugin's domain.
+        _context = HostContexts.Create(TelemetryPluginKeys.PluginId);
+        _state = new TelemetryWorkspace(_context.GetDomain<ITelemetryDomain>(), AccessStore);
+        _state.Changed += OnStateChanged;
+        _context.Changed += OnHostChanged;
+
+        await _state.InitializeAsync();
+    }
+
+    private void OnStateChanged() => InvokeAsync(_render);
+
+    // A tenant switch changes what the facade will scope the next request to, so
+    // the chart on screen is answering the previous tenant's question. Nothing
+    // else the host reports concerns this surface: it is not selection scoped,
+    // and a connection change re-probes the gate, which re-initialises through
+    // the access store.
+    private void OnHostChanged(ExplorerPluginHostChange change)
+    {
+        if (change == ExplorerPluginHostChange.Tenant)
+        {
+            InvokeAsync(_state.ReevaluateAsync);
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_state is null)
+        {
+            return;
+        }
+
+        _context.Changed -= OnHostChanged;
+        _state.Changed -= OnStateChanged;
+        _state.Dispose();
+    }
+
+    private RenderFragment Panel => @<section class="lxt-panel" aria-label="Telemetry">
+        <TelemetryBoard State="_state" />
+    </section>;
+}
