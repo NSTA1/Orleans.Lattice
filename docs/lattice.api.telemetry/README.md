@@ -72,6 +72,14 @@ whitespace exactly as Prometheus discards it. An earlier version had no rule for
 swallowed the rest of the query - hiding a metric name from the allow-list that
 the backend then evaluated anyway.
 
+## `GetCatalogAsync` degrades; it does not fail
+
+Discovery **never surfaces a backend fault**. An unconfigured backend, and a caller entitled to no query, both receive `TelemetryQueryCatalog.Empty` rather than an exception, so a client renders no panels instead of erroring - and the two cases stay indistinguishable, so a refusal leaks nothing about the deployment.
+
+**This is load-bearing for callers, and changing it would break them silently.** A client may therefore treat a transport-level `Unavailable` from `GetCatalog` as *the surface is unreachable*, because a mere metrics-store outage cannot produce one. The Explorer's telemetry client relies on exactly that to tell "the telemetry add-on is not installed" apart from "the metrics backend is having a bad minute" - the first hides the surface, the second shows a retryable error on it.
+
+If this method were ever changed so that a backend fault could escape it, that client would begin hiding the telemetry surface during ordinary metrics outages, telling an operator to install something they already have. No test in the client would catch it, because the client's tests exercise its own classification rather than this contract. Treat the degradation as part of the published behaviour of `ILatticeTelemetry`, not as an implementation detail of the current backend.
+
 ## Tenant scope is derived, never accepted
 
 `TelemetryTenantScopeResolver` decides the effective scope from the caller's own
