@@ -31,6 +31,13 @@ internal sealed class FakeTenancyDomain : ITenancyDomain
     /// <inheritdoc />
     public ITenantAdminService Tenants => Service;
 
+    /// <summary>
+    /// The same service seen through the tenant-administrator contract this
+    /// domain also satisfies. Explicit because the two contracts return
+    /// different (widening) types for the one underlying service.
+    /// </summary>
+    ITenantSelfAdminService IMyTenantDomain.Tenants => Service;
+
     /// <inheritdoc />
     public bool IsTenancyEnabled { get; set; } = true;
 

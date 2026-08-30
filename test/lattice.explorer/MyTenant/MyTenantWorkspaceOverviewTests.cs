@@ -290,7 +290,6 @@ public sealed class MyTenantWorkspaceOverviewTests
     {
         var harness = await MyTenantWorkspaceHarness.CreateAsync(domain =>
         {
-            domain.IsOperator = true;
             domain.AllowVisibilityChange = true;
         });
 

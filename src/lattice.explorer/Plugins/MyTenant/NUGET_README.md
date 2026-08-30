@@ -6,7 +6,8 @@ tenant from.
 
 It is a self-contained plugin package - services, Razor components, and a scoped
 stylesheet - that reaches the cluster only through the shared tenancy seam's
-controlled domain model (`ITenancyDomain`). It references no gRPC binding and no
+controlled domain model (`IMyTenantDomain`), the tenant-administrator half of
+that seam. It references no gRPC binding and no
 control-API contract of its own.
 
 ## Surfaces

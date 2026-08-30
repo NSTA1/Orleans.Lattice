@@ -40,7 +40,8 @@
     Deliberately narrower than the Backups and Access plugin projects: this one
     references no gRPC binding and no control-API contract at all. Everything it
     reaches the cluster with arrives through the shared tenancy seam's controlled
-    domain model (ITenancyDomain), which is the whole of the epic's D3 for a
+    domain model (IMyTenantDomain), the tenant-administrator half of that seam,
+    which is the whole of the epic's D3 for a
     tenancy surface. TenancyDomainSurfaceTests guards that the seam names no wire
     type, so this project cannot acquire one by accident.
   -->

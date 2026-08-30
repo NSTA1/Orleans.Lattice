@@ -7,7 +7,7 @@
     DynamicComponent for this plugin.
 
     It reaches the cluster only through its declared domain contract
-    (ITenancyDomain), resolved for it by the host from its own plugin id, so it
+    (IMyTenantDomain), resolved for it by the host from its own plugin id, so it
     holds no connection, no channel, and no container (epic decision D3).
 
     Its six sub-surfaces are internal to the plugin and are rendered through the
@@ -71,7 +71,7 @@ else
         // ever hand back this plugin's declared contract: there is no parameter
         // through which the panel could name another plugin's domain.
         var context = HostContexts.Create(MyTenantPluginKeys.PluginId);
-        _state = new MyTenantWorkspace(context.GetDomain<ITenancyDomain>(), AccessStore);
+        _state = new MyTenantWorkspace(context.GetDomain<IMyTenantDomain>(), AccessStore);
         _state.Changed += OnStateChanged;
         await _state.InitializeAsync();
     }

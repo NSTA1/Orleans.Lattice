@@ -151,7 +151,7 @@ public sealed partial class MyTenantWorkspace
     /// <remarks>
     /// The Explorer's tenant-identity seam is the authority: a platform operator
     /// who switched tenant must see the switched-to tenant, which is what
-    /// <see cref="ITenancyDomain.ActiveTenant"/> reports and what
+    /// <see cref="IMyTenantDomain.ActiveTenant"/> reports and what
     /// <c>GetCurrentTenantAsync</c> - which answers for the caller's own
     /// credential - deliberately does not. The credential's tenant is the
     /// fallback only when no active tenant has been established at all.

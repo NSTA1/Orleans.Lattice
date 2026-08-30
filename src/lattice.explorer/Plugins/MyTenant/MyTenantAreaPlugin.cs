@@ -11,16 +11,22 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 /// <see cref="IExplorerPlugin"/>, so registering or withholding this type is the
 /// whole of the head's opt-in.
 /// <para>
-/// It declares <see cref="ITenancyDomain"/> through
+/// It declares <see cref="IMyTenantDomain"/> through
 /// <see cref="IExplorerPlugin{TDomain}"/>, so the reach of the whole surface is
 /// a compile-time fact stated once in this signature (epic decision D3): the
 /// panel resolves that one contract from its bound host context and receives
 /// nothing else from the host - no cluster connection, no gRPC channel, no
 /// tenant-administration wire type.
 /// </para>
+/// <para>
+/// The contract is deliberately the <em>narrow</em> one. This is a tenant
+/// administrator's surface, so it gets the tenant's own operations and not the
+/// operator-only ones the platform-operator Tenants plugin receives through
+/// <see cref="ITenancyDomain"/> (issue #1785).
+/// </para>
 /// </summary>
 /// <param name="gate">The My Tenant package's own access gate.</param>
-public sealed class MyTenantAreaPlugin(IMyTenantAccessGate gate) : IExplorerPlugin<ITenancyDomain>
+public sealed class MyTenantAreaPlugin(IMyTenantAccessGate gate) : IExplorerPlugin<IMyTenantDomain>
 {
     private static readonly ExplorerPluginDescriptor Registration = new()
     {

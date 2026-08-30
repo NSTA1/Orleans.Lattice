@@ -1,5 +1,4 @@
 using Grpc.Core;
-using Grpc.Core.Interceptors;
 using Grpc.Net.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Telemetry;
@@ -183,99 +182,13 @@ public sealed class GrpcTelemetryQueryClient : ITelemetryQueryClient, IDisposabl
             _channel?.Dispose();
 
             var effective = settings with { Authentication = authentication };
-            _channel = BuildChannel(effective, out var invoker);
+            _channel = LatticeGrpcChannelFactory.CreateChannel(effective);
+            var invoker = LatticeGrpcChannelFactory.CreateCallInvoker(_channel, effective);
             _client = LatticeTelemetryApiGrpcClient.Create(invoker, _serializerProvider);
             _builtEndpoint = settings.Address;
             _builtAuthentication = authentication;
             return _client;
         }
-    }
-
-    /// <summary>
-    /// Builds the channel and an auth-attaching call invoker for
-    /// <paramref name="settings"/>, mirroring the state connection's channel
-    /// construction (per-call token provider or static headers, h2c opt-in).
-    /// </summary>
-    private static GrpcChannel BuildChannel(LatticeConnectionSettings settings, out CallInvoker invoker)
-    {
-        if (settings.AllowUnencryptedHttp2)
-        {
-            AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-        }
-
-        var channelOptions = new GrpcChannelOptions();
-        var auth = settings.Authentication;
-        if (auth is { HasCredentialProvider: true }
-            && settings.AllowUnencryptedHttp2
-            && !IsHttpsAddress(settings.Address))
-        {
-            channelOptions.UnsafeUseInsecureChannelCallCredentials = true;
-        }
-
-        var channel = GrpcChannel.ForAddress(settings.Address, channelOptions);
-        invoker = channel.CreateCallInvoker();
-
-        // Transport headers accompany every call regardless of the auth mode (for
-        // example an origin-routing header a fronting proxy requires), independent
-        // of the sign-in that replaces settings.Authentication.
-        invoker = ApplyTransportHeaders(invoker, settings.TransportHeaders);
-
-        if (auth is { HasCredentialProvider: true, CredentialProvider: { } provider })
-        {
-            var callCredentials = CallCredentials.FromInterceptor(async (context, metadata) =>
-            {
-                var header = await provider.GetAuthorizationHeaderAsync(context.CancellationToken).ConfigureAwait(false);
-                if (!string.IsNullOrEmpty(header))
-                {
-                    metadata.Add(LatticeCallAuthentication.AuthorizationHeaderName, header);
-                }
-            });
-
-            invoker = invoker.Intercept(new CallCredentialsInterceptor(callCredentials));
-        }
-        else if (auth is { HasHeaders: true })
-        {
-            var headers = auth.Headers!;
-            invoker = invoker.Intercept(metadata =>
-            {
-                foreach (var (key, value) in headers)
-                {
-                    metadata.Add(key, value);
-                }
-
-                return metadata;
-            });
-        }
-
-        return channel;
-    }
-
-    private static bool IsHttpsAddress(string? address) =>
-        Uri.TryCreate(address, UriKind.Absolute, out var uri)
-        && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Applies the sign-in-independent transport headers (if any) to every call on
-    /// <paramref name="invoker"/>, returning it unchanged when there are none.
-    /// </summary>
-    private static CallInvoker ApplyTransportHeaders(
-        CallInvoker invoker,
-        IReadOnlyDictionary<string, string>? transportHeaders)
-    {
-        if (transportHeaders is not { Count: > 0 } headers)
-        {
-            return invoker;
-        }
-
-        return invoker.Intercept(metadata =>
-        {
-            foreach (var (key, value) in headers)
-            {
-                metadata.Add(key, value);
-            }
-
-            return metadata;
-        });
     }
 
     /// <inheritdoc />

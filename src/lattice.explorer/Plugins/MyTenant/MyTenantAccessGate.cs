@@ -61,7 +61,7 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 /// stays with <paramref name="domain"/>.
 /// </param>
 internal sealed class MyTenantAccessGate(
-    ITenancyDomain domain,
+    IMyTenantDomain domain,
     IExplorerPluginAccessStore store,
     IExplorerTenantOperatorGate? operatorGate = null) : IMyTenantAccessGate
 {
@@ -74,7 +74,7 @@ internal sealed class MyTenantAccessGate(
     private const string NotTenantAdminReason =
         "You do not hold admin authority over your active tenant.";
 
-    private readonly ITenancyDomain _domain = domain ?? throw new ArgumentNullException(nameof(domain));
+    private readonly IMyTenantDomain _domain = domain ?? throw new ArgumentNullException(nameof(domain));
 
     private readonly IExplorerPluginAccessStore _store = store ?? throw new ArgumentNullException(nameof(store));
 

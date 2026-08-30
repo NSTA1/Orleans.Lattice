@@ -1,8 +1,7 @@
 using Grpc.Core;
-using Grpc.Core.Interceptors;
-using Grpc.Net.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.Explorer.Core.Authentication;
@@ -42,19 +41,27 @@ public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDis
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
-        if (allowUnencryptedHttp2)
-        {
-            AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-        }
+        // The probe's channel is built by the shared factory like every other
+        // Explorer channel, so its transport posture is scoped to this one
+        // short-lived channel rather than written into process-global state. It
+        // carries no credential, so the insecure-channel safeguard never comes
+        // into play here.
+        using var channel = LatticeGrpcChannelFactory.CreateChannel(
+            new LatticeConnectionSettings
+            {
+                Address = address,
+                AllowUnencryptedHttp2 = allowUnencryptedHttp2,
+            });
 
-        using var channel = GrpcChannel.ForAddress(address);
         try
         {
             // Transport headers gate the unauthenticated probe the same way they
             // gate every other call (for example an origin-routing header a
             // fronting proxy requires); without them a proxy-guarded endpoint
             // rejects the probe and discovery wrongly falls back to manual/Basic.
-            var invoker = ApplyTransportHeaders(channel.CreateCallInvoker(), transportHeaders);
+            var invoker = LatticeGrpcChannelFactory.ApplyTransportHeaders(
+                channel.CreateCallInvoker(),
+                transportHeaders);
             var client = LatticeStateApiGrpcClient.Create(invoker, _serializerProvider);
             var advertisement = await client
                 .GetAuthSchemeAsync(new AuthSchemeAdvertisementRequest(), cancellationToken)
@@ -72,24 +79,6 @@ public sealed class GrpcExplorerAuthSchemeProbe : IExplorerAuthSchemeProbe, IDis
             // rejected the probe: fall back to manual/Basic selection.
             return ExplorerAuthSchemeAdvertisement.Empty;
         }
-    }
-
-    private static CallInvoker ApplyTransportHeaders(CallInvoker invoker, IReadOnlyDictionary<string, string>? transportHeaders)
-    {
-        if (transportHeaders is not { Count: > 0 } headers)
-        {
-            return invoker;
-        }
-
-        return invoker.Intercept(metadata =>
-        {
-            foreach (var (key, value) in headers)
-            {
-                metadata.Add(key, value);
-            }
-
-            return metadata;
-        });
     }
 
     private static ExplorerAuthSchemeAdvertisement Map(AuthSchemeAdvertisement advertisement)
