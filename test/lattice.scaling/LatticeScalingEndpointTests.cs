@@ -106,10 +106,42 @@ public sealed class LatticeScalingEndpointTests
         Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
     }
 
+    [Test]
+    public async Task MapLatticeScalingSignal_falls_back_to_the_default_path_when_options_are_not_registered()
+    {
+        // A host that maps the endpoint without ever calling AddLatticeScalingSignal
+        // has no IOptions<LatticeScalingSignalOptions> to resolve, so the mapping
+        // must fall through to the compiled-in default rather than throw.
+        var snapshot = SampleSignal(scaleValue: 1.0d, recommendedReplicas: 1);
+        using var host = await StartHostAsync(snapshot, registerOptions: false);
+        var client = host.GetTestClient();
+
+        var response = await client.GetAsync(LatticeScalingSignalOptions.DefaultEndpointPath);
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+    }
+
+    [Test]
+    public async Task MapLatticeScalingSignal_falls_back_to_the_default_path_when_the_configured_path_is_null()
+    {
+        // EndpointPath is non-nullable by declaration but a configuration binder
+        // can still leave it null; the mapping must fall through to the default
+        // rather than passing null to MapGet.
+        var snapshot = SampleSignal(scaleValue: 1.0d, recommendedReplicas: 1);
+        using var host = await StartHostAsync(snapshot, configureNullPath: true);
+        var client = host.GetTestClient();
+
+        var response = await client.GetAsync(LatticeScalingSignalOptions.DefaultEndpointPath);
+
+        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+    }
+
     private static async Task<IHost> StartHostAsync(
         ScalingSignal snapshot,
         string? mapPath = null,
-        string? configuredPath = null)
+        string? configuredPath = null,
+        bool registerOptions = true,
+        bool configureNullPath = false)
     {
         var facade = Substitute.For<ILatticeScalingSignal>();
         facade.GetScalingSignalAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(snapshot));
@@ -122,7 +154,16 @@ public sealed class LatticeScalingEndpointTests
                 {
                     services.AddRouting();
                     services.AddSingleton(facade);
+                    if (!registerOptions)
+                    {
+                        return;
+                    }
+
                     var options = services.AddOptions<LatticeScalingSignalOptions>();
+                    if (configureNullPath)
+                    {
+                        options.Configure(o => o.EndpointPath = null!);
+                    }
                     if (configuredPath is not null)
                     {
                         options.Configure(o => o.EndpointPath = configuredPath);

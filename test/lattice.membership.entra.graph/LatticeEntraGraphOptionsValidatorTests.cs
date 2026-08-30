@@ -100,6 +100,20 @@ public class LatticeEntraGraphOptionsValidatorTests
     }
 
     [Test]
+    public void Validate_blank_scope_fails()
+    {
+        // A configuration binder can leave a whitespace entry in the list; a
+        // blank scope would be sent to Entra verbatim, so it must fail closed.
+        var options = Valid();
+        options.Scopes.Clear();
+        options.Scopes.Add("   ");
+
+        var result = Validator().Validate(null, options);
+
+        Assert.That(result.Failed, Is.True);
+    }
+
+    [Test]
     public void Validate_negative_refresh_skew_fails()
     {
         var options = Valid();
