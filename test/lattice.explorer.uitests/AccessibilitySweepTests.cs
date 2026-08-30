@@ -48,10 +48,12 @@ public sealed class AccessibilitySweepTests : UiTestBase
     // to be fixed at its source rather than suppressed silently here:
     //
     //   color-contrast - the dark theme's --lx-color-text-dim (#5a6373 on the #0b0e14
-    //   canvas) is 3.18:1, below the 4.5:1 WCAG AA minimum for normal text. This is a
+    //   canvas) is 3.19:1, below the 4.5:1 WCAG AA minimum for normal text. This is a
     //   design-token contrast defect in DesignSystem/wwwroot/lattice-tokens.css, not a
     //   shell-structure regression. Blocking on it would make every UI PR red on an
-    //   issue it did not introduce. Remove this exclusion once the token is darkened.
+    //   issue it did not introduce. Tracked as #1801; remove this exclusion in the
+    //   same change that raises the token's contrast (on a dark canvas that means
+    //   lightening it, not darkening it).
     private static readonly HashSet<string> KnownUnblockedRuleIds =
         new(StringComparer.OrdinalIgnoreCase) { "color-contrast" };
 
