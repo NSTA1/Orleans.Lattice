@@ -266,9 +266,13 @@ public sealed partial class MyTenantWorkspace : IDisposable
         var wasAllowed = Allowed;
         ReadAccess();
 
-        // A gate that has just opened wants its data loaded without the caller
-        // reaching for Refresh; anything else is a re-render.
-        if (!wasAllowed && Allowed)
+        // A gate that has just opened for the first time wants its data loaded
+        // without the caller reaching for Refresh. An already-initialized surface
+        // falls through to the re-render instead: InitializeAsync short-circuits
+        // on _initialized and would announce nothing, so a gate that closed and
+        // re-opened - a token expiring, then a sign-in - would otherwise leave
+        // the denied message on screen with the data already in hand.
+        if (!wasAllowed && Allowed && !_initialized)
         {
             _ = InitializeAsync();
             return;
