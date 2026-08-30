@@ -81,6 +81,10 @@ disagree with the master file, the master file wins.
 - **Guardrail 1 - locate here, read with `view`.** The index reflects the last
   ingest, not your uncommitted edits; treat every hit as a pointer and `view` the
   real file before quoting, relying on, or editing it.
+- **Resolve the repo id from `repocontext_list_repos`, never from your current
+  directory.** In a git worktree the directory name is the worktree's, not a
+  repository id, and it will never appear in the listing - that does **not** mean
+  the code is unindexed. The base repository is indexed; query it by its id.
 - **Guardrail 2 - fall back when weak.** `mode: keyword` (a capable BM25 literal
   scan, but tokens not meaning), `status: Failed`, or a stale / mid-ingest
   (partially embedded) index can be a worse locator than `grep` - prefer
