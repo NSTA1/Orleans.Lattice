@@ -68,6 +68,33 @@ public class AssembledExplorerHostSmokeTests
     }
 
     [Test]
+    public async Task Assembled_area_plugins_all_declare_a_distinct_order()
+    {
+        // Two areas sharing an Order compiles, renders, and passes every
+        // per-plugin test, because each plugin package only ever sees itself.
+        // What it actually does is hand the relative position of two tabs to
+        // whatever tie-break the catalogue's sort happens to use, so the strip
+        // order stops being a design decision. Registering the schema plugin
+        // too so the guard covers every area a head can compose at once.
+        await using var provider = BuildAssembledProvider(
+            registerPlugins: services => services.AddExplorerSchemaPlugin());
+        await using var scope = provider.CreateAsyncScope();
+
+        var byOrder = scope.ServiceProvider
+            .GetRequiredService<IExplorerPluginCatalog>()
+            .ForSurface(ExplorerPluginSurface.Area)
+            .GroupBy(plugin => plugin.Descriptor.Order)
+            .Where(group => group.Count() > 1)
+            .Select(group => $"{group.Key}: {string.Join(", ", group.Select(p => p.Descriptor.PluginId))}")
+            .ToArray();
+
+        Assert.That(
+            byOrder,
+            Is.Empty,
+            "every area plugin must claim its own Order so the tab strip is ordered by intent");
+    }
+
+    [Test]
     public async Task Assembled_web_head_registers_no_schema_plugin_by_default()
     {
         await using var provider = BuildAssembledProvider();

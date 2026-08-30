@@ -31,8 +31,11 @@ public sealed class MyTenantAreaPlugin(IMyTenantAccessGate gate) : IExplorerPlug
         // Sorted after the operator-facing areas: this is the surface a tenant
         // admin lives in, and it is the one that disappears entirely on a
         // deployment without the tenancy add-on, so it sits at the end rather
-        // than leaving a gap mid-strip when it does.
-        Order = 400,
+        // than leaving a gap mid-strip when it does. 500 rather than 400
+        // because the platform-operator Tenants area already claims 400, and
+        // two areas sharing an order leaves their relative position to an
+        // arbitrary tie-break instead of to intent.
+        Order = 500,
     };
 
     private readonly IMyTenantAccessGate _gate = gate ?? throw new ArgumentNullException(nameof(gate));
