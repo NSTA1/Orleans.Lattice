@@ -15,6 +15,14 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// is version-bound: it changes when the file's content changes, so a stale receipt
 /// never suppresses a unit whose content has moved on.
 /// </para>
+/// <para>
+/// A unit is a <b>descriptor, not a second copy of the text</b>. The delivered text
+/// lives once, on the owning entry's <see cref="RepoContextContextEntry.Content"/>,
+/// which is exactly the join of its units in order; a unit names its slice of that
+/// content and carries the receipt needed to suppress it later. Publishing the text
+/// here as well would put every byte of source on the wire twice within a single
+/// payload (issue #1811).
+/// </para>
 /// </summary>
 /// <remarks>
 /// This is an MCP protocol payload projected to JSON by the SDK, not an Orleans grain
@@ -38,9 +46,10 @@ public sealed record RepoContextContextUnit
     /// </summary>
     public string? Symbol { get; init; }
 
-    /// <summary>The exact BPE token count of this unit's <see cref="Content"/> under the shared tokenizer profile.</summary>
+    /// <summary>
+    /// The exact BPE token count of the slice of the owning entry's
+    /// <see cref="RepoContextContextEntry.Content"/> that this unit contributed, under
+    /// the shared tokenizer profile.
+    /// </summary>
     public required int TokenCount { get; init; }
-
-    /// <summary>The rendered content of this unit at the entry's detail level. Never <see langword="null"/>.</summary>
-    public required string Content { get; init; }
 }

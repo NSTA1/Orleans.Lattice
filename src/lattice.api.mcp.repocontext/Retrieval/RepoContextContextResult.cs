@@ -6,10 +6,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// an agent can collapse the search -> recall -> read loop into a single round trip
 /// and never overrun its context budget.
 /// <para>
-/// <b>The ceiling is never exceeded.</b> <see cref="TotalTokens"/> is the exact BPE
-/// sum of the packed entries and is always less than or equal to
-/// <see cref="BudgetTokens"/>. When even the cheapest single entry does not fit the
-/// budget, the bundle fails closed: <see cref="Entries"/> is empty and
+/// <b>The ceiling is never exceeded.</b> <see cref="ResponseTokens"/> is the estimated
+/// cost of the response as the caller receives it - delivered content plus each entry's
+/// JSON envelope, times the SDK's dual-emission factor - and is always less than or
+/// equal to <see cref="BudgetTokens"/>. <see cref="TotalTokens"/> reports the narrower
+/// figure of the packed source text alone. When even the cheapest single entry does not
+/// fit the budget, the bundle fails closed: <see cref="Entries"/> is empty and
 /// <see cref="RetryBudgetTokens"/> reports a budget that is guaranteed to fit at
 /// least one entry on a retry. An empty <see cref="Entries"/> with a
 /// <see langword="null"/> <see cref="RetryBudgetTokens"/> means the search matched
@@ -46,11 +48,24 @@ public sealed record RepoContextContextResult
     public required int BudgetTokens { get; init; }
 
     /// <summary>
-    /// The exact BPE token sum of every entry in <see cref="Entries"/>. Always less
-    /// than or equal to <see cref="BudgetTokens"/> - the invariant the whole tool
-    /// exists to guarantee.
+    /// The exact BPE token sum of the source text delivered in <see cref="Entries"/>,
+    /// excluding the JSON envelope around it. This is the "how much source did I get"
+    /// figure; <see cref="ResponseTokens"/> is the "what did this cost me" figure, and
+    /// it is the latter that the budget bounds.
     /// </summary>
     public required int TotalTokens { get; init; }
+
+    /// <summary>
+    /// The estimated token cost of the response as the caller actually receives it:
+    /// the delivered content plus each entry's JSON envelope (path, match reasons,
+    /// content hash, and per-unit receipts), multiplied by the MCP SDK's dual-emission
+    /// factor because every tool result is serialized twice - once as structured
+    /// content and once as text. Always less than or equal to
+    /// <see cref="BudgetTokens"/>: this is the invariant the tool exists to guarantee.
+    /// The estimate is deliberately conservative, so a bundle may come in slightly
+    /// under the ceiling but never over it.
+    /// </summary>
+    public required int ResponseTokens { get; init; }
 
     /// <summary>
     /// Whether at least one ranked candidate was dropped because it did not fit the
