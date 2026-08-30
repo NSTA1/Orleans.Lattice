@@ -371,14 +371,35 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         if (all)
         {
             // Stream the first tag's posting list; emit a key only when every
-            // other tag's membership row also exists for it.
+            // other tag's membership row also exists for it. The (T-1) sibling-tag
+            // probes for each candidate are issued as a single batched
+            // GetManyAsync rather than one sequential read apiece, collapsing the
+            // AND query's index-tree reads from O(candidates x tags) to
+            // O(candidates). GetManyAsync omits absent/tombstoned rows, so a row
+            // missing from the result is not live; in a flag mode a returned row
+            // is additionally decoded so a disabled/tombstoned flag reads as
+            // absent - matching the per-row RowLiveAsync semantics exactly, and
+            // correct even when the same tag appears more than once.
+            var probe = new List<string>(tags.Length - 1);
             await foreach (var key in PostingListAsync(treeId, tags[0], cancellationToken).ConfigureAwait(false))
             {
-                var inAll = true;
-                for (var i = 1; i < tags.Length && inAll; i++)
+                probe.Clear();
+                for (var i = 1; i < tags.Length; i++)
                 {
-                    inAll = await RowLiveAsync(RowKey(tags[i], treeId, key), cancellationToken).ConfigureAwait(false);
+                    probe.Add(RowKey(tags[i], treeId, key));
                 }
+
+                var rows = await _indexTree.GetManyAsync(probe, cancellationToken).ConfigureAwait(false);
+                var inAll = true;
+                for (var i = 0; i < probe.Count; i++)
+                {
+                    if (!rows.TryGetValue(probe[i], out var bytes) || (FlagMode && !IsRowLive(bytes)))
+                    {
+                        inAll = false;
+                        break;
+                    }
+                }
+
                 if (inAll)
                 {
                     yield return key;

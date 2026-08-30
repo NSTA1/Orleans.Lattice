@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Graph;
 using NSubstitute;
 using Orleans.Hosting;
 using Orleans.Lattice.Membership.Entra;
@@ -121,6 +122,92 @@ public class LatticeEntraGraphServiceCollectionExtensionsTests
         // Resolving the resolver forces the shared GraphServiceClient factory to
         // run the secret-less branch (built directly from the TokenCredential).
         using var provider = services.BuildServiceProvider();
+        Assert.That(provider.GetService<IEntraGroupResolver>(), Is.Not.Null);
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_with_client_secret_builds_the_shared_graph_client()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(Configure);
+
+        // Resolving forces the confidential-client branch of the shared
+        // GraphServiceClient factory to run: MSAL application build, token
+        // acquirer, refresh-skew provider, and authentication provider.
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(provider.GetService<IEntraGroupResolver>(), Is.Not.Null);
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_resolves_the_identity_directory()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(Configure);
+
+        using var provider = services.BuildServiceProvider();
+        var directory = provider.GetService<ILatticeIdentityDirectory>();
+
+        Assert.That(directory, Is.InstanceOf<EntraGraphIdentityDirectory>());
+    }
+
+    [Test]
+    public void AddEntraGraphGroupResolver_with_credential_resolves_the_identity_directory()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(ConfigureCredential);
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(
+            provider.GetService<ILatticeIdentityDirectory>(),
+            Is.InstanceOf<EntraGraphIdentityDirectory>());
+    }
+
+    [Test]
+    public void The_resolver_and_the_directory_share_one_graph_client()
+    {
+        // A single token stream no matter how many Graph-backed seams consume
+        // it: both registrations must resolve the same singleton.
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+
+        builder.AddEntraGraphGroupResolver(Configure);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IEntraGroupResolver>();
+        provider.GetRequiredService<ILatticeIdentityDirectory>();
+
+        Assert.That(
+            provider.GetRequiredService<GraphServiceClient>(),
+            Is.SameAs(provider.GetRequiredService<GraphServiceClient>()));
+    }
+
+    [Test]
+    public void The_identity_directory_honours_registered_directory_options()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+        services.Configure<LatticeIdentityDirectoryOptions>(o => o.MaxPageSize = 7);
+
+        builder.AddEntraGraphGroupResolver(Configure);
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(provider.GetService<ILatticeIdentityDirectory>(), Is.Not.Null);
+    }
+
+    [Test]
+    public void A_registered_time_provider_is_used_for_the_token_refresh_clock()
+    {
+        var (builder, services) = CreateBuilder(entraRegistered: true);
+        services.AddSingleton(TimeProvider.System);
+
+        builder.AddEntraGraphGroupResolver(Configure);
+
+        using var provider = services.BuildServiceProvider();
+
         Assert.That(provider.GetService<IEntraGroupResolver>(), Is.Not.Null);
     }
 

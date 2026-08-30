@@ -59,6 +59,21 @@ public sealed class FileWalStorageOptionsAndRegistrationTests
     }
 
     [Test]
+    public void Validator_rejects_a_NaN_compaction_threshold()
+    {
+        var validator = new FileWalStorageOptionsValidator();
+        var result = validator.Validate(null, new FileWalStorageOptions
+        {
+            RootDirectory = "C:/wal",
+            CompactionThreshold = double.NaN,
+        });
+        Assert.That(
+            result.Failed,
+            Is.True,
+            "NaN compares false against every ordering test, so it needs its own guard.");
+    }
+
+    [Test]
     public void Validator_rejects_a_negative_minimum_dead_bytes()
     {
         var validator = new FileWalStorageOptionsValidator();

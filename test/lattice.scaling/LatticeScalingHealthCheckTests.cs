@@ -329,6 +329,39 @@ public sealed class LatticeScalingHealthCheckTests
             tags: null),
     };
 
+    [Test]
+    public async Task A_context_without_a_registration_falls_back_to_the_default_options_name()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<LatticeScalingHealthCheckOptions>>();
+        var options = new LatticeScalingHealthCheckOptions();
+        monitor.CurrentValue.Returns(options);
+        monitor.Get(Arg.Any<string>()).Returns(options);
+        var check = new LatticeScalingHealthCheck(
+            Signal(),
+            monitor,
+            NullLogger<LatticeScalingHealthCheck>.Instance);
+
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
+
+        Assert.That(result.Status, Is.EqualTo(HealthStatus.Healthy));
+        monitor.Received().Get(DefaultName);
+    }
+
+    [Test]
+    public async Task A_null_reason_is_reported_as_an_empty_string()
+    {
+        // ScalingSignal.Reason is nullable; the data dictionary must never carry
+        // a null value because health-check reporters serialize it directly.
+        var signal = Substitute.For<ILatticeScalingSignal>();
+        signal.GetScalingSignalAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScalingSignal { Reason = null! }));
+        var check = CreateCheck(signal, new LatticeScalingHealthCheckOptions());
+
+        var result = await check.CheckHealthAsync(Context(), CancellationToken.None);
+
+        Assert.That(result.Data["reason"], Is.EqualTo(string.Empty));
+    }
+
     private sealed class FakeTimeProvider : TimeProvider
     {
         public DateTimeOffset UtcNow { get; set; }

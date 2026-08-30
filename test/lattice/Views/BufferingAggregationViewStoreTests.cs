@@ -128,4 +128,51 @@ public class BufferingAggregationViewStoreTests
         Assert.That(upserts, Is.Empty);
         Assert.That(deletes, Is.Empty);
     }
+
+    [Test]
+    public async Task GetManyAsync_mergesOverlayHitsWithBatchedInnerReadForMisses()
+    {
+        var inner = Inner();
+        inner.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, byte[]>(StringComparer.Ordinal) { ["miss"] = B("from-inner") });
+        var store = new Orleans.Lattice.Views.BufferingAggregationViewStore(inner);
+        await store.SetAsync("hit", B("buffered"));
+
+        var result = await store.GetManyAsync(["hit", "miss"]);
+
+        Assert.That(result["hit"], Is.EqualTo(B("buffered")));
+        Assert.That(result["miss"], Is.EqualTo(B("from-inner")));
+        // Only the overlay miss is forwarded to the inner batched read.
+        await inner.Received(1).GetManyAsync(
+            Arg.Is<List<string>>(k => k.Count == 1 && k[0] == "miss"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetManyAsync_overlayDeleteMarker_omitsKeyAndDoesNotConsultInner()
+    {
+        var inner = Inner();
+        var store = new Orleans.Lattice.Views.BufferingAggregationViewStore(inner);
+        await store.DeleteAsync("gone");
+
+        var result = await store.GetManyAsync(["gone"]);
+
+        Assert.That(result, Is.Empty);
+        await inner.DidNotReceive().GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetManyAsync_allOverlayHits_doesNotConsultInner()
+    {
+        var inner = Inner();
+        var store = new Orleans.Lattice.Views.BufferingAggregationViewStore(inner);
+        await store.SetAsync("a", B("1"));
+        await store.SetAsync("b", B("2"));
+
+        var result = await store.GetManyAsync(["a", "b"]);
+
+        Assert.That(result["a"], Is.EqualTo(B("1")));
+        Assert.That(result["b"], Is.EqualTo(B("2")));
+        await inner.DidNotReceive().GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>());
+    }
 }

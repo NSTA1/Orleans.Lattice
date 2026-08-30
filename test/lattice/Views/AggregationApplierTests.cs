@@ -26,6 +26,17 @@ public sealed class AggregationApplierTests
         public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default)
             => Task.FromResult(_map.TryGetValue(key, out var v) ? v : null);
 
+        public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
+        {
+            var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            foreach (var key in keys)
+            {
+                if (_map.TryGetValue(key, out var v))
+                    result[key] = v;
+            }
+            return Task.FromResult(result);
+        }
+
         public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
         {
             _map[key] = value;
