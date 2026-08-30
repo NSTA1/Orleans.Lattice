@@ -58,7 +58,9 @@ Console.WriteLine(
 
 // -- Act 2: stand up the single silo + State API gRPC (auth required) -------
 // h2c (HTTP/2 without TLS) keeps the sample dependency-free - no dev cert.
-AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+// Kestrel binds HttpProtocols.Http2 with no certificate below, and grpc-dotnet
+// speaks h2c by prior knowledge over an http:// address, so no process-global
+// AppContext switch is needed.
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();

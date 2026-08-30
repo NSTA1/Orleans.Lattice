@@ -172,11 +172,6 @@ public sealed partial class LatticeValueTransformEvaluatorTests
     [Test]
     public void Constants_project_boolean_and_double_as_json_values()
     {
-        // The unrecognised-LatticeConstantKind arm of FromConstant is deliberately
-        // NOT asserted here: it currently projects as JSON null, silently replacing
-        // the member's existing value during a remediation pass. That is a
-        // fail-open defect tracked separately, so pinning it as expected behaviour
-        // here would enshrine it.
         var transform = LatticeValueTransform.Passthrough(
             LatticeValueTransform.SetMember("flag", LatticeValueTransform.Const(LatticeConstant.Bool(true))),
             LatticeValueTransform.SetMember("score", LatticeValueTransform.Const(LatticeConstant.Real(1.5))));
@@ -186,6 +181,48 @@ public sealed partial class LatticeValueTransformEvaluatorTests
         Assert.That(root.GetProperty("flag").GetBoolean(), Is.True);
         Assert.That(root.GetProperty("score").GetDouble(), Is.EqualTo(1.5d));
     }
+
+    [Test]
+    public void Constant_with_unknown_kind_throws()
+    {
+        // LatticeConstantKind is wire format and is persisted in the remediation
+        // state, so a kind authored by a newer node is reachable here on a
+        // mixed-version cluster. It must fail closed like the unknown compute
+        // operator above, rather than projecting as JSON null.
+        Assert.That(
+            () => LatticeValueTransformEvaluation.Evaluate(Utf8("{\"tier\":\"gold\"}"), UnknownConstantTransform()),
+            Throws.InvalidOperationException.With.Message.Contains("Unknown constant kind"));
+    }
+
+    [Test]
+    public void Constant_with_unknown_kind_does_not_silently_null_the_existing_member()
+    {
+        // The concrete data-loss shape: a remediation pass rewrites every entry,
+        // so a kind this node cannot map must abort the pass rather than replace
+        // the member's existing value with a null indistinguishable from an
+        // explicit LatticeConstantKind.Null constant.
+        byte[] output;
+        try
+        {
+            output = LatticeValueTransformEvaluation.Evaluate(Utf8("{\"tier\":\"gold\"}"), UnknownConstantTransform());
+        }
+        catch (InvalidOperationException)
+        {
+            Assert.Pass("The transform failed closed, so no value was overwritten.");
+            return;
+        }
+
+        Assert.That(
+            JsonDocument.Parse(output).RootElement.GetProperty("tier").ValueKind,
+            Is.Not.EqualTo(JsonValueKind.Null),
+            "The member's existing value must not be silently nulled by a constant kind this node cannot map.");
+    }
+
+    private static LatticeValueTransform UnknownConstantTransform() =>
+        LatticeValueTransform.Passthrough(
+            LatticeValueTransform.SetMember(
+                "tier",
+                LatticeValueTransform.Const(new LatticeConstant { Kind = (LatticeConstantKind)99 })));
 
     [Test]
     public void Empty_member_paths_on_operations_and_expressions_throw()

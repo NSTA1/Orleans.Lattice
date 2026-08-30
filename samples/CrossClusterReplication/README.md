@@ -57,10 +57,11 @@ latency; the before/after values and the converged result are stable.)
 
 ## Notes on this sample
 
-- Uses plaintext HTTP/2 (h2c) on loopback with the process-wide
-  `Http2UnencryptedSupport` switch and `AllowPlaintextEndpoints = true`.
-  Production deployments should use `https://` peer endpoints and leave those at
-  their secure defaults.
+- Uses plaintext HTTP/2 (h2c) on loopback with `AllowPlaintextEndpoints = true`.
+  Each site binds Kestrel to HTTP/2 with no certificate and grpc-dotnet speaks
+  h2c by prior knowledge over an `http://` address, so no process-wide switch is
+  involved. Production deployments should use `https://` peer endpoints and leave
+  `AllowPlaintextEndpoints` at its secure default.
 - Receiver-side shared-secret authentication is turned off
   (`RequireAuthentication = false`) because this is a loopback demo with no
   secret material. Production must supply a secret and leave authentication on.

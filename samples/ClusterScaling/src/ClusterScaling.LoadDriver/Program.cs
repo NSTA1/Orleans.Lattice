@@ -47,12 +47,6 @@ Console.WriteLine();
 using var serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
 
 var channelOptions = new GrpcChannelOptions();
-if (options.AllowInsecure)
-{
-    // h2c for a local (non-TLS) endpoint. Never used against the ACA ingress,
-    // which always presents managed TLS.
-    AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-}
 
 using var channel = GrpcChannel.ForAddress(options.Address, channelOptions);
 

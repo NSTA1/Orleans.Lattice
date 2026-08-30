@@ -56,15 +56,17 @@ public sealed class TelemetryAccessAuthorizerTests
     }
 
     [Test]
-    public async Task AuthorizeClusterTelemetryAsync_authorizes_over_the_reserved_policy_tree()
+    public async Task AuthorizeClusterTelemetryAsync_authorizes_over_the_cluster_wide_sentinel()
     {
         var gate = StubAccessGate.TelemetryOnly();
 
         await new TelemetryAccessAuthorizer(gate).AuthorizeClusterTelemetryAsync();
 
-        Assert.That(gate.AuthorizedTrees, Is.EqualTo(new[] { LatticeAuthReservedTrees.PolicyTreeId }),
-            "The reserved namespace routes through control-plane isolation, so the capability "
-            + "cannot fail open under a permissive data-plane default effect.");
+        Assert.That(gate.AuthorizedTrees, Is.EqualTo(new[] { LatticeScope.ClusterWideTreeId }),
+            "The capability must be asked about on the same scope LatticeScope.ClusterWide() "
+            + "authors, or a grant written the documented way is silently inert. The gate governs "
+            + "the sentinel with control-plane isolation, so it still cannot fail open under a "
+            + "permissive data-plane default effect.");
     }
 
     [Test]

@@ -151,15 +151,6 @@ var frontDoorId = config["LATTICE_FRONT_DOOR_ID"];
 var administratorToken = config["Mcp:AdministratorToken"];
 var administratorScheme = config["Mcp:AdministratorScheme"] ?? "Bearer";
 
-// Allow HTTP/2 without TLS (h2c) only when a plaintext http:// gRPC endpoint is
-// configured - the local compose harness dials the silo over h2c. Production
-// endpoints are https:// and never trip this switch.
-if (new[] { stateEndpoint, authEndpoint, dataEndpoint, backupEndpoint, replicationEndpoint }
-        .Any(e => e is not null && e.StartsWith("http://", StringComparison.OrdinalIgnoreCase)))
-{
-    AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-}
-
 // The silo enforces a Front Door origin lock on its external gRPC port: every
 // request other than /health must carry an X-Azure-FDID header matching the
 // front-door id, or it is rejected 403 before authentication. The MCP head dials

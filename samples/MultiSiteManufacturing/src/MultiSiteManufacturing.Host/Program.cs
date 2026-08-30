@@ -30,12 +30,10 @@ using MultiSiteManufacturing.Host.Replication;
 
 // HTTP/2 cleartext (h2c) for the gRPC push transport. The dev
 // docker-compose topology and the local `dotnet run` topology both
-// expose plaintext HTTP/2 on the silo HTTP ports; the grpc-dotnet
-// channel needs this AppContext switch enabled before constructing a
-// GrpcChannel against an http:// URI. Production deployments swap to
-// https:// + mTLS (configured via LatticeReplicationGrpcOptions.ConfigureChannel)
-// and do not need this switch.
-AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+// expose plaintext HTTP/2 on the silo HTTP ports, and grpc-dotnet
+// speaks h2c by prior knowledge over an http:// URI - no process-global
+// AppContext switch is involved. Production deployments swap to
+// https:// + mTLS (configured via LatticeReplicationGrpcOptions.ConfigureChannel).
 
 var builder = WebApplication.CreateBuilder(args);
 

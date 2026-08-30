@@ -254,17 +254,18 @@ uses for State, so the console needs no second address.
    region B's series, read from `prometheus-b`. Neither region can read the other's
    telemetry - only replication and the shared backup sink cross the boundary.
 
-> **`auditor` is the exception, and it is a product gap, not a harness one.**
-> `auditor` holds the scopeless `Telemetry` capability and its MCP telemetry tools
-> work, but it gets **no** Telemetry area in the Explorer. The two surfaces check
-> different scopes: the seeded grant is authored cluster-wide over the all-trees
-> sentinel (`LatticeScope.ClusterWide()`, whose own documentation names
-> `LatticeOperation.Telemetry` as its intended use), while the telemetry facade
-> authorizes `Telemetry` over the **reserved auth-policy tree** instead, so a grant
-> authored the documented way is never honoured by it. `platform-admin` reaches the
-> area only because a bootstrap administrator bypasses the gate outright. Nothing
-> in this harness can reconcile that; it needs a fix in the facade or in
-> `LatticeScope.ClusterWide()`'s contract. Tracked as #1795.
+> **`auditor` reaches telemetry without holding any data grant.**
+> `auditor` holds the scopeless `Telemetry` capability and nothing else: its MCP
+> telemetry tools work **and** it gets the Telemetry area in the Explorer, while
+> every tree read is still denied. The seeded grant is authored cluster-wide over
+> the all-trees sentinel (`LatticeScope.ClusterWide()`, whose own documentation
+> names `LatticeOperation.Telemetry` as its intended use), and both the telemetry
+> facade and the tree-administration facade authorize the capability over that
+> same sentinel, so a grant authored the documented way is the grant that is
+> honoured. `platform-admin` reaches the area by a different route: a bootstrap
+> administrator bypasses the gate outright. Until #1795 the two facades asked
+> about the reserved auth-policy tree instead, so this delegated grant was
+> silently inert and only bootstrap administrators could see the area.
 
 Unset `Telemetry__BackendAddress` on a silo and that region's telemetry surface
 disappears entirely: the binding answers `Unimplemented`, the Explorer's gate reads

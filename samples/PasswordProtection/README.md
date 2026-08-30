@@ -104,12 +104,12 @@ changed and a TLS listener bolted on, the project as written is **not** safe to
 expose to the public internet. Adding TLS alone does not close the gaps below;
 each needs a deliberate change before this shape goes anywhere untrusted.
 
-- **It runs plaintext h2c, not TLS.** The host sets the process-global
-  `System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport` switch and binds
-  Kestrel to `localhost` with `HttpProtocols.Http2` (no certificate). To serve
-  real TLS you must remove that switch, bind a public interface, and call
-  `UseHttps(...)` with a real certificate. Leaving the unencrypted switch set
-  keeps a cleartext-downgrade path open even after you add an HTTPS listener, and
+- **It runs plaintext h2c, not TLS.** The host binds Kestrel to `localhost` with
+  `HttpProtocols.Http2` and no certificate, and the client speaks h2c by prior
+  knowledge over an `http://` address. Binding without a certificate is the only
+  thing that selects plaintext here - there is no app switch to unset. To serve
+  real TLS you must bind a public interface and call `UseHttps(...)` with a real
+  certificate; until you do, the listener has no encrypted path at all, and
   port-forwarding the sample as-is sends the `Basic` credential in clear text.
 - **The passwords are compiled into the binary.** The demo declares the
   passwords as constants and mints the hashes in-process at startup for a
