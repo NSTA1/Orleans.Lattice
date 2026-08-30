@@ -209,6 +209,24 @@ Treat these as **set-point** facts only. Re-open the question for read-heavy (`g
 
 ---
 
+## Repository context and memory (repocontext)
+
+Follow `.github/instructions/repocontext.instructions.md`. For this agent
+specifically:
+
+- **Before planning a phase**, `repocontext_search` the workload and
+  `repocontext_scan` scope `MemoryTopic` topic `decisions` for ceilings, noise
+  bands, and configurations already established. The issue-tree ledger is the
+  public record; memory is what carries the reasoning between sessions.
+- **After each phase completes**, `repocontext_remember` the established number
+  and its conditions (workload, rig shape, WAL partitioning, silo count) under
+  `decisions`, `author` = your session identity, no TTL. A throughput ceiling
+  without its conditions is not reusable - record both.
+- **A multi-session perf program is a coordinated workstream**: use one topic
+  named after the program (for example `perf-wal-partitioning`) as its
+  coordination bus, with `ttlSeconds: 604800` on the handoffs, and promote
+  anything durable into `decisions` when the program closes.
+
 ## Hand-offs
 
 - A concrete code optimisation surfaced by a sweep -> `optimisation` agent to quantify against the benchmark-history harness, then `feature-dev` to ship.
