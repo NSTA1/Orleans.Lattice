@@ -264,7 +264,7 @@ uses for State, so the console needs no second address.
 > authored the documented way is never honoured by it. `platform-admin` reaches the
 > area only because a bootstrap administrator bypasses the gate outright. Nothing
 > in this harness can reconcile that; it needs a fix in the facade or in
-> `LatticeScope.ClusterWide()`'s contract.
+> `LatticeScope.ClusterWide()`'s contract. Tracked as #1795.
 
 Unset `Telemetry__BackendAddress` on a silo and that region's telemetry surface
 disappears entirely: the binding answers `Unimplemented`, the Explorer's gate reads
