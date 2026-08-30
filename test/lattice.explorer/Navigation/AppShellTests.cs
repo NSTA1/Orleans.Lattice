@@ -5,6 +5,8 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.DesignSystem.Layout;
+using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 using Orleans.Lattice.Explorer.UI.Authentication;
@@ -33,6 +35,7 @@ namespace Orleans.Lattice.Explorer.Tests.Navigation;
 public sealed class AppShellTests
 {
     private const string HomeMarker = "section";
+    private const string CatalogMarker = "aside";
 
     // ---- registration and ordering -----------------------------------------
 
@@ -219,6 +222,91 @@ public sealed class AppShellTests
         await harness.ClickAsync(harness.Tab("Bravo"));
 
         Assert.That(harness.ActiveView, Is.EqualTo(typeof(OtherStubPluginView)));
+    }
+
+    [Test]
+    public async Task Every_area_tab_states_its_selection_and_the_state_follows_activation()
+    {
+        using var harness = ShellHarness.Create(
+            Plugin("a", "Alpha", ExplorerPluginAccessGates.Allowed),
+            Plugin("b", "Bravo", ExplorerPluginAccessGates.Allowed, order: 200));
+        await harness.RenderAsync();
+
+        var beforeHome = harness.Buttons[0].AriaSelected;
+        var beforeAlpha = harness.Tab("Alpha").AriaSelected;
+
+        await harness.ClickAsync(harness.Tab("Alpha"));
+
+        // aria-selected is enumerated, not boolean: rendering it from a bool
+        // emitted an empty value on the active tab and nothing at all on the
+        // inactive ones, so a screen-reader user could not tell which area they
+        // were in (issue #1793).
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeHome, Is.EqualTo("true"));
+            Assert.That(beforeAlpha, Is.EqualTo("false"), "an inactive tab states it, rather than omitting it");
+            Assert.That(harness.Buttons[0].AriaSelected, Is.EqualTo("false"));
+            Assert.That(harness.Tab("Alpha").AriaSelected, Is.EqualTo("true"));
+            Assert.That(harness.Tab("Bravo").AriaSelected, Is.EqualTo("false"));
+        });
+    }
+
+    // ---- the frame the shell puts around the home surface -------------------
+
+    [Test]
+    public async Task At_expanded_the_catalog_is_a_pane_that_needs_no_toggle()
+    {
+        using var harness = ShellHarness.Create();
+        await harness.RenderAsync(breakpoint: LatticeBreakpoint.Expanded);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.RendersCatalog, Is.True, "the desktop frame keeps the catalog beside the detail pane");
+            Assert.That(harness.RendersHomeSurface, Is.True);
+            Assert.That(
+                harness.Buttons.Select(button => button.Text),
+                Is.EqualTo(new[] { "Explore" }),
+                "and adds no drawer toggle");
+        });
+    }
+
+    [Test]
+    public async Task At_compact_the_catalog_appears_only_once_its_drawer_is_opened()
+    {
+        using var harness = ShellHarness.Create();
+        await harness.RenderAsync(breakpoint: LatticeBreakpoint.Compact);
+
+        var beforeToggle = harness.RendersCatalog;
+        await harness.ClickAsync(harness.Tab("Catalog"));
+
+        // The defect issue #1792 records is exactly this: at 390px the catalog
+        // held a fixed 20rem pane and left the detail surface about seventy
+        // pixels. A compact frame must give it no pane at all.
+        Assert.Multiple(() =>
+        {
+            Assert.That(beforeToggle, Is.False, "a compact frame gives the catalog no pane");
+            Assert.That(harness.RendersCatalog, Is.True, "the toggle brings it in, as an overlay");
+            Assert.That(
+                harness.RendersHomeSurface,
+                Is.True,
+                "and the detail surface is present the whole time");
+        });
+    }
+
+    [Test]
+    public async Task Closing_the_compact_drawer_returns_the_width_to_the_detail_surface()
+    {
+        using var harness = ShellHarness.Create();
+        await harness.RenderAsync(breakpoint: LatticeBreakpoint.Compact);
+        await harness.ClickAsync(harness.Tab("Catalog"));
+
+        await harness.ClickAsync(harness.Tab("Catalog"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.RendersCatalog, Is.False);
+            Assert.That(harness.RendersHomeSurface, Is.True);
+        });
     }
 
     // ---- transitions --------------------------------------------------------
@@ -457,6 +545,13 @@ public sealed class AppShellTests
         /// <summary>Whether the shell currently renders the caller-supplied home content.</summary>
         public bool RendersHomeSurface => Renderer.RendersElement(_componentId, HomeMarker);
 
+        /// <summary>
+        /// Whether the shell currently renders the caller-supplied catalog. False
+        /// at compact until the drawer is opened, because a compact frame gives
+        /// the catalog no pane of its own.
+        /// </summary>
+        public bool RendersCatalog => Renderer.RendersElement(_componentId, CatalogMarker);
+
         public static ShellHarness Create(params IExplorerPlugin[] plugins)
         {
             var connection = Substitute.For<ILatticeStateConnection>();
@@ -497,23 +592,65 @@ public sealed class AppShellTests
             return new ShellHarness(provider, renderer, store, connection, auth);
         }
 
-        public async Task RenderAsync(LoginDialogState? login = null)
+        public async Task RenderAsync(
+            LoginDialogState? login = null,
+            LatticeBreakpoint? breakpoint = null)
         {
-            var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
+            var childContent = (RenderFragment)(builder =>
             {
-                [nameof(AppShell.ChildContent)] = (RenderFragment)(builder =>
-                {
-                    builder.OpenElement(0, HomeMarker);
-                    builder.CloseElement();
-                }),
+                builder.OpenElement(0, HomeMarker);
+                builder.CloseElement();
             });
 
-            var (id, shell) = await Renderer.RenderAsync<AppShell>(
-                parameters,
-                component => component.Login = login);
+            var catalogContent = (RenderFragment)(builder =>
+            {
+                builder.OpenElement(0, CatalogMarker);
+                builder.CloseElement();
+            });
 
-            _componentId = id;
-            Shell = shell;
+            if (breakpoint is null)
+            {
+                var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
+                {
+                    [nameof(AppShell.ChildContent)] = childContent,
+                    [nameof(AppShell.Catalog)] = catalogContent,
+                });
+
+                var (id, shell) = await Renderer.RenderAsync<AppShell>(
+                    parameters,
+                    component => component.Login = login);
+
+                _componentId = id;
+                Shell = shell;
+            }
+            else
+            {
+                // The breakpoint reaches the shell the way it does in the
+                // product: cascaded from above, never set on the shell itself.
+                var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
+                {
+                    ["Value"] = new LatticeAdaptiveContext(
+                        breakpoint.Value,
+                        LatticeDensity.Cosy,
+                        IsMeasured: true),
+                    ["ChildContent"] = (RenderFragment)(builder =>
+                    {
+                        builder.OpenComponent<AppShell>(0);
+                        builder.AddComponentParameter(1, nameof(AppShell.ChildContent), childContent);
+                        builder.AddComponentParameter(2, nameof(AppShell.Catalog), catalogContent);
+                        builder.CloseComponent();
+                    }),
+                });
+
+                var (rootId, _) = await Renderer
+                    .RenderAsync<CascadingValue<LatticeAdaptiveContext>>(parameters);
+
+                var found = Renderer.FindComponent<AppShell>(rootId);
+                Assert.That(found, Is.Not.Null, "the shell must render beneath the cascaded context");
+
+                _componentId = found!.Value.Id;
+                Shell = found.Value.Component;
+            }
 
             // A render fault would otherwise show up only as an empty tab strip,
             // so surface it as itself.
@@ -525,6 +662,7 @@ public sealed class AppShellTests
             }
         }
 
+        /// <summary>The button carrying <paramref name="label"/>, whichever control it is.</summary>
         public ComponentTestRenderer.RenderedButton Tab(string label) =>
             Buttons.Single(button => string.Equals(button.Text, label, StringComparison.Ordinal));
 

@@ -1,8 +1,10 @@
+@using Orleans.Lattice.Explorer.DesignSystem.Layout
+@using Orleans.Lattice.Explorer.DesignSystem.Tokens
 @using Orleans.Lattice.Explorer.Plugins
 @using Orleans.Lattice.Explorer.UI.Authentication
 @using Orleans.Lattice.Explorer.UI.Plugins
 @implements IDisposable
-@inject IExplorerPluginCatalog Catalog
+@inject IExplorerPluginCatalog PluginCatalog
 @inject IExplorerPluginAccessStore AccessStore
 @inject IExplorerPluginAccessRefresher AccessRefresher
 @inject ExplorerPluginHostState HostState
@@ -21,52 +23,167 @@
     disabled-and-visible with the same grey-out and tooltip as before,
     authentication-required stays clickable and opens the sign-in dialog, and
     unavailable renders no entry at all.
+
+    The shell is also the frame around the home surface, and it reflows with the
+    cascaded breakpoint rather than holding one desktop shape at every width
+    (issue #1792):
+
+      expanded / medium  the catalog sits in a persistent pane beside the
+                         detail surface, exactly as before
+      compact            the catalog is not a pane at all: it collapses behind
+                         a toggle into the design system's drawer presentation,
+                         so the detail surface gets the whole width
+
+    The area strip overflows rather than running off the edge, on the same
+    LatticeOverflowLayout the design system's own strips use, so the active area
+    is always visible and the rest stay reachable through a menu.
 *@
 
-<div class="lx-shell-areastrip" role="tablist" aria-label="Application areas">
-    <button type="button"
-            role="tab"
-            class="@(_activePlugin is null ? ActiveTabClass : TabClass)"
-            aria-selected="@(_activePlugin is null)"
-            @onclick="_activateHome">
-        @HomeLabel
-    </button>
-    @for (var i = 0; i < _tabs.Length; i++)
-    {
-        var tab = _tabs[i];
-        var access = AccessStore.Get(tab.PluginId);
-        if (!access.IsVisible)
-        {
-            continue;
-        }
+@{ BuildVisibleTabs(); }
 
-        var signInRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
-        var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
-        <button type="button"
-                role="tab"
-                class="@(isActive ? ActiveTabClass : TabClass)"
-                aria-selected="@isActive"
-                disabled="@(!access.IsAllowed && !signInRequired)"
-                title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
-                @onclick="tab.Activate">
-            @tab.Label
-        </button>
+<div class="lx-shell-areastrip">
+    <div class="lx-tabstrip" role="tablist" aria-label="Application areas">
+        @if (_strip.IsInline(HomeStripIndex))
+        {
+            <button type="button"
+                    role="tab"
+                    class="@(_activePlugin is null ? ActiveTabClass : TabClass)"
+                    aria-selected="@(_activePlugin is null ? "true" : "false")"
+                    @onclick="_activateHome">
+                @HomeLabel
+            </button>
+        }
+        @for (var slot = 0; slot < _visibleCount; slot++)
+        {
+            if (!_strip.IsInline(slot + 1))
+            {
+                continue;
+            }
+
+            var tab = _tabs[_visible[slot]];
+            var access = _visibleAccess[slot];
+            var signInRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
+            var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
+            <button type="button"
+                    role="tab"
+                    class="@(isActive ? ActiveTabClass : TabClass)"
+                    aria-selected="@(isActive ? "true" : "false")"
+                    disabled="@(!access.IsAllowed && !signInRequired)"
+                    title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
+                    @onclick="tab.Activate">
+                @tab.Label
+            </button>
+        }
+    </div>
+    @if (_strip.HasOverflow)
+    {
+        <div class="lx-tabstrip-overflow-host">
+            <button type="button"
+                    class="lx-tabstrip-overflow-toggle"
+                    id="@_overflowToggleElementId"
+                    aria-haspopup="menu"
+                    aria-expanded="@(IsOverflowOpen ? "true" : "false")"
+                    aria-controls="@_overflowMenuElementId"
+                    @onclick="_toggleOverflow">
+                @OverflowLabel
+            </button>
+            @if (IsOverflowOpen)
+            {
+                <div class="lx-tabstrip-overflow"
+                     id="@_overflowMenuElementId"
+                     role="menu"
+                     aria-labelledby="@_overflowToggleElementId"
+                     @onkeydown="_overflowKeyDown">
+                    <button type="button"
+                            class="lx-tabstrip-overflow-item"
+                            role="menuitemradio"
+                            aria-checked="@(_activePlugin is null ? "true" : "false")"
+                            @onclick="_activateHomeFromOverflow">
+                        @HomeLabel
+                    </button>
+                    @for (var slot = 0; slot < _visibleCount; slot++)
+                    {
+                        var tab = _tabs[_visible[slot]];
+                        var access = _visibleAccess[slot];
+                        var signInRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
+                        var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
+                        <button type="button"
+                                class="lx-tabstrip-overflow-item"
+                                role="menuitemradio"
+                                aria-checked="@(isActive ? "true" : "false")"
+                                disabled="@(!access.IsAllowed && !signInRequired)"
+                                title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
+                                @onclick="tab.ActivateFromOverflow">
+                            @tab.Label
+                        </button>
+                    }
+                </div>
+            }
+        </div>
     }
 </div>
 
 <div class="lx-shell-area-content">
-    @if (_activePlugin is null)
+    @if (_activePlugin is not null)
     {
-        @ChildContent
+        <DynamicComponent Type="_activePlugin.ViewType" />
+    }
+    else if (_breakpoint == LatticeBreakpoint.Compact)
+    {
+        @* Compact: the catalog is not a pane. It lives behind a toggle in the
+           design system's drawer presentation, so the detail surface below it
+           gets the full viewport width instead of the ~70px a fixed 20rem
+           sidebar leaves at a phone width. *@
+        <div class="lx-shell-layout is-stacked">
+            <div class="lx-nav-drawer-host">
+                <button type="button"
+                        class="lx-nav-drawer-toggle"
+                        id="@_catalogToggleElementId"
+                        aria-expanded="@(IsCatalogOpen ? "true" : "false")"
+                        aria-controls="@_catalogDrawerElementId"
+                        @onclick="_toggleCatalog">
+                    @CatalogToggleLabel
+                </button>
+                @if (IsCatalogOpen)
+                {
+                    <div class="lx-nav-scrim" @onclick="_closeCatalog"></div>
+                    <div class="lx-nav lx-nav-drawer"
+                         id="@_catalogDrawerElementId"
+                         @onkeydown="_catalogKeyDown">
+                        <div class="lx-nav-drawer-header">
+                            <button type="button"
+                                    class="lx-nav-drawer-close"
+                                    @onclick="_closeCatalog">
+                                <span class="lx-visually-hidden">@CatalogCloseLabel</span>
+                            </button>
+                        </div>
+                        @Catalog
+                    </div>
+                }
+            </div>
+            <main class="lx-shell-main">
+                @ChildContent
+            </main>
+        </div>
     }
     else
     {
-        <DynamicComponent Type="_activePlugin.ViewType" />
+        <div class="lx-shell-layout">
+            @Catalog
+            <main class="lx-shell-main">
+                @ChildContent
+            </main>
+        </div>
     }
 </div>
 
 @code {
     private static readonly AreaTab[] NoTabs = [];
+    private static readonly int[] NoSlots = [];
+    private static readonly ExplorerPluginAccess[] NoAccess = [];
+
+    /// <summary>The area strip's fixed first slot: the shell's own home surface.</summary>
+    private const int HomeStripIndex = 0;
 
     // The two class strings a tab can carry, composed once. Interpolating them
     // per tab per render would allocate on every access change and every
@@ -74,30 +191,119 @@
     private const string TabClass = "lx-shell-area-tab";
     private const string ActiveTabClass = "lx-shell-area-tab is-active";
 
+    private readonly string _instanceId = "lx-shell-" + Guid.NewGuid().ToString("N");
+
     private AreaTab[] _tabs = NoTabs;
     private IExplorerPlugin? _activePlugin;
-    private EventCallback _activateHome;
+    private readonly EventCallback _activateHome;
+    private readonly EventCallback _activateHomeFromOverflow;
+    private readonly EventCallback _toggleOverflow;
+    private readonly EventCallback _toggleCatalog;
+    private readonly EventCallback _closeCatalog;
+    private readonly EventCallback<KeyboardEventArgs> _overflowKeyDown;
+    private readonly EventCallback<KeyboardEventArgs> _catalogKeyDown;
     private readonly Action _render;
     private readonly Func<Task> _refresh;
     private ExplorerPluginConnectionState _lastConnectionState;
 
-    /// <summary>Creates the shell, caching the two delegates its subscriptions marshal.</summary>
+    // The strip's visible slots, rebuilt into buffers sized once at mount, so a
+    // render pass allocates nothing however many areas are registered and
+    // however often the access store changes.
+    private int[] _visible = NoSlots;
+    private ExplorerPluginAccess[] _visibleAccess = NoAccess;
+    private int _visibleCount;
+    private LatticeOverflowLayout _strip;
+
+    private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
+
+    private readonly string _overflowMenuElementId;
+    private readonly string _overflowToggleElementId;
+    private readonly string _catalogDrawerElementId;
+    private readonly string _catalogToggleElementId;
+
+    /// <summary>Creates the shell, caching the delegates and element ids its render path reuses.</summary>
     public AppShell()
     {
         // Bound once rather than per notification, so a probe cycle that files
         // several decisions does not allocate a delegate for each of them.
         _render = StateHasChanged;
         _refresh = RefreshAccessAsync;
+
+        // Every callback the strip and the compact frame bind is composed here
+        // rather than on the render path: the strip re-renders on every access
+        // change and every connection transition, and a method group in the
+        // markup would allocate a delegate on each of them.
+        _activateHome = EventCallback.Factory.Create(this, ActivateHomeAsync);
+        _activateHomeFromOverflow = EventCallback.Factory.Create(this, ActivateHomeFromOverflowAsync);
+        _toggleOverflow = EventCallback.Factory.Create(this, ToggleOverflowAsync);
+        _toggleCatalog = EventCallback.Factory.Create(this, ToggleCatalogAsync);
+        _closeCatalog = EventCallback.Factory.Create(this, CloseCatalogAsync);
+        _overflowKeyDown = EventCallback.Factory.Create<KeyboardEventArgs>(this, OnOverflowKeyDown);
+        _catalogKeyDown = EventCallback.Factory.Create<KeyboardEventArgs>(this, OnCatalogKeyDown);
+
+        _overflowMenuElementId = _instanceId + "-overflow";
+        _overflowToggleElementId = _instanceId + "-overflow-toggle";
+        _catalogDrawerElementId = _instanceId + "-catalog";
+        _catalogToggleElementId = _instanceId + "-catalog-toggle";
     }
 
-    /// <summary>The home surface's content (the tree browser), rendered when no area plugin is active.</summary>
+    /// <summary>
+    /// The home surface's detail content, rendered inside the shell's main pane
+    /// when no area plugin is active.
+    /// </summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// The home surface's catalog (the tree browser). The shell decides where it
+    /// goes: a persistent pane beside <see cref="ChildContent"/> at the medium
+    /// and expanded breakpoints, and the drawer behind
+    /// <see cref="CatalogToggleLabel"/> at compact, where a fixed pane would
+    /// leave the detail surface unusably narrow.
+    /// </summary>
+    [Parameter] public RenderFragment? Catalog { get; set; }
 
     /// <summary>The label of the shell's own always-available home surface.</summary>
     [Parameter] public string HomeLabel { get; set; } = "Explore";
 
+    /// <summary>The label of the area strip's overflow control.</summary>
+    [Parameter] public string OverflowLabel { get; set; } = "More";
+
+    /// <summary>The label of the control that opens the catalog drawer at the compact breakpoint.</summary>
+    [Parameter] public string CatalogToggleLabel { get; set; } = "Catalog";
+
+    /// <summary>The accessible name of the catalog drawer's close control.</summary>
+    [Parameter] public string CatalogCloseLabel { get; set; } = "Close catalog";
+
+    /// <summary>
+    /// Whether the compact catalog drawer is open. The shell toggles this itself
+    /// when the caller activates the toggle; bind it when a host needs to open or
+    /// close the catalog programmatically. Ignored at the breakpoints that render
+    /// the catalog as a persistent pane.
+    /// </summary>
+    [Parameter] public bool IsCatalogOpen { get; set; }
+
+    /// <summary>Raised when the catalog drawer opens or closes, for two-way binding.</summary>
+    [Parameter] public EventCallback<bool> IsCatalogOpenChanged { get; set; }
+
+    /// <summary>
+    /// Whether the area strip's overflow menu is open. The shell toggles this
+    /// itself; bind it when a host needs to drive the menu. Ignored when the
+    /// whole strip fits inline.
+    /// </summary>
+    [Parameter] public bool IsOverflowOpen { get; set; }
+
+    /// <summary>Raised when the overflow menu opens or closes, for two-way binding.</summary>
+    [Parameter] public EventCallback<bool> IsOverflowOpenChanged { get; set; }
+
     /// <summary>Shared dialog state used to offer a sign-in for a plugin that requires one.</summary>
     [CascadingParameter] public LoginDialogState? Login { get; set; }
+
+    /// <summary>
+    /// The ambient shell context cascaded by <c>LatticeAdaptiveRoot</c>. Absent
+    /// when the shell is rendered standalone, in which case the default
+    /// breakpoint applies and the layout is the one the Explorer always shipped.
+    /// </summary>
+    [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -105,7 +311,7 @@
         // render path: the strip re-renders on every access change and every
         // connection transition, and a closure or an interpolated tooltip per tab
         // per render would allocate on all of them.
-        var plugins = Catalog.ForSurface(ExplorerPluginSurface.Area);
+        var plugins = PluginCatalog.ForSurface(ExplorerPluginSurface.Area);
         if (plugins.Count > 0)
         {
             var tabs = new AreaTab[plugins.Count];
@@ -115,9 +321,13 @@
             }
 
             _tabs = tabs;
+
+            // Sized once, to the widest the strip can ever be, so the per-render
+            // visibility pass writes into a buffer instead of allocating one.
+            _visible = new int[plugins.Count];
+            _visibleAccess = new ExplorerPluginAccess[plugins.Count];
         }
 
-        _activateHome = EventCallback.Factory.Create(this, ActivateHome);
         _lastConnectionState = HostState.Connection.State;
 
         AccessStore.Changed += OnAccessChanged;
@@ -128,15 +338,83 @@
         await RefreshAccessAsync();
     }
 
-    private void ActivateHome()
+    /// <inheritdoc />
+    protected override void OnParametersSet() =>
+        _breakpoint = AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default;
+
+    /// <inheritdoc />
+    protected override async Task OnParametersSetAsync()
+    {
+        // A catalog drawer or an overflow menu left open across a widening
+        // breakpoint change would be orphaned: the wider shapes render neither
+        // the scrim nor the toggle that dismisses it. Routed through the setters
+        // so a bound caller is told rather than silently diverging from the
+        // shell's own state.
+        if (IsCatalogOpen && _breakpoint != LatticeBreakpoint.Compact)
+        {
+            await SetCatalogOpenAsync(false);
+        }
+
+        // The visible count is the one the last render resolved, which is what
+        // the next render will overflow (or not) against.
+        if (IsOverflowOpen && _visibleCount + 1 <= LatticeBreakpoints.TabInlineCapacity(_breakpoint))
+        {
+            await SetOverflowOpenAsync(false);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the strip's visible slots and its overflow split for this render
+    /// pass. Writes into the buffers sized at mount, so it allocates nothing.
+    /// </summary>
+    private void BuildVisibleTabs()
+    {
+        var count = 0;
+        var activeIndex = _activePlugin is null ? HomeStripIndex : -1;
+
+        for (var i = 0; i < _tabs.Length; i++)
+        {
+            var tab = _tabs[i];
+            var access = AccessStore.Get(tab.PluginId);
+            if (!access.IsVisible)
+            {
+                continue;
+            }
+
+            if (ReferenceEquals(tab.Plugin, _activePlugin))
+            {
+                // The home surface owns slot 0, so a plugin's strip index is one
+                // past its position in the visible list.
+                activeIndex = count + 1;
+            }
+
+            _visible[count] = i;
+            _visibleAccess[count] = access;
+            count++;
+        }
+
+        _visibleCount = count;
+
+        // One more than the visible plugins: the home surface is always a tab.
+        _strip = LatticeOverflowLayout.Resolve(
+            count + 1,
+            activeIndex,
+            LatticeBreakpoints.TabInlineCapacity(_breakpoint));
+    }
+
+    private Task ActivateHomeAsync()
     {
         if (_activePlugin is null)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         _activePlugin = null;
         StateHasChanged();
+
+        // The compact catalog drawer belongs to the home surface, so leaving and
+        // returning must not restore a scrim the caller never reopened.
+        return SetCatalogOpenAsync(false);
     }
 
     private void Activate(IExplorerPlugin plugin)
@@ -158,6 +436,60 @@
 
         _activePlugin = plugin;
         StateHasChanged();
+    }
+
+    // ---- the area strip's overflow menu -------------------------------------
+
+    private async Task ActivateHomeFromOverflowAsync()
+    {
+        await SetOverflowOpenAsync(false);
+        await ActivateHomeAsync();
+    }
+
+    private async Task ActivateFromOverflowAsync(IExplorerPlugin plugin)
+    {
+        await SetOverflowOpenAsync(false);
+        Activate(plugin);
+    }
+
+    private Task ToggleOverflowAsync() => SetOverflowOpenAsync(!IsOverflowOpen);
+
+    private Task OnOverflowKeyDown(KeyboardEventArgs args) =>
+        string.Equals(args.Key, "Escape", StringComparison.Ordinal)
+            ? SetOverflowOpenAsync(false)
+            : Task.CompletedTask;
+
+    private Task SetOverflowOpenAsync(bool isOpen)
+    {
+        if (IsOverflowOpen == isOpen)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsOverflowOpen = isOpen;
+        return IsOverflowOpenChanged.HasDelegate ? IsOverflowOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
+    }
+
+    // ---- the compact catalog drawer -----------------------------------------
+
+    private Task ToggleCatalogAsync() => SetCatalogOpenAsync(!IsCatalogOpen);
+
+    private Task CloseCatalogAsync() => SetCatalogOpenAsync(false);
+
+    private Task OnCatalogKeyDown(KeyboardEventArgs args) =>
+        string.Equals(args.Key, "Escape", StringComparison.Ordinal)
+            ? SetCatalogOpenAsync(false)
+            : Task.CompletedTask;
+
+    private Task SetCatalogOpenAsync(bool isOpen)
+    {
+        if (IsCatalogOpen == isOpen)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsCatalogOpen = isOpen;
+        return IsCatalogOpenChanged.HasDelegate ? IsCatalogOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
     }
 
     private async Task RefreshAccessAsync()
@@ -238,6 +570,8 @@
             DeniedTitle = $"{Label} is not available for your account.";
             SignInTitle = $"{Label} requires you to sign in.";
             Activate = EventCallback.Factory.Create(shell, () => shell.Activate(plugin));
+            ActivateFromOverflow = EventCallback.Factory.Create(
+                shell, () => shell.ActivateFromOverflowAsync(plugin));
         }
 
         public IExplorerPlugin Plugin { get; }
@@ -251,5 +585,11 @@
         public string SignInTitle { get; }
 
         public EventCallback Activate { get; }
+
+        /// <summary>
+        /// Activates the plugin from the overflow menu, closing the menu first so
+        /// it never outlives the choice that was made in it.
+        /// </summary>
+        public EventCallback ActivateFromOverflow { get; }
     }
 }

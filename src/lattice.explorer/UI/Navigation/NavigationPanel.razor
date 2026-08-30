@@ -36,21 +36,21 @@
             <button type="button"
                     role="tab"
                     class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.Trees ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Trees)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Trees ? "true" : "false")"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Trees))">
                 Trees
             </button>
             <button type="button"
                     role="tab"
                     class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.Views ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Views)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Views ? "true" : "false")"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
                 Views
             </button>
             <button type="button"
                     role="tab"
                     class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.TagIndexes)"
+                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "true" : "false")"
                     @onclick="@(() => SwitchKindAsync(CatalogKind.TagIndexes))">
                 Tag indexes
             </button>
@@ -82,7 +82,7 @@
                 {
                     var isSelected = string.Equals(Selection.Selected?.Id, item.Id, StringComparison.Ordinal)
                         && Selection.Selected?.Kind == item.Kind;
-                    <li role="option" aria-selected="@isSelected">
+                    <li role="option" aria-selected="@(isSelected ? "true" : "false")">
                         <button type="button"
                                 class="lx-shell-nav-item @(isSelected ? "is-selected" : null)"
                                 @onclick="@(() => SelectAsync(item))">

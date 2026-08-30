@@ -99,6 +99,7 @@ internal sealed class ComponentTestRenderer(IServiceProvider services, ILoggerFa
             var end = i + array[i].ElementSubtreeLength;
             string? cssClass = null;
             string? title = null;
+            string? ariaSelected = null;
             var disabled = false;
             ulong clickHandler = 0;
             var text = string.Empty;
@@ -116,6 +117,9 @@ internal sealed class ComponentTestRenderer(IServiceProvider services, ILoggerFa
                             case "title":
                                 title = array[j].AttributeValue as string;
                                 break;
+                            case "aria-selected":
+                                ariaSelected = array[j].AttributeValue as string;
+                                break;
                             case "disabled":
                                 disabled = array[j].AttributeValue is not null;
                                 break;
@@ -131,7 +135,7 @@ internal sealed class ComponentTestRenderer(IServiceProvider services, ILoggerFa
                 }
             }
 
-            buttons.Add(new RenderedButton(text.Trim(), cssClass, title, disabled, clickHandler));
+            buttons.Add(new RenderedButton(text.Trim(), cssClass, title, ariaSelected, disabled, clickHandler));
         }
 
         return buttons;
@@ -228,12 +232,21 @@ internal sealed class ComponentTestRenderer(IServiceProvider services, ILoggerFa
     /// <param name="Text">The button's text content.</param>
     /// <param name="Class">Its <c>class</c> attribute, or <see langword="null"/>.</param>
     /// <param name="Title">Its <c>title</c> attribute, or <see langword="null"/> when it carries none.</param>
+    /// <param name="AriaSelected">
+    /// Its <c>aria-selected</c> attribute verbatim, or <see langword="null"/>
+    /// when it carries none. Read as the literal string rather than a
+    /// <see langword="bool"/> on purpose: <c>aria-selected</c> is an enumerated
+    /// ARIA attribute, so <c>"true"</c> / <c>"false"</c> and an absent or empty
+    /// value are three distinguishable outcomes, and only a test that can tell
+    /// them apart catches the boolean-attribute rendering issue #1793 found.
+    /// </param>
     /// <param name="Disabled">Whether it rendered the <c>disabled</c> attribute.</param>
     /// <param name="ClickHandlerId">The event-handler id of its <c>onclick</c> binding.</param>
     internal readonly record struct RenderedButton(
         string Text,
         string? Class,
         string? Title,
+        string? AriaSelected,
         bool Disabled,
         ulong ClickHandlerId)
     {
