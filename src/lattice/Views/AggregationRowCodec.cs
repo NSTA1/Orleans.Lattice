@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
 using Orleans.Lattice.Primitives;
@@ -125,18 +126,28 @@ internal static class AggregationRowCodec
     /// <summary>Encodes a membership row.</summary>
     internal static byte[] EncodeMembership(in MembershipRow row)
     {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream, Encoding.UTF8);
-        writer.Write(row.GroupKey);
-        writer.Write(row.Member is not null);
-        writer.Write(row.Numeric);
-        if (row.Member is not null)
+        // Emit the row directly into an exact-size array instead of a
+        // MemoryStream + BinaryWriter (which allocate a growable backing
+        // buffer, a writer, and an encoder per call, then a final ToArray
+        // copy). Every source mutation feeding a group-by view writes exactly
+        // one membership row through here, so this runs on the view-write hot
+        // path. The output is byte-for-byte identical to the BinaryWriter
+        // encoding it replaces (7-bit length-prefixed UTF-8 strings, a single
+        // bool byte, little-endian double), so persisted rows stay readable.
+        var hasMember = row.Member is not null;
+        var size = Utf8Size(row.GroupKey) + sizeof(bool) + sizeof(double)
+            + (hasMember ? Utf8Size(row.Member!) : 0);
+        var buffer = new byte[size];
+        var writer = new RowWriter(buffer);
+        writer.WriteString(row.GroupKey);
+        writer.WriteBool(hasMember);
+        writer.WriteDouble(row.Numeric);
+        if (hasMember)
         {
-            writer.Write(row.Member);
+            writer.WriteString(row.Member!);
         }
 
-        writer.Flush();
-        return stream.ToArray();
+        return buffer;
     }
 
     /// <summary>Decodes a membership row produced by <see cref="EncodeMembership"/>.</summary>
@@ -171,22 +182,34 @@ internal static class AggregationRowCodec
     /// <summary>Encodes an inverse-contribution row (a source-key to contribution map).</summary>
     internal static byte[] EncodeInverse(IReadOnlyDictionary<string, MemberEntry> entries)
     {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream, Encoding.UTF8);
-        writer.Write(entries.Count);
+        // See EncodeMembership: this replaces a per-call MemoryStream +
+        // BinaryWriter with a single sizing pass over the entries followed by
+        // a direct write into an exact-size array. The dictionary is not
+        // mutated between the two passes, so both enumerate in the same order
+        // and the bytes are identical to the BinaryWriter encoding.
+        var size = sizeof(int);
         foreach (var (sourceKey, entry) in entries)
         {
-            writer.Write(sourceKey);
-            writer.Write(entry.Member is not null);
-            writer.Write(entry.Numeric);
-            if (entry.Member is not null)
+            size += Utf8Size(sourceKey) + sizeof(bool) + sizeof(double)
+                + (entry.Member is not null ? Utf8Size(entry.Member) : 0);
+        }
+
+        var buffer = new byte[size];
+        var writer = new RowWriter(buffer);
+        writer.WriteInt32(entries.Count);
+        foreach (var (sourceKey, entry) in entries)
+        {
+            writer.WriteString(sourceKey);
+            var hasMember = entry.Member is not null;
+            writer.WriteBool(hasMember);
+            writer.WriteDouble(entry.Numeric);
+            if (hasMember)
             {
-                writer.Write(entry.Member);
+                writer.WriteString(entry.Member!);
             }
         }
 
-        writer.Flush();
-        return stream.ToArray();
+        return buffer;
     }
 
     /// <summary>Decodes an inverse-contribution row produced by <see cref="EncodeInverse"/>.</summary>
@@ -227,20 +250,31 @@ internal static class AggregationRowCodec
     /// <summary>Encodes a fold-contribution row (a source-key to member-value map for a custom fold group shard).</summary>
     internal static byte[] EncodeFoldInverse(IReadOnlyDictionary<string, FoldMember> entries)
     {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream, Encoding.UTF8);
-        writer.Write(entries.Count);
+        // See EncodeMembership: a single sizing pass then a direct write into
+        // an exact-size array, replacing the per-call MemoryStream +
+        // BinaryWriter. The value bytes are written raw (no length prefix of
+        // their own beyond the explicit int32 length), matching the prior
+        // BinaryWriter.Write(byte[]) call byte-for-byte.
+        var size = sizeof(int);
         foreach (var (sourceKey, entry) in entries)
         {
-            writer.Write(sourceKey);
-            writer.Write(entry.Timestamp.WallClockTicks);
-            writer.Write(entry.Timestamp.Counter);
-            writer.Write(entry.Value.Length);
-            writer.Write(entry.Value);
+            size += Utf8Size(sourceKey) + sizeof(long) + sizeof(int)
+                + sizeof(int) + entry.Value.Length;
         }
 
-        writer.Flush();
-        return stream.ToArray();
+        var buffer = new byte[size];
+        var writer = new RowWriter(buffer);
+        writer.WriteInt32(entries.Count);
+        foreach (var (sourceKey, entry) in entries)
+        {
+            writer.WriteString(sourceKey);
+            writer.WriteInt64(entry.Timestamp.WallClockTicks);
+            writer.WriteInt32(entry.Timestamp.Counter);
+            writer.WriteInt32(entry.Value.Length);
+            writer.WriteRaw(entry.Value);
+        }
+
+        return buffer;
     }
 
     /// <summary>Decodes a fold-contribution row produced by <see cref="EncodeFoldInverse"/>.</summary>
@@ -267,4 +301,88 @@ internal static class AggregationRowCodec
     /// <param name="Value">The source value bytes the source key last contributed.</param>
     /// <param name="Timestamp">The source entry HLC, used to order the re-fold.</param>
     internal readonly record struct FoldMember(byte[] Value, HybridLogicalClock Timestamp);
+
+    /// <summary>
+    /// Returns the number of bytes <see cref="RowWriter.WriteString"/> emits for
+    /// <paramref name="value"/>: a 7-bit-encoded UTF-8 byte-count prefix followed
+    /// by the UTF-8 bytes, exactly as <see cref="BinaryWriter.Write(string)"/> does.
+    /// </summary>
+    private static int Utf8Size(string value)
+    {
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        return SevenBitSize(byteCount) + byteCount;
+    }
+
+    /// <summary>Returns the number of bytes a 7-bit-encoded <paramref name="value"/> occupies.</summary>
+    private static int SevenBitSize(int value)
+    {
+        var v = (uint)value;
+        var size = 1;
+        while (v >= 0x80)
+        {
+            size++;
+            v >>= 7;
+        }
+
+        return size;
+    }
+
+    /// <summary>
+    /// A forward-only cursor that writes the same byte layout as
+    /// <see cref="BinaryWriter"/> with <see cref="Encoding.UTF8"/> (7-bit
+    /// length-prefixed UTF-8 strings, single-byte bools, little-endian numerics,
+    /// raw byte spans) directly into a caller-owned span, so a row can be
+    /// encoded into an exact-size array with no intermediate stream or writer.
+    /// </summary>
+    private ref struct RowWriter(Span<byte> buffer)
+    {
+        private readonly Span<byte> _buffer = buffer;
+        private int _pos;
+
+        public void WriteBool(bool value) => _buffer[_pos++] = value ? (byte)1 : (byte)0;
+
+        public void WriteInt32(int value)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(_buffer[_pos..], value);
+            _pos += sizeof(int);
+        }
+
+        public void WriteInt64(long value)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(_buffer[_pos..], value);
+            _pos += sizeof(long);
+        }
+
+        public void WriteDouble(double value)
+        {
+            BinaryPrimitives.WriteDoubleLittleEndian(_buffer[_pos..], value);
+            _pos += sizeof(double);
+        }
+
+        public void WriteRaw(ReadOnlySpan<byte> value)
+        {
+            value.CopyTo(_buffer[_pos..]);
+            _pos += value.Length;
+        }
+
+        public void WriteString(string value)
+        {
+            var byteCount = Encoding.UTF8.GetByteCount(value);
+            Write7BitEncodedInt(byteCount);
+            Encoding.UTF8.GetBytes(value, _buffer[_pos..]);
+            _pos += byteCount;
+        }
+
+        private void Write7BitEncodedInt(int value)
+        {
+            var v = (uint)value;
+            while (v >= 0x80)
+            {
+                _buffer[_pos++] = (byte)(v | 0x80);
+                v >>= 7;
+            }
+
+            _buffer[_pos++] = (byte)v;
+        }
+    }
 }
