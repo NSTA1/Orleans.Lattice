@@ -163,6 +163,7 @@ internal sealed class RepoContextBundleService
                 Detail = Label(floorLevel),
                 BudgetTokens = budget,
                 TotalTokens = 0,
+                ResponseTokens = 0,
                 Truncated = false,
                 RetryBudgetTokens = null,
                 Entries = [],
@@ -218,6 +219,7 @@ internal sealed class RepoContextBundleService
             Detail = Label(fitted ? usedLevel : floorLevel),
             BudgetTokens = budget,
             TotalTokens = packed.TotalTokens,
+            ResponseTokens = packed.ResponseTokens,
             Truncated = packed.Truncated,
             // Fail closed: when nothing fit, every candidate was measured against an
             // empty bundle, so the cheapest candidate's cost strictly exceeds the
@@ -528,7 +530,7 @@ internal sealed class RepoContextBundleService
             var units = await BuildUnitsAsync(repoId, candidate, level, body, contentHash, cancellationToken)
                 .ConfigureAwait(false);
 
-            List<RepoContextContextUnit>? surviving = null;
+            List<RepoContextRenderedUnit>? surviving = null;
             for (var u = 0; u < units.Count; u++)
             {
                 var unit = units[u];
@@ -545,7 +547,7 @@ internal sealed class RepoContextBundleService
                 }
                 else
                 {
-                    (surviving ??= new List<RepoContextContextUnit>(units.Count)).Add(unit);
+                    (surviving ??= new List<RepoContextRenderedUnit>(units.Count)).Add(unit);
                 }
             }
 
@@ -619,7 +621,7 @@ internal sealed class RepoContextBundleService
     /// outline unit per declared symbol (outline, falling back to a pointer when the
     /// file declares no symbols).
     /// </summary>
-    private async Task<IReadOnlyList<RepoContextContextUnit>> BuildUnitsAsync(
+    private async Task<IReadOnlyList<RepoContextRenderedUnit>> BuildUnitsAsync(
         string repoId,
         PackCandidate candidate,
         RepoContextContextDetail level,
@@ -637,7 +639,7 @@ internal sealed class RepoContextBundleService
 
                 return
                 [
-                    new RepoContextContextUnit
+                    new RepoContextRenderedUnit
                     {
                         Receipt = RepoContextReuse.Receipt(repoId, candidate.Path, contentHash, RepoContextReuse.SpanKind, string.Empty),
                         Kind = RepoContextReuse.SpanKind,
@@ -655,12 +657,12 @@ internal sealed class RepoContextBundleService
                     return [Pointer(repoId, candidate.Path, contentHash)];
                 }
 
-                var units = new RepoContextContextUnit[symbols.Count];
+                var units = new RepoContextRenderedUnit[symbols.Count];
                 for (var s = 0; s < symbols.Count; s++)
                 {
                     var symbol = symbols[s];
                     var line = symbol.Signature.Length != 0 ? symbol.Signature : symbol.FullyQualifiedName;
-                    units[s] = new RepoContextContextUnit
+                    units[s] = new RepoContextRenderedUnit
                     {
                         Receipt = RepoContextReuse.Receipt(repoId, candidate.Path, contentHash, RepoContextReuse.OutlineKind, symbol.FullyQualifiedName),
                         Kind = RepoContextReuse.OutlineKind,
@@ -677,7 +679,7 @@ internal sealed class RepoContextBundleService
         }
     }
 
-    private RepoContextContextUnit Pointer(string repoId, string path, string contentHash) => new()
+    private RepoContextRenderedUnit Pointer(string repoId, string path, string contentHash) => new()
     {
         Receipt = RepoContextReuse.Receipt(repoId, path, contentHash, RepoContextReuse.PointerKind, string.Empty),
         Kind = RepoContextReuse.PointerKind,
@@ -714,7 +716,7 @@ internal sealed class RepoContextBundleService
         }
     }
 
-    private static string JoinUnits(List<RepoContextContextUnit> units)
+    private static string JoinUnits(List<RepoContextRenderedUnit> units)
     {
         if (units.Count == 1)
         {

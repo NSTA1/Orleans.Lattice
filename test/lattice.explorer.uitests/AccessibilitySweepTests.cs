@@ -41,21 +41,21 @@ public sealed class AccessibilitySweepTests : UiTestBase
     // focused on established conformance criteria rather than best-practice advisories.
     private static readonly List<string> WcagTags = ["wcag2a", "wcag2aa"];
 
-    // Known pre-existing violations that this baseline records but does not block on,
-    // because they live in production CSS/markup this test project may not change and
-    // are unrelated to the shell/accessibility regressions the suite was created to
-    // guard (#1792 reflow, #1793 aria-selected). Each entry is a real finding, tracked
-    // to be fixed at its source rather than suppressed silently here:
+    // There is deliberately no allow-list here. This sweep once carried one, holding
+    // a single entry: `color-contrast`, because the dark theme's --lx-color-text-dim
+    // (#5a6373 on the #0b0e14 canvas) measured 3.19:1 against the 4.5:1 WCAG AA
+    // minimum for normal text. That was a real defect in the design tokens rather
+    // than a shell-structure regression, so it was recorded and tracked as #1801
+    // instead of being suppressed silently.
     //
-    //   color-contrast - the dark theme's --lx-color-text-dim (#5a6373 on the #0b0e14
-    //   canvas) is 3.19:1, below the 4.5:1 WCAG AA minimum for normal text. This is a
-    //   design-token contrast defect in DesignSystem/wwwroot/lattice-tokens.css, not a
-    //   shell-structure regression. Blocking on it would make every UI PR red on an
-    //   issue it did not introduce. Tracked as #1801; remove this exclusion in the
-    //   same change that raises the token's contrast (on a dark canvas that means
-    //   lightening it, not darkening it).
-    private static readonly HashSet<string> KnownUnblockedRuleIds =
-        new(StringComparer.OrdinalIgnoreCase) { "color-contrast" };
+    // #1801 raised both palettes' dim token and removed the entry, which emptied the
+    // set. An empty allow-list plus the filter that consumed it is an invitation to
+    // refill it, so the mechanism went with it: every critical or serious violation
+    // of the scoped rule set now fails this test, with no exception to argue about.
+    // The tokens themselves are re-measured on every build by
+    // Orleans.Lattice.Explorer.Tests.TextContrastTokenHygieneTests, which does not
+    // need a browser and therefore runs in the required build-and-test check rather
+    // than in this advisory browser lane.
 
     [Test]
     public async Task Home_surface_has_no_critical_or_serious_wcag_violations()
@@ -75,7 +75,6 @@ public sealed class AccessibilitySweepTests : UiTestBase
 
         var blocking = results.Violations
             .Where(v => v.Impact is not null && BlockingImpacts.Contains(v.Impact))
-            .Where(v => !KnownUnblockedRuleIds.Contains(v.Id))
             .ToList();
 
         Assert.That(blocking, Is.Empty, () => DescribeViolations(blocking));

@@ -20,6 +20,10 @@ public sealed class RepoContextUsageFiguresTests
 
     private static RepoContextContextResult Result(
         string detail, int totalTokens, params RepoContextContextEntry[] entries)
+        => Result(detail, totalTokens, totalTokens, entries);
+
+    private static RepoContextContextResult Result(
+        string detail, int totalTokens, int responseTokens, params RepoContextContextEntry[] entries)
         => new()
         {
             RepoId = "acme",
@@ -28,6 +32,7 @@ public sealed class RepoContextUsageFiguresTests
             Detail = detail,
             BudgetTokens = 10_000,
             TotalTokens = totalTokens,
+            ResponseTokens = responseTokens,
             Truncated = false,
             RetryBudgetTokens = null,
             Entries = entries,
@@ -49,6 +54,21 @@ public sealed class RepoContextUsageFiguresTests
     {
         var usage = RepoContextUsageFigures.ForContextBundle(Result("slices", 123, Entry(123, 400)));
         Assert.That(usage.ResponseTokens, Is.EqualTo(123));
+    }
+
+    [Test]
+    public void ForContextBundle_charges_the_wire_cost_not_the_content_total()
+    {
+        // The accounting must charge what the caller actually received - envelope and the
+        // SDK's dual emission included - otherwise it under-reports the cost of every
+        // bundle, the same blind spot that let the response outgrow its budget (#1811).
+        var result = Result("slices", 100, 260, Entry(100, 400));
+        var usage = RepoContextUsageFigures.ForContextBundle(result);
+        Assert.Multiple(() =>
+        {
+            Assert.That(usage.ResponseTokens, Is.EqualTo(260));
+            Assert.That(usage.NetSavedTokens, Is.EqualTo(400 - 260));
+        });
     }
 
     [Test]
@@ -121,6 +141,7 @@ public sealed class RepoContextUsageFiguresTests
             Detail = "slices",
             BudgetTokens = 10_000,
             TotalTokens = 10,
+            ResponseTokens = 10,
             Truncated = false,
             RetryBudgetTokens = null,
             Entries = [Entry(10, 400)],
