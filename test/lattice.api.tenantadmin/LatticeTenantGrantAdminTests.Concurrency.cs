@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each case is driven by <see cref="RacingTenantRegistry"/>, which commits a
+/// Each case is driven by <see cref="MergingTenantRegistry"/>, which commits a
 /// competing write <em>inside</em> the read-to-write window and merges on put
 /// exactly as the real registry does, and by <see cref="ScriptedClock"/>, which
 /// hands out explicit stamps. There are no threads, no delays, and no wall-clock
