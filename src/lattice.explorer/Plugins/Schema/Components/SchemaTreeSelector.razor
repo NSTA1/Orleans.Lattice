@@ -1,0 +1,81 @@
+@*
+    The Schema area's tree selection panel. Trees are the governance unit, so
+    selecting one is what pins the area's subject and triggers the per-tree,
+    per-action probe that files this plugin's scoped access decisions.
+
+    The list keeps its listbox semantics: each row is an option carrying its own
+    aria-selected, and the refresh control keeps its accessible name, so the
+    keyboard and screen-reader behaviour is unchanged by the split.
+*@
+
+<aside class="lx-schema-treepanel" aria-label="Schema tree selection">
+    <header class="lx-schema-treepanel-header">
+        <span class="lx-schema-treepanel-title">Trees</span>
+        <button type="button"
+                class="lx-schema-refresh"
+                title="Refresh trees"
+                aria-label="Refresh trees"
+                disabled="@(IsLoading || !Session.IsAllowed)"
+                @onclick="OnRefresh">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                <path fill="currentColor"
+                      d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+            </svg>
+        </button>
+    </header>
+    <div class="lx-schema-treelist">
+        @if (!Session.IsAllowed)
+        {
+            <p class="lx-schema-state">Schema management is unavailable.</p>
+        }
+        else if (IsLoading && _rows.Length == 0)
+        {
+            <p class="lx-schema-state">Loading trees...</p>
+        }
+        else if (Catalog.Error is { } error)
+        {
+            <div class="lx-schema-state is-error">
+                <span>@error</span>
+                <button type="button" class="lx-schema-btn-link" @onclick="OnRefresh">Try again</button>
+            </div>
+        }
+        else if (_rows.Length == 0)
+        {
+            <p class="lx-schema-state">No trees found.</p>
+        }
+        else
+        {
+            <ul class="lx-schema-treeitems" role="listbox" aria-label="Trees">
+                @* aria-selected is enumerated, not boolean: it must carry the
+                   literal "true" or "false" on every option, or a screen reader
+                   cannot tell which tree is selected. *@
+                @for (var i = 0; i < _rows.Length; i++)
+                {
+                    var row = _rows[i];
+                    var isSelected = string.Equals(Session.TreeId, row.Id, StringComparison.Ordinal);
+                    <li role="option" aria-selected="@(isSelected ? "true" : "false")" @key="row.Id">
+                        <button type="button"
+                                class="@(isSelected ? SelectedItemClass : ItemClass)"
+                                disabled="@Session.IsBusy"
+                                @onclick="row.Select">
+                            <span class="lx-schema-treeitem-id">@row.Label</span>
+                            @if (row.HasBadges)
+                            {
+                                <span class="lx-schema-treeitem-meta">
+                                    @if (row.Lifecycle is { } lifecycle)
+                                    {
+                                        <span class="lx-schema-badge">@lifecycle</span>
+                                    }
+                                    @if (row.ShardBadge is { } shards)
+                                    {
+                                        <span class="lx-schema-badge" title="Shard count">@shards</span>
+                                    }
+                                </span>
+                            }
+                        </button>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</aside>

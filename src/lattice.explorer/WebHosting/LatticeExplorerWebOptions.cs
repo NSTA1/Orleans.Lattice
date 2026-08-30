@@ -81,16 +81,6 @@ public sealed class LatticeExplorerWebOptions
     public bool AllowInteractiveEndpointConfiguration { get; set; }
 
     /// <summary>
-    /// When <see langword="true"/>, the schema-management area is surfaced in the
-    /// Explorer's area switcher. When <see langword="false"/> (the default), the
-    /// area is hidden: its tab is not rendered and it cannot be activated, though
-    /// the schema control services stay registered so it can be re-surfaced by
-    /// flipping this flag. The area is withheld by default because its versioning
-    /// UI cannot yet express what differs between schema versions.
-    /// </summary>
-    public bool EnableSchemaArea { get; set; }
-
-    /// <summary>
     /// When set, the ASP.NET Data Protection key ring is persisted to this Azure
     /// Blob Storage blob (for example
     /// <c>https://account.blob.core.windows.net/keys/explorer-keyring.xml</c>)

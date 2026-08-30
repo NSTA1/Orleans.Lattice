@@ -79,4 +79,14 @@ public sealed class LatticeApiMcpRemoteRegionOptions
     /// the tenant group in this region.
     /// </summary>
     public LatticeApiMcpRemoteEndpoint? TenantAdmin { get; set; }
+
+    /// <summary>
+    /// The region's endpoint for the read-only telemetry facade
+    /// (<c>ILatticeTelemetry</c>), or <see langword="null"/> to not serve the
+    /// telemetry group in this region. A peer with no telemetry endpoint does not
+    /// serve the group there: it is reported unavailable for the region in
+    /// <c>lattice_list_regions</c> and a telemetry call targeting the region is
+    /// rejected fail-closed, exactly as for every sibling group.
+    /// </summary>
+    public LatticeApiMcpRemoteEndpoint? Telemetry { get; set; }
 }

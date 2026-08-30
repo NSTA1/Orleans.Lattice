@@ -1,0 +1,105 @@
+/*
+  Orleans.Lattice Explorer - live-metrics plugin.
+
+  Every rule here is owned by this package and prefixed with the surface it
+  belongs to. Written against the design-system token layer, so it follows the
+  shell's spacing, colour and type scales.
+
+  The surface needs no width media query of its own: the tile grid auto-fills,
+  and the per-shard hotness table is the design system's adaptive table, which
+  reflows to a card list at compact width from the cascaded breakpoint rather
+  than from a query (epic decision D7 - the breakpoint layer is the only place a
+  width may be named).
+*/
+
+.lx-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-7);
+}
+
+.lx-metrics-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-5);
+}
+
+.lx-metrics-refresh {
+    padding: var(--lx-space-3) var(--lx-space-5);
+    font-size: var(--lx-text-caption);
+}
+
+.lx-metrics-sampled {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-dim);
+}
+
+.lx-metrics-state {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-body);
+}
+
+.lx-metrics-error {
+    color: var(--lx-color-danger);
+}
+
+/* Detail counts and per-shard hotness go dark while the table is too busy to
+   sample. That is a degraded reading rather than a failure, so it takes the
+   warning colour rather than the danger one .lx-metrics-error uses - the two
+   read differently because they mean different things. */
+.lx-metrics-paused {
+    color: var(--lx-color-warning);
+}
+
+.lx-metrics-muted {
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-small);
+}
+
+/*
+  Tiles auto-fill, so the grid collapses to a single column on a phone and
+  spreads across a desktop window with no breakpoint of its own.
+*/
+.lx-metrics-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: var(--lx-space-5);
+}
+
+.lx-metrics-tile {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    padding: var(--lx-space-5) var(--lx-space-6);
+    background: var(--lx-color-surface);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+}
+
+.lx-metrics-tile-label {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-metrics-tile-value {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-title);
+    color: var(--lx-color-text);
+}
+
+.lx-metrics-section-title {
+    margin: 0 0 var(--lx-space-4);
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+}

@@ -1,0 +1,21 @@
+@*
+    One metric tile: a caption and a value. Small enough to stay a single
+    component, and owned by this package so the metrics surface ships its whole
+    presentation rather than borrowing the shell's.
+*@
+<div class="lx-metrics-tile">
+    <span class="lx-metrics-tile-label">@Label</span>
+    <span class="lx-metrics-tile-value">@Value</span>
+</div>
+
+@code {
+    /// <summary>The metric's caption.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>The formatted metric value.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string Value { get; set; } = string.Empty;
+}

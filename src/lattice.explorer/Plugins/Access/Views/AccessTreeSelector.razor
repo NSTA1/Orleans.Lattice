@@ -1,0 +1,122 @@
+@using Orleans.Lattice.Explorer.Core.Catalog
+
+@*
+    The tree-selection panel the Policies and Explain surfaces share. Trees are
+    the policy scope unit, so both surfaces pin one from the catalog-driven list
+    rather than asking for a typed tree id. Selecting a tree here pins it as the
+    active tree for rule authoring and for Explain across both surfaces.
+*@
+
+<aside class="lxa-treepanel" aria-label="Tree selection">
+    <header class="lxa-treepanel-header">
+        <span class="lxa-treepanel-title">Trees</span>
+        <button type="button"
+                class="lxa-refresh"
+                title="Refresh trees"
+                aria-label="Refresh trees"
+                disabled="@(State.TreesLoading || !State.Allowed)"
+                @onclick="State.RefreshTreesAsync">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+                <path fill="currentColor"
+                      d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z" />
+            </svg>
+        </button>
+    </header>
+    <div class="lxa-treelist">
+        @if (!State.Allowed)
+        {
+            <p class="lxa-state">Access administration is unavailable.</p>
+        }
+        else if (State.TreesLoading && State.Trees.Count == 0)
+        {
+            <p class="lxa-state">Loading trees...</p>
+        }
+        else if (State.TreesError is not null)
+        {
+            <div class="lxa-state is-error">
+                <span>@State.TreesError</span>
+                <button type="button" class="lx-btn-link" @onclick="State.RefreshTreesAsync">Try again</button>
+            </div>
+        }
+        else if (State.Trees.Count == 0)
+        {
+            <p class="lxa-state">No trees found.</p>
+        }
+        else
+        {
+            <ul class="lxa-list" role="listbox" aria-label="Trees">
+                @* aria-selected is enumerated, not boolean: it must carry the
+                   literal "true" or "false" on every option, or a screen reader
+                   cannot tell which tree is selected. *@
+                @foreach (var tree in State.Trees)
+                {
+                    var isSelected = string.Equals(State.SelectedTreeId, tree.Id, StringComparison.Ordinal);
+                    <li role="option" aria-selected="@(isSelected ? "true" : "false")">
+                        <button type="button"
+                                class="@(isSelected ? SelectedItemClass : ItemClass)"
+                                disabled="@State.Busy"
+                                @onclick="Select(tree.Id)">
+                            <span class="lxa-itemid">@tree.Label</span>
+                            @if (tree.Lifecycle is not null || tree.ShardCount is int)
+                            {
+                                <span class="lxa-itemmeta">
+                                    @if (tree.Lifecycle is not null)
+                                    {
+                                        <span class="lxa-badge">@tree.Lifecycle</span>
+                                    }
+                                    @if (tree.ShardCount is int shards)
+                                    {
+                                        <span class="lxa-badge" title="Shard count">@shards sh</span>
+                                    }
+                                </span>
+                            }
+                        </button>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</aside>
+
+@code {
+    // Composed once rather than interpolated per row per render: the panel
+    // re-renders on every selection and every load.
+    private const string ItemClass = "lxa-navitem";
+    private const string SelectedItemClass = "lxa-navitem is-selected";
+
+    private readonly Dictionary<string, EventCallback> _select = new(StringComparer.Ordinal);
+
+    /// <summary>The Access workspace this panel selects a tree in.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+
+    /// <summary>
+    /// The selection callback for one tree, bound once and reused on every later
+    /// render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per row per render - the panel re-renders on
+    /// every selection and every load - and gave the delegate a new identity each
+    /// time, so Blazor's attribute diffing re-registered every handler rather
+    /// than skipping it. The tree id is both the row identity and the argument,
+    /// so nothing can go stale.
+    /// </remarks>
+    private EventCallback Select(string treeId)
+    {
+        if (_select.TryGetValue(treeId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for trees no longer rendered.
+        if (_select.Count > State.Trees.Count * 2)
+        {
+            _select.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.SelectTree(treeId));
+        _select.Add(treeId, callback);
+        return callback;
+    }
+}

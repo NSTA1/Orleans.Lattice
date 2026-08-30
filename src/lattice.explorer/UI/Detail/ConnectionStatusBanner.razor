@@ -8,33 +8,33 @@
 }
 @if (status.State == LatticeConnectionState.Reconnecting)
 {
-    <div class="explorer-connbar explorer-connbar-warn" role="status">
-        <span class="explorer-conndot"></span>
-        <span class="explorer-connmsg">Reconnecting...</span>
+    <div class="lx-shell-connbar lx-shell-connbar-warn" role="status">
+        <span class="lx-shell-conndot"></span>
+        <span class="lx-shell-connmsg">Reconnecting...</span>
     </div>
 }
 else if (status.State == LatticeConnectionState.Connecting)
 {
-    <div class="explorer-connbar explorer-connbar-warn" role="status">
-        <span class="explorer-conndot"></span>
-        <span class="explorer-connmsg">Connecting...</span>
+    <div class="lx-shell-connbar lx-shell-connbar-warn" role="status">
+        <span class="lx-shell-conndot"></span>
+        <span class="lx-shell-connmsg">Connecting...</span>
     </div>
 }
 else if (status.IsDisconnected)
 {
-    <div class="explorer-connbar explorer-connbar-down" role="alert">
-        <span class="explorer-conndot"></span>
-        <span class="explorer-connmsg">@(status.Message ?? "Disconnected from the state API.")</span>
+    <div class="lx-shell-connbar lx-shell-connbar-down" role="alert">
+        <span class="lx-shell-conndot"></span>
+        <span class="lx-shell-connmsg">@(status.Message ?? "Disconnected from the state API.")</span>
         @if (status.RequiresAuthentication)
         {
             <button type="button"
-                    class="explorer-btn explorer-btn-primary explorer-reconnect"
+                    class="lx-btn lx-btn-primary lx-shell-reconnect"
                     @onclick="OpenLogin">
                 Sign in
             </button>
         }
         <button type="button"
-                class="explorer-btn explorer-reconnect"
+                class="lx-btn lx-shell-reconnect"
                 disabled="@_reconnecting"
                 @onclick="ReconnectAsync">
             @(_reconnecting ? "Reconnecting..." : "Reconnect")
@@ -43,9 +43,9 @@ else if (status.IsDisconnected)
 }
 else
 {
-    <div class="explorer-connbar explorer-connbar-ok" role="status">
-        <span class="explorer-conndot"></span>
-        <span class="explorer-connmsg">Connected</span>
+    <div class="lx-shell-connbar lx-shell-connbar-ok" role="status">
+        <span class="lx-shell-conndot"></span>
+        <span class="lx-shell-connmsg">Connected</span>
     </div>
 }
 

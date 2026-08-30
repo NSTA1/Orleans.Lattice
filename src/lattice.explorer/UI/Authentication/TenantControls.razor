@@ -5,26 +5,26 @@
 
 @if (_active)
 {
-    <span class="explorer-tenant" title="Active tenant">
-        <span class="explorer-tenant-label">tenant</span>
-        <span class="explorer-tenant-id">@(_activeTenant?.Value ?? "none")</span>
+    <span class="lx-shell-tenant" title="Active tenant">
+        <span class="lx-shell-tenant-label">tenant</span>
+        <span class="lx-shell-tenant-id">@(_activeTenant?.Value ?? "none")</span>
     </span>
 
     @if (_isOperator)
     {
-        <div class="explorer-tenant-switch">
-            <label class="explorer-tenant-alltenants" title="Show every tenant's trees">
+        <div class="lx-shell-tenant-switch">
+            <label class="lx-shell-tenant-alltenants" title="Show every tenant's trees">
                 <input type="checkbox" checked="@_allTenants" @onchange="OnAllTenantsChangedAsync" />
                 all tenants
             </label>
             <input type="text"
-                   class="explorer-tenant-input"
+                   class="lx-shell-tenant-input"
                    placeholder="tenant id"
                    aria-label="Switch to tenant"
                    @bind="_tenantInput"
                    @bind:event="oninput" />
             <button type="button"
-                    class="explorer-btn-link"
+                    class="lx-btn-link"
                     title="Switch to tenant"
                     disabled="@(string.IsNullOrWhiteSpace(_tenantInput))"
                     @onclick="OnSwitchTenantAsync">

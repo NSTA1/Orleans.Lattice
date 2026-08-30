@@ -206,7 +206,8 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             LatticeReplicationMetrics.DeadLetterEnqueued.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, string.Empty),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonSchema));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonSchema),
+                LatticeTenantLabel.ForTree(string.Empty));
 
             _failures.TryRemove(key, out _);
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };

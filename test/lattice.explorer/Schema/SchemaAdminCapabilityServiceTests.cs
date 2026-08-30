@@ -1,96 +1,124 @@
 using Grpc.Core;
 using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Tests.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Schema;
 
+/// <summary>
+/// The Schema plugin's own access gate. It reproduces the coarse
+/// control-plane-reachability gate the area used to read from the shared
+/// capability record, now as the plugin-level decision keyed under
+/// <see cref="SchemaPluginKeys.PluginId"/>, and keeps the per-tree capability
+/// probe the panel drives its own action grey-out from.
+/// </summary>
 [TestFixture]
 public class SchemaAdminCapabilityServiceTests
 {
-    private static (SchemaAdminCapabilityService Service, ExplorerCapabilityStore Store) Create(FakeSchemaAdminClient client)
-    {
-        var store = new ExplorerCapabilityStore();
-        return (new SchemaAdminCapabilityService(client, store), store);
-    }
+    private static readonly IExplorerPluginHostContext Context =
+        PluginTestHost.Context(SchemaPluginKeys.PluginId);
+
+    private static SchemaAdminCapabilityService Create(FakeSchemaAdminClient client) => new(client);
 
     [Test]
     public void Constructor_null_client_throws()
     {
-        Assert.That(() => new SchemaAdminCapabilityService(null!, new ExplorerCapabilityStore()), Throws.ArgumentNullException);
+        Assert.That(() => new SchemaAdminCapabilityService(null!), Throws.ArgumentNullException);
     }
 
     [Test]
-    public void Constructor_null_store_throws()
+    public void ProbeAsync_null_context_throws()
     {
-        Assert.That(() => new SchemaAdminCapabilityService(new FakeSchemaAdminClient(), null!), Throws.ArgumentNullException);
+        var service = Create(new FakeSchemaAdminClient());
+
+        Assert.That(async () => await service.ProbeAsync(null!), Throws.ArgumentNullException);
     }
 
     [Test]
-    public async Task RefreshAsync_probe_reachable_sets_coarse_allowed()
+    public async Task ProbeAsync_probe_reachable_allows_the_plugin()
     {
         var client = new FakeSchemaAdminClient();
-        var (service, store) = Create(client);
+        var service = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.SchemaAllowed, Is.True);
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
             Assert.That(client.LastProbeTreeId, Is.EqualTo(SchemaAdminCapabilityService.CapabilityProbeTreeId));
         });
     }
 
     [Test]
-    public async Task RefreshAsync_denied_leaves_coarse_disabled()
+    public async Task ProbeAsync_denied_denies_the_plugin()
     {
         var client = new FakeSchemaAdminClient { ProbeThrows = new LatticeAuthorizationDeniedException("denied") };
-        var (service, store) = Create(client);
+        var service = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.That(store.Current.SchemaAllowed, Is.False);
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
     }
 
     [Test]
-    public async Task RefreshAsync_transport_failure_leaves_coarse_disabled()
+    public async Task ProbeAsync_transport_failure_denies_the_plugin()
     {
         var client = new FakeSchemaAdminClient { ProbeThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")) };
-        var (service, store) = Create(client);
+        var service = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.That(store.Current.SchemaAllowed, Is.False);
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
     }
 
     [Test]
-    public async Task RefreshAsync_unconfigured_session_leaves_coarse_disabled()
+    public async Task ProbeAsync_unconfigured_session_denies_the_plugin()
     {
         var client = new FakeSchemaAdminClient
         {
             ProbeThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
         };
-        var (service, store) = Create(client);
+        var service = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
 
-        Assert.That(store.Current.SchemaAllowed, Is.False);
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
     }
 
     [Test]
-    public async Task RefreshAsync_preserves_other_capability_fields()
+    public async Task ProbeAsync_never_reports_unavailable_so_a_denied_area_greys_out_rather_than_hiding()
     {
-        var client = new FakeSchemaAdminClient();
-        var store = new ExplorerCapabilityStore();
-        store.Set(ExplorerCapabilities.Empty with { AuthAdminAllowed = true });
-        var service = new SchemaAdminCapabilityService(client, store);
+        var client = new FakeSchemaAdminClient { ProbeThrows = new LatticeAuthorizationDeniedException("denied") };
+        var service = Create(client);
 
-        await service.RefreshAsync();
+        var access = await service.ProbeAsync(Context);
+
+        Assert.That(access.IsVisible, Is.True);
+    }
+
+    [Test]
+    public async Task A_denied_plugin_re_opens_when_the_control_endpoint_becomes_reachable_again()
+    {
+        // The allowed -> denied -> allowed transition. It is the shape that has
+        // twice turned an idempotent initializer into a second-call no-op, so
+        // the gate is asserted to make the round trip rather than only the first
+        // leg of it.
+        var client = new FakeSchemaAdminClient();
+        var service = Create(client);
+        var first = await service.ProbeAsync(Context);
+
+        client.ProbeThrows = new RpcException(new Status(StatusCode.Unavailable, "gone"));
+        var denied = await service.ProbeAsync(Context);
+
+        client.ProbeThrows = null;
+        var reopened = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
         {
-            Assert.That(store.Current.SchemaAllowed, Is.True);
-            Assert.That(store.Current.AuthAdminAllowed, Is.True);
+            Assert.That(first.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
+            Assert.That(denied.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
+            Assert.That(reopened.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
         });
     }
 
@@ -112,7 +140,7 @@ public class SchemaAdminCapabilityServiceTests
                 CanRemediate = true,
             },
         };
-        var (service, _) = Create(client);
+        var service = Create(client);
 
         var snapshot = await service.ProbeTreeAsync("t");
 
@@ -134,7 +162,7 @@ public class SchemaAdminCapabilityServiceTests
     public async Task ProbeTreeAsync_denied_fails_closed_to_none()
     {
         var client = new FakeSchemaAdminClient { ProbeThrows = new LatticeAuthorizationDeniedException("denied") };
-        var (service, _) = Create(client);
+        var service = Create(client);
 
         var snapshot = await service.ProbeTreeAsync("t");
 
@@ -145,7 +173,7 @@ public class SchemaAdminCapabilityServiceTests
     public async Task ProbeTreeAsync_transport_failure_fails_closed_to_none()
     {
         var client = new FakeSchemaAdminClient { ProbeThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")) };
-        var (service, _) = Create(client);
+        var service = Create(client);
 
         var snapshot = await service.ProbeTreeAsync("t");
 
@@ -159,7 +187,7 @@ public class SchemaAdminCapabilityServiceTests
         {
             ProbeThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
         };
-        var (service, _) = Create(client);
+        var service = Create(client);
 
         var snapshot = await service.ProbeTreeAsync("t");
 
@@ -169,7 +197,7 @@ public class SchemaAdminCapabilityServiceTests
     [Test]
     public void ProbeTreeAsync_empty_tree_throws()
     {
-        var (service, _) = Create(new FakeSchemaAdminClient());
+        var service = Create(new FakeSchemaAdminClient());
 
         Assert.That(() => service.ProbeTreeAsync(string.Empty), Throws.InstanceOf<ArgumentException>());
     }

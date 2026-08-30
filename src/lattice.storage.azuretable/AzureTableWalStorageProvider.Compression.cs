@@ -253,23 +253,27 @@ public sealed partial class AzureTableWalStorageProvider
     internal static void RecordWalCompressionMetrics(string treeId, in WalCompressionStats stats)
     {
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
-        LatticeMetrics.StorageWalUncompressedBytes.Add(stats.UncompressedBytes, treeTag);
-        LatticeMetrics.StorageWalStoredBytes.Add(stats.StoredBytes, treeTag);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+        LatticeMetrics.StorageWalUncompressedBytes.Add(stats.UncompressedBytes, treeTag, tenantTag);
+        LatticeMetrics.StorageWalStoredBytes.Add(stats.StoredBytes, treeTag, tenantTag);
 
         if (stats.SkippedDisabled > 0)
         {
             LatticeMetrics.StorageWalCompressionSkipped.Add(
-                stats.SkippedDisabled, treeTag, LatticeMetrics.ReasonCompressionDisabled);
+                stats.SkippedDisabled, treeTag, LatticeMetrics.ReasonCompressionDisabled,
+                tenantTag);
         }
         if (stats.SkippedBelowThreshold > 0)
         {
             LatticeMetrics.StorageWalCompressionSkipped.Add(
-                stats.SkippedBelowThreshold, treeTag, LatticeMetrics.ReasonBelowThreshold);
+                stats.SkippedBelowThreshold, treeTag, LatticeMetrics.ReasonBelowThreshold,
+                tenantTag);
         }
         if (stats.SkippedInflationGuard > 0)
         {
             LatticeMetrics.StorageWalCompressionSkipped.Add(
-                stats.SkippedInflationGuard, treeTag, LatticeMetrics.ReasonInflationGuard);
+                stats.SkippedInflationGuard, treeTag, LatticeMetrics.ReasonInflationGuard,
+                tenantTag);
         }
     }
 }

@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
+    <ProjectReference Include="..\lattice.api.telemetry\Orleans.Lattice.Api.Telemetry.csproj" />
   </ItemGroup>
 
 </Project>

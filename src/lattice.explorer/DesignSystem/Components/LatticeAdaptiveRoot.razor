@@ -1,0 +1,206 @@
+@implements IAsyncDisposable
+@inject IServiceProvider Services
+
+@*
+    The root of an adaptive Explorer shell. It owns the viewport observation and
+    cascades the resolved LatticeBreakpoint, so every component below it - the
+    design-system primitives and every plugin - reads the breakpoint by name and
+    never measures a viewport or writes a media query itself (epic decision D7).
+
+    Until a measurement arrives the cascaded value is LatticeBreakpoints.Default
+    (Expanded), so a static render, a prerender pass, and a host without
+    JavaScript all produce the layout the Explorer shipped with.
+*@
+
+<CascadingValue TValue="LatticeAdaptiveContext" Value="_context">
+    <div class="lx-root @Class"
+         data-lx-breakpoint="@LatticeBreakpoints.Name(_context.Breakpoint)"
+         data-lx-density="@LatticeDensities.Name(_context.Density)"
+         data-lx-measured="@(_context.IsMeasured ? "true" : "false")">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    // Held for the lifetime of the root and reused on every callback, so the
+    // observation costs one object reference rather than one per notification.
+    private DotNetObjectReference<LatticeAdaptiveRoot>? _selfReference;
+    private IJSObjectReference? _module;
+    private ILatticeViewport? _viewport;
+    private int _observerHandle;
+    private LatticeAdaptiveContext _context = LatticeAdaptiveContext.Unmeasured;
+
+    /// <summary>The shell content rendered inside the adaptive root.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// The density applied to everything inside the root. Defaults to
+    /// <see cref="LatticeDensity.Cosy"/>, the Explorer's standard density; the
+    /// breakpoint layer still relaxes it to comfortable spacing at compact.
+    /// </summary>
+    [Parameter] public LatticeDensity Density { get; set; } = LatticeDensity.Cosy;
+
+    /// <summary>Additional CSS classes appended to the root element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnInitialized()
+    {
+        // Resolved rather than injected so the primitives can be rendered
+        // standalone - in a component test, a preview host, or a plugin that has
+        // not registered the design system - without a DI failure. Without a
+        // registered viewport the root simply stays on the default breakpoint.
+        _viewport = Services.GetService(typeof(ILatticeViewport)) as ILatticeViewport;
+
+        if (_viewport is null)
+        {
+            return;
+        }
+
+        _viewport.BreakpointChanged += OnBreakpointChangedInternal;
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() => RebuildContext();
+
+    // The cascaded context is rebuilt only when one of its inputs actually
+    // changes, so a re-render that does not move the breakpoint or the density
+    // hands every consumer the same instance and costs no allocation.
+    private void RebuildContext()
+    {
+        var breakpoint = _viewport?.Breakpoint ?? LatticeBreakpoints.Default;
+        var isMeasured = _viewport?.IsMeasured ?? false;
+
+        if (_context.Breakpoint == breakpoint
+            && _context.Density == Density
+            && _context.IsMeasured == isMeasured)
+        {
+            return;
+        }
+
+        _context = new LatticeAdaptiveContext(breakpoint, Density, isMeasured);
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _viewport is null)
+        {
+            return;
+        }
+
+        // JavaScript is an enhancement, not a requirement: a head that cannot
+        // reach a JS runtime (static rendering, a prerender pass, scripting
+        // disabled) keeps the default breakpoint and a fully usable shell.
+        if (Services.GetService(typeof(IJSRuntime)) is not IJSRuntime js)
+        {
+            return;
+        }
+
+        try
+        {
+            _module = await js.InvokeAsync<IJSObjectReference>(
+                "import",
+                "./_content/Orleans.Lattice.Explorer.DesignSystem/lattice-breakpoints.js");
+
+            _selfReference = DotNetObjectReference.Create(this);
+
+            var initial = await _module.InvokeAsync<BreakpointObservation>(
+                "observe",
+                _selfReference,
+                LatticeBreakpoints.MediumMinimumWidth,
+                LatticeBreakpoints.ExpandedMinimumWidth);
+
+            _observerHandle = initial.Handle;
+            ApplyBreakpointName(initial.Breakpoint);
+        }
+        catch (JSException)
+        {
+            // The module failed to load or run. The shell stays on the default
+            // breakpoint rather than failing to render.
+        }
+        catch (InvalidOperationException)
+        {
+            // Interop attempted outside an interactive circuit.
+        }
+    }
+
+    /// <summary>
+    /// Invoked from the breakpoint observer when the viewport crosses a
+    /// boundary. Public because the JavaScript interop layer requires it; it is
+    /// not part of the design system's intended API surface.
+    /// </summary>
+    /// <param name="breakpointName">The stable name of the breakpoint now in effect.</param>
+    [JSInvokable]
+    public void OnBreakpointChanged(string breakpointName) => ApplyBreakpointName(breakpointName);
+
+    private void ApplyBreakpointName(string breakpointName)
+    {
+        if (!LatticeBreakpoints.TryParseName(breakpointName, out var breakpoint))
+        {
+            return;
+        }
+
+        // Routed through the viewport so every consumer of the seam - not just
+        // this subtree - sees the same value. SetBreakpoint marks the viewport
+        // measured even when the resolved breakpoint already matched the
+        // default, and reports whether the value moved.
+        _viewport?.SetBreakpoint(breakpoint);
+        OnBreakpointChangedInternal(breakpoint);
+    }
+
+    private void OnBreakpointChangedInternal(LatticeBreakpoint breakpoint)
+    {
+        var previous = _context;
+        RebuildContext();
+
+        if (!ReferenceEquals(previous, _context))
+        {
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask DisposeAsync()
+    {
+        if (_viewport is not null)
+        {
+            _viewport.BreakpointChanged -= OnBreakpointChangedInternal;
+        }
+
+        if (_module is not null)
+        {
+            try
+            {
+                if (_observerHandle != 0)
+                {
+                    await _module.InvokeVoidAsync("release", _observerHandle);
+                }
+
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The circuit is already gone; the browser released the
+                // listeners with it.
+            }
+            catch (JSException)
+            {
+                // Best-effort teardown of an already-faulted module.
+            }
+            finally
+            {
+                _module = null;
+            }
+        }
+
+        _selfReference?.Dispose();
+        _selfReference = null;
+    }
+
+    /// <summary>
+    /// The observer's start result: a disposal handle and the breakpoint the
+    /// viewport is in right now.
+    /// </summary>
+    private sealed record BreakpointObservation(int Handle, string Breakpoint);
+}

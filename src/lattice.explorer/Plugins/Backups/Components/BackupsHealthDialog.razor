@@ -1,0 +1,79 @@
+@using System.Globalization
+
+@*
+    The backup-health diagnostics dialog: why a backup is not healthy, which
+    artifacts are missing or mismatched, and a re-check that verifies the sink
+    payload on demand.
+*@
+
+@if (Owner.HealthDialog is { } report)
+{
+    <div class="lx-modal-backdrop" role="presentation">
+        <div class="lx-modal" role="dialog" aria-modal="true" aria-labelledby="lx-backups-health-title">
+            <h3 id="lx-backups-health-title">Backup health</h3>
+            <p>
+                Backup <strong>@report.BackupId</strong> is
+                <strong>@report.Status</strong>.
+            </p>
+            <p class="lx-backups-hint">@report.Explanation</p>
+            @if (report.MissingArtifactIds.Count > 0)
+            {
+                <p><strong>Missing or uncommitted artifacts:</strong></p>
+                <ul class="lx-backups-health-list">
+                    @foreach (var id in report.MissingArtifactIds)
+                    {
+                        <li @key="id">@id</li>
+                    }
+                </ul>
+            }
+            @if (report.HashMismatchArtifactIds.Count > 0)
+            {
+                <p><strong>Content-hash mismatches:</strong></p>
+                <ul class="lx-backups-health-list">
+                    @foreach (var id in report.HashMismatchArtifactIds)
+                    {
+                        <li @key="id">@id</li>
+                    }
+                </ul>
+            }
+            <p class="lx-backups-hint">Last checked @report.CheckedAtUtc.UtcDateTime.ToString("u", CultureInfo.InvariantCulture).</p>
+            <div class="lx-modal-actions">
+                <button type="button" class="lx-btn lx-btn-primary" disabled="@Owner.Busy"
+                        @onclick="Recheck(report.BackupId)">Re-check now</button>
+                <button type="button" class="lx-btn" disabled="@Owner.Busy" @onclick="Owner.CloseHealthDialog">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string? _recheckBackupId;
+    private EventCallback _recheck;
+
+    /// <summary>The Backups panel this dialog reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    /// <summary>
+    /// The re-check callback for the report on screen, bound once per backup
+    /// rather than on every render.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> on each render, and the dialog re-renders on
+    /// every busy transition and every completed re-check, so the delegate's
+    /// identity changed under Blazor's attribute diffing each time. The dialog
+    /// shows one report at a time, so a single cached entry keyed by its backup
+    /// id is enough, and it is rebuilt the moment a different backup is shown.
+    /// </remarks>
+    private EventCallback Recheck(string backupId)
+    {
+        if (string.Equals(_recheckBackupId, backupId, StringComparison.Ordinal))
+        {
+            return _recheck;
+        }
+
+        _recheckBackupId = backupId;
+        _recheck = EventCallback.Factory.Create(this, () => Owner.RecheckHealthAsync(backupId));
+        return _recheck;
+    }
+}

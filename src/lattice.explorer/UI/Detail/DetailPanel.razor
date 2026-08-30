@@ -1,158 +1,445 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
-@using Orleans.Lattice.Explorer.Core.Detail
 @using Orleans.Lattice.Explorer.Core.Session
-@using Orleans.Lattice.Explorer.UI.Detail.Tabs
+@using Orleans.Lattice.Explorer.Plugins
+@using Orleans.Lattice.Explorer.UI.Authentication
+@using Orleans.Lattice.Explorer.UI.Plugins
 @implements IDisposable
+@inject IExplorerPluginCatalog Catalog
+@inject IExplorerPluginAccessStore AccessStore
 @inject IExplorerSelection Selection
 @inject IUiPreferenceStore Preferences
 
-<section class="explorer-detail" aria-label="Detail">
-    @{
-        var selected = Selection.Selected;
-    }
-    <header class="explorer-detail-header">
-        <div class="explorer-tabstrip" role="tablist" aria-label="Detail tabs">
-            @if (selected?.Kind != CatalogKind.TagIndexes)
-            {
-                @foreach (var tab in DetailTabs.Ordered)
-                {
-                    <button type="button"
-                            role="tab"
-                            class="explorer-tab @(_tabRestored && tab == _activeTab ? "is-active" : null)"
-                            aria-selected="@(_tabRestored && tab == _activeTab)"
-                            @onclick="@(() => SetTab(tab))">
-                        @DetailTabs.Label(tab)
-                    </button>
-                }
-            }
-        </div>
-        @if (selected is not null)
+@*
+    The per-selection tier: the surfaces that render whatever tree, view or tag
+    index is currently selected. It is the same plugin model the area switcher
+    above it runs on (epic decision D4) - the panel enumerates IExplorerPlugin
+    from the container, filters to the Selection surface and to the plugins that
+    declare the selected kind, orders them, and renders the active one through
+    DynamicComponent - so it names no surface and gains no per-surface service
+    injection.
+
+    Two things follow from that, and they are the point of the rewrite:
+
+      - A tag-index selection is no longer a hard-coded branch that bypasses the
+        tier. The tag-index browser simply declares that it applies to tag-index
+        selections and the generic surfaces declare that they do not, so the
+        selection resolves to a different plugin set through ordinary
+        applicability.
+
+      - The tier is gated for the first time. Gating is advisory, exactly as it
+        is for areas (epic decision D6 - the server stays the sole enforcement
+        point): allowed renders active, denied renders disabled-and-visible and
+        never renders its content, authentication-required stays clickable and
+        opens the sign-in dialog, and unavailable renders no tab at all.
+
+    A selection plugin's view is handed the selected catalog entry as a
+    Selection parameter, which is what SelectionPluginViewBase declares - so a
+    view derives from it rather than re-declaring the parameter and the
+    lifetime token by hand.
+*@
+
+<section class="lx-shell-detail" aria-label="Detail">
+    <header class="lx-shell-detail-header">
+        <LatticeAdaptiveTabs Tabs="_tabs"
+                             ActiveId="@(_restored ? _activePluginId : null)"
+                             OnSelect="_activate"
+                             Label="Detail tabs"
+                             Class="lx-shell-detail-tabs" />
+        @if (_selected is not null)
         {
-            <span class="explorer-detail-title" title="@selected.Id">@selected.Label</span>
+            <span class="lx-shell-detail-title" title="@_selected.Id">@_selected.Label</span>
         }
     </header>
 
-    <div class="explorer-detail-body">
-        @if (selected is null)
+    <div class="lx-shell-detail-body">
+        @if (_selected is null)
         {
-            <div class="explorer-detail-empty">
+            <div class="lx-shell-detail-empty">
                 <p>Select a tree or view to inspect it.</p>
             </div>
         }
-        else if (selected.Kind == CatalogKind.TagIndexes)
+        else if (!_restored)
         {
-            // A tag index gets a purpose-built browsing surface (covered trees,
-            // tags, and per-tag members) instead of the generic tabs, which would
-            // only expose the membership tree's internal composite-key rows.
-            <TagIndexDetailTab @key="@($"tagindex:{selected.Id}")" Selection="selected" />
+            @* Hold the body until the retained surface is known so the default
+               one never renders first and then switches (a visible flicker). *@
+            <div class="lx-shell-detail-empty" aria-busy="true"></div>
         }
-        else if (!_tabRestored)
+        else if (_activePlugin is null)
         {
-            // Hold the body until the retained tab is known so the default tab
-            // never renders first and then switches (a visible flicker).
-            <div class="explorer-detail-empty" aria-busy="true"></div>
+            <div class="lx-shell-detail-empty">
+                <p>@_emptyBodyMessage</p>
+            </div>
         }
         else
         {
-            var key = $"{selected.Kind}:{selected.Id}:{_activeTab}";
-            switch (_activeTab)
-            {
-                case DetailTab.Metrics:
-                    <MetricsTab @key="key" Selection="selected" />
-                    break;
-                case DetailTab.Topology:
-                    <TopologyTab @key="key" Selection="selected" />
-                    break;
-                case DetailTab.Data:
-                    <DataTab @key="key" Selection="selected" />
-                    break;
-                case DetailTab.DeadLetter:
-                    <DeadLetterTab @key="key" Selection="selected" />
-                    break;
-            }
+            <DynamicComponent @key="_viewKey" Type="_activePlugin.ViewType" Parameters="_viewParameters" />
         }
     </div>
 </section>
 
 @code {
-    private DetailTab _activeTab = DetailTabs.Default;
-    private bool _tabRestored;
+    private static readonly SelectionTab[] NoTabSources = [];
+    private static readonly LatticeTabItem[] NoTabs = [];
+    private static readonly IExplorerPlugin[] NoPlugins = [];
 
-    // Durable-preference key for the active detail tab (global, not per selection).
-    private const string TabStateKey = "detail-tab";
+    private const string NoSurfaceRegistered = "No detail surface is registered for this selection.";
+    private const string NoSurfaceAvailable = "No detail surface for this selection is available for your account.";
+
+    private readonly Action _render;
+
+    private CatalogItem? _selected;
+    private ExplorerPluginSelectionKind _kind = ExplorerPluginSelectionKind.Tree;
+    private bool _kindResolved;
+
+    private IReadOnlyList<IExplorerPlugin> _plugins = NoPlugins;
+    private SelectionTab[] _tabSources = NoTabSources;
+    private LatticeTabItem[] _tabs = NoTabs;
+
+    private IExplorerPlugin? _activePlugin;
+    private string? _activePluginId;
+    private string? _retainedPluginId;
+    private string _emptyBodyMessage = NoSurfaceRegistered;
+
+    // The DynamicComponent's identity and its parameter set are both rebuilt only
+    // when the selection or the active surface actually changes, never per
+    // render: the panel re-renders on every access change and every selection
+    // notification, and composing either here would allocate on all of them.
+    private string _viewKey = string.Empty;
+    private Dictionary<string, object?>? _viewParameters;
+
+    private EventCallback<string> _activate;
+    private bool _restored;
+
+    /// <summary>Creates the panel, caching the delegate its subscriptions marshal.</summary>
+    public DetailPanel() => _render = StateHasChanged;
+
+    /// <summary>Shared dialog state used to offer a sign-in for a surface that requires one.</summary>
+    [CascadingParameter] public LoginDialogState? Login { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
-        Selection.SelectionChanged += OnSelectionChanged;
+        // Bound once rather than per render, so the strip's selection callback
+        // does not allocate a delegate on every pass.
+        _activate = EventCallback.Factory.Create<string>(this, ActivateAsync);
 
-        // Restore the prior active tab so the panel reopens on the same tab.
-        // Tolerant of an unreachable backing store (server prerender); the
-        // first-render fallback re-applies once browser storage is reachable.
+        Selection.SelectionChanged += OnSelectionChanged;
+        AccessStore.Changed += OnAccessChanged;
+
+        ApplySelection(Selection.Selected);
+
+        // Restore the prior active surface so the panel reopens on it. Tolerant
+        // of an unreachable backing store (server prerender); the first-render
+        // fallback re-applies once browser storage is reachable.
         await Preferences.EnsureLoadedAsync();
-        RestoreTab();
+        RestoreRetained();
+        Resolve();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _tabRestored)
+        if (!firstRender || _restored)
         {
             return;
         }
 
         await Preferences.EnsureLoadedAsync();
 
-        // Restore the retained tab if the mirror hydrated; otherwise fall back to
-        // the default so the body renders rather than staying blank when browser
-        // storage is unreachable (for example with JavaScript disabled).
-        RestoreTab();
-        if (!_tabRestored)
+        // Restore the retained surface if the mirror hydrated; otherwise release
+        // the hold anyway so the body renders rather than staying blank when
+        // browser storage is unreachable (for example with JavaScript disabled).
+        RestoreRetained();
+        if (!_restored)
         {
-            _tabRestored = true;
+            _restored = true;
         }
 
+        Resolve();
         StateHasChanged();
     }
 
-    private void RestoreTab()
+    private void RestoreRetained()
     {
-        if (_tabRestored || !Preferences.IsLoaded)
+        if (_restored || !Preferences.IsLoaded)
         {
             return;
         }
 
-        _tabRestored = true;
-        _activeTab = Preferences.GetOrDefault(TabStateKey, DetailTabs.Default);
+        _restored = true;
+        _retainedPluginId = Preferences.GetOrDefault<string?>(SelectionPluginKeys.ActivePluginPreferenceKey, null);
     }
 
-    private async Task SetTab(DetailTab tab)
+    /// <summary>
+    /// Points the panel at <paramref name="selected"/>, re-resolving the
+    /// applicable plugin set when the selection's kind changed and rebuilding
+    /// the parameters handed to the rendered view.
+    /// </summary>
+    private void ApplySelection(CatalogItem? selected)
     {
-        if (_activeTab == tab)
+        _selected = selected;
+
+        if (selected is null)
+        {
+            // Nothing is selected, so no plugin applies: the per-selection tier
+            // has nothing to key, gate or activate until something is.
+            _kindResolved = false;
+            _plugins = NoPlugins;
+            _tabSources = NoTabSources;
+            _tabs = NoTabs;
+            return;
+        }
+
+        var kind = ExplorerSelectionKindProjection.ToPluginKind(selected.Kind);
+        if (!_kindResolved || kind != _kind)
+        {
+            // The applicable set - and therefore the strip - depends only on the
+            // selection's kind, so moving between two trees rebuilds neither.
+            _kind = kind;
+            _kindResolved = true;
+            _plugins = Catalog.ForSelection(kind);
+            _tabSources = BuildTabSources(_plugins);
+            RebuildTabs();
+        }
+
+        // One dictionary for the panel's lifetime rather than one per selection:
+        // the view is re-mounted on every selection change (see the key), so a
+        // fresh instance reads whatever is currently filed here.
+        _viewParameters ??= new Dictionary<string, object?>(StringComparer.Ordinal);
+        _viewParameters[nameof(SelectionPluginViewBase.Selection)] = selected;
+    }
+
+    /// <summary>
+    /// Recomputes which surface is active and the key that re-mounts its view.
+    /// Called on every input that can change either - a new selection, a new
+    /// access decision, a tab switch - and never from the render path.
+    /// </summary>
+    private void Resolve()
+    {
+        var plugins = _plugins;
+        IExplorerPlugin? active = null;
+
+        // The retained surface when this selection's set contains it and it is
+        // reachable, otherwise the first reachable one. A denied surface is
+        // skipped rather than activated, so its content never renders - the
+        // per-selection analogue of the shell falling back to its home surface.
+        for (var i = 0; i < plugins.Count; i++)
+        {
+            var descriptor = plugins[i].Descriptor;
+            if (!AccessStore.Get(descriptor.PluginId).IsAllowed)
+            {
+                continue;
+            }
+
+            active ??= plugins[i];
+
+            if (_retainedPluginId is not null
+                && string.Equals(descriptor.PluginId, _retainedPluginId, StringComparison.Ordinal))
+            {
+                active = plugins[i];
+                break;
+            }
+        }
+
+        _activePlugin = active;
+        _activePluginId = active?.Descriptor.PluginId;
+        _emptyBodyMessage = plugins.Count == 0 ? NoSurfaceRegistered : NoSurfaceAvailable;
+
+        RebuildViewKey();
+    }
+
+    /// <summary>
+    /// Recomposes the strip from the current access decisions. Driven only by
+    /// the two inputs that can change it - the applicable plugin set and a
+    /// plugin-level decision - so switching tabs or moving between two trees
+    /// re-renders the existing strip rather than rebuilding it.
+    /// </summary>
+    private void RebuildTabs()
+    {
+        var sources = _tabSources;
+
+        var visible = 0;
+        for (var i = 0; i < sources.Length; i++)
+        {
+            if (AccessStore.Get(sources[i].PluginId).IsVisible)
+            {
+                visible++;
+            }
+        }
+
+        if (visible == 0)
+        {
+            _tabs = NoTabs;
+            return;
+        }
+
+        var tabs = new LatticeTabItem[visible];
+        var next = 0;
+        for (var i = 0; i < sources.Length; i++)
+        {
+            var source = sources[i];
+            var item = source.For(AccessStore.Get(source.PluginId).State);
+            if (item is not null)
+            {
+                tabs[next++] = item;
+            }
+        }
+
+        _tabs = tabs;
+    }
+
+    private void RebuildViewKey() =>
+        // Keyed on the selection and the active surface, so switching either
+        // re-mounts the view rather than reusing one holding the previous
+        // selection's state - which is also what cancels its in-flight loads.
+        _viewKey = _selected is null || _activePluginId is null
+            ? string.Empty
+            : $"{_selected.Kind}:{_selected.Id}:{_activePluginId}";
+
+    private async Task ActivateAsync(string pluginId)
+    {
+        // Membership is checked before the decision is read, so an id that does
+        // not belong to this selection's set can never reach the sign-in prompt
+        // or the retained preference.
+        if (Find(pluginId) is null)
         {
             return;
         }
 
-        _activeTab = tab;
+        var access = AccessStore.Get(pluginId);
+        if (access.State == ExplorerPluginAccessState.AuthenticationRequired)
+        {
+            // A recoverable state, so offer the remedy instead of an inert
+            // grey-out. The active surface stays where it is until the sign-in
+            // lands and the gate re-probes.
+            Login?.Open();
+            return;
+        }
 
-        // Retain the active tab as a durable preference.
-        await Preferences.SetAsync(TabStateKey, tab);
+        if (!access.IsAllowed || string.Equals(pluginId, _activePluginId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _retainedPluginId = pluginId;
+        Resolve();
+
+        // Retain the active surface as a durable preference.
+        await Preferences.SetAsync(SelectionPluginKeys.ActivePluginPreferenceKey, pluginId);
         StateHasChanged();
+    }
+
+    private IExplorerPlugin? Find(string pluginId)
+    {
+        var plugins = _plugins;
+        for (var i = 0; i < plugins.Count; i++)
+        {
+            if (string.Equals(plugins[i].Descriptor.PluginId, pluginId, StringComparison.Ordinal))
+            {
+                return plugins[i];
+            }
+        }
+
+        return null;
     }
 
     private void OnSelectionChanged()
     {
+        ApplySelection(Selection.Selected);
+
         // A programmatic navigation (for example clicking a covered tree or a
-        // member from the tag-index view) can seed a new active tab alongside the
-        // new selection. Re-apply the retained tab preference so the panel opens
-        // on the seeded tab rather than the one that was active before; in the
-        // ordinary case the preference still holds the last-used tab, so this is a
-        // no-op that preserves the "reopen on the same tab" behaviour.
-        if (_tabRestored && Preferences.IsLoaded)
+        // member from the tag-index view) can seed a new active surface alongside
+        // the new selection. Re-apply the retained preference so the panel opens
+        // on the seeded surface rather than the one that was active before; in the
+        // ordinary case the preference still holds the last-used surface, so this
+        // is a no-op that preserves the "reopen on the same tab" behaviour.
+        if (_restored && Preferences.IsLoaded)
         {
-            _activeTab = Preferences.GetOrDefault(TabStateKey, DetailTabs.Default);
+            _retainedPluginId = Preferences.GetOrDefault<string?>(
+                SelectionPluginKeys.ActivePluginPreferenceKey,
+                null);
         }
 
-        InvokeAsync(StateHasChanged);
+        Resolve();
+        InvokeAsync(_render);
     }
 
-    public void Dispose() => Selection.SelectionChanged -= OnSelectionChanged;
+    private void OnAccessChanged(ExplorerPluginAccessChange change)
+    {
+        // The strip reads only plugin-level decisions, and only for the surfaces
+        // this selection resolves to, so neither a scoped sub-capability nor
+        // another tier's plugin is a reason to re-resolve.
+        if (change.Key.Scope is not null || Find(change.Key.PluginId) is null)
+        {
+            return;
+        }
+
+        RebuildTabs();
+        Resolve();
+        InvokeAsync(_render);
+    }
+
+    public void Dispose()
+    {
+        Selection.SelectionChanged -= OnSelectionChanged;
+        AccessStore.Changed -= OnAccessChanged;
+    }
+
+    private static SelectionTab[] BuildTabSources(IReadOnlyList<IExplorerPlugin> plugins)
+    {
+        if (plugins.Count == 0)
+        {
+            return NoTabSources;
+        }
+
+        var sources = new SelectionTab[plugins.Count];
+        for (var i = 0; i < plugins.Count; i++)
+        {
+            sources[i] = new SelectionTab(plugins[i].Descriptor);
+        }
+
+        return sources;
+    }
+
+    /// <summary>
+    /// One surface's pre-composed strip entries: the tab it renders in each of
+    /// the three visible access states, built once when the applicable plugin
+    /// set changes. A rebuild after a probe then picks one of the three instead
+    /// of composing a tab and two tooltips per surface per access change.
+    /// </summary>
+    private sealed class SelectionTab
+    {
+        private readonly LatticeTabItem _allowed;
+        private readonly LatticeTabItem _denied;
+        private readonly LatticeTabItem _signInRequired;
+
+        public SelectionTab(ExplorerPluginDescriptor descriptor)
+        {
+            PluginId = descriptor.PluginId;
+
+            _allowed = new LatticeTabItem(PluginId, descriptor.Label);
+            _denied = new LatticeTabItem(PluginId, descriptor.Label)
+            {
+                IsEnabled = false,
+                Description = $"{descriptor.Label} is not available for your account.",
+            };
+            _signInRequired = new LatticeTabItem(PluginId, descriptor.Label)
+            {
+                Description = $"{descriptor.Label} requires you to sign in.",
+            };
+        }
+
+        public string PluginId { get; }
+
+        /// <summary>
+        /// The strip entry for <paramref name="state"/>, or <see langword="null"/>
+        /// when the surface renders no entry at all because its capability is
+        /// absent from this cluster.
+        /// </summary>
+        public LatticeTabItem? For(ExplorerPluginAccessState state) => state switch
+        {
+            ExplorerPluginAccessState.Allowed => _allowed,
+            ExplorerPluginAccessState.AuthenticationRequired => _signInRequired,
+            ExplorerPluginAccessState.Unavailable => null,
+            _ => _denied,
+        };
+    }
 }

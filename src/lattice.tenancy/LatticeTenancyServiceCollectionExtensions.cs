@@ -341,6 +341,13 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.AddOptions<TenantObservabilityOptions>();
         builder.Services.TryAddSingleton<TenantObservabilitySource>();
         builder.Services.TryAddSingleton<ITenantObservabilityView, TenantObservabilityView>();
+
+        // The by-id usage-reading seam a control facade projects a tenant's quota
+        // panel from. Unlike ITenantObservabilityView above it performs no
+        // visibility check of its own - it is engine state keyed by tenant id,
+        // exactly as ITenantRegistry is - so every consumer must authorize the
+        // caller against the requested tenant at its own narrowest seam first.
+        builder.Services.TryAddSingleton<ITenantUsageReader, TenantUsageReader>();
         builder.Services.TryAddSingleton<TenantObservabilityPublisher>();
         // Register the shared publisher singleton as a hosted service. AddSingleton
         // (not TryAddEnumerable) is required here: the host resolves IHostedService as

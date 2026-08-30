@@ -56,49 +56,49 @@ internal static class ScalingSignalGaugeRegistry
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.ScaleValueName,
-                static () => Volatile.Read(ref _scaleValue),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _scaleValue)),
                 unit: "{replica}",
                 description: "Smoothed, scale-in-gated replica-demand scalar an autoscaler should act on.");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.RawScaleValueName,
-                static () => Volatile.Read(ref _rawScaleValue),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _rawScaleValue)),
                 unit: "{replica}",
                 description: "Raw, un-smoothed replica-demand scalar before smoothing and scale-in gating.");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.ComputeActivationPressureName,
-                static () => Volatile.Read(ref _activationPressure),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _activationPressure)),
                 unit: "1",
                 description: "Normalised grain-activation compute pressure (0.0 idle to 1.0 saturated).");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.ComputeResourcePressureName,
-                static () => Volatile.Read(ref _resourcePressure),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _resourcePressure)),
                 unit: "1",
                 description: "Normalised host-resource compute pressure (0.0 idle to 1.0 saturated).");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.ComputeWalDispatchPressureName,
-                static () => Volatile.Read(ref _walDispatchPressure),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _walDispatchPressure)),
                 unit: "1",
                 description: "Normalised WAL-dispatch compute pressure (0.0 idle to 1.0 saturated).");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.ComputeReplicasName,
-                static () => Volatile.Read(ref _recommendedReplicas),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _recommendedReplicas)),
                 unit: "{replica}",
                 description: "Recommended silo replica count honouring the replica floor.");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.StorageAccountsOverThresholdName,
-                static () => Volatile.Read(ref _accountsOverThreshold),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _accountsOverThreshold)),
                 unit: "{account}",
                 description: "WAL catalogue keys whose retained bytes are over the advisory threshold.");
 
             meter.CreateObservableGauge(
                 LatticeScalingMetrics.StorageRebalanceRecommendationsName,
-                static () => Volatile.Read(ref _rebalanceRecommendations),
+                static () => LatticeTenantLabel.PlatformMeasurement(Volatile.Read(ref _rebalanceRecommendations)),
                 unit: "1",
                 description: "1 when a WAL rebalance is recommended, otherwise 0.");
 

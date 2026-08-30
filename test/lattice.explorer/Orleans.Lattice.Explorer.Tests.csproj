@@ -29,10 +29,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.explorer\Core\Orleans.Lattice.Explorer.Core.csproj" />
-    <ProjectReference Include="..\..\src\lattice.explorer\Backup\Orleans.Lattice.Explorer.Backup.csproj" />
-    <ProjectReference Include="..\..\src\lattice.explorer\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Backups\Orleans.Lattice.Explorer.Backup.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Tenancy\Orleans.Lattice.Explorer.Plugins.Tenancy.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Tenants\Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\MyTenant\Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Tenancy\Orleans.Lattice.Explorer.Plugins.Tenancy.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Telemetry\Orleans.Lattice.Explorer.Plugins.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\UI\Orleans.Lattice.Explorer.UI.csproj" />
-    <ProjectReference Include="..\..\src\lattice.explorer\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <ProjectReference Include="..\..\src\lattice.explorer\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
     <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
   </ItemGroup>

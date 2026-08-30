@@ -187,7 +187,7 @@ internal sealed class LatticeLockGrain(
 
             if (request.MaxWait == TimeSpan.Zero)
             {
-                LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "timeout"));
+                LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "timeout"), LatticeTenantLabel.Platform);
                 throw new TimeoutException(
                     $"Lock '{LockName}' is held and a non-blocking acquire (MaxWait = 0) could not be granted.");
             }
@@ -225,7 +225,7 @@ internal sealed class LatticeLockGrain(
                 return lease;
             }
 
-            LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "unavailable"));
+            LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "unavailable"), LatticeTenantLabel.Platform);
             return null;
         }
         finally
@@ -285,7 +285,7 @@ internal sealed class LatticeLockGrain(
             }
 
             DisposeLeaseTimer();
-            LatticeMetrics.LockReleased.Add(1);
+            LatticeMetrics.LockReleased.Add(1, LatticeTenantLabel.Platform);
 
             if (_waiters.Count > 0)
             {
@@ -334,7 +334,7 @@ internal sealed class LatticeLockGrain(
         if (LockAdmissionCore.ReclaimIfExpired(ref _core, nowTicks))
         {
             DisposeLeaseTimer();
-            LatticeMetrics.LockLeaseReclaimed.Add(1);
+            LatticeMetrics.LockLeaseReclaimed.Add(1, LatticeTenantLabel.Platform);
         }
 
         if (!_core.IsHeld && _waiters.Count > 0)
@@ -392,8 +392,8 @@ internal sealed class LatticeLockGrain(
 
     private static void RecordGranted(double waitedMs)
     {
-        LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "granted"));
-        LatticeMetrics.LockAcquireWait.Record(waitedMs);
+        LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "granted"), LatticeTenantLabel.Platform);
+        LatticeMetrics.LockAcquireWait.Record(waitedMs, LatticeTenantLabel.Platform);
     }
 
     /// <summary>
@@ -507,7 +507,7 @@ internal sealed class LatticeLockGrain(
             }
 
             DisposeWaiterTimeout(waiter);
-            LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "timeout"));
+            LatticeMetrics.LockAcquired.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, "timeout"), LatticeTenantLabel.Platform);
             waiter.Completion.TrySetException(new TimeoutException(
                 $"Acquiring lock '{LockName}' timed out before the caller reached the head of the FIFO queue."));
         }

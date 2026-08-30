@@ -1,0 +1,59 @@
+@*
+    The Backups plugin's view: the area frame, the sub-tab strip, and the
+    dialogs. Every region of the surface is its own component, and every piece
+    of state and every operation lives in this component's partials, so no file
+    in the plugin carries more than one concern.
+
+    The panel takes exactly one service from the host - the per-plugin host
+    context factory - and resolves its declared IBackupsDomain from the context
+    it returns, so its reach is what BackupsAreaPlugin declares and nothing more
+    (epic decision D3).
+*@
+
+<section class="lx-backups" aria-label="Backups">
+    <header class="lx-backups-header">
+        <button type="button" class="lx-btn" disabled="@Busy" @onclick="ReloadAsync">Refresh</button>
+    </header>
+
+    @if (LastResult is { } result)
+    {
+        <p class="lx-backups-result @ResultClass(result.Status)" role="status">@result.Message</p>
+    }
+
+    @*
+        aria-selected takes the literal string "true" or "false": it is an
+        enumerated ARIA attribute, not an HTML boolean one. Handing Blazor a bool
+        emits aria-selected="" for the active tab and omits the attribute
+        entirely for the others, so a screen-reader user cannot tell which tab is
+        selected. Before the restore completes neither tab is active, and both
+        must then say "false" rather than say nothing.
+    *@
+    <div class="lx-tabstrip" role="tablist" aria-label="Backups tabs">
+        <button type="button" role="tab"
+                class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "is-active" : null)"
+                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "true" : "false")"
+                @onclick="@(() => SetSubTabAsync(BackupsSubTab.New))">New Backup</button>
+        <button type="button" role="tab"
+                class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "is-active" : null)"
+                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "true" : "false")"
+                @onclick="@(() => SetSubTabAsync(BackupsSubTab.Existing))">Existing Backups</button>
+    </div>
+
+    @if (!_subTabRestored)
+    {
+        <div class="lx-backups-body" aria-busy="true"></div>
+    }
+    else if (_activeSubTab == BackupsSubTab.New)
+    {
+        <BackupsCaptureForm Owner="this" />
+    }
+    else
+    {
+        <BackupsCatalogue Owner="this" />
+    }
+
+    <BackupsDeleteDialog Owner="this" />
+    <BackupsRestoreDialog Owner="this" />
+    <BackupsScheduleDialog Owner="this" />
+    <BackupsHealthDialog Owner="this" />
+</section>

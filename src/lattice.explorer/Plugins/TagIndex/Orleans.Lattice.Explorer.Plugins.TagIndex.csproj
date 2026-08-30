@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.TagIndex</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.TagIndex</PackageId>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>9.4.0</Version>
+    <Description>The tag-index browsing per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: the trees an index covers, the tags it carries, and the live members of a chosen tag, each navigable back into the tree that holds them. It applies to tag-index selections alone, so a membership tree resolves to it through ordinary plugin applicability rather than a special case in the shell.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Selection\Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+  </ItemGroup>
+
+</Project>

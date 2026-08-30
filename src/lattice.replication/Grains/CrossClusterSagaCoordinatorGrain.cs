@@ -244,7 +244,8 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
             LatticeReplicationMetrics.SagaPhaseDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
                 new KeyValuePair<string, object?>(
-                    LatticeReplicationMetrics.TagPhase, LatticeReplicationMetrics.SagaPhasePrepare));
+                    LatticeReplicationMetrics.TagPhase, LatticeReplicationMetrics.SagaPhasePrepare),
+                LatticeTenantLabel.Platform);
         }
     }
 
@@ -342,7 +343,8 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds,
                 new KeyValuePair<string, object?>(
                     LatticeReplicationMetrics.TagPhase,
-                    commit ? LatticeReplicationMetrics.SagaPhaseCommit : LatticeReplicationMetrics.SagaPhaseAbort));
+                    commit ? LatticeReplicationMetrics.SagaPhaseCommit : LatticeReplicationMetrics.SagaPhaseAbort),
+                LatticeTenantLabel.Platform);
         }
     }
 

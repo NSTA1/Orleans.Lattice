@@ -210,21 +210,21 @@ public sealed class AutoTrainingCompressionDictionaryProvider
             var elapsed = _time.GetUtcNow().UtcTicks - lastTicks;
             if (elapsed < _options.MinTrainingInterval.Ticks)
             {
-                LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedCadence);
+                LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedCadence, LatticeTenantLabel.Platform);
                 return false;
             }
         }
 
         if (_reservoir.SampleCount < _options.MinSamplesToTrain)
         {
-            LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedInsufficientSamples);
+            LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedInsufficientSamples, LatticeTenantLabel.Platform);
             return false;
         }
 
         if (Interlocked.CompareExchange(ref _trainingInFlight, 1, 0) != 0)
         {
             // Another pass is already running; treat as a cadence skip.
-            LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedCadence);
+            LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedCadence, LatticeTenantLabel.Platform);
             return false;
         }
 
@@ -245,19 +245,19 @@ public sealed class AutoTrainingCompressionDictionaryProvider
             {
                 // The builder rejects a too-small / too-homogeneous corpus.
                 // Treat as "no dictionary this cycle"; never propagate.
-                LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedInsufficientSamples);
+                LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedInsufficientSamples, LatticeTenantLabel.Platform);
                 return false;
             }
 
             if (dictionary is null || dictionary.Length == 0)
             {
-                LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedInsufficientSamples);
+                LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeSkippedInsufficientSamples, LatticeTenantLabel.Platform);
                 return false;
             }
 
             var hash = ComputeHash(dictionary);
 
-            LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeTrained);
+            LatticeMetrics.CompressionDictionaryTrainingRuns.Add(1, LatticeMetrics.OutcomeTrained, LatticeTenantLabel.Platform);
 
             // Probe the trained-vs-baseline compression ratio before publishing.
             RecordRatioProbe(samples, dictionary);
@@ -441,8 +441,8 @@ public sealed class AutoTrainingCompressionDictionaryProvider
 
         if (baselineBytes > 0)
         {
-            LatticeMetrics.CompressionDictionaryTrainedBytesIn.Add(baselineBytes);
-            LatticeMetrics.CompressionDictionaryTrainedBytesOut.Add(trainedBytes);
+            LatticeMetrics.CompressionDictionaryTrainedBytesIn.Add(baselineBytes, LatticeTenantLabel.Platform);
+            LatticeMetrics.CompressionDictionaryTrainedBytesOut.Add(trainedBytes, LatticeTenantLabel.Platform);
         }
     }
 
@@ -482,7 +482,7 @@ public sealed class AutoTrainingCompressionDictionaryProvider
             yield break;
         }
 
-        yield return new Measurement<long>(current.CurrentDictionaryId);
+        yield return new Measurement<long>(current.CurrentDictionaryId, LatticeTenantLabel.Platform);
     }
 
     private static IEnumerable<Measurement<long>> ObserveReservoirFill()
@@ -493,7 +493,7 @@ public sealed class AutoTrainingCompressionDictionaryProvider
             yield break;
         }
 
-        yield return new Measurement<long>(current._reservoir.SampleCount, LatticeMetrics.ReservoirFillSamplesTag);
-        yield return new Measurement<long>(current._reservoir.TotalBytes, LatticeMetrics.ReservoirFillBytesTag);
+        yield return new Measurement<long>(current._reservoir.SampleCount, LatticeMetrics.ReservoirFillSamplesTag, LatticeTenantLabel.Platform);
+        yield return new Measurement<long>(current._reservoir.TotalBytes, LatticeMetrics.ReservoirFillBytesTag, LatticeTenantLabel.Platform);
     }
 }

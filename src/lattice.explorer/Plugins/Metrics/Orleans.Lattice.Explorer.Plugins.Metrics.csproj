@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.Metrics</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Metrics</PackageId>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>9.4.0</Version>
+    <Description>The live-metrics per-selection surface for the Orleans.Lattice Explorer, as a self-contained plugin: the lifecycle, shard, key and depth tiles plus the per-shard hotness table for the selected tree or view. It reaches the cluster only through the IMetricsSurface domain contract it declares, and ships its own scoped stylesheet over the Explorer design-system tokens.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Selection\Orleans.Lattice.Explorer.Plugins.Selection.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+  </ItemGroup>
+
+</Project>

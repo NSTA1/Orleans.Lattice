@@ -1,0 +1,203 @@
+@*
+    The inspector for the selected key: its metadata, its rendered value or - for
+    a typed CRDT - the decoded current member set, plus the live indicator and
+    the hand-off into the revision-timeline surface.
+
+    The History button names a sibling surface by intent only; the parent turns
+    that into a request by plugin id, so this package never references it.
+*@
+@if (SelectedKey is null)
+{
+    <div class="lx-selection-state">Select a key to inspect its value.</div>
+}
+else if (Loading)
+{
+    <div class="lx-selection-state">Loading value...</div>
+}
+else if (Error is not null)
+{
+    <div class="lx-selection-state lx-selection-state-error">
+        <span>@Error</span>
+        <button type="button" class="lx-btn-link" @onclick="OnRetry">Try again</button>
+    </div>
+}
+else if (Entry is null)
+{
+    <div class="lx-selection-state">Key not found (it may have changed since the scan).</div>
+}
+else
+{
+    var d = Entry;
+    <div class="lx-data-detail-head">
+        <code class="lx-data-detail-key">@d.Key</code>
+        @if (d.CrdtShape is null && Rendered is not null)
+        {
+            <span class="lx-data-format">@Rendered.Format.ToString().ToLowerInvariant()</span>
+        }
+        @if (ShowLiveIndicator)
+        {
+            <span class="lx-data-live" title="This entry refreshes automatically as it is mutated. The live feed only carries changes emitted while this surface is open.">
+                <span class="lx-data-live-dot lx-data-live-dot-@DotClass"></span>
+                <span class="lx-data-live-label">@StateLabel</span>
+            </span>
+        }
+        @if (CanShowHistory)
+        {
+            <button type="button" class="lx-btn lx-data-history-btn @(ShowHistory ? "is-active" : null)"
+                    @onclick="OnToggleHistory">
+                @(ShowHistory ? "Hide history" : "History")
+            </button>
+        }
+    </div>
+
+    @if (LiveError is not null)
+    {
+        <div class="lx-data-live-error">Live updates stopped: @LiveError</div>
+    }
+
+    @if (ShowHistory && HistoryViewType is not null)
+    {
+        @* The revision timeline for this key, rendered inline exactly where it
+           has always been. It is contributed by its own package through the
+           nested-surface registry, so this surface renders a Type it never
+           names. *@
+        <DynamicComponent @key="HistoryKey" Type="HistoryViewType" Parameters="HistoryParameters" />
+    }
+    else
+    {
+        <dl class="lx-data-meta">
+            <div><dt>Value length</dt><dd>@d.ValueLength.ToString("N0") bytes</dd></div>
+            <div><dt>Timestamp</dt><dd>@FormatHlc(d)</dd></div>
+            <div><dt>Tombstone</dt><dd>@(d.IsTombstone ? "yes" : "no")</dd></div>
+            <div><dt>Expires</dt><dd>@FormatExpiry(d)</dd></div>
+            @if (d.CrdtShape is not null)
+            {
+                <div><dt>CRDT shape</dt><dd>@d.CrdtShape</dd></div>
+            }
+        </dl>
+
+        @if (d.CrdtShape is null && Rendered?.Note is not null)
+        {
+            <p class="lx-data-note">@Rendered.Note</p>
+        }
+
+        @if (d.CrdtShape is not null)
+        {
+            @* A typed CRDT renders its decoded current state - the live member set
+               of the folded value - instead of the opaque serialized blob. Only
+               present members are shown; removed elements are excluded
+               server-side. *@
+            @if (d.CurrentMembers.Count > 0)
+            {
+                <ul class="lx-data-members">
+                    @foreach (var member in d.CurrentMembers)
+                    {
+                        <li class="lx-data-member">
+                            <code class="lx-data-member-element">@MemberElementText(member)</code>
+                            <span class="lx-data-member-replica">@MemberProvenance(member)</span>
+                        </li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <p class="lx-data-muted">Empty CRDT state - no current members.</p>
+            }
+        }
+        else if (Rendered is null || Rendered.Format == ValueFormat.Empty)
+        {
+            <p class="lx-data-muted">No value bytes.</p>
+        }
+        else
+        {
+            <pre class="lx-data-value lx-data-value-@Rendered.Format.ToString().ToLowerInvariant()">@Rendered.Content</pre>
+        }
+    }
+}
+
+@code {
+    /// <summary>The key being inspected, or <see langword="null"/> when none is.</summary>
+    [Parameter] public string? SelectedKey { get; set; }
+
+    /// <summary>The loaded entry, or <see langword="null"/> when the key was absent.</summary>
+    [Parameter] public DataEntry? Entry { get; set; }
+
+    /// <summary>The rendered form of the entry's value bytes.</summary>
+    [Parameter] public RenderedValue? Rendered { get; set; }
+
+    /// <summary>Whether the per-key read is in flight.</summary>
+    [Parameter] public bool Loading { get; set; }
+
+    /// <summary>The per-key read error to surface, or <see langword="null"/>.</summary>
+    [Parameter] public string? Error { get; set; }
+
+    /// <summary>The live-tail error to surface, or <see langword="null"/>.</summary>
+    [Parameter] public string? LiveError { get; set; }
+
+    /// <summary>Whether a live follower is registered, so the indicator is meaningful.</summary>
+    [Parameter] public bool ShowLiveIndicator { get; set; }
+
+    /// <summary>The connection health the live indicator mirrors.</summary>
+    [Parameter] public LatticeConnectionState ConnectionState { get; set; }
+
+    /// <summary>
+    /// The nested revision-timeline view to render behind the History button, or
+    /// <see langword="null"/> when no head registered one - in which case no
+    /// button is offered.
+    /// </summary>
+    [Parameter] public Type? HistoryViewType { get; set; }
+
+    /// <summary>The parameter set handed to the nested timeline.</summary>
+    [Parameter] public IDictionary<string, object?>? HistoryParameters { get; set; }
+
+    /// <summary>The key that re-mounts the nested timeline when the inspected key changes.</summary>
+    [Parameter] public string HistoryKey { get; set; } = string.Empty;
+
+    /// <summary>Whether the panel currently shows the timeline instead of the value view.</summary>
+    [Parameter] public bool ShowHistory { get; set; }
+
+    /// <summary>Invoked to retry a failed per-key read.</summary>
+    [Parameter] public EventCallback OnRetry { get; set; }
+
+    /// <summary>Invoked to swap between the value view and the nested timeline.</summary>
+    [Parameter] public EventCallback OnToggleHistory { get; set; }
+
+    private bool CanShowHistory => HistoryViewType is not null;
+
+    private string DotClass => ConnectionState switch
+    {
+        LatticeConnectionState.Connected => "on",
+        LatticeConnectionState.Connecting or LatticeConnectionState.Reconnecting => "warn",
+        _ => "down",
+    };
+
+    private string StateLabel => ConnectionState switch
+    {
+        LatticeConnectionState.Connected => "Live",
+        LatticeConnectionState.Connecting => "Connecting",
+        LatticeConnectionState.Reconnecting => "Reconnecting",
+        _ => "Offline",
+    };
+
+    private static string MemberElementText(DataCrdtMember member) =>
+        member.ElementFormat == ValueFormat.Empty ? "(empty)" : member.ElementText;
+
+    private static string MemberProvenance(DataCrdtMember member) =>
+        member.ReplicaId.Length == 0 ? string.Empty : $"{member.ReplicaId} (dot {member.Ordinal})";
+
+    private static string FormatHlc(DataEntry entry)
+    {
+        if (entry.Hlc.WallClockTicks <= 0)
+        {
+            return "-";
+        }
+
+        var wall = new DateTime(entry.Hlc.WallClockTicks, DateTimeKind.Utc).ToLocalTime();
+        return $"{wall:yyyy-MM-dd HH:mm:ss} (+{entry.Hlc.Counter})";
+    }
+
+    private static string FormatExpiry(DataEntry entry) =>
+        entry.ExpiresAtTicks <= 0
+            ? "never"
+            : new DateTime(entry.ExpiresAtTicks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+}

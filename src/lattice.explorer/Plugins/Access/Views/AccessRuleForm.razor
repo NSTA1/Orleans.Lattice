@@ -1,0 +1,134 @@
+@using Orleans.Lattice.Auth
+
+@*
+    The rule authoring form. Beyond an ordinary tree/prefix/key rule it carries
+    two affordances that supply their own scope:
+
+      - access-administration delegation: a whole-tree Admin Allow rule on the
+        reserved policy tree, so the operator never picks the reserved tree; and
+      - an all-trees (cluster-wide) grant over the "*" sentinel, where the
+        operator still chooses operations and effect.
+
+    Both are recorded by the server regardless, and enforced only when the
+    cluster's corresponding option is enabled - which is what the posture badges
+    above the form report.
+*@
+
+<div class="lxa-formcol">
+    <h3 class="lxa-title">@(State.EditingExistingRule ? "Edit rule" : "New rule")</h3>
+    <label class="lxa-field">
+        <span>Rule id</span>
+        <input type="text" value="@State.RuleIdInput"
+               disabled="@(State.Busy || !State.Allowed || State.EditingExistingRule)"
+               @oninput="e => State.RuleIdInput = e.Value?.ToString() ?? string.Empty"
+               placeholder="rule id" />
+    </label>
+    <label class="lxa-field">
+        <span>Subject</span>
+        <SubjectPicker Domain="State.Domain"
+                       Kind="State.RuleSubjectKind"
+                       KindChanged="OnSubjectKindChanged"
+                       SubjectId="@State.RuleSubjectId"
+                       SubjectIdChanged="OnSubjectIdChanged"
+                       Disabled="@(State.Busy || !State.Allowed)" />
+    </label>
+    <label class="lxa-field lxa-check">
+        <input type="checkbox" checked="@State.RuleDelegateAccessAdmin"
+               disabled="@(State.Busy || !State.Allowed || State.EditingExistingRule || State.RuleAllTrees)"
+               @onchange="e => State.RuleDelegateAccessAdmin = (bool)(e.Value ?? false)" />
+        <span>Access administration (delegate)</span>
+    </label>
+    <label class="lxa-field lxa-check">
+        <input type="checkbox" checked="@State.RuleAllTrees"
+               disabled="@(State.Busy || !State.Allowed || State.EditingExistingRule || State.RuleDelegateAccessAdmin)"
+               @onchange="e => State.RuleAllTrees = (bool)(e.Value ?? false)" />
+        <span>All trees (cluster-wide)</span>
+    </label>
+    @if (State.RuleDelegateAccessAdmin)
+    {
+        <p class="lxa-note">@AccessCreateModel.AccessAdministrationHelpText</p>
+        <label class="lxa-field">
+            <span>Target</span>
+            <span class="lxa-treevalue">
+                access administration (@AccessCreateModel.AccessAdministrationTreeId), whole tree, Admin, Allow
+            </span>
+        </label>
+    }
+    else
+    {
+        @if (State.RuleAllTrees)
+        {
+            <p class="lxa-note">@AccessCreateModel.AllTreesHelpText</p>
+            <label class="lxa-field">
+                <span>Scope</span>
+                <span class="lxa-treevalue">all trees (@LatticeScope.ClusterWideTreeId), whole tree</span>
+            </label>
+        }
+        else
+        {
+            <label class="lxa-field">
+                <span>Tree</span>
+                <span class="lxa-treevalue">
+                    @(State.SelectedTreeId ?? "Select a tree from the list")
+                </span>
+            </label>
+            <label class="lxa-field">
+                <span>Scope</span>
+                <span class="lxa-inline">
+                    <select value="@State.RuleScopeKind" disabled="@(State.Busy || !State.Allowed)"
+                            @onchange="e => State.RuleScopeKind = Enum.Parse<LatticeScopeKind>(e.Value?.ToString() ?? nameof(LatticeScopeKind.Tree))">
+                        <option value="@nameof(LatticeScopeKind.Tree)">Whole tree</option>
+                        <option value="@nameof(LatticeScopeKind.Prefix)">Prefix</option>
+                        <option value="@nameof(LatticeScopeKind.Key)">Key</option>
+                    </select>
+                    @if (State.RuleScopeKind != LatticeScopeKind.Tree)
+                    {
+                        <input type="text" value="@State.RuleScopeKeyOrPrefix"
+                               disabled="@(State.Busy || !State.Allowed)"
+                               @oninput="e => State.RuleScopeKeyOrPrefix = e.Value?.ToString() ?? string.Empty"
+                               placeholder="@(State.RuleScopeKind == LatticeScopeKind.Key ? "key" : "prefix")" />
+                    }
+                </span>
+            </label>
+        }
+        <fieldset class="lxa-ops" disabled="@(State.Busy || !State.Allowed)">
+            <legend>Operations</legend>
+            @foreach (var op in AccessRuleFormat.Operations)
+            {
+                var flag = op.Flag;
+                <label class="lxa-opcheck">
+                    <input type="checkbox" checked="@State.HasRuleOperation(flag)"
+                           @onchange="e => State.ToggleOperation(flag, (bool)(e.Value ?? false))" />
+                    <span>@op.Label</span>
+                </label>
+            }
+        </fieldset>
+        <label class="lxa-field">
+            <span>Effect</span>
+            <select value="@State.RuleEffect" disabled="@(State.Busy || !State.Allowed)"
+                    @onchange="e => State.RuleEffect = Enum.Parse<LatticeEffect>(e.Value?.ToString() ?? nameof(LatticeEffect.Allow))">
+                <option value="@nameof(LatticeEffect.Allow)">Allow</option>
+                <option value="@nameof(LatticeEffect.Deny)">Deny</option>
+            </select>
+        </label>
+    }
+    <div class="lxa-actions">
+        <button type="button" class="lx-btn"
+                disabled="@(State.Busy || !State.Allowed || !State.CanSaveRule())"
+                @onclick="State.SaveRuleAsync">Save</button>
+        <button type="button" class="lx-btn" disabled="@State.Busy"
+                @onclick="State.CancelRuleForm">Cancel</button>
+        <button type="button" class="lx-btn lxa-danger"
+                disabled="@(State.Busy || !State.Allowed || !State.EditingExistingRule)"
+                @onclick="State.DeleteRuleAsync">Delete</button>
+    </div>
+</div>
+
+@code {
+    /// <summary>The Access workspace this form reads and drives.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+
+    private void OnSubjectKindChanged(LatticeSubjectSelectorKind kind) => State.RuleSubjectKind = kind;
+
+    private void OnSubjectIdChanged(string id) => State.RuleSubjectId = id;
+}

@@ -1,0 +1,241 @@
+/*
+  Orleans.Lattice Explorer - design token layer.
+
+  This file is the single definition of every design value the Explorer and its
+  plugins are allowed to spend: spacing, type scale, colour, elevation, motion,
+  radius, density, and touch-target sizing. A plugin stylesheet references a
+  token; it never restates a literal.
+
+  Two rules keep the layer honest:
+
+  1. Nothing here declares a width media query. Breakpoints live in exactly one
+     file, `lattice-breakpoints.css`, and a hygiene guard fails the build if a
+     width media query appears anywhere else.
+  2. Every value below is declared here outright. The layer used to derive each
+     colour from a theme variable in the `app.css` monolith, with the literal as
+     a fallback; issue #1770 deleted that monolith, which left the indirection
+     resolving to its own fallback on every head. The fallbacks - the values now
+     inlined below - are byte-for-byte what the monolith declared, so nothing
+     changed visually when it went.
+
+  Theming works exactly as it did before: `data-theme="light"` on <html> selects
+  the light palette, the dark palette is the default, and a future high-contrast
+  palette slots in the same way.
+*/
+
+:root {
+    /* --------------------------------------------------------------------
+       Spacing scale. A 4px base, doubling loosely, so a layout composes from
+       a small set of rhythmic steps rather than ad-hoc rem values.
+       -------------------------------------------------------------------- */
+    --lx-space-0: 0;
+    --lx-space-1: 0.125rem; /*  2px */
+    --lx-space-2: 0.25rem;  /*  4px */
+    --lx-space-3: 0.375rem; /*  6px */
+    --lx-space-4: 0.5rem;   /*  8px */
+    --lx-space-5: 0.75rem;  /* 12px */
+    --lx-space-6: 1rem;     /* 16px */
+    --lx-space-7: 1.25rem;  /* 20px */
+    --lx-space-8: 1.5rem;   /* 24px */
+    --lx-space-9: 2rem;     /* 32px */
+    --lx-space-10: 3rem;    /* 48px */
+
+    /* --------------------------------------------------------------------
+       Type scale.
+       -------------------------------------------------------------------- */
+    --lx-font-ui: "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --lx-font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+
+    --lx-text-micro: 0.7rem;
+    --lx-text-caption: 0.78rem;
+    --lx-text-small: 0.85rem;
+    --lx-text-body: 0.9rem;
+    --lx-text-base: 1rem;
+    --lx-text-title: 1.15rem;
+    --lx-text-display: 1.4rem;
+
+    --lx-leading-tight: 1.25;
+    --lx-leading-normal: 1.5;
+
+    --lx-weight-regular: 400;
+    --lx-weight-medium: 500;
+    --lx-weight-semibold: 600;
+
+    --lx-tracking-tight: -0.01em;
+    --lx-tracking-wide: 0.05em;
+
+    /* --------------------------------------------------------------------
+       Radius.
+       -------------------------------------------------------------------- */
+    --lx-radius-none: 0;
+    --lx-radius-sm: 4px;
+    --lx-radius-md: 6px;
+    --lx-radius-lg: 10px;
+    --lx-radius-pill: 999px;
+
+    /* --------------------------------------------------------------------
+       Motion. Durations and easings, so a component never invents a timing.
+       The `prefers-reduced-motion` rule in the breakpoint layer neutralises
+       all of them at once.
+       -------------------------------------------------------------------- */
+    --lx-motion-instant: 0ms;
+    --lx-motion-fast: 120ms;
+    --lx-motion-medium: 200ms;
+    --lx-motion-slow: 320ms;
+
+    --lx-motion-ease: ease;
+    --lx-motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
+    --lx-motion-ease-in: cubic-bezier(0.4, 0.14, 1, 1);
+
+    /* --------------------------------------------------------------------
+       Density. The breakpoint layer picks a default per breakpoint; a surface
+       overrides it with `data-lx-density` when it wants a different one.
+       -------------------------------------------------------------------- */
+    --lx-density-row-height: 2rem;
+    --lx-density-padding-block: var(--lx-space-3);
+    --lx-density-padding-inline: var(--lx-space-5);
+    --lx-density-gap: var(--lx-space-4);
+
+    /* --------------------------------------------------------------------
+       Touch targets. The compact breakpoint raises the minimum to the 44px
+       recommended for finger input; wider breakpoints keep the pointer-sized
+       control the desktop surfaces already use.
+       -------------------------------------------------------------------- */
+    --lx-target-min: 2rem;
+    --lx-target-min-touch: 2.75rem; /* 44px */
+
+    /* --------------------------------------------------------------------
+       Layering. One ordered scale, so a drawer can never end up under a scrim.
+       -------------------------------------------------------------------- */
+    --lx-layer-base: 0;
+    --lx-layer-raised: 10;
+    --lx-layer-sticky: 100;
+    --lx-layer-scrim: 200;
+    --lx-layer-drawer: 210;
+    --lx-layer-menu: 300;
+    --lx-layer-dialog: 400;
+
+    /* --------------------------------------------------------------------
+       Shell metrics used by more than one primitive.
+       -------------------------------------------------------------------- */
+    --lx-nav-sidebar-width: 20rem;
+    --lx-nav-drawer-width: 18rem;
+    --lx-nav-bar-height: 3.5rem;
+}
+
+/*
+  Colour, dark palette (the default).
+*/
+:root,
+:root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --lx-color-canvas: #0b0e14;
+    --lx-color-surface: #0f131c;
+    --lx-color-surface-raised: #131927;
+    --lx-color-surface-sunken: #0c1019;
+
+    --lx-color-border: #1e2532;
+    --lx-color-border-strong: #2b3545;
+    --lx-color-focus-ring: rgba(76, 194, 255, 0.35);
+
+    --lx-color-text: #d8dee9;
+    --lx-color-text-muted: #8a93a3;
+    --lx-color-text-dim: #5a6373;
+
+    --lx-color-accent: #4cc2ff;
+    --lx-color-accent-hover: #74d1ff;
+    --lx-color-accent-contrast: #04111c;
+
+    --lx-color-success: #3ad29f;
+    --lx-color-warning: #ffc857;
+    --lx-color-danger: #ff6b6b;
+
+    --lx-color-scrim: rgba(4, 7, 12, 0.72);
+    --lx-color-danger-surface: rgba(255, 107, 107, 0.08);
+    --lx-color-danger-border: rgba(255, 107, 107, 0.3);
+
+    /* Elevation. Dark surfaces read depth from shadow spread, not lightness. */
+    --lx-elevation-0: none;
+    --lx-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --lx-elevation-2: 0 4px 12px rgba(0, 0, 0, 0.45);
+    --lx-elevation-3: 0 8px 30px rgba(0, 0, 0, 0.55);
+}
+
+/* Colour, light palette. Applied only when a caller opts in with data-theme="light". */
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --lx-color-canvas: #f6f8fb;
+    --lx-color-surface: #ffffff;
+    --lx-color-surface-raised: #ffffff;
+    --lx-color-surface-sunken: #ffffff;
+
+    --lx-color-border: #dfe4ec;
+    --lx-color-border-strong: #c4ccd8;
+    --lx-color-focus-ring: rgba(20, 110, 180, 0.3);
+
+    --lx-color-text: #1b2330;
+    --lx-color-text-muted: #5a6473;
+    --lx-color-text-dim: #8a93a3;
+
+    --lx-color-accent: #1b73c4;
+    --lx-color-accent-hover: #155a9b;
+    --lx-color-accent-contrast: #ffffff;
+
+    --lx-color-success: #1a9c6e;
+    --lx-color-warning: #b07a16;
+    --lx-color-danger: #c92a2a;
+
+    --lx-color-scrim: rgba(20, 28, 40, 0.4);
+    --lx-color-danger-surface: rgba(201, 42, 42, 0.07);
+    --lx-color-danger-border: rgba(201, 42, 42, 0.3);
+
+    --lx-elevation-0: none;
+    --lx-elevation-1: 0 1px 2px rgba(20, 28, 40, 0.08);
+    --lx-elevation-2: 0 4px 12px rgba(20, 28, 40, 0.12);
+    --lx-elevation-3: 0 8px 30px rgba(20, 28, 40, 0.18);
+}
+
+/*
+  Density presets. A surface opts in with `data-lx-density="compact"` and every
+  primitive inside it tightens, because the primitives spend the density tokens
+  rather than their own padding literals.
+*/
+[data-lx-density="comfortable"] {
+    --lx-density-row-height: 2.75rem;
+    --lx-density-padding-block: var(--lx-space-5);
+    --lx-density-padding-inline: var(--lx-space-6);
+    --lx-density-gap: var(--lx-space-5);
+}
+
+[data-lx-density="cosy"] {
+    --lx-density-row-height: 2rem;
+    --lx-density-padding-block: var(--lx-space-3);
+    --lx-density-padding-inline: var(--lx-space-5);
+    --lx-density-gap: var(--lx-space-4);
+}
+
+[data-lx-density="compact"] {
+    --lx-density-row-height: 1.65rem;
+    --lx-density-padding-block: var(--lx-space-2);
+    --lx-density-padding-inline: var(--lx-space-4);
+    --lx-density-gap: var(--lx-space-3);
+}
+
+/*
+  Utility: content visible only to assistive technology. Used by the primitives
+  for the labels a sighted reader infers from layout, and available to plugins.
+*/
+.lx-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}

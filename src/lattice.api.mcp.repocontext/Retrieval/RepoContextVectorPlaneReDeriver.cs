@@ -187,7 +187,7 @@ internal sealed class RepoContextVectorPlaneReDeriver : IDisposable
                 "not a rebuildable derived vector tree; refusing auto re-derivation (fail-closed) and " +
                 "propagating the fault.",
                 treeName);
-            _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeRefused));
+            _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeRefused), LatticeTenantLabel.ForTree(treeName));
             return Task.CompletedTask;
         }
 
@@ -199,7 +199,7 @@ internal sealed class RepoContextVectorPlaneReDeriver : IDisposable
             "(durable projection checkpoint trimmed with no covering snapshot). Auto re-deriving the tree " +
             "from the store-of-record sources; the always-on gap scanner re-embeds every uncovered source.",
             treeName);
-        _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeObserved));
+        _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeObserved), LatticeTenantLabel.ForTree(treeName));
 
         // Single-flight per tree: a re-derivation already in flight is a no-op; a
         // concurrent observer awaits the same reset task.
@@ -241,7 +241,7 @@ internal sealed class RepoContextVectorPlaneReDeriver : IDisposable
                     treeName);
             }
 
-            _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeCompleted));
+            _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeCompleted), LatticeTenantLabel.ForTree(treeName));
             _logger.LogInformation(
                 "Repo-context vector plane: tree {Tree} re-derivation reset completed; the always-on gap " +
                 "scanner re-embeds every uncovered source from the store-of-record trees and files.",
@@ -249,7 +249,7 @@ internal sealed class RepoContextVectorPlaneReDeriver : IDisposable
         }
         catch (Exception ex)
         {
-            _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeFailed));
+            _counter.Add(1, new(TreeTagKey, treeName), new(OutcomeTagKey, OutcomeFailed), LatticeTenantLabel.ForTree(treeName));
             _logger.LogError(
                 ex,
                 "Repo-context vector plane: tree {Tree} re-derivation reset failed; the fault stands and " +

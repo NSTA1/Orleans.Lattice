@@ -249,6 +249,48 @@ internal static class TenantAdminTestSupport
     }
 
     /// <summary>
+    /// A substitutable <see cref="ITenantUsageReader"/> serving a fixed
+    /// tenant-to-reading map and a fixed enforcement scope. Every figure is a
+    /// hand-authored sample rather than a live sampler reading, so a usage test is
+    /// exact and never depends on timing, ordering, or the wall clock.
+    /// </summary>
+    internal sealed class FakeTenantUsageReader : ITenantUsageReader
+    {
+        private readonly Dictionary<string, TenantUsageReading> _readings = new(StringComparer.Ordinal);
+        private readonly TenantEnforcementScope _scope;
+
+        public FakeTenantUsageReader(TenantEnforcementScope scope = TenantEnforcementScope.GlobalConverged) =>
+            _scope = scope;
+
+        /// <summary>The tenant ids <see cref="ReadAsync"/> was called for, in order.</summary>
+        public List<string?> Reads { get; } = [];
+
+        /// <summary>Seeds a tenant's reading, built from fixed usage, quota, and overage samples.</summary>
+        public FakeTenantUsageReader With(
+            TenantId tenant,
+            LocalUsageSample usage,
+            TenantQuotas quotas,
+            TenantOverageSample meteredOverage = default,
+            TenantEnforcementScope? scope = null)
+        {
+            _readings[tenant.Value!] = new TenantUsageReading(
+                new TenantObservabilitySnapshot(tenant, usage, quotas, meteredOverage),
+                scope ?? _scope);
+            return this;
+        }
+
+        public TenantEnforcementScope ResolveScope(TenantId tenant) => _scope;
+
+        public Task<TenantUsageReading?> ReadAsync(TenantId tenant, CancellationToken cancellationToken = default)
+        {
+            Reads.Add(tenant.Value);
+            return Task.FromResult(_readings.TryGetValue(tenant.Value ?? string.Empty, out var reading)
+                ? (TenantUsageReading?)reading
+                : null);
+        }
+    }
+
+    /// <summary>
     /// An <see cref="ITenantRegistry"/> double that models the real
     /// <c>LatticeTenantRegistry.PutMergeAsync</c> CRDT join rather than a
     /// last-writer-wins overwrite: a read hands out an independent

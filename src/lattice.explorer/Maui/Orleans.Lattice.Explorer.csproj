@@ -57,6 +57,32 @@
 
   <ItemGroup>
     <ProjectReference Include="..\UI\Orleans.Lattice.Explorer.UI.csproj" />
+    <!--
+      The Backups plugin is now a self-contained package that the shared UI
+      library no longer references, so a head that surfaces the Backups area
+      takes the dependency itself. That is the whole of a head's opt-in.
+    -->
+    <ProjectReference Include="..\Plugins\Backups\Orleans.Lattice.Explorer.Backup.csproj" />
+    <!--
+      The Access plugin is likewise self-contained (services, Razor views, and
+      its own stylesheet), so the shared UI library no longer references it and
+      a head takes it directly. Withholding this reference ships no Access area.
+    -->
+    <ProjectReference Include="..\Plugins\Access\Orleans.Lattice.Explorer.Access.csproj" />
+    <!--
+      The Schema plugin is referenced but deliberately NOT registered (see
+      MauiProgram): the desktop head wires the schema services and renders no
+      Schema tab until it calls AddExplorerSchemaPlugin().
+    -->
+    <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <!--
+      The Tenants plugin, likewise self-contained. It brings the shared tenancy
+      seam transitively, so a head that surfaces tenant administration takes
+      this one reference. Withholding it ships no Tenants area.
+    -->
+    <ProjectReference Include="..\Plugins\Tenants\Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
+    <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
+    <ProjectReference Include="..\Plugins\Telemetry\Orleans.Lattice.Explorer.Plugins.Telemetry.csproj" />
   </ItemGroup>
 
 </Project>

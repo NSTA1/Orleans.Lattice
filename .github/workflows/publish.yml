@@ -9,6 +9,7 @@ on:
       #   lattice.replication-v3.3.0
       #   lattice.replication.grpc-v3.3.0
       #   lattice.storage.azuretable-v3.3.0
+      #   lattice.storage.file-v8.0.0
       #   lattice.dashboards-v3.3.0
       #   lattice.api.abstractions-v7.9.0
       #   lattice.api.state-v3.3.0
@@ -30,12 +31,16 @@ on:
       #   lattice.api.mcp-v7.9.1
       #   lattice.api.mcp.telemetry-v7.9.1
       #   lattice.api.mcp.telemetry.azure-v8.0.0
+      #   lattice.api.mcp.repocontext-v8.0.0
+      #   lattice.api.mcp.repocontext.replication-v8.0.0
       #   lattice.api.schema-v7.9.1
       #   lattice.api.schema.grpc-v7.9.1
       #   lattice.api.treeadmin-v8.0.0
       #   lattice.api.treeadmin.grpc-v8.0.0
       #   lattice.api.tenantadmin-v8.0.0
       #   lattice.api.tenantadmin.grpc-v8.0.0
+      #   lattice.api.telemetry-v9.4.0
+      #   lattice.api.telemetry.grpc-v9.4.0
       #   lattice.schema-v7.9.0
       #   lattice.scaling-v7.9.0
       #   lattice.tenancy-v8.0.0
@@ -47,6 +52,19 @@ on:
       #   lattice.explorer.web-v7.9.1
       #   lattice.explorer.entra-v7.7.1
       #   lattice.explorer.entra.web-v8.0.0
+      #   lattice.explorer.designsystem-v9.4.0
+      #   lattice.explorer.plugins.abstractions-v9.4.0
+      #   lattice.explorer.plugins.selection-v9.4.0
+      #   lattice.explorer.plugins.data-v9.4.0
+      #   lattice.explorer.plugins.history-v9.4.0
+      #   lattice.explorer.plugins.metrics-v9.4.0
+      #   lattice.explorer.plugins.topology-v9.4.0
+      #   lattice.explorer.plugins.tagindex-v9.4.0
+      #   lattice.explorer.plugins.deadletter-v9.4.0
+      #   lattice.explorer.plugins.telemetry-v9.4.0
+      #   lattice.explorer.plugins.tenancy-v9.4.0
+      #   lattice.explorer.plugins.tenants-v9.4.0
+      #   lattice.explorer.plugins.mytenant-v9.4.0
       #   lattice.caching.azureblob-v8.0.0
       # The tag prefix is the literal folder name under src/, dots and all.
       # Packages that live in a shared app folder's sub-directory (the
@@ -57,6 +75,7 @@ on:
       - 'lattice.replication-v*'
       - 'lattice.replication.grpc-v*'
       - 'lattice.storage.azuretable-v*'
+      - 'lattice.storage.file-v*'
       - 'lattice.dashboards-v*'
       - 'lattice.api.abstractions-v*'
       - 'lattice.api.state-v*'
@@ -78,12 +97,16 @@ on:
       - 'lattice.api.mcp-v*'
       - 'lattice.api.mcp.telemetry-v*'
       - 'lattice.api.mcp.telemetry.azure-v*'
+      - 'lattice.api.mcp.repocontext-v*'
+      - 'lattice.api.mcp.repocontext.replication-v*'
       - 'lattice.api.schema-v*'
       - 'lattice.api.schema.grpc-v*'
       - 'lattice.api.treeadmin-v*'
       - 'lattice.api.treeadmin.grpc-v*'
       - 'lattice.api.tenantadmin-v*'
       - 'lattice.api.tenantadmin.grpc-v*'
+      - 'lattice.api.telemetry-v*'
+      - 'lattice.api.telemetry.grpc-v*'
       - 'lattice.schema-v*'
       - 'lattice.scaling-v*'
       - 'lattice.tenancy-v*'
@@ -95,6 +118,19 @@ on:
       - 'lattice.explorer.web-v*'
       - 'lattice.explorer.entra-v*'
       - 'lattice.explorer.entra.web-v*'
+      - 'lattice.explorer.designsystem-v*'
+      - 'lattice.explorer.plugins.abstractions-v*'
+      - 'lattice.explorer.plugins.selection-v*'
+      - 'lattice.explorer.plugins.data-v*'
+      - 'lattice.explorer.plugins.history-v*'
+      - 'lattice.explorer.plugins.metrics-v*'
+      - 'lattice.explorer.plugins.topology-v*'
+      - 'lattice.explorer.plugins.tagindex-v*'
+      - 'lattice.explorer.plugins.deadletter-v*'
+      - 'lattice.explorer.plugins.telemetry-v*'
+      - 'lattice.explorer.plugins.tenancy-v*'
+      - 'lattice.explorer.plugins.tenants-v*'
+      - 'lattice.explorer.plugins.mytenant-v*'
       - 'lattice.caching.azureblob-v*'
 
 jobs:

@@ -117,7 +117,8 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
             SagaId);
         LatticeReplicationMetrics.SagaCompensations.Add(1,
             new KeyValuePair<string, object?>(
-                LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseCoordinatorLoss));
+                LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseCoordinatorLoss),
+            LatticeTenantLabel.Platform);
         await CompensateParticipantsAsync();
         _state.State.Phase = SagaPhase.Aborted;
         _state.State.Vote = SagaVote.Abort;
@@ -243,7 +244,8 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
                 await CompensateParticipantsAsync(request);
                 LatticeReplicationMetrics.SagaCompensations.Add(1,
                     new KeyValuePair<string, object?>(
-                        LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseVoteAbort));
+                        LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseVoteAbort),
+                    LatticeTenantLabel.Platform);
                 _state.State.Phase = SagaPhase.Aborted;
                 _state.State.Vote = SagaVote.Abort;
                 _state.State.FenceDeadlineTicks = 0;

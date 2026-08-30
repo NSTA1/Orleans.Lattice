@@ -419,7 +419,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             // matches one consumed retry slot.
             LatticeReplicationMetrics.BootstrapTransientRetries.Add(1,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                LatticeTenantLabel.ForTree(treeName));
 
             Logger.LogWarning(ex,
                 "Bootstrap drain for tree '{TreeName}' from source '{SourceClusterId}' encountered a transient fault; retrying within the configured bounded budget",
@@ -642,11 +643,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             // waiting for the terminal duration histogram.
             LatticeReplicationMetrics.BootstrapEntriesReceived.Add(1,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                LatticeTenantLabel.ForTree(treeName));
             var byteCount = entry.Value?.Length ?? 0;
             LatticeReplicationMetrics.BootstrapBytesReceived.Add(byteCount,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                LatticeTenantLabel.ForTree(treeName));
 
             // Track the highest source HLC observed so a resume can
             // re-export from this point. The per-origin HWM dedupe
@@ -816,10 +819,15 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
 
         var elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-        LatticeReplicationMetrics.BootstrapDuration.Record(elapsedMs,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
+        LatticeReplicationMetrics.BootstrapDuration.Record(
+            elapsedMs,
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome),
+                LatticeTenantLabel.ForTree(treeName),
+            });
         _drainStartTimestamp = null;
     }
 }

@@ -370,6 +370,7 @@ public abstract class DocsSnippetCompilationTestsBase
         "Orleans.Lattice.Api.Data",
         "Orleans.Lattice.Api.Data.Grpc",
         "Orleans.Lattice.Api.Mcp",
+        "Orleans.Lattice.Api.Telemetry",
         "Microsoft.AspNetCore.Builder",
         "Microsoft.Extensions.DependencyInjection",
         "Microsoft.Extensions.Hosting",

@@ -61,14 +61,24 @@ public interface ITenantPolicyEngine
     /// Resolves whether <paramref name="sourceTenant"/> holds a cross-tenant grant
     /// to perform <paramref name="operation"/> against <paramref name="scope"/> of
     /// <paramref name="targetTenant"/>'s data. A grant matches when the target
-    /// tenant issued it to the source tenant, its authorized operations include
+    /// tenant issued it to the source tenant, the grant is
+    /// <see cref="TenantGrantState.Active"/>, its authorized operations include
     /// the requested one, and its scope covers the requested scope.
     /// </summary>
+    /// <remarks>
+    /// <b>Only an active grant authorizes.</b> A cross-tenant grant is a two-step
+    /// agreement - the granting tenant offers it and the grantee approves it - so
+    /// an offered-but-unapproved (<see cref="TenantGrantState.Pending"/>),
+    /// declined (<see cref="TenantGrantState.Rejected"/>), or withdrawn
+    /// (<see cref="TenantGrantState.Revoked"/>) grant resolves to a denial here.
+    /// This method is the single seam at which a grant becomes an allow, and so
+    /// the single place that gate is applied.
+    /// </remarks>
     /// <param name="sourceTenant">The tenant requesting access.</param>
     /// <param name="targetTenant">The tenant whose data is being accessed (the granting tenant).</param>
     /// <param name="scope">The scope (tree name or prefix) being accessed. Must not be <c>null</c>.</param>
     /// <param name="operation">The operation being requested.</param>
-    /// <returns>An allow decision when a matching grant exists, or a denial carrying the reason.</returns>
+    /// <returns>An allow decision when a matching active grant exists, or a denial carrying the reason.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <c>null</c>.</exception>
     TenantAccessDecision ResolveCrossTenantGrant(
         TenantId sourceTenant,

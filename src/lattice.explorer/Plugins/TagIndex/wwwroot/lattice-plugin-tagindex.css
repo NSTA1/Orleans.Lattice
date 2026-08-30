@@ -1,0 +1,174 @@
+/*
+  Orleans.Lattice Explorer - tag-index browsing plugin.
+
+  Every rule here is owned by this package and prefixed with the surface it
+  belongs to, written against the design-system token layer.
+
+  No width media query: the three sections stack from the `is-stacked` class the
+  view adds when the cascaded breakpoint is compact, and the member list is the
+  design system's adaptive table (epic decision D7 - the breakpoint layer is the
+  only place a width may be named).
+*/
+
+.lx-tagindex {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--lx-space-2);
+}
+
+.lx-tagindex-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    flex-wrap: wrap;
+    padding: var(--lx-space-3) var(--lx-space-1);
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.lx-tagindex-name {
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+    word-break: break-all;
+}
+
+.lx-tagindex-stat {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-tagindex-summary .lx-btn {
+    margin-left: auto;
+}
+
+.lx-tagindex-body {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.8fr) minmax(160px, 0.7fr) 1.5fr;
+    gap: var(--lx-space-5);
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* Compact: one column, so the three sections read as a single scroll. */
+.lx-tagindex-body.is-stacked {
+    grid-template-columns: 1fr;
+}
+
+.lx-tagindex-section {
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface);
+    padding: var(--lx-space-5);
+    overflow: auto;
+    min-height: 0;
+}
+
+/* A grid item's automatic minimum size is its content, so a long tree id, a
+   long tag, or the members table would push its track wider than the share
+   .lx-tagindex-body granted it and spill the whole body sideways. Releasing
+   that floor is what makes .lx-tagindex-section's own `overflow: auto` take
+   effect, so the wide content scrolls inside its pane instead. */
+.lx-tagindex-trees,
+.lx-tagindex-tags,
+.lx-tagindex-members {
+    min-width: 0;
+}
+
+.lx-tagindex-heading {
+    margin: 0 0 var(--lx-space-4);
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+}
+
+.lx-tagindex-membertag {
+    font-family: var(--lx-font-mono);
+    color: var(--lx-color-accent);
+    text-transform: none;
+    letter-spacing: 0;
+    word-break: break-all;
+}
+
+.lx-tagindex-empty {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+}
+
+.lx-tagindex-treelist,
+.lx-tagindex-taglist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+}
+
+.lx-tagindex-treelink,
+.lx-tagindex-tag,
+.lx-tagindex-memberlink {
+    width: 100%;
+    min-height: var(--lx-target-min);
+    text-align: left;
+    font-family: var(--lx-font-mono);
+    background: var(--lx-color-surface-sunken);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    color: var(--lx-color-text);
+    padding: var(--lx-space-3) var(--lx-space-4);
+    cursor: pointer;
+    word-break: break-all;
+    transition: border-color var(--lx-motion-fast) var(--lx-motion-ease),
+        color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-tagindex-treelink:hover,
+.lx-tagindex-tag:hover,
+.lx-tagindex-memberlink:hover {
+    border-color: var(--lx-color-accent);
+    color: var(--lx-color-accent);
+}
+
+.lx-tagindex-treelink:focus-visible,
+.lx-tagindex-tag:focus-visible,
+.lx-tagindex-memberlink:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-tagindex-tag.is-active {
+    border-color: var(--lx-color-accent);
+    color: var(--lx-color-accent-contrast);
+    background: var(--lx-color-accent);
+}
+
+.lx-tagindex-memberlink {
+    border-style: dashed;
+}
+
+.lx-tagindex-pager {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-4);
+    margin-bottom: var(--lx-space-4);
+}
+
+.lx-tagindex-pagenum {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-text-muted);
+    font-variant-numeric: tabular-nums;
+}

@@ -541,15 +541,16 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         var elidedCount = entries.Count - missingCount;
 
         var treeTag = new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, request.TreeName);
+        var tenantTag = LatticeTenantLabel.ForTree(request.TreeName);
         var peerTag = new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, request.OriginClusterId);
-        LatticeReplicationMetrics.ReceiverContentManifestExchanges.Add(1, treeTag, peerTag);
+        LatticeReplicationMetrics.ReceiverContentManifestExchanges.Add(1, treeTag, peerTag, tenantTag);
         if (elidedCount > 0)
         {
-            LatticeReplicationMetrics.ReceiverContentEntriesElided.Add(elidedCount, treeTag, peerTag);
+            LatticeReplicationMetrics.ReceiverContentEntriesElided.Add(elidedCount, treeTag, peerTag, tenantTag);
         }
         if (advanced)
         {
-            LatticeReplicationMetrics.ReceiverContentHwmAdvances.Add(1, treeTag, peerTag);
+            LatticeReplicationMetrics.ReceiverContentHwmAdvances.Add(1, treeTag, peerTag, tenantTag);
         }
 
         return new ContentManifestResponseBox { Value = response };

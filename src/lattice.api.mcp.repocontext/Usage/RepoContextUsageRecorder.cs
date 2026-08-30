@@ -96,11 +96,13 @@ internal sealed class RepoContextUsageRecorder : IRepoContextUsageRecorder, IDis
             _replaced[index] += replaced;
         }
 
-        // A single struct tag (string value, no boxing) - no array is allocated on the record path.
+        // Two struct tags (string values, no boxing) - no array is allocated on the record path.
+        // The repo-context surface is platform-owned tooling, not tenant-scoped traffic, so the
+        // derived tenant dimension is the constant platform sentinel.
         var tag = new KeyValuePair<string, object?>(CommandTagKey, usage.Command);
-        _callsCounter.Add(1, tag);
-        _responseCounter.Add(response, tag);
-        _replacedCounter.Add(replaced, tag);
+        _callsCounter.Add(1, tag, LatticeTenantLabel.Platform);
+        _responseCounter.Add(response, tag, LatticeTenantLabel.Platform);
+        _replacedCounter.Add(replaced, tag, LatticeTenantLabel.Platform);
     }
 
     /// <inheritdoc />

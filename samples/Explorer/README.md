@@ -16,7 +16,7 @@ to embed it in their own ASP.NET app:
   UI, the state-API connection seam, and the Backups and Access areas. The Schema
   area ships hidden and stays hidden here too; set the
   `LATTICE_EXPLORER_ENABLE_SCHEMA=true` environment variable before running to
-  surface it (the sample maps that to `EnableSchemaArea = true`).
+  surface it (the sample maps that to an `AddExplorerSchemaPlugin()` call).
 - `MapLatticeExplorer()` maps the interactive-server components, static assets,
   and sign-in / sign-out endpoints.
 

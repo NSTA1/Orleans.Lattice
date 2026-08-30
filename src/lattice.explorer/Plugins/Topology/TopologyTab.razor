@@ -1,0 +1,100 @@
+@inherits SelectionPluginViewBase
+@inject ITopologySurface Surface
+@inject IJSRuntime JS
+
+@*
+    The tree-topology surface: a load-coloured radial graph of the selected
+    tree's shard roots and internal nodes. It reaches the cluster only through
+    ITopologySurface - the single domain contract this plugin declares.
+
+    The graph is an SVG with a viewBox, so it scales to whatever width it is
+    given, down to a phone, with no width media query of its own. The toolbar
+    wraps for the same reason (epic decision D7).
+*@
+
+<div class="lx-topology">
+    <div class="lx-topology-toolbar">
+        <button type="button"
+                class="lx-btn"
+                disabled="@_loading"
+                @onclick="LoadAsync">
+            @(_loading ? "Loading..." : "Refresh")
+        </button>
+        <label class="lx-topology-toggle">
+            <input type="checkbox" checked="@_showLeaves" @onchange="OnToggleLeaves" />
+            Show leaf nodes
+        </label>
+        @if (_canvasReady)
+        {
+            <button type="button" class="lx-btn lx-topology-reset" @onclick="ResetViewAsync">
+                Reset view
+            </button>
+            <span class="lx-topology-hint">scroll to zoom, drag to pan</span>
+        }
+        @if (_truncated)
+        {
+            <span class="lx-topology-trunc" title="Depth or node budget reached">truncated</span>
+        }
+        <div class="lx-topology-legend" aria-hidden="true">
+            <span class="lx-topology-legend-label">load</span>
+            @for (var b = 0; b < TopologyLayout.LoadBuckets; b++)
+            {
+                <span class="lx-topo-swatch lx-topo-load-@b"></span>
+            }
+        </div>
+    </div>
+
+    @if (_loading && _graph is null)
+    {
+        <div class="lx-topology-state">Loading topology...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="lx-topology-state lx-topology-error">
+            <span>@_error</span>
+            <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
+        </div>
+    }
+    else if (_graph is null || _graph.Nodes.Count == 0)
+    {
+        <div class="lx-topology-state">No structure reported for this id.</div>
+    }
+    else
+    {
+        <div class="lx-topology-canvas">
+            <svg @ref="_svg"
+                 class="lx-topo-svg"
+                 viewBox="@_homeViewBox"
+                 preserveAspectRatio="xMidYMid meet"
+                 role="img" aria-label="Tree topology graph">
+                @foreach (var edge in _graph.Edges)
+                {
+                    var from = _points[edge.FromId];
+                    var to = _points[edge.ToId];
+                    <line class="lx-topo-edge"
+                          x1="@F(from.X)" y1="@F(from.Y)"
+                          x2="@F(to.X)" y2="@F(to.Y)" />
+                }
+                @foreach (var node in _graph.Nodes)
+                {
+                    var p = _points[node.Node.NodeId];
+                    var expandable = node.Node.HasMoreChildren;
+                    <g class="lx-topo-node @(expandable ? "is-expandable" : null) @(node.Node.SplitInProgress ? "is-splitting" : null)"
+                       transform="@($"translate({F(p.X)},{F(p.Y)})")"
+                       @onclick="@(() => OnNodeClickAsync(node.Node))">
+                        <title>@NodeTooltip(node)</title>
+                        <circle class="lx-topo-dot lx-topo-load-@node.LoadBucket" r="@F(RadialLayout.NodeRadius)" />
+                        @if (node.LeafBadge > 0)
+                        {
+                            @((MarkupString)$"<text class=\"lx-topo-badge\" x=\"0\" y=\"4\">{node.LeafBadge}</text>")
+                        }
+                        @if (expandable)
+                        {
+                            @((MarkupString)$"<text class=\"lx-topo-expand\" x=\"0\" y=\"{F(RadialLayout.NodeRadius + 12)}\">+</text>")
+                        }
+                    </g>
+                }
+            </svg>
+        </div>
+    }
+</div>

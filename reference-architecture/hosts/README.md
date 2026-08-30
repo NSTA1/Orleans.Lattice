@@ -86,7 +86,6 @@ underscore separator, case-insensitive).
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `Explorer:ConfigFilePath` | `%TEMP%/lattice-explorer/config.json` | Writable JSON config backing store (the chiseled non-root image has no writable app-data dir). |
-| `Explorer:EnableSchemaArea` | `false` | Surface the schema-management area. |
 | `Entra:Enabled` | `false` | Enable the hosted-web Microsoft Entra (OpenID Connect, auth-code + PKCE) sign-in provider. |
 | `Entra:TenantId` | - | Directory (tenant) the console signs operators in against. |
 | `Entra:WebClientId` | - | The Explorer console's OWN confidential web-app registration (holds the OIDC redirect URIs); NOT the silo facade audience. |

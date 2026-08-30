@@ -1,6 +1,7 @@
 using System.Net;
 using Azure.Identity;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using Orleans.Configuration;
 using Orleans.Lattice;
@@ -16,6 +17,8 @@ using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Api.Schema.Grpc;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Api.State.Grpc;
+using Orleans.Lattice.Api.Telemetry;
+using Orleans.Lattice.Api.Telemetry.Grpc;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Api.TenantAdmin.Grpc;
 using Orleans.Lattice.Api.TreeAdmin;
@@ -50,6 +53,9 @@ using Orleans.Lattice.Tenancy;
 //     this region runs the scheduler (primary) or is DR standby (scheduler off).
 //   * The read-only State API, the read-write Data API, the auth-admin control
 //     plane and the backup control plane over gRPC.
+//   * The read-only telemetry facade over its region's Prometheus (opt-in via
+//     Telemetry:BackendAddress), on the same gRPC endpoint, so the Explorer's
+//     Telemetry area is reachable in this harness.
 //   * The lattice.scaling compute-axis signal endpoint for KEDA.
 //   * Entra-backed authentication for its exposed facades.
 //
@@ -125,6 +131,23 @@ var dataApiEnabled = config.GetValue("DataApi:Enabled", true);
 // authors the demo tenants declared in the mounted identity model. The MCP head
 // advertises the lattice_tenant_* tools under the matching Mcp:EnableTenancy flag.
 var tenancyEnabled = config.GetValue("Tenancy:Enabled", false);
+
+// Read-only telemetry facade. The silo already exports the whole orleans.lattice
+// meter family over /metrics for its region's Prometheus to scrape; this is the
+// other direction - the silo proxying a READ of that same Prometheus so the
+// Explorer's Telemetry area (and any other consumer of the telemetry gRPC
+// binding) can render cluster time series without being handed the metrics store.
+// Wired only when a backend address is configured, so an unset knob leaves the
+// facade off rather than serving an empty catalogue: the binding then answers
+// Unimplemented and the Explorer's telemetry gate correctly renders no area.
+//
+// REGION-LOCAL BY CONSTRUCTION: each silo is given only its OWN region's
+// Prometheus (silo-a -> prometheus-a on net-a, silo-b -> prometheus-b on net-b),
+// and Docker's per-region private networks make the sibling region's Prometheus
+// unresolvable from here in any case. Telemetry is deliberately not one of the
+// two cross-region seams (replication and the shared backup sink).
+var telemetryBackend = config["Telemetry:BackendAddress"];
+var telemetryEnabled = !string.IsNullOrWhiteSpace(telemetryBackend);
 
 // Global-ingress origin lock: when set, every client-facing request on the
 // external gRPC port must carry an X-Azure-FDID header matching this id. Empty
@@ -682,6 +705,48 @@ if (tenancyEnabled)
     }
 }
 
+// The read-only telemetry facade and its gRPC binding, co-hosted on the same silo
+// gRPC endpoint as State. Wired only when Telemetry:BackendAddress names this
+// region's Prometheus (see telemetryEnabled above); without it the binding is not
+// mapped, the facade is not exposed, and a connecting Explorer's telemetry gate
+// reads the surface as unimplemented and renders no Telemetry area.
+//
+// The backend credential and the caller's Lattice credential are two independent
+// halves of the trust boundary: the compose Prometheus is unauthenticated (AuthMode
+// None, the default), and the caller's bearer is NEVER forwarded to it. The real
+// caller-side enforcement is the deny-by-default LatticeOperation.Telemetry check
+// the facade makes over the RESERVED AUTH-POLICY tree; a caller who fails it gets
+// an empty catalogue and no area, indistinguishable from a cluster serving no
+// telemetry at all, so it cannot probe its own entitlement. In this harness that
+// admits `platform-admin` (a bootstrap administrator, which the gate allows
+// outright) and nobody else - note that `auditor`, whose whole role is telemetry,
+// is NOT admitted here even though its MCP telemetry tools work, because its
+// seeded grant is cluster-wide over the all-trees sentinel rather than over the
+// reserved policy tree. That asymmetry is a product-level gap, not a harness
+// setting; see the note in README.md's telemetry demo. The coarse transport gate
+// mirrors every other facade: opened only when a deployment turns
+// RequireAuthorization on.
+if (telemetryEnabled)
+{
+    builder.Services.Configure<LatticeTelemetryOptions>(options =>
+    {
+        options.BackendAddress = new Uri(telemetryBackend!, UriKind.Absolute);
+
+        // MetricAccess stays at its ReadAll default: this harness exists to show
+        // the whole orleans.lattice meter family the silo exports above, and the
+        // catalogue is a fixed server-authored set of named queries - a caller
+        // never supplies PromQL, so ReadAll widens nothing a caller can address.
+    });
+    builder.Services.AddSingleton<IValidateOptions<LatticeTelemetryOptions>, LatticeTelemetryOptionsValidator>();
+    builder.Services.AddLatticeTelemetryApi();
+
+    builder.Services.AddLatticeTelemetryApiGrpc(options => options.RequireAuthorization = requireApiAuthorization);
+    if (requireApiAuthorization)
+    {
+        builder.Services.AddSingleton<ILatticeTelemetryApiAuthorizer, AllowAllTelemetryApiAuthorizer>();
+    }
+}
+
 // Export the whole orleans.lattice meter family over Prometheus at /metrics so a
 // scraper (the local compose Prometheus, or Azure Managed Prometheus) can collect
 // the cluster telemetry that backs the bundled Grafana dashboards and the MCP
@@ -769,6 +834,15 @@ if (tenancyEnabled)
     // The tenant-administration control-API gRPC endpoint the MCP head's remote
     // tenant group dials (off the same silo gRPC endpoint as State).
     app.MapLatticeTenantAdminApiGrpc();
+}
+
+if (telemetryEnabled)
+{
+    // The telemetry read-plane gRPC endpoint the Explorer's Telemetry area dials.
+    // It rides the SAME silo gRPC endpoint the console already uses for State, so
+    // the console needs no second address - which is why the harness wires the
+    // backend here rather than at the Explorer head.
+    app.MapLatticeTelemetryApiGrpc();
 }
 
 // Compute-axis scaling signal for the KEDA Prometheus scaler (default route

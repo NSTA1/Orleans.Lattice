@@ -1,0 +1,480 @@
+/*
+  Orleans.Lattice Explorer - My Tenant plugin stylesheet.
+
+  Everything the My Tenant surface renders is styled here, in the plugin's own
+  package, and served at
+  `_content/Orleans.Lattice.Explorer.Plugins.MyTenant/lattice-mytenant.css`. Nothing in
+  this file belongs to the shared shell: a head that does not register the My
+  Tenant plugin loads none of it (epic decision D5).
+
+  Two rules hold:
+
+  1. Every colour, spacing, radius, and type size is a design token from
+     `_content/Orleans.Lattice.Explorer.DesignSystem/lattice-tokens.css`.
+  2. It contains no width media query and no breakpoint number. Anything that
+     has to change with the viewport either composes a breakpoint utility from
+     the design system's breakpoint layer, or is decided in .NET from the
+     cascaded LatticeAdaptiveContext - which is how the member, region, and
+     tenant tables reflow to cards and how the six-tab strip collapses to one
+     inline tab (epic decision D7). BreakpointTokenHygieneTests fails the build
+     if that is ever broken here.
+
+  Class prefix: `lxm-` (lattice explorer my-tenant), so the plugin's rules
+  cannot collide with the shell's or another plugin's.
+*/
+
+/* --------------------------------------------------------------------------
+   Panel shell
+   -------------------------------------------------------------------------- */
+.lxm-root {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.lxm-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    flex: 1;
+    min-height: 0;
+    text-align: left;
+}
+
+.lxm-tabs {
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+}
+
+.lxm-surface {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    padding-block: var(--lx-space-3);
+}
+
+.lxm-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+}
+
+.lxm-section-heading {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+    margin: 0;
+    font-size: var(--lx-text-title);
+    font-weight: var(--lx-weight-semibold);
+    color: var(--lx-color-text);
+}
+
+/* The tenant this whole area is scoped to, pinned beside the tab strip so it
+   is never ambiguous which tenant a control acts on. */
+.lxm-tenant-chip {
+    padding: var(--lx-space-1) var(--lx-space-2);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-text-muted);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 14rem;
+}
+
+.lxm-refresh-action {
+    margin-inline-start: auto;
+}
+
+/* --------------------------------------------------------------------------
+   Status banners
+   -------------------------------------------------------------------------- */
+.lxm-status {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-1);
+    margin: 0;
+    padding: var(--lx-space-2) var(--lx-space-3);
+    border-inline-start: 3px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+    font-size: var(--lx-text-small);
+}
+
+.lxm-status-message {
+    margin: 0;
+}
+
+/* The plugin's own next step, beneath the cluster's verbatim message rather
+   than instead of it: the wire collapses every precondition refusal onto one
+   status and keeps the reason only in that message, so replacing it would
+   destroy the only statement of which invariant was breached. */
+.lxm-status-guidance {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+}
+
+.lxm-status.is-success {
+    border-inline-start-color: var(--lx-color-success);
+}
+
+.lxm-status.is-denied,
+.lxm-status.is-failed {
+    border-inline-start-color: var(--lx-color-danger);
+}
+
+/* A guard-rail is not a fault: an invariant the caller can work around reads as
+   a warning rather than an error. */
+.lxm-status.is-refused {
+    border-inline-start-color: var(--lx-color-warning);
+}
+
+.lxm-caption {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+    max-width: 48rem;
+}
+
+.lxm-note {
+    margin: 0;
+    padding: var(--lx-space-2) var(--lx-space-3);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+    font-size: var(--lx-text-small);
+}
+
+.lxm-muted {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}
+
+.lxm-pending {
+    align-self: center;
+    color: var(--lx-color-warning);
+    font-size: var(--lx-text-small);
+}
+
+.lxm-count {
+    padding: 0 var(--lx-space-2);
+    border: 1px solid var(--lx-color-warning);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-warning);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+}
+
+/* --------------------------------------------------------------------------
+   Facts and badges
+   -------------------------------------------------------------------------- */
+.lxm-facts,
+.lxm-grant-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-3) var(--lx-space-5);
+    margin: 0;
+}
+
+.lxm-fact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-1);
+    min-width: 0;
+}
+
+.lxm-fact dt {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+}
+
+.lxm-fact dd {
+    margin: 0;
+    font-size: var(--lx-text-small);
+}
+
+.lxm-fact-code {
+    font-family: var(--lx-font-mono);
+    overflow-wrap: anywhere;
+}
+
+.lxm-badge {
+    display: inline-block;
+    padding: 0 var(--lx-space-2);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-sunken);
+    font-size: var(--lx-text-micro);
+    white-space: nowrap;
+}
+
+.lxm-badge.is-ok {
+    border-color: var(--lx-color-success);
+    color: var(--lx-color-success);
+}
+
+.lxm-badge.is-warn {
+    border-color: var(--lx-color-warning);
+    color: var(--lx-color-warning);
+}
+
+.lxm-badge.is-off {
+    color: var(--lx-color-text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Tables and forms
+   -------------------------------------------------------------------------- */
+.lxm-table {
+    width: 100%;
+}
+
+.lxm-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--lx-space-2);
+}
+
+.lxm-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-1);
+    flex: 1 1 15rem;
+    min-width: 0;
+}
+
+.lxm-field-label {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+}
+
+.lxm-input {
+    width: 100%;
+    min-width: 0;
+    padding: var(--lx-space-1) var(--lx-space-2);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface);
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-small);
+}
+
+.lxm-primary-action {
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lxm-destructive-action {
+    color: var(--lx-color-danger);
+}
+
+.lxm-switch-action {
+    white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Quota gauges
+
+   A track is rendered ONLY for a dimension that is both bounded and measured.
+   There is deliberately no style for an "empty" bar, because an unbounded or
+   unmeasured dimension must not render one at all: a zero-width track reads as
+   "you have used none of your allowance" when the truth is that there is no
+   allowance, or that nothing is measuring it.
+   -------------------------------------------------------------------------- */
+.lxm-gauges {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lxm-gauge {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-1);
+    padding: var(--lx-space-2) var(--lx-space-3);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+}
+
+.lxm-gauge.is-over {
+    border-color: var(--lx-color-danger);
+}
+
+.lxm-gauge-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--lx-space-2);
+}
+
+.lxm-gauge-label {
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lxm-gauge-figures {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--lx-space-1);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+}
+
+.lxm-gauge-sep,
+.lxm-gauge-unit {
+    color: var(--lx-color-text-muted);
+    font-family: var(--lx-font-ui);
+    font-size: var(--lx-text-micro);
+}
+
+.lxm-gauge-nobar {
+    margin: 0;
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-micro);
+    font-style: italic;
+}
+
+.lxm-gauge-detail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-1) var(--lx-space-3);
+}
+
+.lxm-gauge-note {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+}
+
+.lxm-gauge-note.is-over {
+    color: var(--lx-color-danger);
+}
+
+.lxm-bar {
+    width: 100%;
+    height: var(--lx-space-2);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-sunken);
+    overflow: hidden;
+}
+
+.lxm-bar-fill {
+    height: 100%;
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-accent);
+}
+
+.lxm-gauge.is-over .lxm-bar-fill {
+    background: var(--lx-color-danger);
+}
+
+.lxm-quota-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--lx-space-2);
+}
+
+/* --------------------------------------------------------------------------
+   Cross-tenant grants
+
+   A grant awaiting this tenant's decision is the only thing on the surface
+   that gets the decision treatment, because approving is the step that turns
+   an offer into live access.
+   -------------------------------------------------------------------------- */
+.lxm-grants {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lxm-grant {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    padding: var(--lx-space-3);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-raised);
+}
+
+.lxm-grant.is-decision {
+    border-color: var(--lx-color-warning);
+    border-inline-start-width: 3px;
+}
+
+.lxm-grant-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--lx-space-2);
+}
+
+.lxm-grant-party {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--lx-space-1);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+}
+
+.lxm-grant-consequence {
+    margin: 0;
+    font-size: var(--lx-text-small);
+}
+
+.lxm-grant-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+}
+
+.lxm-approve-action {
+    border-color: var(--lx-color-success);
+    color: var(--lx-color-success);
+    font-weight: var(--lx-weight-semibold);
+}
+
+/* Only a live grant reads as live. */
+.lxm-grant-state {
+    display: inline-block;
+    padding: 0 var(--lx-space-2);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-pill);
+    background: var(--lx-color-surface-sunken);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    white-space: nowrap;
+}
+
+.lxm-grant-state.is-active {
+    border-color: var(--lx-color-success);
+    color: var(--lx-color-success);
+}
+
+.lxm-grant-state.is-pending {
+    border-color: var(--lx-color-warning);
+    color: var(--lx-color-warning);
+}
+
+.lxm-grant-state.is-closed {
+    color: var(--lx-color-text-muted);
+}

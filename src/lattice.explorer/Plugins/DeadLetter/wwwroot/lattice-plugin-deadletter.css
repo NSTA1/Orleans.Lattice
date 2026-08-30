@@ -1,0 +1,143 @@
+/*
+  Orleans.Lattice Explorer - strict-mode dead-letter plugin.
+
+  Every rule here is owned by this package and prefixed with the surface it
+  belongs to. The surface previously borrowed the value-drill-down surface's
+  scaffolding classes; it now ships its own, so neither package can restyle the
+  other by accident.
+
+  No width media query: the two-pane body stacks from the `is-stacked` class the
+  view adds when the cascaded breakpoint is compact, and the entry list is the
+  design system's adaptive table (epic decision D7 - the breakpoint layer is the
+  only place a width may be named).
+*/
+
+.lx-deadletter {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    height: 100%;
+    min-height: 0;
+}
+
+.lx-deadletter-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-6);
+    flex-wrap: wrap;
+}
+
+.lx-deadletter-count {
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-warning);
+    font-variant-numeric: tabular-nums;
+}
+
+.lx-deadletter-count.is-empty {
+    color: var(--lx-color-text-dim);
+}
+
+.lx-deadletter-body {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.2fr) 1fr;
+    gap: var(--lx-space-5);
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* Compact: one column, list above detail, so nothing scrolls sideways. */
+.lx-deadletter-body.is-stacked {
+    grid-template-columns: 1fr;
+}
+
+.lx-deadletter-list,
+.lx-deadletter-detail {
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface);
+    overflow: auto;
+    min-height: 0;
+}
+
+.lx-deadletter-detail {
+    padding: var(--lx-space-6);
+}
+
+.lx-deadletter-key {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0;
+    font-family: var(--lx-font-mono);
+    font-size: inherit;
+    color: var(--lx-color-accent);
+    background: none;
+    border: none;
+    text-align: left;
+    word-break: break-all;
+    cursor: pointer;
+}
+
+.lx-deadletter-key:hover {
+    color: var(--lx-color-accent-hover);
+    text-decoration: underline;
+}
+
+.lx-deadletter-key.is-selected {
+    font-weight: var(--lx-weight-semibold);
+    text-decoration: underline;
+}
+
+.lx-deadletter-key:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+    border-radius: var(--lx-radius-sm);
+}
+
+.lx-deadletter-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--lx-space-3) var(--lx-space-6);
+    margin: 0 0 var(--lx-space-5);
+}
+
+.lx-deadletter-meta div {
+    display: flex;
+    flex-direction: column;
+}
+
+.lx-deadletter-meta dt {
+    font-size: var(--lx-text-micro);
+    text-transform: uppercase;
+    letter-spacing: var(--lx-tracking-wide);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-deadletter-meta dd {
+    margin: 0;
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    color: var(--lx-color-text);
+    word-break: break-all;
+}
+
+.lx-deadletter-note {
+    margin: 0 0 var(--lx-space-4);
+    font-size: var(--lx-text-caption);
+    color: var(--lx-color-warning);
+}
+
+.lx-deadletter-value {
+    margin: 0;
+    padding: var(--lx-space-5);
+    background: var(--lx-color-surface-sunken);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-caption);
+    line-height: 1.45;
+    color: var(--lx-color-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: auto;
+    max-height: 60vh;
+}

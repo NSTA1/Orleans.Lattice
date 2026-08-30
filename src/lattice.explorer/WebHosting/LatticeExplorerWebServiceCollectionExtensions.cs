@@ -13,9 +13,15 @@ using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Core.Topology;
+using Orleans.Lattice.Explorer.DesignSystem;
+using Orleans.Lattice.Explorer.Plugins.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
+using Orleans.Lattice.Explorer.UI.Plugins;
 
 namespace Orleans.Lattice.Explorer.Web;
 
@@ -63,14 +69,25 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         configure?.Invoke(options);
         services.TryAddSingleton(options);
 
-        // Surface only the areas this head opts into. Every area stays registered
-        // in AppAreas.Ordered and its services below stay wired; the switcher just
-        // hides an opt-in area (the Schema area is withheld by default).
+        // The plugin host and the two adapters that publish the Explorer's own
+        // selection, connection, tenant and preference state onto the plugin
+        // contract. Which areas the shell surfaces is decided further down, by
+        // which area plugins this head registers.
+        services.AddExplorerPluginAdapters();
+
+        // The per-selection tier: the metrics, topology, data and dead-letter
+        // surfaces a tree or view resolves to, and the tag-index browser a
+        // tag-index selection resolves to. Registered as ordinary plugins, so
+        // the detail panel enumerates and gates them exactly as the shell does
+        // the area tier.
+        services.AddExplorerSelectionPlugins();
+
+        // Do not advertise a connection-settings affordance the store refuses.
+        // Presentation only; the enforcing check is on the store below. There is
+        // no per-area flag here any more - an area is surfaced by registering its
+        // plugin, so the only navigation option left is this one.
         services.TryAddSingleton(new ExplorerNavigationOptions
         {
-            EnableSchemaArea = options.EnableSchemaArea,
-            // Do not advertise a connection-settings affordance the store refuses.
-            // Presentation only; the enforcing check is on the store below.
             AllowEndpointConfiguration = options.AllowInteractiveEndpointConfiguration,
         });
 
@@ -136,6 +153,10 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         services.AddExplorerHistory();
         services.AddExplorerSession();
 
+        // The adaptive shell's viewport seam: one breakpoint per circuit, driven
+        // by LatticeAdaptiveRoot and read by every design-system primitive.
+        services.AddLatticeExplorerDesignSystem();
+
         // The web head persists UI preferences to the browser's localStorage (Data
         // Protection-encrypted), overriding the in-memory fallback backing store.
         services.AddScoped<IUiPreferenceBackingStore, ProtectedLocalStoragePreferenceBackingStore>();
@@ -155,17 +176,53 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         services.AddExplorerAuth();
 
         // The Backups management area: the backup control-API client, its catalog
-        // reader, and the capability probe that gates the area and its actions.
+        // reader, and the access gate that gates the area and its per-scope
+        // actions, plus the plugin registration that surfaces it in the shell.
         services.AddExplorerBackup();
+        services.AddExplorerBackupsPlugin();
 
         // The Access (membership & access-control) management area: the auth-admin
-        // control-API client, its membership and policy services, and the
-        // capability probe that gates the area.
+        // control-API client, its membership and policy services, and the access
+        // gate that gates the area, plus the plugin registration that surfaces it.
         services.AddExplorerAccess();
+        services.AddExplorerAccessPlugin();
+
+        // The Tenants (platform-operator tenant management) area. Registered
+        // after AddExplorerAccess(), which supplies the platform-operator gate
+        // this area is reserved to; the plugin's own registration turns on the
+        // tenant-view seam and the shared tenancy client, and refuses to compose
+        // at all if the gate it needs is the fail-closed default.
+        services.AddExplorerTenantsPlugin();
+        // The My Tenant self-service area, for a tenant administrator. Its
+        // registration must follow AddExplorerAccess(): AddExplorerTenantView()
+        // registers a fail-closed placeholder platform-operator gate with
+        // TryAdd, and Access registers the real one, so calling them the other
+        // way round keeps the placeholder and every tenant switch quietly does
+        // nothing. On a cluster without the tenancy add-on the plugin's gate
+        // reports the surface unavailable and no My Tenant tab is rendered.
+        services.AddExplorerTenantView();
+        services.AddExplorerMyTenant();
+        services.AddExplorerMyTenantPlugin();
+
+        // The Telemetry area: time-series panels built from the server-authored
+        // catalogue. Registered after My Tenant so the metrics section has a
+        // surface to fill; the section and the area are independent opt-ins, and
+        // this head takes both. On a cluster serving no telemetry facade - or
+        // offering this caller no queries - the plugin's gate reports the
+        // surface unavailable and no Telemetry tab is rendered.
+        services.AddExplorerTelemetry();
+        services.AddExplorerTelemetryPlugin();
+        services.AddExplorerTelemetryMyTenantSection();
 
         // The Schema management area: the schema control-API client, its policy,
-        // versioning, and compliance services, and the capability probe that gates
-        // the area.
+        // versioning, and compliance services, and the access gate that gates the
+        // area. Its services are wired here, but its plugin deliberately is not
+        // registered, so this head renders no Schema tab. A head opts the area in
+        // with one call - services.AddExplorerSchemaPlugin() from
+        // Orleans.Lattice.Explorer.Schema - which is the whole of the
+        // opt-in now that the per-area flag is retired. The area stays withheld by
+        // default because its versioning UI cannot yet express what differs
+        // between schema versions.
         services.AddExplorerSchema();
 
         return services;

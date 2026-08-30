@@ -1,0 +1,244 @@
+using Grpc.Core;
+using Grpc.Net.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Backup.Grpc;
+using Orleans.Lattice.Backup;
+using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Serialization;
+
+namespace Orleans.Lattice.Explorer.Backup;
+
+/// <summary>
+/// The production <see cref="IBackupControlClient"/>. Builds a
+/// <see cref="LatticeBackupApiGrpcClient"/> over a gRPC channel to the currently
+/// configured endpoint, attaching the same sign-in the state connection uses
+/// (read from <see cref="IExplorerAuthSession.CurrentAuthentication"/>). The
+/// channel is rebuilt lazily whenever the endpoint or the sign-in changes, so a
+/// reconnect or a login is picked up without a restart. A gRPC
+/// <see cref="StatusCode.PermissionDenied"/> / <see cref="StatusCode.Unauthenticated"/>
+/// is translated back to <see cref="LatticeAuthorizationDeniedException"/> so the
+/// rest of the explorer handles a single typed denial.
+/// </summary>
+public sealed class GrpcBackupControlClient : IBackupControlClient, IDisposable
+{
+    private readonly IExplorerSession _session;
+    private readonly IExplorerAuthSession _auth;
+    private readonly IServiceProvider _serializerProvider;
+    private readonly object _gate = new();
+
+    private GrpcChannel? _channel;
+    private LatticeBackupApiGrpcClient? _client;
+    private string? _builtEndpoint;
+    private LatticeCallAuthentication? _builtAuthentication;
+    private bool _disposed;
+
+    /// <summary>
+    /// Creates the client over the explorer session and auth session. A private
+    /// Orleans serializer provider is always built and owned, matching the state
+    /// connection's self-contained wiring. The client deliberately does not take a
+    /// serializer provider from the ambient container: the explorer's application
+    /// root has no Orleans serialization registered, and an injected root provider
+    /// would make every backup call fail resolving its per-message serializers.
+    /// </summary>
+    /// <param name="session">The explorer session that owns the endpoint. Must not be <see langword="null"/>.</param>
+    /// <param name="auth">The auth session whose current sign-in is attached. Must not be <see langword="null"/>.</param>
+    public GrpcBackupControlClient(
+        IExplorerSession session,
+        IExplorerAuthSession auth)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(auth);
+        _session = session;
+        _auth = auth;
+        _serializerProvider = new ServiceCollection().AddSerializer().BuildServiceProvider();
+    }
+
+    /// <inheritdoc />
+    public Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.ProbeCapabilitiesAsync(scope, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupCatalogPage> ListBackupsAsync(BackupCatalogRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.ListBackupsAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupChainDescription?> DescribeBackupAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return InvokeAsync(client => client.DescribeBackupAsync(backupId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.CreateBackupAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.CreateIncrementalBackupAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.CreateBackupSetAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return InvokeAsync(client => client.RestoreBackupAsync(request, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<bool> DeleteBackupAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return InvokeAsync(client => client.DeleteBackupAsync(backupId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<TimeSpan> ScheduleBackupAsync(BackupScopeSelector scope, bool incremental, TimeSpan interval, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.ScheduleBackupAsync(scope, incremental, interval, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task CancelScheduleAsync(BackupScopeSelector scope, bool incremental, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.CancelScheduleAsync(scope, incremental, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return InvokeAsync(client => client.GetScopeStatusAsync(scope, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
+        => InvokeAsync(client => client.IsHealthMonitoringAvailableAsync(cancellationToken));
+
+    /// <inheritdoc />
+    public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return InvokeAsync(client => client.CheckBackupHealthAsync(backupId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return InvokeAsync(client => client.GetBackupHealthAsync(backupId, cancellationToken));
+    }
+
+    /// <inheritdoc />
+    public Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        ArgumentNullException.ThrowIfNull(config);
+        return InvokeAsync(client => client.ConfigureBackupHealthAsync(backupId, config, cancellationToken));
+    }
+
+    private async Task<T> InvokeAsync<T>(Func<LatticeBackupApiGrpcClient, Task<T>> call)
+    {
+        var client = ResolveClient();
+        try
+        {
+            return await call(client).ConfigureAwait(false);
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.PermissionDenied or StatusCode.Unauthenticated)
+        {
+            // Present the transport denial as the same typed exception the rest of
+            // the explorer handles, so a UI action can degrade gracefully.
+            throw new LatticeAuthorizationDeniedException(ex.Status.Detail, ex);
+        }
+    }
+
+    private async Task InvokeAsync(Func<LatticeBackupApiGrpcClient, Task> call)
+    {
+        var client = ResolveClient();
+        try
+        {
+            await call(client).ConfigureAwait(false);
+        }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.PermissionDenied or StatusCode.Unauthenticated)
+        {
+            throw new LatticeAuthorizationDeniedException(ex.Status.Detail, ex);
+        }
+    }
+
+    /// <summary>
+    /// Returns a client bound to the current endpoint and sign-in, rebuilding the
+    /// channel when either has changed since it was last built.
+    /// </summary>
+    private LatticeBackupApiGrpcClient ResolveClient()
+    {
+        var configuration = _session.Current
+            ?? throw new InvalidOperationException("The explorer is not configured with an endpoint yet.");
+        var settings = configuration.ToConnectionSettings();
+        var authentication = _auth.CurrentAuthentication;
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_client is not null
+                && string.Equals(_builtEndpoint, settings.Address, StringComparison.Ordinal)
+                && ReferenceEquals(_builtAuthentication, authentication))
+            {
+                return _client;
+            }
+
+            _channel?.Dispose();
+
+            var effective = settings with { Authentication = authentication };
+            _channel = LatticeGrpcChannelFactory.CreateChannel(effective);
+            var invoker = LatticeGrpcChannelFactory.CreateCallInvoker(_channel, effective);
+            _client = LatticeBackupApiGrpcClient.Create(invoker, _serializerProvider);
+            _builtEndpoint = settings.Address;
+            _builtAuthentication = authentication;
+            return _client;
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _channel?.Dispose();
+            _channel = null;
+            _client = null;
+        }
+
+        if (_serializerProvider is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
+}

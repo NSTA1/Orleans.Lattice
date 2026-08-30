@@ -1,0 +1,138 @@
+@using Orleans.Lattice.Auth
+
+@*
+    The group create / edit form, and the direct-member editor for the selected
+    group.
+
+    The create path fails closed against the directory: when the cluster reports
+    a searchable identity directory the entered / chosen id must resolve to a
+    real group, otherwise the create is blocked with an inline reason. The edit
+    path skips the resolve, because the group already exists.
+*@
+
+<div class="lxa-formcol">
+    <h3 class="lxa-title">@(State.EditingExistingGroup ? "Edit group" : "New group")</h3>
+    @if (State.EditingExistingGroup)
+    {
+        <label class="lxa-field">
+            <span>Group id</span>
+            <input type="text" value="@State.GroupIdInput" disabled="true" placeholder="group id" />
+        </label>
+    }
+    else
+    {
+        <label class="lxa-field">
+            <span>Group id</span>
+            <SubjectPicker Domain="State.Domain"
+                           Kind="LatticeSubjectSelectorKind.Group" KindLocked="true"
+                           SubjectId="@State.GroupIdInput"
+                           SubjectIdChanged="OnGroupIdChanged"
+                           SubjectDisplayNameChanged="State.OnGroupDisplayNameSuggested"
+                           Disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)" />
+        </label>
+        @if (!string.IsNullOrEmpty(State.AccessModel.DirectoryExplanation))
+        {
+            <p class="lxa-hint">@State.AccessModel.DirectoryExplanation</p>
+        }
+        @if (State.GroupCreateError is not null)
+        {
+            <p class="lxa-status is-failed" role="status">@State.GroupCreateError</p>
+        }
+    }
+    <label class="lxa-field">
+        <span>Display name</span>
+        <input type="text" value="@State.GroupDisplayInput"
+               disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)"
+               @oninput="e => State.GroupDisplayInput = e.Value?.ToString() ?? string.Empty"
+               placeholder="optional" />
+    </label>
+    <div class="lxa-actions">
+        <button type="button" class="lx-btn"
+                disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable || string.IsNullOrWhiteSpace(State.GroupIdInput))"
+                @onclick="State.SaveGroupAsync">Save</button>
+        <button type="button" class="lx-btn" disabled="@State.Busy"
+                @onclick="State.CancelGroupForm">Cancel</button>
+        <button type="button" class="lx-btn lxa-danger"
+                disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable || !State.EditingExistingGroup)"
+                @onclick="State.DeleteGroupAsync">Delete</button>
+    </div>
+
+    @if (State.SelectedGroupId is not null)
+    {
+        <h3 class="lxa-title" title="@State.SelectedGroupId">Direct members of '@State.SelectedGroupLabel'</h3>
+        @if (State.DirectMembers.Count == 0)
+        {
+            <p class="lxa-empty">No direct members.</p>
+        }
+        else
+        {
+            <ul class="lxa-memberlist">
+                @foreach (var member in State.DirectMembers)
+                {
+                    <li>
+                        <button type="button" class="lx-btn lx-btn-icon lxa-danger"
+                                title="Remove member" aria-label="@($"Remove {member}")"
+                                disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)"
+                                @onclick="Remove(member)">x</button>
+                        <span class="lxa-principal" title="@member">@State.Labels.Label(member)</span>
+                    </li>
+                }
+            </ul>
+        }
+        <div class="lxa-addmember">
+            <SubjectPicker Domain="State.Domain"
+                           Kind="State.MemberPickerKind"
+                           KindChanged="OnMemberKindChanged"
+                           SubjectId="@State.MemberIdInput"
+                           SubjectIdChanged="OnMemberIdChanged"
+                           Disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)" />
+            <button type="button" class="lx-btn"
+                    disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable || string.IsNullOrWhiteSpace(State.MemberIdInput))"
+                    @onclick="State.AddMemberAsync">Add member</button>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<string, EventCallback> _remove = new(StringComparer.Ordinal);
+
+    /// <summary>The Access workspace this form reads and drives.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+
+    private void OnGroupIdChanged(string id) => State.GroupIdInput = id;
+
+    private void OnMemberIdChanged(string id) => State.MemberIdInput = id;
+
+    private void OnMemberKindChanged(LatticeSubjectSelectorKind kind) => State.MemberPickerKind = kind;
+
+    /// <summary>
+    /// The removal callback for one direct member, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per member per render, and gave the delegate
+    /// a new identity each time, so Blazor's attribute diffing re-registered
+    /// every handler rather than skipping it. The member id is both the row
+    /// identity and the argument the destructive action takes, so nothing can go
+    /// stale: a cached callback removes exactly the member its row names.
+    /// </remarks>
+    private EventCallback Remove(string memberId)
+    {
+        if (_remove.TryGetValue(memberId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for members no longer rendered.
+        if (_remove.Count > State.DirectMembers.Count * 2)
+        {
+            _remove.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.RemoveMemberAsync(memberId));
+        _remove.Add(memberId, callback);
+        return callback;
+    }
+}

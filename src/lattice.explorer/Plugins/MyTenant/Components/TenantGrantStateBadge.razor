@@ -1,0 +1,17 @@
+@*
+    A grant's lifecycle state, rendered explicitly wherever a grant appears.
+
+    Grant state is load-bearing: only Active authorizes anything. A pending
+    grant is an offer nobody has accepted and confers no access at all, so it
+    never borrows the styling of a live one, and the badge carries the sentence
+    saying so as its title.
+*@
+
+<span class="@TenantGrantLabels.BadgeClass(State)" title="@TenantGrantLabels.Description(State)">
+    @TenantGrantLabels.Label(State)
+</span>
+
+@code {
+    /// <summary>The grant state to render.</summary>
+    [Parameter, EditorRequired] public ExplorerTenantGrantState State { get; set; }
+}

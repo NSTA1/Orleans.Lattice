@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!--
+      A new Explorer plugin package is Orleans.Lattice.Explorer.Plugins.<Area>.
+      Access, Backup, and Schema predate the plugin model and keep their already
+      shipped ids for consumer compatibility; this one has never shipped, so it
+      takes the current name. AssemblyName is left to default to the project file
+      name, as the other Plugins.* packages do - and it is the assembly name that
+      the scoped stylesheet's _content/ path is derived from.
+    -->
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.MyTenant</RootNamespace>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.MyTenant</PackageId>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>9.4.0</Version>
+    <Description>The My Tenant plugin for the Orleans.Lattice Explorer: the tenant admin's self-service area. Renders the tenant's own descriptor and status, its admin-subject membership, its consumption against each quota ceiling (unbounded, unmeasured, and measured kept distinct, and captioned with the scope the figures were enforced under), its region residency against the operator-authorized allowed set, and its own side of the two-step cross-tenant grant agreement. Scoped to the caller's active tenant throughout, so a tenant admin can never read or mutate another tenant through it. Registered with AddExplorerMyTenant() and AddExplorerMyTenantPlugin(); served by a referencing app at _content/Orleans.Lattice.Explorer.Plugins.MyTenant.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    Deliberately narrower than the Backups and Access plugin projects: this one
+    references no gRPC binding and no control-API contract at all. Everything it
+    reaches the cluster with arrives through the shared tenancy seam's controlled
+    domain model (IMyTenantDomain), the tenant-administrator half of that seam,
+    which is the whole of the epic's D3 for a
+    tenancy surface. TenancyDomainSurfaceTests guards that the seam names no wire
+    type, so this project cannot acquire one by accident.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
+    <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\Tenancy\Orleans.Lattice.Explorer.Plugins.Tenancy.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>

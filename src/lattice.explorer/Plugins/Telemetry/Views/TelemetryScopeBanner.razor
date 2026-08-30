@@ -1,0 +1,33 @@
+@*
+    The scope caption: what the figures beneath it actually cover.
+
+    A degraded scope is rendered as an alert, not as an aside. The facade fails
+    closed - an AllTenants request it cannot validate is served as one tenant
+    instead of refused - so the only thing standing between an operator and
+    reading one tenant's traffic as the whole cluster's is this line. That makes
+    it a correctness surface, which is why the degraded branch uses role="alert"
+    and the ordinary branch role="status".
+
+    Nothing here is computed. The caption arrived already composed from the scope
+    the facade reported, so this component renders a string and picks a class.
+*@
+
+@if (Caption.Text is { Length: > 0 })
+{
+    @if (Caption.IsDegraded)
+    {
+        <p class="lxt-scope is-warn" role="alert">
+            <strong class="lxt-scope-lead">Narrower than you asked for.</strong>
+            @Caption.Text
+        </p>
+    }
+    else
+    {
+        <p class="lxt-scope" role="status">@Caption.Text</p>
+    }
+}
+
+@code {
+    /// <summary>The caption to render, composed from the scope the facade pinned.</summary>
+    [Parameter, EditorRequired] public TelemetryScopeCaption Caption { get; set; }
+}

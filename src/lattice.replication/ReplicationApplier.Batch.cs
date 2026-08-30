@@ -90,7 +90,7 @@ internal sealed partial class ReplicationApplier
         var plan = BuildParallelApplyPlanOrNull(entries);
         if (plan is null)
         {
-            LatticeReplicationMetrics.ApplyParallelRuns.Record(1);
+            LatticeReplicationMetrics.ApplyParallelRuns.Record(1, LatticeTenantLabel.Platform);
             return await ApplyRunsSequentiallyAsync(entries, cancellationToken).ConfigureAwait(false);
         }
 
@@ -178,7 +178,7 @@ internal sealed partial class ReplicationApplier
         ParallelApplyPlan plan,
         CancellationToken cancellationToken)
     {
-        LatticeReplicationMetrics.ApplyParallelRuns.Record(plan.EffectiveDegreeOfParallelism);
+        LatticeReplicationMetrics.ApplyParallelRuns.Record(plan.EffectiveDegreeOfParallelism, LatticeTenantLabel.Platform);
 
         using var throttle = new SemaphoreSlim(plan.EffectiveDegreeOfParallelism);
         var tasks = new Task<ApplyResult>[plan.TreeOrder.Count];

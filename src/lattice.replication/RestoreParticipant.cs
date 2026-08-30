@@ -73,17 +73,20 @@ internal sealed class RestoreParticipant(
     /// <summary>Records a participant prepare vote on the saga vote counter, tagged by reason.</summary>
     private static void RecordVote(string reason) =>
         LatticeReplicationMetrics.SagaParticipantVotes.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason),
+            LatticeTenantLabel.Platform);
 
     /// <summary>Records a participant commit on the saga commit counter, tagged by reason.</summary>
     private static void RecordCommit(string reason) =>
         LatticeReplicationMetrics.SagaParticipantCommits.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason),
+            LatticeTenantLabel.Platform);
 
     /// <summary>Records a participant abort on the saga abort counter, tagged by reason.</summary>
     private static void RecordAbort(string reason) =>
         LatticeReplicationMetrics.SagaParticipantAborts.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason),
+            LatticeTenantLabel.Platform);
 
     /// <summary>
     /// Best-effort in-memory cache of the group of shadows built for a <b>set</b>

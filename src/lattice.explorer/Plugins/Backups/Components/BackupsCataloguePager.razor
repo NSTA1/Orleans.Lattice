@@ -1,0 +1,20 @@
+@*
+    The Existing Backups pager: previous / page number / next over the
+    newest-first catalogue listing. An already-visited page is served from the
+    pager's cache, so only a frontier advance reaches the server.
+*@
+
+<div class="lx-data-pager lx-backups-pager">
+    <button type="button" class="lx-btn"
+            disabled="@(Owner.Busy || !Owner.Pager.CanGoPrevious)"
+            @onclick="Owner.PreviousPageAsync">Prev</button>
+    <span class="lx-data-pagenum" aria-live="polite">Page @(Owner.Pager.PageIndex + 1)</span>
+    <button type="button" class="lx-btn"
+            disabled="@(Owner.Busy || !Owner.Pager.CanGoNext)"
+            @onclick="Owner.NextPageAsync">Next</button>
+</div>
+
+@code {
+    /// <summary>The Backups panel this pager reads and drives.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+}

@@ -262,14 +262,11 @@ Backup*/
 # junk) does not silently ignore new sample files added under them.
 !/samples/MultiSiteManufacturing/src/MultiSiteManufacturing.Host/Backup/
 !/samples/MultiSiteManufacturing/test/MultiSiteManufacturing.Tests/Backup/
-# The Explorer's backup-management project head is a real source directory, not a
-# Visual Studio upgrade-backup folder; re-include it past the Backup*/ rule above.
-!/src/lattice.explorer/Backup/
+# The Explorer's Backups plugin is a real source directory, not a Visual Studio
+# upgrade-backup folder; re-include it past the Backup*/ rule above.
+!/src/lattice.explorer/Plugins/Backups/
 # The Explorer backup tests likewise live in a real Backup/ source directory.
 !/test/lattice.explorer/Backup/
-# The Explorer UI's Backups panel components live in a real Backup/ source
-# directory (UI/Backup/), not a Visual Studio upgrade-backup folder either.
-!/src/lattice.explorer/UI/Backup/
 # The MCP server's backup tool module lives in a real Tools/Backup/ source
 # directory, not a Visual Studio upgrade-backup folder either.
 !/src/lattice.api.mcp/Tools/Backup/

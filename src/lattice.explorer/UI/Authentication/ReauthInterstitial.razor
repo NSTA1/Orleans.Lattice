@@ -6,15 +6,15 @@
 
 @if (_reauthRequired)
 {
-    <div class="explorer-config-overlay">
-        <div class="explorer-config-dialog" role="alertdialog" aria-modal="true" aria-label="Session expired">
+    <div class="lx-shell-config-overlay">
+        <div class="lx-shell-config-dialog" role="alertdialog" aria-modal="true" aria-label="Session expired">
             <h2>Your session expired</h2>
-            <p class="explorer-config-help">
+            <p class="lx-shell-config-help">
                 Your sign-in could not be renewed - this can happen after the console moves between
                 replicas, or when your session times out. Sign in again to continue where you left off.
             </p>
-            <div class="explorer-config-actions">
-                <button type="button" class="explorer-btn explorer-btn-primary" @onclick="ReauthenticateAsync">
+            <div class="lx-shell-config-actions">
+                <button type="button" class="lx-btn lx-btn-primary" @onclick="ReauthenticateAsync">
                     Sign in again
                 </button>
             </div>

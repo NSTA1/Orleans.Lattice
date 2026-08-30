@@ -255,6 +255,14 @@ services:
       Backup__BlobConnectionString: "${BACKUP_BLOB_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite-backup-shared:10000/devstoreaccount1;}"
       # Region A is the designated backup-primary: it owns the backup scheduler.
       Backup__Primary: "true"
+      # Region A's OWN Prometheus (net-a). This is the read direction of the
+      # telemetry seam: the silo already exports /metrics for prometheus-a to
+      # scrape, and this points the read-only telemetry facade back at it so the
+      # Explorer's Telemetry area (which dials this silo's gRPC endpoint, the same
+      # one it uses for State) can render cluster series. NEVER point this at
+      # prometheus-b: telemetry is region-local, and net-a/net-b isolation would
+      # refuse it anyway - only replication and the shared backup sink cross.
+      Telemetry__BackendAddress: "http://prometheus-a:9090"
       Cluster__Id: "lattice-local-a"
       Cluster__ServiceId: "lattice-local-a"
       # Replication identity for region A and the reciprocal peer (region B's silo
@@ -301,11 +309,15 @@ services:
       LATTICE_EXPLORER_ENDPOINT: "http://localhost:8081"
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
-      # Auto-sign-in as the platform administrator on first load. Sign out and sign
-      # back in with any identity id as the username to see that identity's view
-      # (a data-reader sees only readable trees; an auditor sees none).
-      LATTICE_EXPLORER_USERNAME: "platform-admin"
-      LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
+      # NOTE: no LATTICE_EXPLORER_USERNAME / LATTICE_EXPLORER_PASSWORD here, by
+      # design - they would be inert. The web Explorer withholds the environment
+      # CREDENTIAL seed unless a host opts in, and this host deliberately does not:
+      # sign-out on a web head clears the credential cookie and reloads, which is
+      # precisely the empty-store condition the seed fires on, so an enabled seed
+      # would sign the operator straight back in and make sign-out - and therefore
+      # identity switching, this harness's headline demo - unachievable. Sign in by
+      # entering an identity id as the username at the console's dialog (the
+      # password is ignored); see hosts/Explorer/Program.cs.
 
   prometheus-a:
     logging: *default-logging
@@ -387,6 +399,10 @@ services:
       # writes the shared sink (no competing backup chains). It still reads the sink
       # for a coordinated restore.
       Backup__Primary: "false"
+      # Region B's OWN Prometheus (net-b), symmetric to region A's. Region-local by
+      # construction: prometheus-a is not resolvable from net-b, and telemetry is
+      # deliberately not one of the two cross-region seams.
+      Telemetry__BackendAddress: "http://prometheus-b:9090"
       Cluster__Id: "lattice-local-b"
       Cluster__ServiceId: "lattice-local-b"
       Replication__ClusterId: "region-b"
@@ -427,8 +443,8 @@ services:
       LATTICE_EXPLORER_ENDPOINT: "http://localhost:8081"
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
-      LATTICE_EXPLORER_USERNAME: "platform-admin"
-      LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
+      # Symmetric to explorer-a: no credential seed, sign-in is manual. See the
+      # note on explorer-a for why.
 
   prometheus-b:
     logging: *default-logging

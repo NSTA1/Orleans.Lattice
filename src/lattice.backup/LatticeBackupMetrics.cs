@@ -196,27 +196,27 @@ public static class LatticeBackupMetrics
 #pragma warning disable IDE0052 // Held to keep the observable gauges registered on the meter for the process lifetime.
     private static readonly ObservableGauge<long> InventoryCount =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.inventory.count",
-            static () => Registry.Snapshot().Count, unit: "{backup}",
+            static () => LatticeTenantLabel.PlatformMeasurement(Registry.Snapshot().Count), unit: "{backup}",
             description: "Current tracked backup count.");
 
     private static readonly ObservableGauge<long> InventoryChainDepth =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.inventory.chain_depth_max",
-            static () => (long)Registry.Snapshot().MaxChainDepth, unit: "{backup}",
+            static () => LatticeTenantLabel.PlatformMeasurement((long)Registry.Snapshot().MaxChainDepth), unit: "{backup}",
             description: "Deepest fully-tracked base-backup chain.");
 
     private static readonly ObservableGauge<long> InventoryCatalogBytes =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.catalog.bytes",
-            static () => Registry.Snapshot().TotalBytes, unit: "By",
+            static () => LatticeTenantLabel.PlatformMeasurement(Registry.Snapshot().TotalBytes), unit: "By",
             description: "Cumulative artifact bytes across tracked backups.");
 
     private static readonly ObservableGauge<double> InventoryOldestAge =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.inventory.oldest_age",
-            static () => AgeSeconds(Registry.Snapshot().OldestCreatedAtUtc), unit: "s",
+            static () => LatticeTenantLabel.PlatformMeasurement(AgeSeconds(Registry.Snapshot().OldestCreatedAtUtc)), unit: "s",
             description: "Age in seconds of the oldest tracked backup (0 when none).");
 
     private static readonly ObservableGauge<double> InventoryNewestAge =
         BackupMetrics.Meter.CreateObservableGauge("orleans.lattice.backup.inventory.newest_age",
-            static () => AgeSeconds(Registry.Snapshot().NewestCreatedAtUtc), unit: "s",
+            static () => LatticeTenantLabel.PlatformMeasurement(AgeSeconds(Registry.Snapshot().NewestCreatedAtUtc)), unit: "s",
             description: "Age in seconds of the newest tracked backup (0 when none).");
 
     private static readonly ObservableGauge<long> ScopeLastRunStatus =
@@ -239,7 +239,8 @@ public static class LatticeBackupMetrics
         {
             yield return new Measurement<long>(
                 (long)pair.Value.LastRunOutcome,
-                new KeyValuePair<string, object?>(TagScope, pair.Key));
+                new KeyValuePair<string, object?>(TagScope, pair.Key),
+                LatticeTenantLabel.Platform);
         }
     }
 
@@ -251,7 +252,9 @@ public static class LatticeBackupMetrics
                 ? Math.Max(0d, (DateTimeOffset.UtcNow - when).TotalSeconds)
                 : -1d;
             yield return new Measurement<double>(
-                age, new KeyValuePair<string, object?>(TagScope, pair.Key));
+                age,
+                new KeyValuePair<string, object?>(TagScope, pair.Key),
+                LatticeTenantLabel.Platform);
         }
     }
 
@@ -274,13 +277,17 @@ public static class LatticeBackupMetrics
     {
         ArgumentNullException.ThrowIfNull(manifest);
         var kindTag = KindTag(manifest.Kind);
-        Captures.Add(1, kindTag);
-        CaptureDuration.Record(durationMs, kindTag);
-        BackupBytes.Record(byteLength, kindTag);
-        BackupArtifacts.Record(artifactCount, kindTag);
-        BackupEntries.Record(entryCount, kindTag);
-        EntriesProcessed.Add(entryCount, kindTag);
-        BytesProcessed.Add(byteLength, kindTag);
+        // A backup scope spans an operator-chosen set of trees, so a capture is
+        // not attributable to a single tenant: every backup instrument carries
+        // the reserved platform sentinel as its derived tenant dimension.
+        var tenantTag = LatticeTenantLabel.Platform;
+        Captures.Add(1, kindTag, tenantTag);
+        CaptureDuration.Record(durationMs, kindTag, tenantTag);
+        BackupBytes.Record(byteLength, kindTag, tenantTag);
+        BackupArtifacts.Record(artifactCount, kindTag, tenantTag);
+        BackupEntries.Record(entryCount, kindTag, tenantTag);
+        EntriesProcessed.Add(entryCount, kindTag, tenantTag);
+        BytesProcessed.Add(byteLength, kindTag, tenantTag);
         BackupInventoryRegistry.Instance.RecordCaptureSuccess(manifest);
     }
 
@@ -289,8 +296,8 @@ public static class LatticeBackupMetrics
     /// <param name="baseCutAgeMs">The age of the base cut in milliseconds.</param>
     public static void RecordIncrementalLag(long deltaEntries, double baseCutAgeMs)
     {
-        IncrementalLagEntries.Record(deltaEntries);
-        IncrementalLagAge.Record(baseCutAgeMs);
+        IncrementalLagEntries.Record(deltaEntries, LatticeTenantLabel.Platform);
+        IncrementalLagAge.Record(baseCutAgeMs, LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records the success-path instruments for one restore.</summary>
@@ -298,8 +305,8 @@ public static class LatticeBackupMetrics
     /// <param name="entriesApplied">The number of entries applied.</param>
     public static void RecordRestoreSuccess(double durationMs, long entriesApplied)
     {
-        RestoreDuration.Record(durationMs);
-        RestoreEntriesApplied.Add(entriesApplied);
+        RestoreDuration.Record(durationMs, LatticeTenantLabel.Platform);
+        RestoreEntriesApplied.Add(entriesApplied, LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records the bytes reclaimed and backups pruned by a retention pass for a scope.</summary>
@@ -312,12 +319,12 @@ public static class LatticeBackupMetrics
         var scopeTag = new KeyValuePair<string, object?>(TagScope, scopeKey);
         if (bytesReclaimed > 0)
         {
-            RetentionBytesReclaimed.Add(bytesReclaimed, scopeTag);
+            RetentionBytesReclaimed.Add(bytesReclaimed, scopeTag, LatticeTenantLabel.Platform);
         }
 
         if (prunedCount > 0)
         {
-            RetentionPruned.Add(prunedCount, scopeTag);
+            RetentionPruned.Add(prunedCount, scopeTag, LatticeTenantLabel.Platform);
         }
     }
 
@@ -326,7 +333,7 @@ public static class LatticeBackupMetrics
     public static void RecordSchedulerSkipped(string scopeKey)
     {
         ArgumentException.ThrowIfNullOrEmpty(scopeKey);
-        SchedulerSkipped.Add(1, new KeyValuePair<string, object?>(TagScope, scopeKey));
+        SchedulerSkipped.Add(1, new KeyValuePair<string, object?>(TagScope, scopeKey), LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records that a scheduled cycle fired while a capture was still in flight.</summary>
@@ -334,7 +341,7 @@ public static class LatticeBackupMetrics
     public static void RecordSchedulerOverrun(string scopeKey)
     {
         ArgumentException.ThrowIfNullOrEmpty(scopeKey);
-        SchedulerOverruns.Add(1, new KeyValuePair<string, object?>(TagScope, scopeKey));
+        SchedulerOverruns.Add(1, new KeyValuePair<string, object?>(TagScope, scopeKey), LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records a capture retry / fallback with a classified reason.</summary>
@@ -342,7 +349,7 @@ public static class LatticeBackupMetrics
     public static void RecordCaptureRetry(string reason)
     {
         ArgumentException.ThrowIfNullOrEmpty(reason);
-        CaptureRetries.Add(1, new KeyValuePair<string, object?>(TagReason, reason));
+        CaptureRetries.Add(1, new KeyValuePair<string, object?>(TagReason, reason), LatticeTenantLabel.Platform);
     }
 
     /// <summary>
@@ -358,10 +365,15 @@ public static class LatticeBackupMetrics
     /// <returns><see langword="false"/> always.</returns>
     public static bool EmitCaptureFailure(BackupKind kind, string phase, Exception exception)
     {
-        CaptureFailures.Add(1,
-            KindTag(kind),
-            new KeyValuePair<string, object?>(TagPhase, phase),
-            new KeyValuePair<string, object?>(TagReason, MapReason(exception)));
+        CaptureFailures.Add(
+            1,
+            new System.Diagnostics.TagList
+            {
+                KindTag(kind),
+                new KeyValuePair<string, object?>(TagPhase, phase),
+                new KeyValuePair<string, object?>(TagReason, MapReason(exception)),
+                LatticeTenantLabel.Platform,
+            });
         BackupInventoryRegistry.Instance.IncrementCaptureFailures();
         return false;
     }
@@ -379,7 +391,8 @@ public static class LatticeBackupMetrics
     {
         RestoreFailures.Add(1,
             new KeyValuePair<string, object?>(TagPhase, phase),
-            new KeyValuePair<string, object?>(TagReason, MapReason(exception)));
+            new KeyValuePair<string, object?>(TagReason, MapReason(exception)),
+            LatticeTenantLabel.Platform);
         BackupInventoryRegistry.Instance.IncrementRestoreFailures();
         return false;
     }

@@ -1,0 +1,40 @@
+@inject MyTenantMetricsSectionAccessor Metrics
+
+@*
+    The Metrics surface: a declared seam with a placeholder body.
+
+    The tab exists from the start deliberately. Adding it later would shift
+    every tab beside it and move the overflow boundary at compact, so the strip
+    is stable from the first release and the section fills in underneath it.
+
+    A head that registers an IMyTenantMetricsSection gets that component; one
+    that does not gets the placeholder, and nothing about the area breaks
+    either way. The optional resolution is the container's job, through the
+    plugin's own accessor - the panel injects no service provider and asks for
+    nothing by type.
+*@
+
+<div class="lxm-surface">
+    @if (Metrics.Section is { } section)
+    {
+        <section class="lxm-section" aria-label="@section.Label">
+            <DynamicComponent Type="section.ViewType" />
+        </section>
+    }
+    else
+    {
+        <p class="lxm-muted">
+            Your tenant's metrics are not available in this build. The section is declared here and
+            fills in when a head registers one.
+        </p>
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// The workspace this surface belongs to. The section resolves whatever it
+    /// needs itself, so this is held for the surface's own scoping rather than
+    /// passed down.
+    /// </summary>
+    [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+}

@@ -1,0 +1,61 @@
+@inherits SelectionPluginViewBase
+@inject ITagIndexSurface Surface
+
+@*
+    The tag-index browsing surface. It is composed of three sections, each its
+    own component so this file stays a shell: the trees the index covers, the
+    tags it carries, and the members of the selected tag.
+
+    The sections sit in a three-column grid at medium and expanded, and stack
+    into one column at compact - chosen from the cascaded breakpoint by name,
+    never from a media query (epic decision D7).
+*@
+
+<div class="lx-tagindex">
+    @if (string.IsNullOrEmpty(IndexName))
+    {
+        <div class="lx-selection-state">This selection is not a tag index.</div>
+    }
+    else if (_loading && !_loaded)
+    {
+        <div class="lx-selection-state">Loading tag index...</div>
+    }
+    else if (_error is not null)
+    {
+        <div class="lx-selection-state lx-selection-state-error">
+            <span>@_error</span>
+            <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
+        </div>
+    }
+    else
+    {
+        <div class="lx-tagindex-summary">
+            <span class="lx-badge">index</span>
+            <span class="lx-tagindex-name">@IndexName</span>
+            <span class="lx-tagindex-stat">@_coveredTrees.Count covered tree@(_coveredTrees.Count == 1 ? "" : "s")</span>
+            <span class="lx-tagindex-stat">@_tags.Count tag@(_tags.Count == 1 ? "" : "s")</span>
+            <button type="button" class="lx-btn" disabled="@_loading" @onclick="LoadAsync">
+                @(_loading ? "Loading..." : "Refresh")
+            </button>
+        </div>
+
+        <div class="lx-tagindex-body @(IsCompact ? "is-stacked" : null)">
+            <TagIndexTrees Trees="_coveredTrees" OnOpenTree="_openTree" />
+
+            <TagIndexTags Tags="_tags" SelectedTag="_selectedTag" OnSelectTag="_selectTag" />
+
+            <TagIndexMembers Tag="_selectedTag"
+                             Members="CurrentMembers"
+                             Loading="_membersLoading"
+                             HasLoadedPage="@(_memberPages.Count > 0)"
+                             Error="_memberError"
+                             PageIndex="_memberPageIndex"
+                             CanGoPrevious="@(_memberPageIndex > 0)"
+                             CanGoNext="CanGoNextMembers"
+                             OnPrevious="_previousMembers"
+                             OnNext="_nextMembers"
+                             OnRetry="_retryMembers"
+                             OnOpenMember="_openMember" />
+        </div>
+    }
+</div>

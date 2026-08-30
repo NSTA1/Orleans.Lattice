@@ -7,11 +7,17 @@ using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Access;
+using Orleans.Lattice.Explorer.DesignSystem;
+using Orleans.Lattice.Explorer.Plugins.MyTenant;
+using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
+using Orleans.Lattice.Explorer.UI.Plugins;
 
 namespace Orleans.Lattice.Explorer;
 
@@ -62,6 +68,11 @@ public static class MauiProgram
         builder.Services.AddExplorerHistory();
         builder.Services.AddExplorerSession();
 
+        // The adaptive shell's viewport seam: one breakpoint per rendered shell,
+        // driven by LatticeAdaptiveRoot and read by every design-system
+        // primitive.
+        builder.Services.AddLatticeExplorerDesignSystem();
+
         // The desktop head persists UI preferences to the platform preference
         // store, overriding the in-memory fallback backing store.
         builder.Services.AddScoped<IUiPreferenceBackingStore, MauiPreferenceBackingStore>();
@@ -73,13 +84,47 @@ public static class MauiProgram
         builder.Services.AddSingleton(new ExplorerAuthUiOptions { UseServerFormPost = false });
         builder.Services.AddExplorerAuth();
 
+        // The plugin host and the adapters that publish the Explorer's own
+        // selection, connection, tenant and preference state onto the plugin
+        // contract. Which areas the shell surfaces is decided by which area
+        // plugins this head registers below.
+        builder.Services.AddExplorerPluginAdapters();
+
+        // The per-selection tier (see the web head for the rationale).
+        builder.Services.AddExplorerSelectionPlugins();
+
         // The Backups management area (see the web head for the rationale).
         builder.Services.AddExplorerBackup();
+        builder.Services.AddExplorerBackupsPlugin();
 
         // The Access (membership & access-control) area (see the web head).
         builder.Services.AddExplorerAccess();
+        builder.Services.AddExplorerAccessPlugin();
 
-        // The Schema management area (see the web head).
+        // The Tenants (platform-operator tenant management) area (see the web
+        // head). Registered after AddExplorerAccess(), which supplies the
+        // platform-operator gate the area is reserved to.
+        builder.Services.AddExplorerTenantsPlugin();
+        // The My Tenant self-service area (see the web head for the ordering
+        // rationale: AddExplorerTenantView must follow AddExplorerAccess so the
+        // real platform-operator gate wins the TryAdd).
+        builder.Services.AddExplorerTenantView();
+        builder.Services.AddExplorerMyTenant();
+        builder.Services.AddExplorerMyTenantPlugin();
+
+        // The Telemetry area and the tenant-metrics section of My Tenant (see
+        // the web head). Both are opt-ins this head takes; on a cluster serving
+        // no telemetry facade the plugin's gate reports the surface unavailable
+        // and no Telemetry tab is rendered.
+        builder.Services.AddExplorerTelemetry();
+        builder.Services.AddExplorerTelemetryPlugin();
+        builder.Services.AddExplorerTelemetryMyTenantSection();
+
+        // The Schema management area (see the web head). Its services are wired
+        // but its plugin is not registered, so the desktop head renders no Schema
+        // tab - a head opts in with AddExplorerSchemaPlugin() from
+        // Orleans.Lattice.Explorer.Schema, which is the whole of the
+        // opt-in now that the per-area flag is retired.
         builder.Services.AddExplorerSchema();
 
 #if DEBUG

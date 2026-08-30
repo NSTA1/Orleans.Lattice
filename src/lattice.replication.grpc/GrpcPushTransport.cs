@@ -385,7 +385,8 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
                 LatticeReplicationMetrics.WalEntriesShipped.Add(
                     entryCount,
                     new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, batch.TreeName),
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, batch.TargetClusterId));
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, batch.TargetClusterId),
+                    LatticeTenantLabel.ForTree(batch.TreeName));
             }
 
             return ackBox.Value;
@@ -394,9 +395,13 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         {
             LatticeReplicationMetrics.ShipDuration.Record(
                 stopwatch.GetElapsedMilliseconds(),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, batch.TreeName),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, batch.TargetClusterId),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome));
+                new System.Diagnostics.TagList
+                {
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, batch.TreeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, batch.TargetClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome),
+                    LatticeTenantLabel.ForTree(batch.TreeName),
+                });
         }
     }
 

@@ -148,6 +148,39 @@ public sealed class TenantRecordTests
     }
 
     [Test]
+    public void AdminSubjectCount_is_zero_on_a_fresh_record() =>
+        Assert.That(AcmeRecord().AdminSubjectCount, Is.Zero);
+
+    [Test]
+    public void AdminSubjectCount_counts_only_live_subjects()
+    {
+        var record = AcmeRecord();
+        record.AddAdminSubject("alice", Clock(20), "w1");
+        record.AddAdminSubject("bob", Clock(21), "w1");
+        record.AddAdminSubject("charlie", Clock(22), "w1");
+        record.RemoveAdminSubject("bob", Clock(30), "w1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(record.AdminSubjectCount, Is.EqualTo(2),
+                "A tombstoned subject must not be counted.");
+            Assert.That(record.AdminSubjectCount, Is.EqualTo(record.AdminSubjects.Count),
+                "The zero-allocation count must agree with the materialised list.");
+        });
+    }
+
+    [Test]
+    public void AdminSubjectCount_does_not_double_count_a_re_added_subject()
+    {
+        var record = AcmeRecord();
+        record.AddAdminSubject("alice", Clock(20), "w1");
+        record.RemoveAdminSubject("alice", Clock(21), "w1");
+        record.AddAdminSubject("alice", Clock(22), "w1");
+
+        Assert.That(record.AdminSubjectCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public void AddAdminSubject_null_throws()
     {
         var record = AcmeRecord();

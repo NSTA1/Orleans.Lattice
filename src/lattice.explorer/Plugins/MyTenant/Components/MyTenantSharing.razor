@@ -1,0 +1,287 @@
+@*
+    The Sharing surface: this tenant's own side of the two-step cross-tenant
+    grant agreement.
+
+    The inbox comes FIRST, and a pending inbound offer is rendered as its own
+    decision card rather than as a row with a small button - because approving
+    is the step that turns an offer into live access, and it is the one action
+    on this surface that changes what another tenant can reach. The card names
+    the granter, the scope, and the operations it would authorize, and says in
+    plain words that the grant authorizes nothing until it is approved. Nothing
+    else on the surface uses the primary action styling.
+
+    Every grant carries its state explicitly, in both directions and in every
+    list, so a pending grant can never be mistaken for live access.
+*@
+
+<div class="lxm-surface">
+    <section class="lxm-section" aria-labelledby="lxm-inbox-heading">
+        <h3 id="lxm-inbox-heading" class="lxm-section-heading">
+            Offers to your tenant
+            @if (State.HasPendingInbound)
+            {
+                <span class="lxm-count">@State.PendingInboundCount awaiting decision</span>
+            }
+        </h3>
+
+        @if (State.HasPendingInbound)
+        {
+            <p class="lxm-status is-refused" role="status">
+                @State.PendingInboundCount cross-tenant grant(s) have been offered to your tenant and
+                are <strong>pending</strong>. A pending grant authorizes nothing: approving it here is
+                what makes the access live.
+            </p>
+        }
+
+        @if (State.Inbound.Count == 0)
+        {
+            <p class="lxm-muted">No tenant has offered your tenant access to its data.</p>
+        }
+        else
+        {
+            <ul class="lxm-grants">
+                @foreach (var row in State.Inbound)
+                {
+                    var actions = Actions(row);
+                    <li class="lxm-grant @(row.NeedsDecision ? "is-decision" : null)" @key="row.Grant.GrantId">
+                        <div class="lxm-grant-head">
+                            <span class="lxm-grant-party">
+                                @TenantGrantLabels.Label(row.Direction)
+                                <strong class="lxm-fact-code">@row.CounterpartyTenantId</strong>
+                            </span>
+                            <TenantGrantStateBadge State="row.Grant.State" />
+                        </div>
+
+                        <dl class="lxm-grant-facts">
+                            <div class="lxm-fact">
+                                <dt>Scope</dt>
+                                <dd class="lxm-fact-code">@row.Grant.Scope</dd>
+                            </div>
+                            <div class="lxm-fact">
+                                <dt>Operations</dt>
+                                <dd>@TenantGrantLabels.Operations(row.Grant.Operations)</dd>
+                            </div>
+                        </dl>
+
+                        @if (row.NeedsDecision)
+                        {
+                            <p class="lxm-grant-consequence">
+                                Approving gives <strong>@row.Grant.GranterTenantId</strong>
+                                <strong>@TenantGrantLabels.OperationsInSentence(row.Grant.Operations)</strong>
+                                access to <strong>@row.Grant.Scope</strong>. Until you do, it grants nothing.
+                            </p>
+                            <div class="lxm-grant-actions">
+                                <button type="button"
+                                        class="lx-btn lxm-approve-action"
+                                        disabled="@(State.Busy || !State.Allowed)"
+                                        @onclick="actions.Approve">
+                                    Approve and make live
+                                </button>
+                                <button type="button"
+                                        class="lx-btn"
+                                        disabled="@(State.Busy || !State.Allowed)"
+                                        @onclick="actions.Reject">Reject</button>
+                            </div>
+                        }
+                        else if (row.CanRevoke)
+                        {
+                            <div class="lxm-grant-actions">
+                                <button type="button"
+                                        class="lx-btn lxm-destructive-action"
+                                        disabled="@(State.Busy || !State.Allowed)"
+                                        @onclick="actions.Revoke">Withdraw</button>
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="lxm-section" aria-labelledby="lxm-outbound-heading">
+        <h3 id="lxm-outbound-heading" class="lxm-section-heading">Grants your tenant has offered</h3>
+
+        @if (State.Outbound.Count == 0)
+        {
+            <p class="lxm-muted">Your tenant has not offered any of its data to another tenant.</p>
+        }
+        else
+        {
+            <ul class="lxm-grants">
+                @foreach (var row in State.Outbound)
+                {
+                    var actions = Actions(row);
+                    <li class="lxm-grant" @key="row.Grant.GrantId">
+                        <div class="lxm-grant-head">
+                            <span class="lxm-grant-party">
+                                @TenantGrantLabels.Label(row.Direction)
+                                <strong class="lxm-fact-code">@row.CounterpartyTenantId</strong>
+                            </span>
+                            <TenantGrantStateBadge State="row.Grant.State" />
+                        </div>
+
+                        <dl class="lxm-grant-facts">
+                            <div class="lxm-fact">
+                                <dt>Scope</dt>
+                                <dd class="lxm-fact-code">@row.Grant.Scope</dd>
+                            </div>
+                            <div class="lxm-fact">
+                                <dt>Operations</dt>
+                                <dd>@TenantGrantLabels.Operations(row.Grant.Operations)</dd>
+                            </div>
+                        </dl>
+
+                        @if (row.IsAwaitingApproval)
+                        {
+                            <p class="lxm-muted">
+                                Waiting on <strong>@row.Grant.GranteeTenantId</strong> to accept. Only that
+                                tenant can approve it, and it authorizes nothing meanwhile.
+                            </p>
+                        }
+
+                        @if (row.CanRevoke)
+                        {
+                            <div class="lxm-grant-actions">
+                                <button type="button"
+                                        class="lx-btn lxm-destructive-action"
+                                        disabled="@(State.Busy || !State.Allowed)"
+                                        @onclick="actions.Revoke">Withdraw</button>
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="lxm-section" aria-labelledby="lxm-offer-heading">
+        <h3 id="lxm-offer-heading" class="lxm-section-heading">Offer a grant on your data</h3>
+
+        <div class="lxm-form-row">
+            <label class="lxm-field">
+                <span class="lxm-field-label">To tenant</span>
+                <input class="lxm-input"
+                       type="text"
+                       autocomplete="off"
+                       placeholder="globex"
+                       disabled="@(State.Busy || !State.Allowed)"
+                       value="@State.OfferGranteeTenantId"
+                       @oninput="OnGranteeInput" />
+            </label>
+            <label class="lxm-field">
+                <span class="lxm-field-label">Scope</span>
+                <input class="lxm-input"
+                       type="text"
+                       autocomplete="off"
+                       placeholder="t/acme/orders"
+                       disabled="@(State.Busy || !State.Allowed)"
+                       value="@State.OfferScope"
+                       @oninput="OnScopeInput" />
+            </label>
+            <label class="lxm-field">
+                <span class="lxm-field-label">Operations</span>
+                <select class="lxm-input"
+                        disabled="@(State.Busy || !State.Allowed)"
+                        value="@State.OfferOperations"
+                        @onchange="OnOperationsChanged">
+                    <option value="@ExplorerTenantGrantAccess.Read">Read</option>
+                    <option value="@ExplorerTenantGrantAccess.Write">Write</option>
+                    <option value="@ExplorerTenantGrantAccess.ReadWrite">Read and write</option>
+                </select>
+            </label>
+            <button type="button"
+                    class="lx-btn"
+                    disabled="@(State.Busy || !State.Allowed)"
+                    @onclick="State.OfferGrantAsync">Offer</button>
+        </div>
+
+        <p class="lxm-muted">
+            An offer is created <strong>pending</strong> and authorizes nothing until the receiving
+            tenant approves it. You cannot approve your own offer, and you can only offer your own
+            tenant's data.
+        </p>
+    </section>
+</div>
+
+@code {
+    private readonly Dictionary<string, RowActions> _actions = new(StringComparer.Ordinal);
+
+    /// <summary>The workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+
+    /// <summary>
+    /// The three decision callbacks for one grant, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambdas inline allocated a closure and an
+    /// <see cref="EventCallback"/> per action per row per render, and gave each
+    /// delegate a new identity, so Blazor's attribute diffing re-registered every
+    /// handler instead of skipping it. The callbacks close over the entry rather
+    /// than over the row, and the entry is re-bound to the row instance being
+    /// rendered, so a reloaded grant is acted on as it is now. That matters here
+    /// above all: approving is the step that turns an offer into live access, and
+    /// withdrawing revokes it.
+    /// <para>
+    /// One map serves both directions because a grant id is unique across them,
+    /// and a grant never appears in both.
+    /// </para>
+    /// </remarks>
+    private RowActions Actions(TenantGrantRow row)
+    {
+        var grantId = row.Grant.GrantId;
+        if (_actions.TryGetValue(grantId, out var actions))
+        {
+            actions.Bind(row);
+            return actions;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the two lists it
+        // serves is holding callbacks for grants no longer rendered.
+        if (_actions.Count > (State.Inbound.Count + State.Outbound.Count) * 2)
+        {
+            _actions.Clear();
+        }
+
+        actions = new RowActions(this, row);
+        _actions.Add(grantId, actions);
+        return actions;
+    }
+
+    private void OnGranteeInput(ChangeEventArgs args) =>
+        State.OfferGranteeTenantId = args.Value?.ToString() ?? string.Empty;
+
+    private void OnScopeInput(ChangeEventArgs args) =>
+        State.OfferScope = args.Value?.ToString() ?? string.Empty;
+
+    // Anything unparseable falls back to Read: the narrowest of the three, so a
+    // malformed selection can never widen what an offer would authorize.
+    private void OnOperationsChanged(ChangeEventArgs args) =>
+        State.OfferOperations =
+            Enum.TryParse<ExplorerTenantGrantAccess>(args.Value?.ToString(), out var parsed)
+                ? parsed
+                : ExplorerTenantGrantAccess.Read;
+
+    /// <summary>One grant row's pre-bound decision callbacks.</summary>
+    private sealed class RowActions
+    {
+        private TenantGrantRow _row;
+
+        public RowActions(MyTenantSharing view, TenantGrantRow row)
+        {
+            _row = row;
+            Approve = EventCallback.Factory.Create(view, () => view.State.ApproveGrantAsync(_row));
+            Reject = EventCallback.Factory.Create(view, () => view.State.RejectGrantAsync(_row));
+            Revoke = EventCallback.Factory.Create(view, () => view.State.RevokeGrantAsync(_row));
+        }
+
+        public EventCallback Approve { get; }
+
+        public EventCallback Reject { get; }
+
+        public EventCallback Revoke { get; }
+
+        /// <summary>Re-points the bound callbacks at the row instance being rendered.</summary>
+        public void Bind(TenantGrantRow row) => _row = row;
+    }
+}

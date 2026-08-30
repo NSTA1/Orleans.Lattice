@@ -283,7 +283,8 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             }
             yield return new Measurement<long>(
                 selector(report),
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 
@@ -300,7 +301,8 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             }
             yield return new Measurement<long>(
                 overThreshold ? 1L : 0L,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 }

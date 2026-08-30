@@ -1,0 +1,826 @@
+/*
+  Orleans.Lattice Explorer - shared shell chrome.
+
+  The shell is the frame every plugin renders inside: the brand bar, the
+  navigation rail, the detail panel, the area strip, and the authentication,
+  tenant, and configuration surfaces. This stylesheet owns those, and only
+  those.
+
+  It exists because deleting the `app.css` monolith (issue #1770) had to
+  resolve every rule in it, not simply drop the file. Each rule was one of
+  three things:
+
+  1. A shared UI primitive every plugin composes - a button, a badge, a modal,
+     a nav list, a tab strip. Those moved to
+     `Orleans.Lattice.Explorer.DesignSystem`, so a plugin composes them without
+     depending on the shared shell at all.
+  2. Shell chrome - the rules below. They stayed with the shell, which is the
+     component that actually renders them.
+  3. Dead. Rules for surfaces deleted earlier in the epic (the old Access
+     grid, the `AppArea` placeholder, a table and panel utility nothing
+     referenced) shipped to every user for nothing, and were removed.
+
+  Two rules hold throughout, the same two the design system holds itself to:
+
+  1. NO width media query. Breakpoints live in exactly one file,
+     `lattice-breakpoints.css`; a surface that must change shape takes the
+     cascaded `LatticeAdaptiveContext` and branches on its breakpoint in .NET.
+     `BreakpointTokenHygieneTests` fails the build if one appears here.
+  2. Every design value - colour, radius, motion, font, elevation, layering -
+     is a token from `lattice-tokens.css`. Nothing below hardcodes a colour.
+
+  Theming works exactly as it did before the monolith was removed:
+  `data-theme="light"` on <html> selects the light palette and the dark palette
+  is the default, because both are declared in the token layer.
+*/
+
+/* ==========================================================================
+   Document
+
+   The monolith carried the product's only element-level reset, so it has to
+   land somewhere or the shell ships with the user agent's default margin,
+   font, and background. The design system deliberately does not carry it: a
+   token layer that restyled <body> would be unusable inside a host page that
+   already has one.
+   ========================================================================== */
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: var(--lx-font-ui);
+    font-size: 14px;
+    line-height: var(--lx-leading-normal);
+    color: var(--lx-color-text);
+    background: var(--lx-color-canvas);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-tight);
+}
+
+h1 {
+    margin: 0 0 var(--lx-space-4);
+    font-size: var(--lx-text-display);
+}
+
+a {
+    color: var(--lx-color-accent);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--lx-color-accent-hover);
+}
+
+code {
+    font-family: var(--lx-font-mono);
+    font-size: 0.92em;
+}
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+
+.lx-shell {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--lx-color-canvas);
+}
+
+.lx-shell-main {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.lx-shell-layout {
+    display: flex;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+/*
+  Compact: the catalog stops being a pane. The frame stacks so the drawer's
+  toggle sits above the detail surface and the detail surface keeps the whole
+  width, instead of a fixed 20rem rail squeezing it to a sliver on a phone
+  (issue #1792). The catalog itself moves into the design system's drawer
+  presentation, which is an overlay, so it occupies no layout width at all.
+*/
+.lx-shell-layout.is-stacked {
+    flex-direction: column;
+}
+
+.lx-shell-layout.is-stacked > .lx-nav-drawer-host {
+    padding: var(--lx-space-3) var(--lx-shell-padding-inline);
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+}
+
+.lx-shell-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* ==========================================================================
+   Brand bar
+   ========================================================================== */
+
+.lx-shell-brand {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 0.55rem;
+    padding: 0.55rem var(--lx-space-6);
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+}
+
+.lx-shell-brand-name {
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: 0.01em;
+}
+
+.lx-shell-brand-sep {
+    color: var(--lx-color-text-dim);
+}
+
+.lx-shell-brand-auth {
+    display: inline-flex;
+    align-items: center;
+    margin-left: auto;
+    padding-left: var(--lx-space-4);
+}
+
+.lx-shell-cluster {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-size: var(--lx-text-small);
+}
+
+.lx-shell-cluster-label {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.lx-shell-cluster-id {
+    color: var(--lx-color-accent);
+    font-family: var(--lx-font-mono);
+}
+
+/* ==========================================================================
+   Settings cog
+   ========================================================================== */
+
+.lx-shell-cog {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--lx-target-min);
+    height: var(--lx-target-min);
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-cog:hover {
+    border-color: var(--lx-color-border);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-accent);
+}
+
+.lx-shell-cog:focus-visible {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+/* ==========================================================================
+   Configuration, sign-in, and re-authentication dialogs
+   ========================================================================== */
+
+.lx-shell-config-loading {
+    padding: var(--lx-space-9);
+    color: var(--lx-color-text-muted);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+}
+
+.lx-shell-config-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--lx-layer-dialog);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--lx-space-6);
+    background: var(--lx-color-scrim);
+    backdrop-filter: blur(2px);
+}
+
+.lx-shell-config-dialog {
+    width: min(30rem, 94vw);
+    padding: 1.75rem;
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    box-shadow: var(--lx-elevation-3);
+}
+
+.lx-shell-config-dialog h2 {
+    margin: 0 0 var(--lx-space-4);
+    font-size: 1.1rem;
+}
+
+.lx-shell-config-help {
+    margin: 0 0 var(--lx-space-7);
+    color: var(--lx-color-text-muted);
+    font-size: 0.88rem;
+}
+
+.lx-shell-config-field {
+    display: block;
+    margin-bottom: 1.1rem;
+}
+
+.lx-shell-config-field span {
+    display: block;
+    margin-bottom: 0.35rem;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-wide);
+    text-transform: uppercase;
+}
+
+.lx-shell-config-field input[type="text"] {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-body);
+    transition: border-color var(--lx-motion-fast) var(--lx-motion-ease),
+                box-shadow var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-config-field input[type="text"]::placeholder {
+    color: var(--lx-color-text-dim);
+}
+
+.lx-shell-config-field input[type="text"]:focus {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-shell-config-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-bottom: var(--lx-space-7);
+    color: var(--lx-color-text-muted);
+    font-size: 0.88rem;
+}
+
+.lx-shell-config-checkbox input[type="checkbox"] {
+    width: var(--lx-text-base);
+    height: var(--lx-text-base);
+    accent-color: var(--lx-color-accent);
+}
+
+.lx-shell-config-error {
+    margin: 0 0 1.1rem;
+    padding: var(--lx-space-4) 0.7rem;
+    border: 1px solid var(--lx-color-danger-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-danger-surface);
+    color: var(--lx-color-danger);
+    font-size: var(--lx-text-small);
+}
+
+.lx-shell-config-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+}
+
+/* ==========================================================================
+   Navigation rail
+   ========================================================================== */
+
+.lx-shell-nav {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    width: var(--lx-nav-sidebar-width);
+    border-right: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+}
+
+/*
+  Inside the compact drawer the catalog is the whole surface, so it fills the
+  drawer rather than holding the sidebar width that would overflow it.
+*/
+.lx-nav-drawer > .lx-shell-nav {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border-right: none;
+}
+
+.lx-shell-nav-header {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+    padding: 0.6rem 0.65rem;
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.lx-shell-nav-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+}
+
+.lx-shell-nav-toggle {
+    display: flex;
+    width: 100%;
+    padding: 2px;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+}
+
+.lx-shell-toggle-option {
+    flex: 1;
+    padding: 0.3rem var(--lx-space-4);
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font-size: 0.8rem;
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-toggle-option:hover {
+    color: var(--lx-color-text);
+}
+
+.lx-shell-toggle-option.is-active {
+    background: var(--lx-color-accent);
+    color: var(--lx-color-accent-contrast);
+}
+
+.lx-shell-toggle-option:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-shell-nav-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-nav-refresh:hover:not(:disabled) {
+    border-color: var(--lx-color-border);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-accent);
+}
+
+.lx-shell-nav-refresh:focus-visible {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-shell-nav-refresh:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.lx-shell-nav-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.4rem;
+}
+
+.lx-shell-nav-state {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    padding: var(--lx-space-7) var(--lx-space-5);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}
+
+.lx-shell-nav-error {
+    color: var(--lx-color-danger);
+}
+
+.lx-shell-nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.lx-shell-nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    width: 100%;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-nav-item:hover {
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-shell-nav-item.is-selected {
+    border-color: var(--lx-color-accent);
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-shell-nav-item:focus-visible {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-shell-nav-item-id {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    word-break: break-all;
+}
+
+.lx-shell-nav-item-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+}
+
+.lx-shell-nav-more {
+    width: 100%;
+    margin-top: 0.4rem;
+    padding: 0.45rem;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text-muted);
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-nav-more:hover:not(:disabled) {
+    border-color: var(--lx-color-border-strong);
+    color: var(--lx-color-text);
+}
+
+.lx-shell-nav-more:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+/* ==========================================================================
+   Connection status banner
+   ========================================================================== */
+
+.lx-shell-connbar {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    margin-left: auto;
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--lx-radius-sm);
+    font-size: 0.8rem;
+}
+
+.lx-shell-connbar-warn {
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-warning);
+}
+
+.lx-shell-connbar-ok {
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-success);
+}
+
+.lx-shell-connbar-down {
+    border: 1px solid var(--lx-color-danger-border);
+    background: var(--lx-color-danger-surface);
+    color: var(--lx-color-danger);
+}
+
+.lx-shell-conndot {
+    flex-shrink: 0;
+    width: var(--lx-space-4);
+    height: var(--lx-space-4);
+    border-radius: var(--lx-radius-pill);
+    background: currentColor;
+}
+
+.lx-shell-connmsg {
+    min-width: 0;
+}
+
+.lx-shell-reconnect {
+    padding: var(--lx-space-2) 0.7rem;
+    font-size: 0.8rem;
+}
+
+/* ==========================================================================
+   Detail panel
+
+   The tab strip inside the header is the design system's adaptive strip. The
+   panel header already draws the separating rule and owns the surface, so the
+   strip does not draw its own; everything else about it (overflow, roving
+   tabindex, disabled affordance) is the primitive's.
+   ========================================================================== */
+
+.lx-shell-detail {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    min-width: 0;
+}
+
+.lx-shell-detail-header {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-6);
+    padding: 0 var(--lx-space-7);
+    border-bottom: 1px solid var(--lx-color-border);
+}
+
+.lx-shell-detail-tabs {
+    flex: 1;
+    min-width: 0;
+    border-bottom: none;
+    background: transparent;
+}
+
+.lx-shell-detail-title {
+    max-width: 40%;
+    margin-left: auto;
+    overflow: hidden;
+    color: var(--lx-color-text-muted);
+    font-family: var(--lx-font-mono);
+    font-size: 0.82rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lx-shell-detail-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--lx-space-8);
+}
+
+.lx-shell-detail-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--lx-color-text-dim);
+}
+
+/* ==========================================================================
+   Authentication: sign-in button and signed-in identity
+   ========================================================================== */
+
+.lx-shell-auth {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.lx-shell-auth-form {
+    display: inline-flex;
+    margin: 0;
+}
+
+.lx-shell-auth-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    max-width: 7rem;
+    color: var(--lx-color-text-muted);
+    font-size: 0.8rem;
+}
+
+.lx-shell-auth-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lx-shell-auth-signin {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.55rem;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font-size: 0.8rem;
+    font-weight: var(--lx-weight-semibold);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-auth-signin:hover {
+    border-color: var(--lx-color-border-strong);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-accent);
+}
+
+.lx-shell-auth-signin:focus-visible {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-shell-auth-label {
+    line-height: 1;
+}
+
+/* ==========================================================================
+   Tenant selection
+   ========================================================================== */
+
+.lx-shell-tenant {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+}
+
+.lx-shell-tenant-label {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-micro);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.lx-shell-tenant-id {
+    max-width: 8rem;
+    overflow: hidden;
+    color: var(--lx-color-accent);
+    font-family: var(--lx-font-mono);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lx-shell-tenant-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+}
+
+.lx-shell-tenant-alltenants {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--lx-space-2);
+    color: var(--lx-color-text-muted);
+    cursor: pointer;
+}
+
+.lx-shell-tenant-input {
+    width: 6rem;
+    padding: 0.15rem 0.35rem;
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    font-family: var(--lx-font-mono);
+    font-size: 0.75rem;
+}
+
+.lx-shell-tenant-input:focus-visible {
+    outline: none;
+    border-color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+/* ==========================================================================
+   Area strip
+
+   The top-level area switcher the plugin host renders its registered areas
+   into.
+   ========================================================================== */
+
+.lx-shell-areastrip {
+    display: flex;
+    align-items: stretch;
+    gap: var(--lx-space-2);
+    min-width: 0;
+    padding: 0 var(--lx-space-6);
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+}
+
+.lx-shell-area-tab {
+    padding: 0.6rem 1.1rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-semibold);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-shell-area-tab:hover:not(:disabled) {
+    color: var(--lx-color-text);
+}
+
+.lx-shell-area-tab.is-active {
+    border-bottom-color: var(--lx-color-accent);
+    color: var(--lx-color-accent);
+}
+
+.lx-shell-area-tab:focus-visible {
+    outline: none;
+    color: var(--lx-color-accent);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-shell-area-tab:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.lx-shell-area-content {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}

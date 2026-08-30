@@ -389,7 +389,8 @@ internal sealed class WalCommitLogWriter(
                 LatticeMetrics.WalAppendAdmissionSaturationRefusals.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
+                    LatticeTenantLabel.ForTree(treeId));
                 throw new LatticeSaturatedException(
                     $"WAL append dispatch to tree '{treeId}' partition {partition} refused: the per-tree saturation signal stayed Saturated beyond {nameof(LatticeOptions.WalAdmissionSaturationWaitBudget)} ({budget}); offered load is exceeding the storage layer's sustained drain rate. The caller should back off and retry once the signal returns to Healthy.",
                     treeId);
@@ -549,6 +550,7 @@ internal sealed class WalCommitLogWriter(
         // WalAppendStage and PendingAppend for the lifecycle details.
         var tracker = GetTracker(stamped.TreeId, partition);
         var treeTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId);
+        var tenantTagWriter = LatticeTenantLabel.ForTree(stamped.TreeId);
         var partitionTagWriter = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
 
         // Pre-admission saturation gate. Refuses fast with
@@ -599,7 +601,7 @@ internal sealed class WalCommitLogWriter(
             if (!isDrainRelease)
             {
                 System.Console.WriteLine($"[wal-admission-timeout] tree={stamped.TreeId} partition={partition} entries=1 cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
-                LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTagWriter, partitionTagWriter);
+                LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTagWriter, partitionTagWriter, tenantTagWriter);
                 throw;
             }
             // Surface the drain-release path as
@@ -610,12 +612,12 @@ internal sealed class WalCommitLogWriter(
             // the inner exception for log diagnostics.
             throw new LatticeShuttingDownException(ex.Message, ex);
         }
-        LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTagWriter, partitionTagWriter);
+        LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTagWriter, partitionTagWriter, tenantTagWriter);
 
         var pending = new PendingAppend(stamped.TreeId, partition, entryCount: 1, batchBytes: 0);
         var preDepth = tracker.LinkReturningPreDepth(pending);
-        LatticeMetrics.WalAppendDispatched.Add(1, treeTagWriter, partitionTagWriter);
-        LatticeMetrics.WalAppendPendingDispatches.Record(preDepth, treeTagWriter, partitionTagWriter);
+        LatticeMetrics.WalAppendDispatched.Add(1, treeTagWriter, partitionTagWriter, tenantTagWriter);
+        LatticeMetrics.WalAppendPendingDispatches.Record(preDepth, treeTagWriter, partitionTagWriter, tenantTagWriter);
 
         // A2 cross-grain dispatch attribution: clock the awaited grain
         // RPC on the caller side so the Orleans turn-queue wait at the
@@ -711,7 +713,8 @@ internal sealed class WalCommitLogWriter(
                 LatticeMetrics.WalAppendDispatchTimeouts.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, stamped.TreeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition),
+                    LatticeTenantLabel.ForTree(stamped.TreeId));
                 // Per-(tree, shard) cumulative trip count consumed by
                 // the silo-scoped saturation sampler (IWalSaturationSignal).
                 // AddOrUpdate runs under the dictionary's internal
@@ -857,6 +860,7 @@ internal sealed class WalCommitLogWriter(
         // the StallWatchdog [wal-append] output too.
         var tracker = GetTracker(treeId, partition);
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
         var partitionTag = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
 
         // Pre-admission saturation gate (batched path).
@@ -885,7 +889,7 @@ internal sealed class WalCommitLogWriter(
             if (!isDrainRelease)
             {
                 System.Console.WriteLine($"[wal-admission-timeout] tree={treeId} partition={partition} entries={entries.Count} cap={perTree.WalMaxPendingBatches} timeout={perTree.WalAppendDispatchTimeout}");
-                LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTag, partitionTag);
+                LatticeMetrics.WalAppendAdmissionTimeouts.Add(1, treeTag, partitionTag, tenantTag);
                 throw;
             }
             // Surface the drain-release path as
@@ -893,12 +897,12 @@ internal sealed class WalCommitLogWriter(
             // overload above for the rationale).
             throw new LatticeShuttingDownException(ex.Message, ex);
         }
-        LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTag, partitionTag);
+        LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTag, partitionTag, tenantTag);
 
         var pending = new PendingAppend(treeId, partition, entryCount: entries.Count, batchBytes: 0);
         var preDepth = tracker.LinkReturningPreDepth(pending);
-        LatticeMetrics.WalAppendDispatched.Add(1, treeTag, partitionTag);
-        LatticeMetrics.WalAppendPendingDispatches.Record(preDepth, treeTag, partitionTag);
+        LatticeMetrics.WalAppendDispatched.Add(1, treeTag, partitionTag, tenantTag);
+        LatticeMetrics.WalAppendPendingDispatches.Record(preDepth, treeTag, partitionTag, tenantTag);
         try
         {
             // Writer-side dispatch deadline (batched path); see
@@ -957,7 +961,8 @@ internal sealed class WalCommitLogWriter(
                     LatticeMetrics.WalAppendDispatchTimeouts.Add(
                         1,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition));
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition),
+                        LatticeTenantLabel.ForTree(treeId));
                     // Per-(tree, shard) cumulative trip count consumed
                     // by the silo-scoped saturation sampler
                     // (IWalSaturationSignal). See the single-entry catch
@@ -997,6 +1002,7 @@ internal sealed class WalCommitLogWriter(
     {
         var elapsedMs = Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
         var shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, partition);
         // walPartitions tag must reflect the tree-registry pinned value
         // (routing-truth) rather than the live IOptionsMonitor value,
@@ -1004,8 +1010,26 @@ internal sealed class WalCommitLogWriter(
         // shape exactly.
         var walPartitionsTag = new KeyValuePair<string, object?>(LatticeMetrics.TagWalPartitions, walPartitions);
         var walMaxPendingTag = new KeyValuePair<string, object?>(LatticeMetrics.TagWalMaxPendingBatches, perTree.WalMaxPendingBatches);
-        LatticeMetrics.WalShardDispatchDuration.Record(elapsedMs, treeTag, shardTag, walPartitionsTag, walMaxPendingTag);
-        LatticeMetrics.WalShardDispatchEntries.Record(entryCount, treeTag, shardTag, walPartitionsTag, walMaxPendingTag);
+        LatticeMetrics.WalShardDispatchDuration.Record(
+            elapsedMs,
+            new System.Diagnostics.TagList
+            {
+                treeTag,
+                shardTag,
+                walPartitionsTag,
+                walMaxPendingTag,
+                tenantTag,
+            });
+        LatticeMetrics.WalShardDispatchEntries.Record(
+            entryCount,
+            new System.Diagnostics.TagList
+            {
+                treeTag,
+                shardTag,
+                walPartitionsTag,
+                walMaxPendingTag,
+                tenantTag,
+            });
     }
 
     /// <summary>
@@ -1357,7 +1381,8 @@ internal sealed class WalCommitLogWriter(
                     LatticeMetrics.WalAppendDrainReleases.Add(
                         1,
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                        new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition));
+                        new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition),
+                        LatticeTenantLabel.ForTree(TreeId));
                     throw new TimeoutException(
                         $"WAL append admission to writer partition {Partition} of tree '{TreeId}' was released by the owning WalCommitLogWriter's drain ({nameof(LatticeOptions.WalDrainBudget)}) before the dispatch could proceed; the silo is shutting down.");
                 }
@@ -1373,7 +1398,8 @@ internal sealed class WalCommitLogWriter(
                 LatticeMetrics.WalAppendDrainReleases.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, Partition),
+                    LatticeTenantLabel.ForTree(TreeId));
                 throw new TimeoutException(
                     $"WAL append admission to writer partition {Partition} of tree '{TreeId}' was released by the owning WalCommitLogWriter's drain ({nameof(LatticeOptions.WalDrainBudget)}) while parked on the admission semaphore; the silo is shutting down.");
             }

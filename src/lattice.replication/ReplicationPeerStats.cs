@@ -342,22 +342,31 @@ public class ReplicationPeerStats
                 ? double.NaN
                 : Math.Max(0d, (now - lastContact.Value).TotalSeconds);
             yield return new Measurement<double>(elapsed,
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, kv.Key.Tree),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDirection, DirectionTag(kv.Key.Direction)));
+                new System.Diagnostics.TagList
+                {
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, kv.Key.Tree),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, kv.Key.Peer),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDirection, DirectionTag(kv.Key.Direction)),
+                    LatticeTenantLabel.ForTree(kv.Key.Tree),
+                });
         }
     }
 
     private static Measurement<long> MeasureOutbound(long value, PeerKey key) =>
         new(value,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer),
+            LatticeTenantLabel.ForTree(key.Tree));
 
     private static Measurement<long> MeasureDirectional(long value, PeerKey key) =>
         new(value,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDirection, DirectionTag(key.Direction)));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, key.Tree),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, key.Peer),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDirection, DirectionTag(key.Direction)),
+                LatticeTenantLabel.ForTree(key.Tree),
+            });
 
     private static string DirectionTag(ReplicationContactDirection direction) =>
         direction == ReplicationContactDirection.Inbound

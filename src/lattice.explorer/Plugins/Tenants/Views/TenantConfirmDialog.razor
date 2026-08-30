@@ -1,0 +1,38 @@
+@*
+    The confirmation gate for every destructive operation on the Tenants
+    surface. Nothing here decides anything: the workspace holds the pending
+    confirmation, this renders it, and only the confirm button dispatches.
+
+    The body always states the blast radius - the number of trees a delete
+    cascades through, the subject an admin revocation removes, the access a
+    grant revocation withdraws - so the operator reads the consequence before
+    committing rather than after.
+*@
+
+@if (State.Confirmation is { } pending)
+{
+    <div class="lxt-confirm-backdrop">
+        <div class="lxt-confirm" role="alertdialog" aria-modal="true"
+             aria-labelledby="lxt-confirm-title" aria-describedby="lxt-confirm-body">
+            <h3 id="lxt-confirm-title" class="lxt-confirm-title">@pending.Title</h3>
+            <p id="lxt-confirm-body" class="lxt-confirm-body">@pending.Body</p>
+            @if (pending.Caution is { Length: > 0 } caution)
+            {
+                <p class="lxt-confirm-caution" role="alert">@caution</p>
+            }
+            <div class="lxt-confirm-actions">
+                <button type="button" class="lx-btn"
+                        disabled="@State.Busy"
+                        @onclick="State.CancelConfirmation">Cancel</button>
+                <button type="button" class="lx-btn lxt-danger"
+                        disabled="@State.Busy"
+                        @onclick="State.ConfirmAsync">@pending.ConfirmLabel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>The workspace whose pending confirmation this dialog renders.</summary>
+    [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+}

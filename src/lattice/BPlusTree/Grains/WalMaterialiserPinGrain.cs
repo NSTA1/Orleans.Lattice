@@ -308,7 +308,8 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 LatticeMetrics.MaterialiserPinDurableWrites.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeTag),
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagOutcome, outcome),
+                    LatticeTenantLabel.ForTree(TreeTag));
             }
             catch
             {

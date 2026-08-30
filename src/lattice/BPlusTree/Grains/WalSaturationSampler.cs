@@ -455,7 +455,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 // distribution leading up to a trip.
                 LatticeMetrics.MaterialiserDrainLag.Record(
                     TimeSpan.FromTicks(lagTicks).TotalMilliseconds,
-                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId));
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+                    LatticeTenantLabel.ForTree(treeId));
 
                 if (!perTree.TryGetValue(treeId, out var acc))
                 {
@@ -621,9 +622,10 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             // match the WalSaturationSignal gauge's spelling.
             var newStateTag = WalSaturationSignal.StateTagValue(newState);
             var previousStateTag = WalSaturationSignal.StateTagValue(previousState);
-            var tags = new List<KeyValuePair<string, object?>>(capacity: 5)
+            var tags = new List<KeyValuePair<string, object?>>(capacity: 6)
             {
                 new(LatticeMetrics.TagTree, acc.TreeId),
+                LatticeTenantLabel.ForTree(acc.TreeId),
                 new(LatticeMetrics.TagWalSaturationState, newStateTag),
                 new(LatticeMetrics.TagWalSaturationPreviousState, previousStateTag),
             };

@@ -229,7 +229,7 @@ internal sealed class LeafCacheGrain(
             // capacity-driven miss - record it so the eviction budget's cost
             // is visible on the existing cache-miss instrument.
             if (payloadEvicted && !_pendingKeys.Contains(key) && !cached.IsMigrated)
-                LatticeMetrics.CacheMisses.Add(1, CacheTreeTag());
+                LatticeMetrics.CacheMisses.Add(1, CacheTreeTag(), CacheTenantTag());
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(PrimaryLeafId);
             return await leaf.GetAsync(key);
         }
@@ -237,11 +237,11 @@ internal sealed class LeafCacheGrain(
         if (live)
         {
             _cache.RecordHit(key);
-            LatticeMetrics.CacheHits.Add(1, CacheTreeTag());
+            LatticeMetrics.CacheHits.Add(1, CacheTreeTag(), CacheTenantTag());
             return cached.Value;
         }
 
-        LatticeMetrics.CacheMisses.Add(1, CacheTreeTag());
+        LatticeMetrics.CacheMisses.Add(1, CacheTreeTag(), CacheTenantTag());
         return null;
     }
 
@@ -270,7 +270,7 @@ internal sealed class LeafCacheGrain(
         // as a live hit here without a leaf RPC - only value reads pay the
         // eviction delegation cost.
         if (hasCached) _cache.RecordHit(key);
-        (hasCached ? LatticeMetrics.CacheHits : LatticeMetrics.CacheMisses).Add(1, CacheTreeTag());
+        (hasCached ? LatticeMetrics.CacheHits : LatticeMetrics.CacheMisses).Add(1, CacheTreeTag(), CacheTenantTag());
         return hasCached;
     }
 
@@ -390,14 +390,19 @@ internal sealed class LeafCacheGrain(
             }
         }
         var tag = CacheTreeTag();
-        if (hits > 0) LatticeMetrics.CacheHits.Add(hits, tag);
+        var tenantTag = CacheTenantTag();
+        if (hits > 0) LatticeMetrics.CacheHits.Add(hits, tag, tenantTag);
         var misses = cacheLookups - hits;
-        if (misses > 0) LatticeMetrics.CacheMisses.Add(misses, tag);
+        if (misses > 0) LatticeMetrics.CacheMisses.Add(misses, tag, tenantTag);
         return result;
     }
 
     private KeyValuePair<string, object?> CacheTreeTag() =>
         new(LatticeMetrics.TagTree, _treeId ?? string.Empty);
+
+    /// <summary>Derives the owning-tenant tag emitted beside <see cref="CacheTreeTag"/>.</summary>
+    private KeyValuePair<string, object?> CacheTenantTag() =>
+        LatticeTenantLabel.ForTree(_treeId);
 
     private async Task RefreshAsync()
     {

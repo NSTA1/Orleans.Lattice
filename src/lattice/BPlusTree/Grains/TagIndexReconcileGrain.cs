@@ -353,10 +353,14 @@ internal sealed class TagIndexReconcileGrain(
             ? "probe_only"
             : state.State.TreesMismatched == 0 ? "clean" : "repaired";
 
-        var indexTags = new KeyValuePair<string, object?>[] { new(TagIndexDimension, IndexName) };
+        // A tag index spans every tree it covers, so a sweep is a multi-tree
+        // aggregate that is not attributable to a single tenant: it carries the
+        // reserved platform sentinel as its derived tenant dimension.
+        var indexTags = new KeyValuePair<string, object?>[] { new(TagIndexDimension, IndexName), LatticeTenantLabel.Platform };
         var outcomeTags = new KeyValuePair<string, object?>[]
         {
             new(TagIndexDimension, IndexName),
+            LatticeTenantLabel.Platform,
             new(LatticeMetrics.TagOutcome, outcome),
         };
 

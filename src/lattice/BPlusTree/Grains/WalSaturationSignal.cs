@@ -274,7 +274,8 @@ internal sealed class WalSaturationSignal : IWalSaturationSignal
             // previous_state labels belong.
             yield return new Measurement<long>(
                 (long)kv.Value,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key));
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, kv.Key),
+                LatticeTenantLabel.ForTree(kv.Key));
         }
     }
 

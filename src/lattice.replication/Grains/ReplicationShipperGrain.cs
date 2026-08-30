@@ -926,11 +926,13 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationMetrics.ShipEffectiveBatchSize.Record(
             effectiveBatchSize,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
         LatticeReplicationMetrics.ShipAckLatency.Record(
             ackLatency.TotalMilliseconds,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
 
         if (options.AdaptiveBatchSizingEnabled)
         {
@@ -2712,11 +2714,13 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationMetrics.CoalesceEntriesElided.Add(
             elidedCount,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
         LatticeReplicationMetrics.CoalesceBytesElided.Add(
             elidedBytes,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
     }
 
     /// <summary>
@@ -2885,15 +2889,18 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationMetrics.CoalesceEntriesElided.Add(
             elidedCount,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
         LatticeReplicationMetrics.CoalesceBytesElided.Add(
             elidedBytes,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
         LatticeReplicationMetrics.CoalesceDeltasMerged.Add(
             deltasMerged,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
     }
 
     /// <summary>
@@ -2945,11 +2952,13 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationMetrics.ShipRedundantPayloads.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
         LatticeReplicationMetrics.ShipRedundantPayloadBytes.Add(
             valueBytes,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
     }
 
     /// <summary>
@@ -3041,7 +3050,8 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationMetrics.ManifestExchanges.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
 
         var elided = ContentManifestPlanner.ComputeElidedIndices(manifest, response.MissingEntryIndices);
         if (elided.Count == 0)
@@ -3081,11 +3091,13 @@ internal sealed class ReplicationShipperGrain(
         LatticeReplicationMetrics.ShipElidedPayloads.Add(
             elidedCount,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
         LatticeReplicationMetrics.ShipElidedPayloadBytes.Add(
             elidedBytes,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
     }
 
     /// <summary>
@@ -3471,10 +3483,15 @@ internal sealed class ReplicationShipperGrain(
     /// tagged with the tree, peer, and outcome <paramref name="reason"/>.
     /// </summary>
     private void RecordWireVersionDownStamp(string reason)
-        => LatticeReplicationMetrics.ShipWireVersionDownStamp.Add(1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason));
+        => LatticeReplicationMetrics.ShipWireVersionDownStamp.Add(
+            1,
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reason),
+                LatticeTenantLabel.ForTree(_treeName),
+            });
 
     /// <summary>
     /// Computes the per-peer shared-dictionary capability negotiation for
@@ -3538,11 +3555,13 @@ internal sealed class ReplicationShipperGrain(
         _dictionaryNegotiationState.Record(_treeName, _peerClusterId, negotiation);
         LatticeReplicationMetrics.DictionaryNegotiation.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
-            new KeyValuePair<string, object?>(
-                LatticeReplicationMetrics.TagOutcome,
-                LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(negotiation)));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.DictionaryNegotiationOutcomeTag(negotiation)),
+                LatticeTenantLabel.ForTree(_treeName),
+            });
 
         if (negotiation.FingerprintMismatch && !_dictionaryFingerprintMismatchWarned)
         {
@@ -3724,9 +3743,13 @@ internal sealed class ReplicationShipperGrain(
     private void RecordDictionaryBatch(string dictionaryTag) =>
         LatticeReplicationMetrics.DictionaryBatches.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDictionary, dictionaryTag));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagDictionary, dictionaryTag),
+                LatticeTenantLabel.ForTree(_treeName),
+            });
 
     private void ApplyBackoff(LatticeReplicationOptions options, Exception? exception, string reason)
     {

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Orleans.Configuration;
 using Orleans.Lattice;
+using Orleans.Lattice.Membership;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin;
@@ -108,6 +109,38 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeTenantRegionAdmin, LatticeTenantRegionAdmin>();
         builder.Services.TryAddSingleton<TenantRegionLifecycleDriver>();
 
+        // N1 tenant access administration. The tenant-tier surface that manages a
+        // tenant's admin-subject set (list / add / remove), so membership can be
+        // changed after creation instead of being frozen at the create-time seed.
+        // It reuses the same two-tier authorizer as region residency - platform
+        // operator OR a live admin subject of that tenant - deliberately not the
+        // operator-only TenantAdminAccessAuthorizer that gates the lifecycle
+        // mutations above. The identity directory is resolved optionally so a
+        // granted subject id is validated against the upstream directory wherever
+        // one is configured, matching the create path's seeding contract.
+        builder.Services.TryAddSingleton<ILatticeTenantAccessAdmin>(sp => new LatticeTenantAccessAdmin(
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<ITenantAdminClock>(),
+            sp.GetRequiredService<IOptions<ClusterOptions>>(),
+            sp.GetService<ILatticeIdentityDirectory>(),
+            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
+
+        // N2 cross-tenant grant administration. The two-step agreement surface -
+        // the granting tenant offers, the grantee approves or rejects, and either
+        // party may revoke - over the grants the tenancy engine's cross-tenant
+        // resolution already consumes but which no facade could previously reach.
+        // It reuses the same two-tier authorizer as region residency and access
+        // administration, applied per operation to the side the step belongs to,
+        // deliberately not the operator-only TenantAdminAccessAuthorizer: a grant
+        // is a tenant-to-tenant agreement, so making an operator the bottleneck
+        // for it would be the wrong shape.
+        builder.Services.TryAddSingleton<ILatticeTenantGrantAdmin>(sp => new LatticeTenantGrantAdmin(
+            sp.GetRequiredService<ITenantRegistry>(),
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<ITenantAdminClock>(),
+            sp.GetRequiredService<IOptions<ClusterOptions>>()));
+
         // T21 tenant self-awareness. The read-only counterpart to the lifecycle
         // facade: it projects the caller's current tenant, the tenants it may
         // enumerate, and the read-only status/residency of one such tenant, scoped
@@ -121,6 +154,17 @@ public static class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<ITenantPolicyEngine>(),
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetService<ILatticeMembershipContext>()));
+
+        // N3 tenant usage against quota. The read-only counterpart to
+        // SetTenantQuotasAsync: it projects the tenancy engine's warm per-tenant
+        // usage index onto the control-API contract so a quota surface can render
+        // a bar rather than only a ceiling. It reuses the two-tier region-residency
+        // authorizer (operator, or a live admin subject of that tenant) because it
+        // is a tenant-tier read, and it unifies an unauthorized tenant with an
+        // absent one so it can never be used to probe for tenant existence.
+        builder.Services.TryAddSingleton<ILatticeTenantQuotaUsage>(sp => new LatticeTenantQuotaUsage(
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<ITenantUsageReader>()));
 
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any

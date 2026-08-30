@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!--
+      The seam is a plain class library, not a Razor library: it ships the
+      controlled domain model and the facade binding that the Tenants and
+      My Tenant plugins consume, and carries no components or stylesheet of
+      its own. Each of those plugins brings its own Razor project.
+    -->
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.Tenancy</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.Plugins.Tenancy</AssemblyName>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Tenancy</PackageId>
+    <Version>9.4.0</Version>
+    <Description>The shared tenancy seam for the Orleans.Lattice Explorer: the client wrapper over the tenant-administration and tenant self-service gRPC bindings, the Explorer-term domain model the tenancy plugins operate against, the fault mapping that turns each documented facade refusal into its own result status, and the availability probe that reports the surface unavailable on a cluster without the tenancy add-on. Registered with AddExplorerTenancy().</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    Like the Backups and Access plugin projects, this one is allowed to
+    reference its own facade's gRPC binding - the tenant-administration one -
+    which transitively pulls in the tenant-administration facade and core. It
+    takes no dependency on the shared UI library, so a head that ships no
+    tenancy surface pays for none of it.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>

@@ -67,6 +67,12 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     private readonly KeyValuePair<string, object?> _treeTag;
 
     /// <summary>
+    /// Cached derived owning-tenant tag for the same instruments as
+    /// <see cref="_treeTag"/>.
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _tenantTag;
+
+    /// <summary>
     /// Cached <see cref="LatticeMetrics.TagShard"/> tag for the same
     /// instruments as <see cref="_treeTag"/>.
     /// </summary>
@@ -191,6 +197,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         _submit = submit;
         _manifestPartitionKey = manifestPartitionKey;
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        _tenantTag = LatticeTenantLabel.ForTree(treeId);
         _shardTag = new KeyValuePair<string, object?>(LatticeMetrics.TagShard, shardIndex);
         _pipelinePhaseTwoTag = pipelinePhaseTwoTag;
         _coalescingWindow = coalescingWindow;
@@ -374,7 +381,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         // histogram covers both committed and faulted batches. The
         // matching duration histogram is recorded around the actual
         // _submit call below.
-        LatticeMetrics.ProviderPhase2BatchSize.Record(commits.Count, _treeTag, _shardTag);
+        LatticeMetrics.ProviderPhase2BatchSize.Record(commits.Count, _treeTag, _shardTag, _tenantTag);
         try
         {
             var actions = new List<TableTransactionAction>((commits.Count * 2) + 1);
@@ -483,7 +490,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     catch (OperationCanceledException) when (commitDeadline.IsCancellationRequested
                         && !cancellationToken.IsCancellationRequested)
                     {
-                        LatticeMetrics.ProviderPhase2CommitTimeouts.Add(1, _treeTag, _shardTag);
+                        LatticeMetrics.ProviderPhase2CommitTimeouts.Add(1, _treeTag, _shardTag, _tenantTag);
                         ObserveAbandonedSubmit(submitTask);
                         throw new TimeoutException(
                             $"Phase-2 manifest commit for partition '{_manifestPartitionKey}' exceeded the "
@@ -498,11 +505,16 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             finally
             {
                 var elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(phaseTwoStartTicks).TotalMilliseconds;
-                LatticeMetrics.ProviderCommitDuration.Record(elapsedMs,
-                    _treeTag,
-                    _shardTag,
-                    LatticeMetrics.PhasePhase2Tag,
-                    _pipelinePhaseTwoTag);
+                LatticeMetrics.ProviderCommitDuration.Record(
+                    elapsedMs,
+                    new System.Diagnostics.TagList
+                    {
+                        _treeTag,
+                        _shardTag,
+                        LatticeMetrics.PhasePhase2Tag,
+                        _pipelinePhaseTwoTag,
+                        _tenantTag,
+                    });
             }
 
             _highestCommittedEndOffset = tailToPersist;
@@ -529,11 +541,16 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 pending.Completion.TrySetException(ex);
             }
             _pending.Clear();
-            LatticeMetrics.ProviderRetryExhausted.Add(1,
-                _treeTag,
-                _shardTag,
-                LatticeMetrics.PhasePhase2Tag,
-                new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)));
+            LatticeMetrics.ProviderRetryExhausted.Add(
+                1,
+                new System.Diagnostics.TagList
+                {
+                    _treeTag,
+                    _shardTag,
+                    LatticeMetrics.PhasePhase2Tag,
+                    new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)),
+                    _tenantTag,
+                });
         }
     }
 

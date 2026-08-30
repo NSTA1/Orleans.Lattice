@@ -3,7 +3,7 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
-using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Schema;
 
@@ -25,7 +25,7 @@ public class ExplorerSchemaServiceCollectionExtensionsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerCapabilityStore)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(IExplorerPluginAccessStore)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(ISchemaAdminClient)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(ISchemaPolicyService)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(ISchemaVersioningService)), Is.True);
@@ -58,7 +58,7 @@ public class ExplorerSchemaServiceCollectionExtensionsTests
         services.AddExplorerSchema();
         await using var provider = services.BuildServiceProvider();
 
-        Assert.That(provider.GetRequiredService<IExplorerCapabilityStore>(), Is.InstanceOf<ExplorerCapabilityStore>());
+        Assert.That(provider.GetRequiredService<IExplorerPluginAccessStore>(), Is.InstanceOf<ExplorerPluginAccessStore>());
     }
 
     [Test]

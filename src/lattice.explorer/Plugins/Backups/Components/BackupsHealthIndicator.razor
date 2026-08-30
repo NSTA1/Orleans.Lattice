@@ -1,0 +1,45 @@
+@using System.Globalization
+
+@*
+    One catalogue row's health indicator: a dot for the verified states, and a
+    button that opens the diagnostics dialog when the backup needs attention.
+    Rendered only when the server reports health monitoring available.
+*@
+
+@if (_health is null || _health.Status == BackupHealthStatus.Unknown)
+{
+    <span class="lx-backups-health lx-backups-health-unknown" title="Not yet verified">-</span>
+}
+else if (_health.Status == BackupHealthStatus.Healthy)
+{
+    <span class="lx-backups-health lx-backups-health-ok"
+          title="@($"Healthy (verified {_health.CheckedAtUtc.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)})")">OK</span>
+}
+else
+{
+    <button type="button" class="lx-backups-health lx-backups-health-warn"
+            title="@(_health.Status == BackupHealthStatus.Missing ? "Manifest missing - click for details" : "Unresolvable - click for details")"
+            @onclick="Open">!</button>
+}
+
+@code {
+    private BackupHealthReport? _health;
+
+    /// <summary>The Backups panel this indicator reads its health reports from.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    /// <summary>The catalogue row this indicator reports on.</summary>
+    [Parameter, EditorRequired] public BackupRow Row { get; set; } = default!;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() => _health = Owner.RowHealth(Row);
+
+    private void Open()
+    {
+        if (_health is not null)
+        {
+            Owner.OpenHealthDialog(_health);
+        }
+    }
+}
+

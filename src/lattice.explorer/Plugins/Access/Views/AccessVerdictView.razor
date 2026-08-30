@@ -1,0 +1,50 @@
+@*
+    The facade's decision verdict for the last Explain, plus the group closure it
+    resolved and the precedence-ranked rules it matched.
+
+    The verdict is rendered verbatim from the facade's Allowed / Filtered flags.
+    Nothing here re-derives it; the ranked table below is a reading aid only.
+*@
+
+@if (State.Explanation is { } explanation)
+{
+    <h3 class="lxa-title">Verdict</h3>
+    <p class="@(explanation.Allowed ? SuccessStatusClass : DeniedStatusClass)" role="status">
+        @(explanation.Allowed ? (explanation.Filtered ? "Allowed (filtered - a subset of keys)" : "Allowed") : "Denied")
+        @{
+            var friendlyReason = AccessRuleFormat.FriendlyReason(explanation, State.Labels);
+        }
+        @if (!string.IsNullOrEmpty(friendlyReason))
+        {
+            @if (!string.IsNullOrEmpty(explanation.SubjectId))
+            {
+                <span title="@explanation.SubjectId"> - @friendlyReason</span>
+            }
+            else
+            {
+                <span> - @friendlyReason</span>
+            }
+        }
+    </p>
+    <p class="lxa-sub">Default effect when no rule matches: @explanation.DefaultEffect</p>
+    @if (explanation.GroupIds.Count > 0)
+    {
+        <p class="lxa-sub">Group closure:
+            @for (var i = 0; i < explanation.GroupIds.Count; i++)
+            {
+                var gid = explanation.GroupIds[i];
+                <span title="@gid">@State.Labels.Label(gid)</span>@(i < explanation.GroupIds.Count - 1 ? ", " : string.Empty)
+            }
+        </p>
+    }
+    <h3 class="lxa-title">Matched rules</h3>
+    <RankedRuleTable Rules="State.ExplainRankedRules" Labels="State.Labels" Label="Matched rules" />
+}
+
+@code {
+    private const string SuccessStatusClass = "lxa-status is-success";
+    private const string DeniedStatusClass = "lxa-status is-denied";
+
+    /// <summary>The Access workspace whose last explanation is rendered.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+}

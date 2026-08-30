@@ -41,6 +41,8 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.api.mcp.telemetry.azure",
         "docs/lattice.api.state",
         "docs/lattice.api.state.grpc",
+        "docs/lattice.api.telemetry",
+        "docs/lattice.api.telemetry.grpc",
         "docs/lattice.auth",
         "docs/lattice.backup",
         "docs/lattice.backup.azureblob",

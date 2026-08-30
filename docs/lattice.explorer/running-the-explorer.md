@@ -42,7 +42,7 @@ shared explorer libraries it builds on restore transitively:
 - `Orleans.Lattice.Explorer.Access` - the Access (membership and access-control)
   management area.
 - `Orleans.Lattice.Explorer.Schema` - the Schema management area. It ships but is
-  hidden from the switcher by default (see `EnableSchemaArea` below).
+  withheld by default (see the Schema plugin note below).
 
 ## Configuration
 
@@ -69,11 +69,14 @@ shared explorer libraries it builds on restore transitively:
   the connection-settings affordance is withheld; configure the endpoint with
   `ConfigFilePath` or the environment bootstrap instead. Opt in only for a web
   head that is genuinely configured through its own UI by a trusted operator.
-- **`EnableSchemaArea`** - default `false`. The schema-management area is withheld
-  from the switcher for now because its versioning UI cannot yet express what
-  differs between schema versions. Set it to `true` to surface the area; the
-  schema control services are registered either way, so this only toggles
-  visibility. See [Managing schema from the Explorer](managing-schema.md).
+- **The Schema plugin** - withheld by default, and no longer an option flag. The
+  schema-management area ships as its own plugin package, and registration is the
+  whole of the opt-in: call `builder.Services.AddExplorerSchemaPlugin()` to surface
+  it, or omit the call to render no Schema tab. It stays withheld by default because
+  its versioning UI cannot yet express what differs between schema versions. The
+  schema control services are registered either way, so a head can surface the area
+  without any other wiring change. See
+  [Managing schema from the Explorer](managing-schema.md).
 
 ### Mounting under a subpath
 

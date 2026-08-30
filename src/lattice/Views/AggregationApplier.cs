@@ -46,7 +46,8 @@ internal sealed class AggregationApplier(
     int maxGroupEntries,
     string operationEpoch,
     ILatticeFoldProjection? fold = null,
-    string? viewName = null)
+    string? viewName = null,
+    KeyValuePair<string, object?>? tenantTag = null)
 {
     private static readonly System.Diagnostics.Metrics.Counter<long> Rejected = LatticeMetrics.ViewAggregationRejected;
 
@@ -55,6 +56,11 @@ internal sealed class AggregationApplier(
     private readonly string _operationEpoch = operationEpoch;
     private readonly ILatticeFoldProjection? _fold = fold;
     private readonly string? _viewName = viewName;
+
+    // The owning tenant of the view this applier maintains, supplied by the
+    // maintainer that already derived it once per activation. Falls back to the
+    // platform sentinel when an applier is built outside a maintainer.
+    private readonly KeyValuePair<string, object?> _tenantTag = tenantTag ?? LatticeTenantLabel.Platform;
 
     private bool IsNumeric => kind is AggregationKind.Count or AggregationKind.Sum;
 
@@ -89,7 +95,7 @@ internal sealed class AggregationApplier(
         // key whose new group is reserved simply keeps its prior (valid) group.
         if (IsReservedGroupKey(contribution.GroupKey))
         {
-            Rejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagView, _viewName));
+            Rejected.Add(1, new KeyValuePair<string, object?>(LatticeMetrics.TagView, _viewName), _tenantTag);
             return Task.CompletedTask;
         }
 

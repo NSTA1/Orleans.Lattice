@@ -99,6 +99,7 @@ internal sealed partial class LatticeAuthDecisionObserver
             {
                 { LatticeAuthMetrics.TagOperation, LatticeOperationTag.For(request.Operation) },
                 { LatticeAuthMetrics.TagTree, request.TreeId },
+                LatticeTenantLabel.ForTree(request.TreeId),
                 { LatticeAuthMetrics.TagEffect, effectTag },
             };
 

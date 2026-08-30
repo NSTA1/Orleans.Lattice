@@ -1,0 +1,75 @@
+@*
+    The Quota surface: consumption against each ceiling, and the caption that
+    says what those figures actually are.
+
+    The enforcement scope is captioned rather than assumed. A PerCluster reading
+    is one cluster's local view and genuinely is not a global total, so it is
+    never presented as one: a tenant reading 250 of 1,000 bytes on a
+    per-cluster reading may well be over its real ceiling across the fleet, and
+    a surface that dropped the qualifier would be quietly wrong.
+*@
+
+<div class="lxm-surface">
+    @if (State.Usage is null)
+    {
+        <p class="lxm-muted">No quota reading has been read for this tenant.</p>
+    }
+    else
+    {
+        <div class="lxm-quota-head">
+            <span class="@ScopeBadgeClass" title="@State.Caption">
+                @(State.EnforcementScope is { } scope ? TenantQuotaLabels.EnforcementLabel(scope) : null)
+            </span>
+            <button type="button"
+                    class="lx-btn"
+                    disabled="@(State.Busy || !State.Allowed)"
+                    @onclick="State.RefreshQuotaAsync">Refresh usage</button>
+        </div>
+
+        <p class="lxm-caption" role="status">@State.Caption</p>
+
+        @if (State.HasBreach)
+        {
+            <p class="lxm-status is-refused" role="status">
+                At least one dimension is over its ceiling. Consumption past a ceiling is admitted
+                only within the burst allowance and is metered as overage.
+            </p>
+        }
+
+        <ul class="lxm-gauges">
+            @foreach (var gauge in State.Gauges)
+            {
+                <TenantQuotaBar @key="gauge.Kind" Gauge="gauge" />
+            }
+        </ul>
+
+        <p class="lxm-muted">
+            Burst allowance: @State.BurstPercent% above each ceiling.
+            @if (!State.HasUsageReading)
+            {
+                <text>
+                    The ceilings above are authoritative; consumption is not measured rather than
+                    zero.
+                </text>
+            }
+        </p>
+    }
+</div>
+
+@code {
+    // Pre-composed literals rather than per-render interpolation: the quota
+    // surface re-renders on every usage refresh.
+    private const string GlobalScopeClass = "lxm-badge is-ok";
+    private const string PerClusterScopeClass = "lxm-badge is-warn";
+
+    /// <summary>The workspace this surface reads and drives.</summary>
+    [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+
+    // A per-cluster reading is the weaker claim, so it is marked as a
+    // qualification rather than sharing the confident styling of a converged
+    // total.
+    private string ScopeBadgeClass =>
+        State.EnforcementScope == ExplorerTenantQuotaEnforcement.PerCluster
+            ? PerClusterScopeClass
+            : GlobalScopeClass;
+}

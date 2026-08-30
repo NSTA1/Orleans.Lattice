@@ -1,0 +1,30 @@
+@*
+    The effective-permissions listing for one subject: the group closure the
+    facade resolved for it, and every rule that applies, in precedence order.
+
+    Like the verdict view, this renders what the facade returned; the ranking is
+    a presentation aid and never a second opinion.
+*@
+
+@if (State.Effective is { } effective)
+{
+    <h3 class="lxa-title">
+        Effective permissions for '<span title="@effective.SubjectId">@State.Labels.Label(effective.SubjectId)</span>'
+    </h3>
+    @if (effective.GroupIds.Count > 0)
+    {
+        <p class="lxa-sub">Group closure:
+            @for (var i = 0; i < effective.GroupIds.Count; i++)
+            {
+                var gid = effective.GroupIds[i];
+                <span title="@gid">@State.Labels.Label(gid)</span>@(i < effective.GroupIds.Count - 1 ? ", " : string.Empty)
+            }
+        </p>
+    }
+    <RankedRuleTable Rules="State.EffectiveRankedRules" Labels="State.Labels" Label="Effective permissions" />
+}
+
+@code {
+    /// <summary>The Access workspace whose last effective-permissions read is rendered.</summary>
+    [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+}

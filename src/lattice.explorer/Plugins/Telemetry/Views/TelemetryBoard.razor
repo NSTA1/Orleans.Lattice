@@ -1,0 +1,113 @@
+@*
+    The whole telemetry body: the panel a caller selected, the bounded controls
+    that shape it, the scope the facade actually served it under, and the chart.
+
+    This component is the reason the area plugin and the My Tenant metrics
+    section are not two implementations. Both mount this; they differ only in the
+    workspace handed to them, and the tenant-pinned one is pinned in the
+    workspace rather than by a different view. So there is exactly one place
+    where a panel is composed, one place a scope caption is rendered, and no
+    chance of the two surfaces disagreeing about what the effective scope was.
+
+    It renders nothing about quota or usage: that is the My Tenant Quota
+    surface's job and duplicating it here would put two answers to the same
+    question in one area.
+*@
+
+<div class="lxt-board">
+    @if (State.Unavailable)
+    {
+        @*
+            No telemetry facade on this cluster, so there is nothing to chart
+            and nothing to explain away. The shell already hides an unavailable
+            plugin's entry; this keeps the body empty if it is rendered anyway.
+        *@
+    }
+    else if (!State.Allowed)
+    {
+        @if (State.AuthenticationRequired)
+        {
+            <p class="lxt-status is-denied" role="alert">
+                You are not signed in to the cluster, so its telemetry is unavailable.
+                The connection is unauthenticated - sign in to read it.
+            </p>
+        }
+        else
+        {
+            <p class="lxt-status is-denied" role="status">
+                @(State.AccessReason ?? "You are not permitted to read this cluster's telemetry.")
+            </p>
+        }
+    }
+    else if (State.Catalog.IsEmpty)
+    {
+        <p class="lxt-muted" role="status">
+            This cluster offers no telemetry queries, so there is nothing to chart.
+        </p>
+    }
+    else
+    {
+        <TelemetryControls State="State" />
+
+        @if (State.Notice is { } notice)
+        {
+            <div class="lxt-status @notice.Severity" role="status">
+                <p class="lxt-status-message">@notice.Message</p>
+                @if (notice.Guidance is { } guidance)
+                {
+                    <p class="lxt-status-guidance">@guidance</p>
+                }
+                @if (notice.IsRetryable)
+                {
+                    <button type="button"
+                            class="lx-btn lxt-retry"
+                            disabled="@State.Busy"
+                            @onclick="State.ReevaluateAsync">Try again</button>
+                }
+            </div>
+        }
+
+        @if (State.Selected is { } query)
+        {
+            <section class="lxt-panel-body" aria-label="@query.Title">
+                <header class="lxt-panel-head">
+                    <h3 class="lxt-panel-title">@query.Title</h3>
+                    <span class="lxt-badge @ScopeBadgeClass" title="@State.Caption.Text">@ScopeBadge</span>
+                </header>
+
+                <p class="lxt-panel-description">@query.Description</p>
+
+                <TelemetryScopeBanner Caption="State.Caption" />
+
+                <TelemetryChartView Chart="State.Chart"
+                                    Label="@query.Title"
+                                    EmptyText="@EmptyText" />
+
+                @if (State.SelectedInstruments is { } instruments)
+                {
+                    <p class="lxt-muted lxt-instruments">Reads @instruments.</p>
+                }
+            </section>
+        }
+    }
+</div>
+
+@code {
+    private const string DegradedBadgeClass = "is-warn";
+    private const string ScopedBadgeClass = "is-ok";
+    private const string NotEvaluatedText = "Nothing has been read yet.";
+    private const string NoSeriesText = "This query matched no series over the window requested.";
+
+    /// <summary>The workspace this board reads and drives.</summary>
+    [Parameter, EditorRequired] public TelemetryWorkspace State { get; set; } = default!;
+
+    // A degraded scope is styled as a qualification rather than sharing the
+    // confident styling of a scope that was served exactly as asked.
+    private string ScopeBadgeClass => State.WasDowngraded ? DegradedBadgeClass : ScopedBadgeClass;
+
+    private string ScopeBadge => TelemetryScopeCaptions.BadgeFor(State.Scope, State.IsTenancyEnabled);
+
+    // "Nothing matched" and "nothing has been read" are different facts, and a
+    // panel that said the first before it had asked would be lying.
+    private string EmptyText => State.HasEvaluated ? NoSeriesText : NotEvaluatedText;
+}

@@ -1,0 +1,97 @@
+@inherits SelectionPluginViewBase
+@inject IMetricsSurface Surface
+
+@*
+    The live-metrics surface. It renders the selected tree or view's snapshot as
+    a tile grid plus a per-shard hotness table, and reaches the cluster only
+    through IMetricsSurface - the single domain contract this plugin declares.
+
+    The hotness table is the design system's adaptive table, so it reflows from
+    aligned columns to a card list at compact width without this package writing
+    a media query (epic decision D7).
+*@
+
+<div class="lx-metrics">
+    @if (Selection.IsHistory)
+    {
+        @* A change-history view has no tree metrics of its own; rather than the
+           bare "No metrics reported" line, route the operator to its source
+           table with the same guidance and action every surface shows. *@
+        <ChangeHistoryGuidance Selection="Selection" OnGoToSourceTree="_goToSourceTree" />
+    }
+    else
+    {
+        <div class="lx-metrics-toolbar">
+            <button type="button"
+                    class="lx-btn lx-metrics-refresh"
+                    disabled="@_loading"
+                    @onclick="LoadAsync">
+                @(_loading ? "Refreshing..." : "Refresh")
+            </button>
+            @if (_metrics is not null)
+            {
+                <span class="lx-metrics-sampled">Sampled @_sampledAt.ToLocalTime().ToString("HH:mm:ss")</span>
+            }
+        </div>
+
+        @if (_loading && _metrics is null)
+        {
+            <div class="lx-metrics-state">Loading metrics...</div>
+        }
+        else if (_error is not null)
+        {
+            <div class="lx-metrics-state lx-metrics-error">
+                <span>@_error</span>
+                <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
+            </div>
+        }
+        else if (_metrics is null)
+        {
+            <div class="lx-metrics-state">No metrics reported for this id.</div>
+        }
+        else
+        {
+            var m = _metrics;
+            @if (m.DetailPaused)
+            {
+                <div class="lx-metrics-state lx-metrics-paused">
+                    Live counts and per-shard hotness are paused while this table is very busy.
+                    They will return automatically once it settles.
+                </div>
+            }
+            <div class="lx-metrics-tiles">
+                <MetricTile Label="Lifecycle" Value="@m.Lifecycle.ToString()" />
+                <MetricTile Label="Shards" Value="@m.ShardCount.ToString()" />
+                <MetricTile Label="Live keys" Value="@(m.DetailPaused ? PausedValue : m.LiveKeys.ToString("N0"))" />
+                <MetricTile Label="Tombstones" Value="@(m.DetailPaused ? PausedValue : m.Tombstones.ToString("N0"))" />
+                <MetricTile Label="Depth (min/max)" Value="@(m.DetailPaused ? PausedValue : $"{m.MinDepth} / {m.MaxDepth}")" />
+                <MetricTile Label="Shards splitting" Value="@(m.DetailPaused ? PausedValue : m.ShardsSplitting.ToString())" />
+                @if (m.ViewCount is int views)
+                {
+                    <MetricTile Label="Views" Value="@views.ToString()" />
+                }
+                @if (m.ViewLagTotal is long lag)
+                {
+                    <MetricTile Label="View lag (total)" Value="@lag.ToString("N0")" />
+                }
+            </div>
+
+            <section>
+                <h3 class="lx-metrics-section-title">Per-shard hotness</h3>
+                @if (m.DetailPaused)
+                {
+                    <p class="lx-metrics-muted">Per-shard hotness is paused while this table is very busy.</p>
+                }
+                else
+                {
+                    <LatticeAdaptiveTable TItem="ShardHotness"
+                                          Items="m.ShardHotness"
+                                          Columns="HotnessColumns"
+                                          KeySelector="_hotnessKey"
+                                          Label="Per-shard hotness"
+                                          EmptyText="No per-shard hotness reported." />
+                }
+            </section>
+        }
+    }
+</div>

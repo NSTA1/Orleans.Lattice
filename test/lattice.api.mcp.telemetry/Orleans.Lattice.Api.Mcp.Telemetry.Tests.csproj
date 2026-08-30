@@ -24,6 +24,14 @@
 
   <ItemGroup>
     <Using Include="NUnit.Framework" />
+    <!--
+      The PromQL machinery this binding proxies moved to the transport-neutral
+      Orleans.Lattice.Api.Telemetry package (issue #1756). Importing that
+      namespace project-wide keeps every pre-existing test source file
+      byte-for-byte unchanged across the move, so the suite is untouched
+      regression evidence that the re-pointed binding behaves identically.
+    -->
+    <Using Include="Orleans.Lattice.Api.Telemetry" />
   </ItemGroup>
 
   <ItemGroup>

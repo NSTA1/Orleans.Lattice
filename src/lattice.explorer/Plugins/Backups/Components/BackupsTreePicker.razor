@@ -1,0 +1,90 @@
+@*
+    The New Backup tab's tree picker: the trees a capture may target, with each
+    logical tree's restore shadows grouped beneath it.
+
+    The two lists are projected once per tree discovery by the panel, so this
+    surface re-renders without re-running a LINQ grouping on every keystroke.
+
+    aria-selected takes the literal string "true" or "false": it is an
+    enumerated ARIA attribute, not an HTML boolean one, so handing Blazor a bool
+    would emit aria-selected="" on the selected option and omit the attribute
+    entirely on every other one.
+*@
+
+<div class="lx-backups-treecol">
+    <span class="lx-backups-picker-label" id="lx-backups-treepicker-label">Trees</span>
+    @if (Owner.OrdinaryTrees.Count > 0 || Owner.RestoreShadowGroups.Count > 0)
+    {
+        <ul class="lx-nav-list" role="listbox" aria-labelledby="lx-backups-treepicker-label">
+            @foreach (var tree in Owner.OrdinaryTrees)
+            {
+                <li role="option" aria-selected="@(Owner.IsTreeSelected(tree.Id) ? "true" : "false")" @key="tree.Id">
+                    <button type="button"
+                            class="lx-nav-item @(Owner.IsTreeSelected(tree.Id) ? "is-selected" : null)"
+                            disabled="@Owner.Busy"
+                            @onclick="Add(tree.Id)">
+                        <span class="lx-nav-item-id">@tree.Id</span>
+                    </button>
+                </li>
+            }
+            @foreach (var group in Owner.RestoreShadowGroups)
+            {
+                <li class="lx-backups-treegroup" role="presentation" @key="group.LogicalTreeId">@group.LogicalTreeId (restore shadows)</li>
+                @foreach (var shadow in group.Shadows)
+                {
+                    <li role="option" aria-selected="@(Owner.IsTreeSelected(shadow.Id) ? "true" : "false")" @key="shadow.Id">
+                        <button type="button"
+                                class="lx-nav-item @(Owner.IsTreeSelected(shadow.Id) ? "is-selected" : null)"
+                                disabled="@Owner.Busy"
+                                @onclick="Add(shadow.Id)">
+                            <span class="lx-nav-item-id">@shadow.Id</span>
+                        </button>
+                    </li>
+                }
+            }
+        </ul>
+    }
+    else
+    {
+        <p class="lx-backups-empty">No trees are visible.</p>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<string, EventCallback> _add = new(StringComparer.Ordinal);
+
+    /// <summary>The Backups panel this picker reads its trees and selection from.</summary>
+    [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    /// <summary>
+    /// The add callback for one tree, bound once and reused on every later
+    /// render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per tree per render - the picker re-renders on
+    /// every selection and every busy transition - and gave the delegate a new
+    /// identity each time, so Blazor's attribute diffing re-registered every
+    /// handler rather than skipping it. The tree id is both the row identity and
+    /// the argument, so nothing can go stale. Ordinary trees and restore shadows
+    /// share the map because a tree id is unique across both lists.
+    /// </remarks>
+    private EventCallback Add(string treeId)
+    {
+        if (_add.TryGetValue(treeId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the lists it
+        // serves is holding callbacks for trees no longer rendered.
+        if (_add.Count > (Owner.OrdinaryTrees.Count + Owner.RestoreShadowGroups.Count) * 4)
+        {
+            _add.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => Owner.AddTreeAsync(treeId));
+        _add.Add(treeId, callback);
+        return callback;
+    }
+}

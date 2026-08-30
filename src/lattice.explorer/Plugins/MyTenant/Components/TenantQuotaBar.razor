@@ -1,0 +1,90 @@
+@*
+    One quota dimension.
+
+    A proportional bar is drawn only for a dimension that is BOTH bounded and
+    measured. Everything else says what it actually is:
+
+      * no ceiling at all      -> "No limit", with the usage figure beside it
+      * a ceiling, no sample   -> "Not measured", with the ceiling beside it
+      * neither                -> "No limit, not measured"
+
+    None of those is a bar at 0%. An unlimited quota drawn as an empty bar reads
+    as "you have used none of your allowance" when the truth is "there is no
+    allowance to use", and an unmeasured rate limit drawn the same way reads as
+    "you are using none of your rate limit" when the truth is that nothing is
+    sampling it. A ceiling of exactly 0 IS a bar - a real cap permitting
+    nothing, against which any usage is already overage.
+*@
+
+<li class="lxm-gauge @(Gauge.IsOverLimit ? "is-over" : null)">
+    <div class="lxm-gauge-head">
+        <span class="lxm-gauge-label">@TenantQuotaLabels.Label(Gauge.Kind)</span>
+        <span class="lxm-gauge-figures">
+            @if (Gauge.Usage is { } usage)
+            {
+                <span>@usage.ToString("N0")</span>
+            }
+            else
+            {
+                <span class="lxm-muted">@TenantQuotaLabels.UnmeasuredText</span>
+            }
+            <span class="lxm-gauge-sep">of</span>
+            @if (Gauge.Limit is { } limit)
+            {
+                <span>@limit.ToString("N0")</span>
+            }
+            else
+            {
+                <span class="lxm-muted">@TenantQuotaLabels.UnboundedText</span>
+            }
+            <span class="lxm-gauge-unit">@TenantQuotaLabels.Unit(Gauge.Kind)</span>
+        </span>
+    </div>
+
+    @if (Gauge.HasBar)
+    {
+        <div class="lxm-bar"
+             role="progressbar"
+             aria-valuemin="0"
+             aria-valuemax="100"
+             aria-valuenow="@Gauge.BarPercent"
+             aria-label="@TenantQuotaLabels.Label(Gauge.Kind)">
+            <div class="lxm-bar-fill" style="@FillStyle"></div>
+        </div>
+    }
+    else
+    {
+        @*
+            Deliberately not a bar. Rendering a track here at all would invite
+            the eye to read an absent measurement as a low one.
+        *@
+        <p class="lxm-gauge-nobar lxm-muted">@TenantQuotaLabels.WithoutBarText(Gauge)</p>
+    }
+
+    <div class="lxm-gauge-detail">
+        @if (Gauge.BurstLimit is { } burst)
+        {
+            <span class="lxm-gauge-note">
+                Burst ceiling @burst.ToString("N0")@(Gauge.BurstHeadroom is { } headroom
+                    ? $", {headroom:N0} headroom"
+                    : null)
+            </span>
+        }
+        @if (Gauge.HasOverage)
+        {
+            <span class="lxm-gauge-note is-over">
+                Over by @Gauge.Overage.ToString("N0"); @Gauge.MeteredOverage.ToString("N0") metered
+            </span>
+        }
+    </div>
+</li>
+
+@code {
+    /// <summary>The dimension this gauge renders.</summary>
+    [Parameter, EditorRequired] public TenantQuotaGauge Gauge { get; set; }
+
+    // Handed out from a pre-composed table rather than concatenated per render:
+    // the quota surface re-renders on every usage refresh, and there are only
+    // 101 possible fills.
+    private string FillStyle => TenantQuotaBarStyle.Width(Gauge.BarPercent);
+}

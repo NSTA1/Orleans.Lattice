@@ -2,10 +2,13 @@
 
 > **Hidden by default.** The Schema area is withheld from the Explorer's switcher
 > for the initial release because its versioning UI cannot yet express what
-> differs between schema versions. Surface it by setting `EnableSchemaArea` to
-> `true` on `LatticeExplorerWebOptions` (see
+> differs between schema versions. Surface it by calling
+> `AddExplorerSchemaPlugin()` on the head's service collection - registration is
+> the whole of the opt-in, and it replaces the retired `EnableSchemaArea` flag
+> that `LatticeExplorerWebOptions` once carried (see
 > [Running the Explorer](running-the-explorer.md)). The schema control services
-> ship and stay registered regardless, so this only toggles visibility. Tracking
+> ship and stay registered regardless, so this only decides whether the tab is
+> rendered. Tracking
 > issue: re-surface the area once version-shape differences are expressible.
 
 The Orleans.Lattice Explorer has a top-level area switcher above the per-tree

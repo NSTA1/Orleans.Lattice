@@ -142,20 +142,24 @@ internal static class BootstrapFallbackPlanner
         LatticeReplicationMetrics.BootstrapFallbackTriggered.Add(
             1,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+            LatticeTenantLabel.ForTree(tree));
 
     private static void RecordEntries(string tree, string peer, int count) =>
         LatticeReplicationMetrics.BootstrapFallbackEntries.Add(
             count,
             new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer));
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+            LatticeTenantLabel.ForTree(tree));
 
     private static void RecordSkipped(string tree, string peer, BootstrapFallbackSkipReason reason) =>
         LatticeReplicationMetrics.BootstrapFallbackSkipped.Add(
             1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
-            new KeyValuePair<string, object?>(
-                LatticeReplicationMetrics.TagReason,
-                LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(reason)));
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, tree),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peer),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(reason)),
+                LatticeTenantLabel.ForTree(tree),
+            });
 }

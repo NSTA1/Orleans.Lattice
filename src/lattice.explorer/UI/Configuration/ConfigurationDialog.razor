@@ -1,13 +1,13 @@
 @using Orleans.Lattice.Explorer.Core.Configuration
 @inject IExplorerSession Session
 
-<div class="explorer-config-dialog" role="dialog" aria-modal="true" aria-label="Connection settings">
+<div class="lx-shell-config-dialog" role="dialog" aria-modal="true" aria-label="Connection settings">
     <h2>Connect to the state API</h2>
-    <p class="explorer-config-help">
+    <p class="lx-shell-config-help">
         Enter the address of the Lattice state-API endpoint the explorer should connect to.
     </p>
 
-    <label class="explorer-config-field">
+    <label class="lx-shell-config-field">
         <span>Endpoint</span>
         <input type="text"
                placeholder="https://host:443"
@@ -16,27 +16,27 @@
                @onkeydown="OnKeyDown" />
     </label>
 
-    <label class="explorer-config-checkbox">
+    <label class="lx-shell-config-checkbox">
         <input type="checkbox" checked="@_insecureLoopbackDev" @onchange="OnInsecureModeChange" />
         <span>Insecure loopback-dev mode (anonymous, plaintext; localhost only)</span>
     </label>
 
-    <label class="explorer-config-checkbox">
+    <label class="lx-shell-config-checkbox">
         <input type="checkbox" checked="@_allowInsecure" @onchange="OnAllowInsecureChange" />
         <span>Allow unencrypted HTTP/2 (h2c) for local development</span>
     </label>
 
     @if (!string.IsNullOrEmpty(_error))
     {
-        <p class="explorer-config-error" role="alert">@_error</p>
+        <p class="lx-shell-config-error" role="alert">@_error</p>
     }
 
-    <div class="explorer-config-actions">
+    <div class="lx-shell-config-actions">
         @if (AllowCancel)
         {
-            <button type="button" class="explorer-btn" disabled="@_saving" @onclick="CancelAsync">Cancel</button>
+            <button type="button" class="lx-btn" disabled="@_saving" @onclick="CancelAsync">Cancel</button>
         }
-        <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_saving" @onclick="SaveAsync">
+        <button type="button" class="lx-btn lx-btn-primary" disabled="@_saving" @onclick="SaveAsync">
             @(_saving ? "Connecting..." : "Save and connect")
         </button>
     </div>

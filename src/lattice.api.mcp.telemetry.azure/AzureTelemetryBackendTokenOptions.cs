@@ -1,4 +1,5 @@
 using Azure.Core;
+using Orleans.Lattice.Api.Telemetry;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 
@@ -11,6 +12,18 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry.Azure;
 /// <see cref="LatticeAzureTelemetryTokenServiceCollectionExtensions.AddAzureTelemetryBackendToken"/>
 /// and resolvable via <c>IOptions&lt;AzureTelemetryBackendTokenOptions&gt;</c>.
 /// </summary>
+/// <remarks>
+/// This is the only type that holds the Azure credential, and
+/// <c>IOptions&lt;AzureTelemetryBackendTokenOptions&gt;</c> is the only path to it.
+/// The trust boundary here is the process: in-process host code that already
+/// composed the container is trusted, so it can of course resolve these options
+/// and the <see cref="ITelemetryBackendTokenProvider"/> seam. What must not happen
+/// is the credential, or the token it mints, escaping to a <i>remote</i> caller -
+/// so the minted token is never written onto
+/// <see cref="LatticeTelemetryOptions.Credential"/> (an instance a binding shares
+/// with its own derived options type and exposes to its request handlers), and it
+/// travels only on the outbound backend request.
+/// </remarks>
 public sealed class AzureTelemetryBackendTokenOptions
 {
     /// <summary>

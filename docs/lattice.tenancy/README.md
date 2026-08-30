@@ -462,7 +462,7 @@ them.
 
 | Instrument | Meaning |
 |---|---|
-| `orleans.lattice.tenancy.tenants` | Cluster-aggregate count of tenants in the warm usage index. The one series with no `tenant` tag. |
+| `orleans.lattice.tenancy.tenants` | Cluster-aggregate count of tenants in the warm usage index. It belongs to the platform rather than to any tenant, so it carries the reserved `_platform_` sentinel as its `tenant` value rather than being left untagged - a tenant-scoped matcher then excludes it by stating so, not by accident of absence. |
 | `orleans.lattice.tenancy.usage.bytes` | The tenant's current aggregate durable bytes. |
 | `orleans.lattice.tenancy.usage.keys` | The tenant's current aggregate live-key count. |
 | `orleans.lattice.tenancy.usage.memory_bytes` | The tenant's current aggregate resident memory. |

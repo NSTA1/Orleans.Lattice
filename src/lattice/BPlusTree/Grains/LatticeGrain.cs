@@ -106,6 +106,33 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <summary>
+    /// Per-activation cached <c>(tag=tenant, value=...)</c> KeyValuePair - the
+    /// derived owning tenant of <see cref="TreeId"/>, emitted alongside
+    /// <see cref="StageTagTree"/> on every public-API duration instrument.
+    /// </summary>
+    /// <remarks>
+    /// Cached with the same flag-based lazy init as <see cref="StageTagTree"/>
+    /// and for the same reason: the derivation is invariant for the activation's
+    /// lifetime (the tree id is fixed by the immutable grain context), so the
+    /// classification runs once per activation instead of once per measurement,
+    /// and the busiest read and write entry points pay nothing for the dimension.
+    /// </remarks>
+    private KeyValuePair<string, object?> _stageTagTenantCache;
+    private bool _stageTagTenantCached;
+    private KeyValuePair<string, object?> StageTagTenant
+    {
+        get
+        {
+            if (!_stageTagTenantCached)
+            {
+                _stageTagTenantCache = LatticeTenantLabel.ForTree(TreeId);
+                _stageTagTenantCached = true;
+            }
+            return _stageTagTenantCache;
+        }
+    }
+
     private LatticeOptions Options => optionsMonitor.Get(TreeId);
 
     /// <summary>
@@ -207,24 +234,24 @@ internal sealed partial class LatticeGrain(
         // without rejecting anything.
         if (advisoryKeys is { } advK && liveKeys >= advK)
         {
-            LatticeMetrics.AdmissionWouldReject.Add(1, StageTagTree, LatticeMetrics.DimensionKeys);
+            LatticeMetrics.AdmissionWouldReject.Add(1, StageTagTree, LatticeMetrics.DimensionKeys, StageTagTenant);
         }
         if (advisoryBytes is { } advB && estimatedBytes >= advB)
         {
-            LatticeMetrics.AdmissionWouldReject.Add(1, StageTagTree, LatticeMetrics.DimensionBytes);
+            LatticeMetrics.AdmissionWouldReject.Add(1, StageTagTree, LatticeMetrics.DimensionBytes, StageTagTenant);
         }
 
         // Enforcing caps: reject at-or-over the ceiling.
         if (maxKeys is { } capKeys && liveKeys >= capKeys)
         {
-            LatticeMetrics.AdmissionRejected.Add(1, StageTagTree, LatticeMetrics.DimensionKeys);
+            LatticeMetrics.AdmissionRejected.Add(1, StageTagTree, LatticeMetrics.DimensionKeys, StageTagTenant);
             throw new LatticeQuotaExceededException(
                 $"Write to tree '{TreeId}' rejected: live key count {liveKeys} has reached the configured LatticeOptions.MaxLiveKeys cap of {capKeys}.",
                 TreeId, LatticeQuotaExceededException.KeysDimension, liveKeys, capKeys);
         }
         if (maxBytes is { } capBytes && estimatedBytes >= capBytes)
         {
-            LatticeMetrics.AdmissionRejected.Add(1, StageTagTree, LatticeMetrics.DimensionBytes);
+            LatticeMetrics.AdmissionRejected.Add(1, StageTagTree, LatticeMetrics.DimensionBytes, StageTagTenant);
             throw new LatticeQuotaExceededException(
                 $"Write to tree '{TreeId}' rejected: estimated footprint {estimatedBytes} bytes has reached the configured LatticeOptions.MaxEstimatedBytes cap of {capBytes} bytes.",
                 TreeId, LatticeQuotaExceededException.BytesDimension, estimatedBytes, capBytes);
@@ -845,7 +872,8 @@ internal sealed partial class LatticeGrain(
                     {
                         LatticeMetrics.GetStageDuration.Record(
                             System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds,
-                            stageTagTree, LatticeMetrics.StageRouteTag);
+                            stageTagTree, LatticeMetrics.StageRouteTag,
+                            StageTagTenant);
                     }
                     var shardStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
                     try
@@ -856,7 +884,8 @@ internal sealed partial class LatticeGrain(
                     {
                         LatticeMetrics.GetStageDuration.Record(
                             System.Diagnostics.Stopwatch.GetElapsedTime(shardStartTicks).TotalMilliseconds,
-                            stageTagTree, LatticeMetrics.StageShardTag);
+                            stageTagTree, LatticeMetrics.StageShardTag,
+                            StageTagTenant);
                     }
                 }
                 catch (StaleShardRoutingException)
@@ -898,7 +927,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.GetDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
-                stageTagTree);
+                stageTagTree,
+                StageTagTenant);
         }
     }
 
@@ -994,7 +1024,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.GetWithVersionDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
-                stageTagTree);
+                stageTagTree,
+                StageTagTenant);
         }
     }
 
@@ -1098,7 +1129,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.ExistsDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
-                stageTagTree);
+                stageTagTree,
+                StageTagTenant);
         }
     }
 
@@ -1191,7 +1223,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.GetManyDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(envelopeStartTicks).TotalMilliseconds,
-                stageTagTree);
+                stageTagTree,
+                StageTagTenant);
         }
     }
 
@@ -1209,7 +1242,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.GetManyStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(initialRouteStartTicks).TotalMilliseconds,
-                stageTagTree, LatticeMetrics.StageRouteTag);
+                stageTagTree, LatticeMetrics.StageRouteTag,
+                StageTagTenant);
         }
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
@@ -1269,7 +1303,8 @@ internal sealed partial class LatticeGrain(
                 {
                     LatticeMetrics.GetManyStageDuration.Record(
                         System.Diagnostics.Stopwatch.GetElapsedTime(retryRouteStartTicks).TotalMilliseconds,
-                        stageTagTree, LatticeMetrics.StageRouteTag);
+                        stageTagTree, LatticeMetrics.StageRouteTag,
+                        StageTagTenant);
                 }
             }
 
@@ -1347,7 +1382,8 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.GetManyStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageBucketTag);
+                    stageTagTree, LatticeMetrics.StageBucketTag,
+                    StageTagTenant);
             }
 
 #if LATTICE_DIAG
@@ -1433,7 +1469,8 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.GetManyStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageFanOutTag);
+                    stageTagTree, LatticeMetrics.StageFanOutTag,
+                    StageTagTenant);
             }
 
             // Merge stage: topology-stability check + snap2 stability
@@ -1483,7 +1520,8 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.GetManyStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(mergeStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageMergeTag);
+                    stageTagTree, LatticeMetrics.StageMergeTag,
+                    StageTagTenant);
             }
             if (returning) return result!;
         }
@@ -1608,7 +1646,8 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.SetStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageGateTag);
+                    stageTagTree, LatticeMetrics.StageGateTag,
+                    StageTagTenant);
             }
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1713,7 +1752,8 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.SetStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(shardStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageShardTag);
+                    stageTagTree, LatticeMetrics.StageShardTag,
+                    StageTagTenant);
             }
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG setcore-exit] tree={TreeId} key={key} attempts={setCoreAttempts} elapsedMs={swSetCore.Elapsed.TotalMilliseconds:F0}");
@@ -1728,14 +1768,16 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.SetStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(publishStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StagePublishTag);
+                    stageTagTree, LatticeMetrics.StagePublishTag,
+                    StageTagTenant);
             }
         }
         finally
         {
             LatticeMetrics.SetDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(setStartTicks).TotalMilliseconds,
-                stageTagTree);
+                stageTagTree,
+                StageTagTenant);
         }
     }
 
@@ -2018,7 +2060,8 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.SetManyStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(gateStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageGateTag);
+                    stageTagTree, LatticeMetrics.StageGateTag,
+                    StageTagTenant);
             }
             cancellationToken.ThrowIfCancellationRequested();
             await RetryOnStaleRoutingAsync(
@@ -2045,14 +2088,16 @@ internal sealed partial class LatticeGrain(
             {
                 LatticeMetrics.SetManyStageDuration.Record(
                     System.Diagnostics.Stopwatch.GetElapsedTime(eventsStartTicks).TotalMilliseconds,
-                    stageTagTree, LatticeMetrics.StageEventsTag);
+                    stageTagTree, LatticeMetrics.StageEventsTag,
+                    StageTagTenant);
             }
         }
         finally
         {
             LatticeMetrics.SetManyDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(setManyStartTicks).TotalMilliseconds,
-                stageTagTree);
+                stageTagTree,
+                StageTagTenant);
         }
     }
 
@@ -2069,7 +2114,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.SetManyStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(routeStartTicks).TotalMilliseconds,
-                stageTagTree, LatticeMetrics.StageRouteTag);
+                stageTagTree, LatticeMetrics.StageRouteTag,
+                StageTagTenant);
         }
 
         // Group entries by shard. Pre-size each bucket to the expected
@@ -2123,7 +2169,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.SetManyStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(bucketStartTicks).TotalMilliseconds,
-                stageTagTree, LatticeMetrics.StageBucketTag);
+                stageTagTree, LatticeMetrics.StageBucketTag,
+                StageTagTenant);
         }
 
         // Fan out writes in parallel per shard.
@@ -2153,7 +2200,8 @@ internal sealed partial class LatticeGrain(
         {
             LatticeMetrics.SetManyStageDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(fanoutStartTicks).TotalMilliseconds,
-                stageTagTree, LatticeMetrics.StageFanOutTag);
+                stageTagTree, LatticeMetrics.StageFanOutTag,
+                StageTagTenant);
         }
 
         static async Task WriteToShardAsync(

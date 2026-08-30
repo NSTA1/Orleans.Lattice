@@ -144,7 +144,8 @@ internal sealed class ShardedReplogSink(
             LatticeReplicationMetrics.DoorbellCoalesced.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerClusterId));
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerClusterId),
+                LatticeTenantLabel.ForTree(treeId));
         }
     }
 
@@ -167,7 +168,8 @@ internal sealed class ShardedReplogSink(
                 LatticeReplicationMetrics.DoorbellRung.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
-                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerClusterId));
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, peerClusterId),
+                    LatticeTenantLabel.ForTree(treeId));
                 await shipper.OnDoorbellAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)

@@ -228,7 +228,8 @@ public sealed class SaturationAwareRetryPolicy : HttpPipelinePolicy
         message.Response = new SaturatedResponse();
         LatticeMetrics.ProviderRetryShortCircuited.Add(1,
             new KeyValuePair<string, object?>(LatticeMetrics.TagStatus,
-                SaturatedResponse.SyntheticStatus.ToString(CultureInfo.InvariantCulture)));
+                SaturatedResponse.SyntheticStatus.ToString(CultureInfo.InvariantCulture)),
+            LatticeTenantLabel.Platform);
     }
 
     /// <summary>
