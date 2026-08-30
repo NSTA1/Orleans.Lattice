@@ -361,19 +361,24 @@ need the actual source to *do* a task (not just locate a file).
   Suppressed content is acknowledged in `reused` and never charged against `top` or
   the budget. Reuse the same `session` id across a multi-step task to keep each
   follow-up bundle cheap.
-- **Known defect - the budget bounds the bundle, not the response (issue #1811).**
-  `responseBudgetTokens` caps the summed *content*, but the response envelope is
-  currently far larger than `totalTokens` suggests: the payload is emitted as both
-  structured and text content, and each entry repeats its body in both
-  `entries[].content` and `entries[].units[].content`, so source crosses the wire
-  about **four times** on top of the per-entry metadata. A bundle reporting a few
-  thousand tokens can therefore overflow your harness's tool-output limit and be
-  spilled to a file. **When that happens, do not abandon `context`** - that is the
-  single most common way this tool falls out of use. Retry it smaller: drop `top`
-  to 3-5, ask for `detail: "outline"` first and only request `slices` for the files
-  the outline shows you actually need, and keep the same `session` id so the retry
-  is not re-charged for what the first call already delivered. If the spill file is
-  written, it is still readable - grep it rather than discarding the call you
+- **The budget bounds the response, and `responseTokens` is the figure to read.**
+  A bundle reports two numbers: `responseTokens` is the estimated cost of the
+  response *as you receive it* (delivered content plus each entry's JSON envelope,
+  multiplied because the MCP SDK serializes every result twice), and it is what
+  `responseBudgetTokens` actually caps. `totalTokens` is the narrower sum of the
+  packed source text alone - useful as "how much source did I get", but it is not
+  the cost. The estimate is deliberately conservative, so a bundle can come in
+  under the ceiling but never over it. (Until issue #1811 was fixed the budget
+  capped only the content, so a bundle reporting a few thousand tokens could land
+  as a response many times that size and silently overflow a harness; if you are
+  running an older build and see that, the workaround below still applies.)
+- **If a bundle is ever too large for your harness, retry it smaller - do not
+  abandon `context`.** Quietly falling back to `grep` after one oversized response
+  is the single most common way this tool falls out of use. Drop `top` to 3-5, ask
+  for `detail: "outline"` first and request `slices` only for the files the outline
+  shows you actually need, and keep the same `session` id so the retry is not
+  re-charged for what the first call already delivered. If the response was spilled
+  to a file, it is still readable - grep it rather than discarding the call you
   already paid for.
 
 ### stats - usage accounting
