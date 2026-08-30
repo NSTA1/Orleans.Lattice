@@ -2,6 +2,7 @@ using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.Backup;
 using Orleans.Lattice.Explorer.Backup.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
+using Orleans.Lattice.Explorer.Tests.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Backup;
 
@@ -29,6 +30,81 @@ public sealed class BackupsPanelRenderTests
             Assert.That(html, Does.Contain("role=\"tablist\""));
             Assert.That(html, Does.Contain("New Backup"));
             Assert.That(html, Does.Contain("Existing Backups"));
+        });
+    }
+
+    [Test]
+    public async Task The_sub_tab_strip_states_selection_on_every_tab_not_just_the_active_one()
+    {
+        // aria-selected is enumerated, not boolean. Handing Blazor a bool makes
+        // the active tab emit aria-selected="" and the inactive one omit the
+        // attribute entirely, so a screen-reader user cannot tell which tab is
+        // selected. Counting is what catches it: a spot check for
+        // "the active tab has aria-selected" passes on the broken form.
+        var html = await BackupsRenderHarness.RenderPanelAsync(StubBackupsDomain.Create());
+        var aria = PluginAriaMarkup.TallyAriaSelected(html);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(aria.Invalid, Is.Zero, "a bare or empty aria-selected is not a valid enumerated value");
+            Assert.That(aria.Valid, Is.EqualTo(aria.Total), "every occurrence must read true or false");
+            Assert.That(aria.True, Is.EqualTo(1), "exactly one sub-tab is selected");
+            Assert.That(
+                aria.False,
+                Is.EqualTo(1),
+                "the unselected sub-tab must say so rather than omit the attribute");
+        });
+    }
+
+    [Test]
+    public async Task Before_the_sub_tab_is_restored_both_tabs_state_that_they_are_unselected()
+    {
+        // The strip renders neither tab as active until the stored preference
+        // has been read. That must render "false" on both rather than saying
+        // nothing at all - the state is "no tab selected yet", not "unknown".
+        var html = await BackupsRenderHarness.RenderPanelAsync(
+            StubBackupsDomain.Create(),
+            preferencesLoaded: false);
+        var aria = PluginAriaMarkup.TallyAriaSelected(html);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(aria.Invalid, Is.Zero);
+            Assert.That(aria.True, Is.Zero, "no sub-tab is selected before the restore completes");
+            Assert.That(aria.False, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task The_tree_picker_states_selection_on_every_option()
+    {
+        // role="option" carries the same enumerated requirement as role="tab":
+        // one option reads "true", every other reads "false", and none may carry
+        // the empty value.
+        var html = await BackupsRenderHarness.RenderPanelAsync(
+            StubBackupsDomain.Create(
+                trees:
+                [
+                    new BackupTreeOption("orders", null),
+                    new BackupTreeOption("invoices", null),
+                    new BackupTreeOption("orders-restore", "orders"),
+                ]),
+            subTab: BackupsSubTab.New);
+        var aria = PluginAriaMarkup.TallyAriaSelected(html);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                PluginAriaMarkup.Count(html, "role=\"option\""),
+                Is.EqualTo(3),
+                "the picker lists both ordinary trees and the restore shadow");
+            Assert.That(aria.Invalid, Is.Zero, "a bare or empty aria-selected is not a valid enumerated value");
+            Assert.That(aria.Valid, Is.EqualTo(aria.Total));
+
+            // Two tabs plus three options, and no tree is selected until one is
+            // picked, so every option states "false" rather than omitting.
+            Assert.That(aria.True, Is.EqualTo(1), "only the active sub-tab is selected");
+            Assert.That(aria.False, Is.EqualTo(4));
         });
     }
 

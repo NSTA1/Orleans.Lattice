@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.Access.Views;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Tests.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Access;
 
@@ -51,6 +52,34 @@ public sealed class AccessPanelRenderTests
                 html,
                 Does.Contain("tabindex=\"-1\""),
                 "a roving tabindex makes the strip a single tab stop");
+        });
+    }
+
+    [Test]
+    public async Task The_tree_selector_states_selection_on_every_option()
+    {
+        // role="option" needs the enumerated aria-selected on every option, not
+        // just the selected one. Blazor renders a bool as an HTML boolean
+        // attribute - aria-selected="" on the selected option, nothing at all on
+        // the rest - so counting is what catches it.
+        var workspace = await AccessRenderHarness.CreateWorkspaceAsync(
+            StubAccessDomain.Create(trees: ["orders", "invoices", "events"]),
+            AccessSurfaces.Policies,
+            selectedTreeId: "orders");
+
+        var html = await AccessRenderHarness.RenderViewAsync<AccessTreeSelector>(workspace);
+        var aria = PluginAriaMarkup.TallyAriaSelected(html);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PluginAriaMarkup.Count(html, "role=\"option\""), Is.EqualTo(3));
+            Assert.That(aria.Invalid, Is.Zero, "a bare or empty aria-selected is not a valid enumerated value");
+            Assert.That(aria.Valid, Is.EqualTo(aria.Total), "every occurrence must read true or false");
+            Assert.That(aria.True, Is.EqualTo(1), "exactly one tree is pinned");
+            Assert.That(
+                aria.False,
+                Is.EqualTo(2),
+                "an unselected option must say so rather than omit the attribute");
         });
     }
 

@@ -29,9 +29,12 @@ internal sealed class StubSchemaDomain : ISchemaPluginDomain
     public SchemaDeadLetterView DeadLetters { get; set; } =
         new() { Status = SchemaOperationStatus.Succeeded };
 
+    /// <summary>The governable trees the area's selector lists.</summary>
+    public SchemaTreeCatalog Trees { get; set; } = SchemaTreeCatalog.Empty;
+
     /// <inheritdoc />
     public Task<SchemaTreeCatalog> ListGovernableTreesAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult(SchemaTreeCatalog.Empty);
+        Task.FromResult(Trees);
 
     /// <inheritdoc />
     public Task<SchemaTreeGrants> ProbeTreeAsync(string treeId, CancellationToken cancellationToken = default) =>

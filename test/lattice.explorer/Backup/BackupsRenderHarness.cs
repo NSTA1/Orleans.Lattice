@@ -42,15 +42,21 @@ internal static class BackupsRenderHarness
     /// An optional action run against the rendered panel before the markup is
     /// read, so a test can reach a state that only an interaction produces.
     /// </param>
+    /// <param name="preferencesLoaded">
+    /// Whether the stub preference store reports itself hydrated. Pass
+    /// <see langword="false"/> to read the markup the panel renders <em>before</em>
+    /// the retained sub-tab has been restored, when neither sub-tab is active.
+    /// </param>
     /// <returns>The rendered markup.</returns>
     public static async Task<string> RenderPanelAsync(
         IBackupsDomain domain,
         BackupsSubTab subTab = BackupsSubTab.Existing,
         LatticeBreakpoint? breakpoint = LatticeBreakpoint.Expanded,
-        Func<BackupsPanel, Task>? afterFirstRender = null)
+        Func<BackupsPanel, Task>? afterFirstRender = null,
+        bool preferencesLoaded = true)
     {
         var preferences = Substitute.For<IExplorerPluginPreferences>();
-        preferences.IsLoaded.Returns(true);
+        preferences.IsLoaded.Returns(preferencesLoaded);
         preferences.GetOrDefault(Arg.Any<string>(), Arg.Any<BackupsSubTab>()).Returns(subTab);
 
         var context = Substitute.For<IExplorerPluginHostContext>();
