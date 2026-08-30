@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 /// CRDT-merged <see cref="ITenantRegistry"/>.
 /// <para>
 /// The last-resident-region invariant cannot be held by a pre-write read-check
-/// alone: <see cref="TenantRecord.RegionStatuses"/> is an LWW-element-map keyed by
+/// alone: <c>TenantRecord.RegionStatuses</c> is an LWW-element-map keyed by
 /// region id, so two callers draining <i>different</i> regions each pass the guard
 /// and the join keeps both tombstones, emptying residency. These tests drive that
 /// exact interleaving deterministically - the competing write is folded in inside

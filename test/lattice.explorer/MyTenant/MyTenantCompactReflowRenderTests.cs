@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Plugins.MyTenant.Components;
+using Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 
