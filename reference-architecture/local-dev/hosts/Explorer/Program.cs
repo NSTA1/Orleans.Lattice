@@ -20,8 +20,11 @@ using Orleans.Lattice.ReferenceArchitecture.Hosting;
 //
 // The console's first-run connection is seeded by the explorer's own environment
 // bootstrap (LATTICE_EXPLORER_ENDPOINT / LATTICE_EXPLORER_INSECURE_DEV /
-// LATTICE_EXPLORER_USERNAME / LATTICE_EXPLORER_PASSWORD / LATTICE_EXPLORER_CONFIG),
-// so the remote endpoint and any auto-sign-in are configuration, never code.
+// LATTICE_EXPLORER_CONFIG), so the remote endpoint is configuration, never code.
+// The bootstrap's CREDENTIAL half (LATTICE_EXPLORER_USERNAME /
+// LATTICE_EXPLORER_PASSWORD) is deliberately unused here: it is withheld by the
+// web head unless a host opts in, and this harness does not opt in, so sign-in is
+// manual. See the AddLatticeExplorerWeb call below for why.
 //
 // Auth: the console offers a hosted-web Microsoft Entra sign-in (OpenID Connect,
 // auth-code + PKCE) when Entra is enabled (AddLatticeExplorerEntraWebAuth). The
@@ -68,6 +71,26 @@ Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
 builder.Services.AddLatticeExplorerWeb(options =>
 {
     options.ConfigFilePath = configFilePath;
+
+    // NOTE: this host deliberately does NOT set AllowEnvironmentCredentialSeed,
+    // and the two LATTICE_EXPLORER_USERNAME / LATTICE_EXPLORER_PASSWORD variables
+    // are not set on it either (see docker-compose.yml). Do not "fix" this by
+    // opting in - it was measured, and it costs more than it buys here:
+    //
+    //   * The web head's sign-out is a server form POST to /auth/logout, which
+    //     clears the credential cookie and redirects. The redirected load starts a
+    //     fresh circuit whose credential store is empty, which is exactly the
+    //     condition the environment seed applies on - so the operator is signed
+    //     straight back in and sign-out becomes unachievable.
+    //   * Signing out and back in AS ANOTHER IDENTITY is this harness's headline
+    //     demonstration (four identities with genuinely different power under
+    //     deny-by-default). Trading that away to save one dialog on first load is
+    //     a bad deal, and leaves the harness advertising a flow it cannot perform.
+    //
+    // So sign-in here is manual and uniform: the console opens at its sign-in
+    // dialog and you type an identity id as the username (the password is
+    // ignored). That is the SAME gesture used for every subsequent identity
+    // switch, so the harness has one sign-in mechanism rather than two.
 });
 
 // The Schema management area is an opt-in plugin: registering it is the whole of
@@ -161,11 +184,11 @@ else
     // stock anonymous state-API connection is fail-closed by the silo's
     // state-visibility filter - the tree catalog comes back empty and the Access
     // area is denied. Replace the built-in Basic auth method with one that signs
-    // the console in as the configured bootstrap administrator by forwarding
+    // the console in as whichever identity the operator enters, by forwarding
     // `Bearer <subject>`, exactly the credential the silo's
     // DevBypassCredentialAuthenticator trusts (and the MCP head already forwards).
-    // Driven by the LATTICE_EXPLORER_USERNAME sign-in seed so it auto-applies on
-    // first load with no dialog. Registered ONLY when Entra is disabled, so it can
+    // Driven by the operator entering an identity id as the username in the
+    // console's sign-in dialog. Registered ONLY when Entra is disabled, so it can
     // never coexist with, or weaken, a real deployment's Entra sign-in.
     builder.Services.RemoveAll<IExplorerAuthMethod>();
     builder.Services.AddSingleton<IExplorerAuthMethod, DevBypassExplorerAuthMethod>();

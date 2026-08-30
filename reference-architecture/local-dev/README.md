@@ -67,6 +67,15 @@ its peer; `net-backup` attaches **only** the two silos and the one shared backup
 so every cluster can read the same backup for a coordinated restore. Everything else
 stays region-local.
 
+Telemetry is deliberately **not** one of those seams, and it flows both ways inside
+a region. Each silo exports the whole `orleans.lattice` meter family at `/metrics`
+for its own Prometheus to scrape (the write direction, feeding Grafana), and each
+silo also **reads** that same Prometheus back through the read-only telemetry facade
+(`Telemetry__BackendAddress`), which is what puts a working **Telemetry** area in
+that region's Explorer. `silo-a` is wired to `prometheus-a` and `silo-b` to
+`prometheus-b`; the sibling region's Prometheus is not resolvable across the network
+boundary, so neither region can read the other's series.
+
 ## Quickstart
 
 Run every command from this directory (`reference-architecture/local-dev`). Each head
@@ -101,6 +110,10 @@ to its region's Docker network and has no host port.
 | Prometheus | internal to net-a | internal to net-b |
 | Azurite primary | internal to net-a | internal to net-b |
 | Azurite backup | one shared sink on net-backup, reachable from both silos | (shared) |
+
+Prometheus has no host port on purpose. Read its series through that region's
+Grafana, that region's Explorer **Telemetry** area, or that region's MCP telemetry
+tools - all three reach it from inside the region's own network.
 
 ## The identity model
 
@@ -150,10 +163,22 @@ and, once tenancy is enabled, the tenant you act as - per call:
   sees the telemetry tools; `region-operator` sees the data read/write tools;
   `platform-admin` sees everything; an unlisted id (or no token) sees nothing.
 
-- **Explorer:** the console auto-signs-in as `platform-admin`. Sign out and sign
-  back in with any identity id as the **username** (the password is ignored) to see
-  that identity's view - a `data-reader` sees only readable trees, an `auditor` sees
-  none, and the Access tab reflects the seeded groups and grants.
+- **Explorer:** the console opens at its sign-in dialog. Enter any identity id as
+  the **username** (the password is ignored) to browse as that identity - start
+  with `platform-admin`.   Sign out and sign back in as another id to see that
+  identity's view: a `data-reader` sees only readable trees, an `auditor` sees no
+  tree data at all, and the Access tab reflects the seeded groups and grants.
+
+  Sign-in here is deliberately manual rather than seeded. The web Explorer
+  withholds the `LATTICE_EXPLORER_USERNAME` / `LATTICE_EXPLORER_PASSWORD`
+  credential seed unless a host opts in - the store is per browser, so a seeded
+  credential would sign **every** anonymous visitor in as the operator - and this
+  harness does not opt in, so those two variables are not set on either console.
+  That is not just caution: a web head signs out by clearing the credential cookie
+  and reloading, which is exactly the empty-store condition the seed fires on, so
+  an enabled seed would sign you straight back in and make sign-out - and with it
+  the identity switching this whole harness exists to demonstrate - impossible.
+  One dialog on first load buys a working four-identity demo.
 
 - **Acting as a tenant (tenancy stack only):** identity and tenant are independent
   axes. The bearer token says *who you are*; the `lattice-active-tenant` header says
@@ -210,7 +235,42 @@ and, once tenancy is enabled, the tenant you act as - per call:
    A's storage, telemetry, or heads - only the silos' replication seam bridges the
    two regions.
 
-## Demo 3 - tenant isolation (opt-in multi-tenancy)
+## Demo 3 - telemetry, region-local
+
+The Explorer's **Telemetry** area is a read plane over that region's Prometheus.
+The silo exposes it: `Telemetry__BackendAddress` names the region's own Prometheus,
+and the telemetry gRPC binding rides the same silo endpoint the console already
+uses for State, so the console needs no second address.
+
+1. Open region A's Explorer (http://localhost:9080) and sign in as `platform-admin`
+   (any password). A **Telemetry** area tab is present; open it and the panels
+   render series scraped from `silo-a`.
+2. Sign out and back in as `data-reader` or `region-operator`, or browse signed
+   out. None of them is entitled to telemetry, so the catalogue comes back empty
+   and **no Telemetry tab is rendered at all**. The facade makes "no backend here"
+   and "nothing offered to you" deliberately indistinguishable, so a caller cannot
+   probe its own entitlement.
+3. The area is region-local: region B's Explorer (http://localhost:9081) shows
+   region B's series, read from `prometheus-b`. Neither region can read the other's
+   telemetry - only replication and the shared backup sink cross the boundary.
+
+> **`auditor` is the exception, and it is a product gap, not a harness one.**
+> `auditor` holds the scopeless `Telemetry` capability and its MCP telemetry tools
+> work, but it gets **no** Telemetry area in the Explorer. The two surfaces check
+> different scopes: the seeded grant is authored cluster-wide over the all-trees
+> sentinel (`LatticeScope.ClusterWide()`, whose own documentation names
+> `LatticeOperation.Telemetry` as its intended use), while the telemetry facade
+> authorizes `Telemetry` over the **reserved auth-policy tree** instead, so a grant
+> authored the documented way is never honoured by it. `platform-admin` reaches the
+> area only because a bootstrap administrator bypasses the gate outright. Nothing
+> in this harness can reconcile that; it needs a fix in the facade or in
+> `LatticeScope.ClusterWide()`'s contract.
+
+Unset `Telemetry__BackendAddress` on a silo and that region's telemetry surface
+disappears entirely: the binding answers `Unimplemented`, the Explorer's gate reads
+the surface as absent, and no Telemetry tab is rendered for anyone.
+
+## Demo 4 - tenant isolation (opt-in multi-tenancy)
 
 This demo requires the stack be stood up with tenancy on:
 `TENANCY_ENABLED=true docker compose up --build -d` (see the Quickstart table).
@@ -293,6 +353,13 @@ environment or a `.env` file next to this compose file:
 | `TENANCY_ENABLED` | `false` | Opt-in multi-tenancy. When `true`, both silos register the tenant registry + tenant-admin API and seed the demo tenants from `identities.json`, and both MCP heads dial the tenant-admin facade and advertise the tenant self-awareness tools. Off leaves the stack byte-for-byte single-tenant. |
 | `TENANCY_CONTROL` | `false` | When `true` (and `TENANCY_ENABLED=true`), the MCP heads also advertise the mutating tenant-administration tools. Ignored when tenancy is off. |
 
+Two per-region values are deliberately **not** `.env` knobs, because pointing either
+across the region boundary would make the harness lie about its isolation: each
+silo's `Telemetry__BackendAddress` and each MCP head's `Mcp__Telemetry__BackendAddress`
+name that region's own Prometheus (`prometheus-a` / `prometheus-b`) directly in the
+compose file. Clear a silo's value to switch that region's telemetry surface off
+entirely - the Explorer then renders no Telemetry area there.
+
 ## How the dev identity seams fit together
 
 | Concern | Component | What it does |
@@ -301,7 +368,7 @@ environment or a `.env` file next to this compose file:
 | Seed the model into the cluster (silo) | `LocalDevIdentitySeeder` | Writes groups + memberships to the membership directory and each group's grant to the policy store. Idempotent, retried until the silo is active. |
 | Seed the demo tenants (silo, tenancy only) | `TenantSeeder` | When `TENANCY_ENABLED=true`, writes each `tenants` entry from `identities.json` into the tenant registry with its admin subjects. Idempotent LWW upserts, retried until the silo is active. Not registered when tenancy is off. |
 | Per-request identity at the edge (MCP) | `DevBypassAuthenticationHandler` | Authenticates each request as the subject in its own `Authorization: Bearer <id>` header; no bearer means anonymous (zero tools). |
-| Per-identity sign-in (Explorer) | `DevBypassExplorerAuthMethod` | Forwards the entered username as the caller's bearer token, so the console is served as that identity. |
+| Per-identity sign-in (Explorer) | `DevBypassExplorerAuthMethod` | Forwards the username entered at the sign-in dialog as the caller's bearer token, so the console is served as that identity. Sign-in is manual: the environment credential seed is deliberately left off (see [Acting as an identity](#acting-as-an-identity)). |
 
 All four exist only in this harness and never ship in a real deployment host.
 

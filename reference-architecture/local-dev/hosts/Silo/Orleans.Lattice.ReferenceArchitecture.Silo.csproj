@@ -61,6 +61,8 @@
     <ProjectReference Include="..\..\..\..\src\lattice.api.schema.grpc\Orleans.Lattice.Api.Schema.Grpc.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.treeadmin\Orleans.Lattice.Api.TreeAdmin.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.treeadmin.grpc\Orleans.Lattice.Api.TreeAdmin.Grpc.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.telemetry\Orleans.Lattice.Api.Telemetry.csproj" />
+    <ProjectReference Include="..\..\..\..\src\lattice.api.telemetry.grpc\Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
     <ProjectReference Include="..\..\..\..\src\lattice.api.tenantadmin.grpc\Orleans.Lattice.Api.TenantAdmin.Grpc.csproj" />
