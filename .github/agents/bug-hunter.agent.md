@@ -138,7 +138,19 @@ Follow the phases in order. Do **not** open a PR yourself - hand off to `feature
 
 ### Phase 0 - Continuity check
 
-Before stating a fresh hypothesis, read what past cycles already found.
+Before stating a fresh hypothesis, read what past cycles already found. The
+scratch ledger below is **local to one working tree** and is gitignored, so it
+vanishes with the worktree; `repocontext` memory is the durable half of this
+check and survives across worktrees, machines, and context windows. Read both,
+starting with memory.
+
+0. **Sweep durable memory first.** `repocontext_scan` scope `MemoryTopic` topic
+   `gotchas` (139-plus entries and growing - this is where confirmed bug-class
+   findings live), then `repocontext_search` the bug class you are considering.
+   A confirmed finding already guarded by a regression test is out of scope; a
+   discarded candidate is subject to the continuity rule in step 3. If the scratch
+   ledger is absent because this is a fresh worktree, memory is the only
+   continuity you have - do not treat "no scratch state" as "no prior work".
 
 1. **Enumerate the ledger and prior findings.**
 
@@ -195,8 +207,8 @@ Write all five into the chat reply. Without them you do not have a hypothesis - 
 
 Read - do not write yet. Build the picture of the suspect code path with the smallest set of file reads that supports the hypothesis. Specifically:
 
-1. Read the target file(s) end-to-end via `get_file`.
-2. `find_references` (Find All References, type=2) on every method the hypothesis touches to enumerate every call site.
+1. Open with one `repocontext_context` call: the hypothesis as the `task`, a stable `session` id reused for the whole investigation. It returns the ranked, explained source for the suspect path under a hard token ceiling in one round trip, with the match `reasons` for each entry. Then `view` the target file(s) end-to-end for the exact current text (the index does not carry uncommitted edits).
+2. `repocontext_related` on the target file to enumerate its inbound dependents and the test types covering it, then `find_references` (Find All References, type=2) on every method the hypothesis touches to confirm the call sites. `related` edges are keyed by simple type-name, so treat its dependent set as a lead to confirm, not a proof.
 3. For Class C/D/E hypotheses, read the relevant state POCO under `src/lattice/BPlusTree/State/` (or the replication-package equivalent) so you can see exactly which fields are persisted, which are in-memory only, and which carry which `[Id(n)]`.
 4. For Class A hypotheses, re-read `.github/instructions/primitives.instructions.md` and confirm whether the type currently asserts the laws it claims to satisfy.
 
@@ -275,6 +287,11 @@ A bug class is a hypothesis about a pattern - once you've confirmed the pattern 
 ### Phase 6 - Finding write-up
 
 Whether you confirmed and fixed the bug, or you discarded the candidate during Phase 2/3, write the outcome into the scratch directory. **The write-up is the input the next cycle's Phase 0 reads** - skip it and the agent re-investigates the same flaw next month.
+
+**Also capture the durable summary in `repocontext` memory** - the scratch file is local to this worktree and dies with it, so a write-up that exists only there is not continuity. `repocontext_remember` a short entry (`author` = your session identity, **no TTL** - this is the record, not a coordination handoff):
+
+- **Confirmed and fixed** -> topic `gotchas`, `kind: Note`. Title it after the flaw, and give the class, the failing behaviour, the fix, and the fully-qualified name of the guarding regression test. Link it to the fixed file (`addLinks`) so a later `recall` flags it stale if that code drifts.
+- **Discarded as a false positive** -> topic `gotchas`, `kind: Note`, titled as a *negative* result ("Class B RMW in X is safe because ..."). Negative results are what stop the next cycle re-hunting the same candidate, and they are the entries most often skipped.
 
 #### 6a - Confirmed and fixed
 

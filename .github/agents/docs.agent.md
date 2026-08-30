@@ -36,7 +36,8 @@ Run the phases in order. Each phase must complete with evidence before the next 
 
 ### Phase 1 - Enumerate the corpus
 
-1. `git ls-files "*.md"` to get the authoritative file list. Note the count. `.scratch/` is gitignored and absent from this list by construction.
+0. **Sweep durable memory first.** `repocontext_search` the docs area under audit, and `repocontext_scan` scope `MemoryTopic` topic `conventions` (then `decisions`). Prior sweeps record which claims were verified, which drift was deliberate, and which conventions the prose must reflect - re-deriving them from source is the expensive path. Per `.github/instructions/repocontext.instructions.md`, this is moment 1.
+1. `git ls-files "*.md"` to get the authoritative file list. Note the count. `.scratch/` is gitignored and absent from this list by construction. This stays a `git ls-files` contract: the corpus must be the tracked working tree, not the index, because you are auditing uncommitted prose too.
 2. If the user gave a narrower scope, filter the list and report the filtered count.
 3. **Do not** glob the filesystem with `Get-ChildItem` - that pulls in `bin/`, `obj/`, `node_modules/`, and stale untracked files. `git ls-files` is the contract.
 
@@ -65,6 +66,16 @@ Identify the **claim categories** to audit. The repeatable axes for this repo:
 For each axis, decide which docs to load. Do not pre-load all 82 files - load only when an axis points at them.
 
 ### Phase 3 - Source verification (the depth pass)
+
+Open each claim's verification with `repocontext_context` (the claim as the
+`task`, a stable `session` id reused across the whole sweep): it returns the
+ranked source that backs or refutes the claim in one budgeted call, where a
+`search` + open-the-file loop costs several. Then `view` the source file to read
+the authoritative current text before you assert drift - the index reflects the
+last ingest, so a claim must be settled against the real file, never against an
+index digest. Capture any convention or deliberate-drift decision you establish
+with `repocontext_remember` under `conventions` / `decisions` so the next sweep
+inherits it.
 
 For each axis from Phase 2:
 

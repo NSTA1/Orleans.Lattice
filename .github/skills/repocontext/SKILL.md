@@ -20,6 +20,11 @@ That file is the authority for everything this skill covers - do not restate its
 rules here or elsewhere; link to it so there is one place to change and nothing
 to drift. It covers:
 
+- **The session protocol - the four moments** - *when* to call the tools, not
+  just how: orient from memory at session start, probe before any discovery, use
+  `context` before reading source you intend to change, capture at each durable
+  finding - plus a self-check listing the symptoms of under-use. This is the
+  section to read first; the rest of the file is reference.
 - **Primary recall and search** - when the surface is available, lead with
   `repocontext` before `grep` / `glob` (and if the `repocontext_*` tools are not
   present, silently fall back); plus the two guardrails that make leading with it
@@ -51,6 +56,23 @@ Enough to know *whether to reach for it* without opening the master file first;
 open it for the full rules before you rely on any of this. If these ever
 disagree with the master file, the master file wins.
 
+- **The four moments (the master file's opening section - the part that changes
+  behaviour).** (1) **Session start, once**: `health` + `index_status`, then sweep
+  the memory you are about to need (`search` your task; `scan` scope `Memory`, or
+  `MemoryTopic` for a topic you can predict). (2) **Before any discovery**: probe
+  with `search` / `scan`, never a guessed path or a cold `grep` - and note that
+  "why is it like this / has this bitten us before" are *memory* questions.
+  (3) **Before reading source in order to change it**: `context` with a stable
+  `session` id, not a `search` + `view` crawl. (4) **At every durable finding**:
+  `remember` it then, not at end of session.
+- **Read what you write.** A session that calls `remember` but never `recall` /
+  `scan` scope `Memory` / `neighbors` is using half the tool; so is one that never
+  calls `context` on a task that required reading source. The master file carries
+  the full under-use self-check.
+- **Coordinating with other sessions?** Memory is the bus: one topic per epic or
+  workstream, `author` set to the session identity, and a **one-week TTL**
+  (`ttlSeconds: 604800`) on handoffs - promote anything durable to
+  `gotchas` / `conventions` / `decisions` (no TTL) when the workstream closes.
 - **Reach for it first.** When the `repocontext_*` tools are present, lead with
   `search` / `scan` / `recall` *before* `grep` / `glob` - both for finding code
   and for recalling what past sessions captured. If the tools are absent (or

@@ -20,6 +20,73 @@ carry the `repocontext_` prefix, as do the health / status / list tools
 (`repocontext_health`, `repocontext_index_status`), so any bare `index_status`
 in the prose means the same tool.
 
+## The session protocol - the four moments
+
+Everything else in this file is *how* to use the tools. This section is *when* -
+and it is the part that changes behaviour. The read side is chronically
+under-used: a session onboards with one `search`, files memories it never reads
+back, and never calls `context` at all. That is not disagreement with the rules
+below; it is that nothing named a **moment** to call them. These four moments are
+obligations. Each has an observable trigger, so you can check whether you
+honoured it.
+
+**1. Session start, once - orient before you act.**
+Before your first edit on any non-trivial task, spend one round:
+`repocontext_health`, then `index_status {repoId}` (which also calibrates you -
+see [Health and degraded mode](#health-and-degraded-mode)), then **sweep the
+memory you are about to need**: `search` your task in natural language (it ranks
+code and memory together), and `scan` scope `Memory` - or `MemoryTopic` for a
+topic you can predict, such as the epic, component, or package you are about to
+touch. You are looking for three things: the decision that already settled this,
+the gotcha that will cost you an hour, and the convention you would otherwise
+violate. Reading memory is the entire point of having written it; a session that
+files entries and never reads any is using half the tool.
+
+**2. Before any discovery - probe, do not guess.**
+Any "where is X / how does Y work / has this been decided" question opens with
+`search` (or `scan`), never with `grep` / `glob` or a guessed path. Drop to
+`grep` only after a probe shows the index is degraded, per guardrail 2 below.
+This holds for the *whole* session, not just its first few minutes: the most
+common failure is a strong opening probe followed by an hour of `grep`. Note that
+"why is it like this?", "is this safe to change?", and "has this bitten us
+before?" are **memory** questions, not code questions - they go to `search` or
+`scan` scope `Memory` first, and to the code second.
+
+**3. Before reading source in order to change it - `context`, not `search` + `view`.**
+When you need real code to *do* the task (not merely to locate a file),
+[`context`](#context---budgeted-context-bundle-in-one-call) is the default move:
+one call returns ranked, explained source under a hard token ceiling, where the
+`search` + `view` loop costs several round trips and whatever the files happen to
+weigh. Pass a stable `session` id and reuse it all task long, so follow-up
+bundles never re-charge you for context you already hold. Use `search` + `view`
+when you genuinely only need *where*, and `outline` / `related` when you need a
+file's shape or its callers rather than its body.
+
+**4. At every durable finding - capture before you move on.**
+The trigger is not "end of session" - you will forget, or run out of turn. It is
+the moment itself: you settled a design question, you lost time to something
+non-obvious, you pinned down an unwritten norm, or you are handing work to
+another session. Capture it then, with `remember`, under the right topic. See
+[Capture](#capture---durable-agent-memory).
+
+**Self-check - symptoms of under-use.** If any of these describes your session so
+far, you are leaving most of the surface unused - fix it on the next step, not
+next session:
+
+- you called `search` early on, then switched to `grep` / `view` for the rest of
+  the session;
+- you called `remember` this session but never `recall`, `scan` scope `Memory`,
+  or `neighbors`;
+- you have never called `context` on a task that required reading source to
+  change it;
+- you re-derived something - a convention, a workaround, a rationale - that a
+  `scan` of `decisions` / `gotchas` / `conventions` would have handed you;
+- you read three or more whole files with `view` to answer one question, without
+  first trying `outline` / `related` / `context`;
+- you are coordinating with another session (an epic, a stacked-PR chain,
+  parallel workstreams) and passing state only through chat messages rather than
+  the [coordination bus](#coordination---memory-as-a-cross-session-bus).
+
 ## Use it as the primary recall and search mechanism
 
 `repocontext` is the **default first move** for finding things in this repo and
@@ -46,11 +113,19 @@ The two jobs it is your first move for:
   filter, so for a memory-only sweep use `scan` with scope `Memory` (or
   `MemoryTopic` for a single topic).
 
-A typical retrieval loop: `search` for the question, take the best hit's `path`,
-`view` that file to read the real content, and (optionally) `remember` any
-durable gotcha you uncovered. When you need the actual source to *do* a task (not
-just find a file), reach for [`context`](#context---budgeted-context-bundle-in-one-call)
-instead - it packs ranked, explained source under a hard token budget in one call.
+**Two loops - pick by what you need, not by habit.**
+
+- **The work loop - the default whenever you will change code.** One
+  [`context`](#context---budgeted-context-bundle-in-one-call) call, with the task
+  in natural language and a stable `session` id, returns ranked, explained source
+  under a hard token ceiling; then `view` the specific files you are about to
+  edit; then `remember` what you learned. Reach for this whenever the answer is
+  "I need to read the relevant code": it is one round trip instead of several and
+  it cannot overrun your budget.
+- **The locate loop - when you only need *where*.** `search` for the question,
+  take the best hit's `path`, `view` that file to read the real content, and
+  (optionally) `remember` any durable gotcha you uncovered.
+
 To navigate the code graph (a file's callers, dependents, tests, or declared
 symbols) without full-file reads, use the
 [graph-navigation tools](#graph-navigation---outline--related--changed)
@@ -62,7 +137,11 @@ Two guardrails make it safe to lean on as primary - follow both every time:
    reflects the **last ingest, not your uncommitted edits**. Treat every hit as a
    pointer: once `repocontext` tells you *where*, `view` (or `grep`) the actual
    file before you quote, rely on, or edit its content. Never edit from an index
-   digest.
+   digest. This is a rule about *editing*, not about *reading*, and it is not a
+   reason to avoid `context`: the bodies `context` packs are real indexed content
+   and are exactly what you should use to understand a task cheaply. Just `view`
+   a file before you edit it, and re-`view` anything you already changed this
+   session, because your own uncommitted edits are never in the index.
 2. **Fall back only after a probe shows it is degraded - never sight-unseen.**
    Every trigger below is a signal you can read **only from a `repocontext`
    call**, so a discovery task must *open* with a `repocontext` probe
@@ -282,6 +361,25 @@ need the actual source to *do* a task (not just locate a file).
   Suppressed content is acknowledged in `reused` and never charged against `top` or
   the budget. Reuse the same `session` id across a multi-step task to keep each
   follow-up bundle cheap.
+- **The budget bounds the response, and `responseTokens` is the figure to read.**
+  A bundle reports two numbers: `responseTokens` is the estimated cost of the
+  response *as you receive it* (delivered content plus each entry's JSON envelope,
+  multiplied because the MCP SDK serializes every result twice), and it is what
+  `responseBudgetTokens` actually caps. `totalTokens` is the narrower sum of the
+  packed source text alone - useful as "how much source did I get", but it is not
+  the cost. The estimate is deliberately conservative, so a bundle can come in
+  under the ceiling but never over it. (Until issue #1811 was fixed the budget
+  capped only the content, so a bundle reporting a few thousand tokens could land
+  as a response many times that size and silently overflow a harness; if you are
+  running an older build and see that, the workaround below still applies.)
+- **If a bundle is ever too large for your harness, retry it smaller - do not
+  abandon `context`.** Quietly falling back to `grep` after one oversized response
+  is the single most common way this tool falls out of use. Drop `top` to 3-5, ask
+  for `detail: "outline"` first and request `slices` only for the files the outline
+  shows you actually need, and keep the same `session` id so the retry is not
+  re-charged for what the first call already delivered. If the response was spilled
+  to a file, it is still readable - grep it rather than discarding the call you
+  already paid for.
 
 ### stats - usage accounting
 
@@ -309,6 +407,31 @@ removed - not a live figure you must keep above zero.
 - Creates or updates a memory entry under a `topic` (both `repoId` and `topic`
   required). Omit `id` to create a new entry with a generated id; pass an
   existing `id` to **CRDT-merge in place** rather than blind-overwrite.
+- **Prefer a caller-chosen, deterministic `id` on a durable entry.** `id` reads
+  as server-owned because it defaults to a generated GUID, but you may choose it:
+  `explorer-token-contrast-1801` rather than `e11f414a...`. A stable, meaningful
+  id makes the write **idempotent** (so a retry cannot double-write), makes a
+  later revision a one-liner instead of a hunt, and makes the entry addressable
+  by `recall` without a search. Use the workstream, component, or issue it
+  belongs to.
+- **Keep the `id` the call returns, and pass it back when you revise.** If you
+  rewrite, extend, or improve the same note later in the same session - normal,
+  since you often learn the rest of the story after first writing it down - pass
+  that `id` so the entry CRDT-merges in place. Omitting it creates a second,
+  near-duplicate entry instead of revising the first. If you have lost the id,
+  `search` or `scan` the topic for your own entry (match on `author`) and reuse
+  its id rather than writing afresh.
+- **`repoId` is required on `remember`, and it is easy to drop.** Read calls
+  carry it too, but a write that omits it fails with
+  `ArgumentException: ... missing a value for the required parameter 'repoId'`.
+  That particular failure is **pre-write** - nothing reached the store, so a
+  straight retry is safe.
+- **Retrying an ambiguous write: check before you re-send.** A validation error
+  that names a missing parameter is safe to retry. Any *ambiguous* failure - a
+  timeout, a dropped connection, an error that does not clearly precede the
+  write - may have landed. `scan` (or `search`) the topic first and look for your
+  own entry by `author` before re-issuing, or retry with the same explicit `id`
+  so the write merges instead of duplicating.
 - Useful fields: `title`, `body`, `kind` (`Decision` / `Note` / `Memory`),
   `tags`, `author`, `provenance`, and `ttlSeconds`. To relate one entry to
   another, pass `addLinks` / `removeLinks` (see
@@ -322,7 +445,9 @@ removed - not a live figure you must keep above zero.
   working the same task right now, or provisional state you expect to supersede
   shortly. Never TTL something whose loss would be a problem: expiry is silent
   and unlogged, so correctness-critical memory must be retired deliberately with
-  `forget`, not left to time out.
+  `forget`, not left to time out. **Cross-session coordination handoffs are the
+  standard TTL case, and their default is one week** (`ttlSeconds: 604800`) - see
+  [Coordination](#coordination---memory-as-a-cross-session-bus).
 
 ### Keep the topic vocabulary small and stable
 
@@ -344,7 +469,14 @@ synonyms (`decision` vs `decisions`):
   originating conversation.
 - **Do not** capture secrets or credentials, anything already committed to
   `docs/` or `AGENTS.md` (link to it instead), transient within-turn state, or
-  large blobs. Memory is not a scratchpad for the current turn.
+  large blobs. Memory is not a scratchpad for the current turn. The one exception
+  to "transient" is a deliberate **cross-session handoff** (see
+  [Coordination](#coordination---memory-as-a-cross-session-bus)), which is
+  transient by design and therefore carries a TTL.
+- **Capture each finding once.** Prefer one well-formed entry written when you
+  actually understand the finding, over a first draft plus a near-duplicate
+  "better" version. If you do improve it, revise in place with its `id` (see
+  `remember` above).
 - **A user telling you to remember counts as a capture request.** When the user
   says *remember* / *note* / *keep in mind* / *don't forget* a standing fact,
   decision, or convention, that is a `repocontext_remember` request - not a cue
@@ -358,6 +490,42 @@ topiced, and carries the rationale:
 
 - Good: `remember(topic: "gotchas", kind: Note, title: "WAL shard read path returns ValueTask", body: "IWalShardGrain.ReadAsync / ReadShippingAsync / GetNextSequenceAsync return ValueTask (not Task) for the same-silo fast path the shipper polls; add .AsTask() only at Task.WhenAll fan-out sites. Reverting to Task reintroduces a real per-poll allocation.")` - actionable months later without this conversation.
 - Weak: `remember(topic: "notes", body: "looked at the WAL, seems fine")` - vague, no rationale, transient, and filed under a catch-all topic instead of a stable one.
+
+### Coordination - memory as a cross-session bus
+
+When several sessions work one epic, a stacked-PR chain, or parallel
+workstreams, the memory layer is also their **coordination bus** - the one place
+where a handoff survives a session ending, a context window rolling over, or a
+sibling starting an hour later. Chat messages between sessions do not persist and
+are not addressable by a session that was not there; a memory entry is both.
+
+- **One topic per workstream, named after it.** Use the epic or workstream id -
+  `epic-1616`, `perf-wal-partitioning` - not a generic bucket. A sibling then
+  picks the whole thread up with a single `scan` of scope `MemoryTopic`. This is
+  the one case where a per-workstream topic beats `decisions` / `gotchas`.
+- **Read the bus before you start, and again before you hand back.** A child
+  session's first move is `scan` `MemoryTopic` for its workstream topic: the
+  seams it must build on, the interfaces already integrated, and the sibling
+  gotchas all live there. A coordinator re-scans before it integrates.
+- **Post the handoffs that unblock somebody else**: an interface or seam now
+  integrated (with its commit sha), a decision that constrains sibling work, a
+  gotcha a sibling will otherwise hit, a deferral and its reason. Keep each entry
+  short and self-contained - the reader will not have your conversation.
+- **Always set `author`** to the session or agent identity (for example
+  `feature-dev-t13`, `epic-coordinator`). On a shared topic, provenance is what
+  makes an entry actionable.
+- **Coordination entries are time-boxed: give them a TTL, one week by default**
+  (`ttlSeconds: 604800`). Their value expires with the workstream, and a stale
+  handoff ("T12 integrated at 2dbeecba") is worse than none once the epic has
+  shipped. Extend it deliberately for a longer-running epic (`update` the entry,
+  or re-`remember` with a larger `ttlSeconds`); shorten it for a same-day
+  handoff.
+- **Promote anything durable; do not let it lapse.** If something posted to the
+  bus matters beyond the workstream - a real gotcha, a convention, a decision
+  with lasting rationale - re-`remember` it under the durable topic
+  (`gotchas` / `conventions` / `decisions`) with **no TTL**. The bus is for
+  coordination; the durable topics are the record. Do this as an explicit step
+  when the workstream closes, for every entry worth keeping.
 
 ### update / forget
 

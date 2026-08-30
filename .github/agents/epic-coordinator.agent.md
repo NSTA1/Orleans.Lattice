@@ -29,6 +29,8 @@ These are non-negotiable. Each encodes a specific failure mode.
 
 10. **Sub-issue work runs as inspectable child sessions, never opaque background agents.** Every sub-issue is dispatched with `create_session` (a project session running the `feature-dev` agent in its own worktree), **not** the background `task`/sub-agent mechanism, so each appears nested under this coordinator in the app UI and the user can open, watch, and inspect it live. Set `coordinate_with_creator: true` so the session can message you back, and `notify_on_idle: "once"` so you are woken when it finishes. You steer a child session with `send_session_message` (review findings, re-work requests) and, if it was created in plan mode and pauses for approval, `respond_to_session_plan`. The whole point of this rule is auditability: a coordinator that hides its workers inside background agents leaves the user with nothing to inspect until the final PR - do not do that.
 
+11. **The epic's memory topic is the coordination bus.** Sub-agents run in separate worktrees and separate context windows; chat messages between them do not persist and are invisible to a session that starts later. The durable channel is `repocontext` memory under a single per-epic topic, `epic-<number>` (see `.github/instructions/repocontext.instructions.md`, "Coordination"). You seed it in Phase 2, every sub-agent reads it before starting and posts its handoffs back to it, and you re-scan it before each integration. Coordination entries carry a **one-week TTL** (`ttlSeconds: 604800`) because their value dies with the epic; anything that outlives the epic gets promoted to a durable topic in Phase 6. Every entry sets `author` to the writing session's identity - on a shared topic, provenance is what makes an entry actionable.
+
 ## Workflow
 
 Run these phases in order. Do not commit, push, or open the PR until Phase 6, and never without the build/hygiene/full-suite gates green.
@@ -43,12 +45,14 @@ Run these phases in order. Do not commit, push, or open the PR until Phase 6, an
    Cross-check against the epic body's "implementation order" / phase section - the body is the authoritative *ordering*, the API is the authoritative *membership*.
 3. Read every open sub-issue body in full (`gh issue view <n> ... --json body`). For each, capture: the deliverable, its declared dependencies (the epic's phase text and any "depends on #NNN" lines), the packages it touches, and its definition of done.
 4. Read `.github/copilot-instructions.md`, all of `.github/instructions/`, and `.github/agents/feature-dev.agent.md` so your review applies the same bar feature-dev is held to. Read the relevant `pr-labels`/`issue-labels`/`testing` skills.
+5. **Sweep prior memory before planning anything.** `repocontext_scan` scope `MemoryTopic` for `epic-<number>` (a resumed epic may already have a bus), then scope `Memory`, and `repocontext_search` the epic subject. Surface: decisions that already constrain this epic, gotchas a sub-agent will otherwise re-hit, and conventions the epic must honour. Fold what you find into the kickoff prompts in Phase 3 - that is cheaper than every sub-agent rediscovering it in its own worktree.
 
 ### Phase 2 - Plan the DAG and the branch
 
 1. Record the sub-issues and their dependency edges in the session db (`todos` + `todo_deps`). Use the epic's declared phases as the edge source; a phase-N issue depends on the phase-(N-1) issues it names. Issues in the same phase with no interdependency are **parallelisable**.
 2. Create the epic integration branch off the current `main`: `feat/<epic-slug>` (kebab-case, derived from the epic title; never a username). All sub-work branches from here.
 3. Write a short `plan.md` in the session folder: the epic goal, the DAG, the branch name, and the integration order. Update it at each phase boundary.
+4. **Seed the coordination bus** (principle 11). `repocontext_remember` one orientation entry under topic `epic-<number>`: the epic goal, the branch name, the DAG/integration order, and any constraint from the Phase 1 memory sweep that every sub-agent must honour. `kind: Decision`, `author: epic-coordinator`, `ttlSeconds: 604800`. This is the entry a sub-agent reads to understand the epic without you re-explaining it in every kickoff prompt.
 
 ### Phase 3 - Fan out and integrate (the core loop)
 
@@ -68,6 +72,7 @@ Loop until every sub-issue is integrated. On each iteration:
    - "**do not** edit `CHANGELOG.md`, `README.md`, `samples/**`, or `docs/**`" (principle 3);
    - "run the build, the 6b hygiene gates, and only the **narrow, unit-only** test filter for the code you changed, excluding `TestCategory=Integration`, `Chaos`, and `AzureStorageEmulator` - **do not** run the full non-chaos suite, cross-solution tests, or any integration-category test; those are the coordinator's" (principle 4);
    - "do not open a PR and do not push - leave your session branch for the coordinator to review and integrate";
+   - "before you start, `repocontext_scan` scope `MemoryTopic` topic `epic-<number>` - that is the epic's coordination bus and carries the integrated seams, sibling gotchas, and constraints you must build on; post your own handoffs back to it (`author: <your session id>`, `ttlSeconds: 604800`) as you land work";
    - the full memory-allocation and test-reliability bar you will review against, so it self-checks first.
 3. **Stay resident and monitor** (principle 1): poll `get_session` on each dispatched session's `project_session_id` (you are also woken via `notify_on_idle`), re-checking until each is idle/finished. Do not end the turn while any child session is running.
 4. **Review each finished session's branch** (Phase 4) before integrating it. If it fails, send the session back with specific findings via `send_session_message` and monitor again; do not fix it silently.
@@ -90,6 +95,8 @@ For every completed sub-agent branch, perform and **report** each check. A silen
 2. Build the integration branch clean (zero errors, zero warnings) after the merge. A merge that builds dirty is not integrated - fix or send back. When the merged sub-issue landed cluster-touching or seam-level code, run the relevant **integration-category** tests now (at your discretion) rather than deferring every one to Phase 6, so integration breakage surfaces against the branch that caused it - these are yours to run, never the sub-agent's.
 3. Mark the sub-issue `done`, recompute the ready set, and continue Phase 3. Leave the child session and its worktree in place for later inspection (principle 10) - do not delete them.
 
+4. **Post the integration to the bus.** After a branch merges clean, `repocontext_remember` a short handoff under `epic-<number>`: which sub-issue integrated, the merge commit sha, the interfaces or seams now available to downstream work, and any constraint the integration imposes on siblings still in flight. `author: epic-coordinator`, `ttlSeconds: 604800`. Downstream sessions read this instead of guessing at the integration branch's shape. Re-scan the topic before the next integration so you pick up sibling posts.
+
 ### Phase 6 - Finish the epic (coordinator-only)
 
 Only after **every** sub-issue is integrated and the integration branch builds clean.
@@ -108,6 +115,7 @@ Only after **every** sub-issue is integrated and the integration branch builds c
 6. **Add exactly one `CHANGELOG.md` entry for the epic.** Under `## [Unreleased]`, add a **single** user-facing entry (in the right subsection - `### Added`/`### Changed`/etc.) that describes the epic **at a high level** - the capability the whole epic delivers, phrased from the user's perspective - and links **the epic issue only** (`#<epic>`). Do **not** add a line per sub-issue and do **not** link the sub-issues; the epic is the one changelog-visible unit of work. No version stamp.
 7. **Fact-check the docs with the docs agent.** Hand the just-written documentation set to the `docs` agent to verify every prose claim against source and check links. Apply its corrections. This is mandatory - you wrote the docs, so an independent accuracy pass is required before shipping.
 8. **Re-run the docs-snippet and em-dash/mojibake hygiene gates** after all doc edits (every markdown edit is in scope of those gates), and confirm green.
+9. **Close the coordination bus: promote, then let the rest lapse** (principle 11). `repocontext_scan` scope `MemoryTopic` topic `epic-<number>` and read every entry the epic accumulated - yours and the sub-agents'. For each one that matters **beyond** this epic, re-`remember` it under its durable topic (`gotchas` / `conventions` / `decisions`) with **no TTL**, keeping the rationale and the `author`; link it to the code it describes (`addLinks`) so a later `recall` flags it stale when that file drifts. Leave the purely operational handoffs ("T12 integrated at 2dbeecba") to expire on their one-week TTL - that is what the TTL is for. Report which entries you promoted and which you let lapse. Skipping this step is how an epic's hard-won knowledge silently evaporates a week after it ships.
 
 ### Phase 7 - Raise the PR to main
 

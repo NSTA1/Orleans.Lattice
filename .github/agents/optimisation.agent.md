@@ -105,6 +105,8 @@ Follow the phases in order. Do **not** open a PR yourself - hand off to `feature
 
 Before stating a fresh hypothesis, **read what past cycles already learned**. The discard branch of every falsified hypothesis writes a post-mortem to `benchmark/.run/<scenario>/POSTMORTEM-<date>-<slug>.md` (Phase 7); these files are gitignored under `.run/`, so they only exist on the local working tree of the silo / dev box that ran the cycle, but they are the highest-signal source of negative results this agent has.
 
+0. **Sweep durable memory first.** The post-mortems are local to one box; `repocontext` memory is not, and it is the only continuity that survives a fresh clone. `repocontext_scan` scope `MemoryTopic` topic `decisions`, then `repocontext_search` the target metric and hot path in natural language. Look for hypotheses already falsified, thresholds and noise bands already established, and optimisations already shipped. State what you found before proposing anything; "no post-mortems on this working tree" is **not** the same as "no prior work", and treating it that way is how the same hypothesis gets re-falsified.
+
 1. **Enumerate prior post-mortems across all scenarios.**
 
    ```powershell
@@ -404,6 +406,8 @@ Branch on the Phase 6 outcome:
 - **Within noise band.** State this explicitly in the chat reply. Default action: discard the branch (`git checkout main; git branch -D perf/...`). Do not "rescue" by enlarging the cohort to chase a marginal effect - 3-run cohorts are fast; if 3 runs each side cannot resolve the change, the change is too small to matter at this scale.
 - **Regressed.** State this explicitly. Discard the branch.
 - **One metric improved, another regressed.** State both. The default decision is to discard, because shipping a Pareto-incomplete change moves the goal-post for every future optimisation. If the trade-off is intentional and worth shipping, document it as a deliberate trade-off in the eventual PR body and have the user confirm.
+
+**Capture the outcome in `repocontext` memory either way**, before writing any file: `repocontext_remember` under topic `decisions`, `kind: Decision`, `author` = your session identity, **no TTL**. Record the hypothesis, the cohort numbers (n, median, IQR each side), the noise band applied, and the verdict. A *falsified* hypothesis is the higher-value entry - it is what stops the next cycle paying the same diagnostic cost - and it is the one most often left only in a gitignored file that the next machine will never see.
 
 If you discard, write a short post-mortem (1-2 paragraphs) into `benchmark/.run/<scenario>/POSTMORTEM-<date>-<slug>.md` covering: hypothesis, what was changed, why it didn't pan out, what the next hypothesis should be. The file is gitignored under `.run/`; this is for your own future-self continuity, **and is the input the next cycle's Phase 0 (Continuity check) reads**. Use a `<slug>` short enough to skim in the directory listing (e.g. `ship-batch-size`, `codec-encode-pool`) - Phase 0 grep matches on filename, so a descriptive slug is what makes the post-mortem discoverable on the next cycle.
 

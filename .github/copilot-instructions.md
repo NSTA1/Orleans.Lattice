@@ -22,7 +22,19 @@ start of non-trivial work, recall what earlier sessions already learned
 `MemoryTopic`) before rediscovering it; and when you reach a decision, hit a
 non-obvious gotcha, or pin down a convention worth keeping, capture it with
 `repocontext_remember` (topics such as `decisions`, `gotchas`, `conventions`,
-`glossary`) so the next session inherits it instead of relearning it. Treat an
+`glossary`) so the next session inherits it instead of relearning it.
+
+Reading is as obligatory as writing, and it is the half that gets skipped. The
+master file sets out **four moments** - orient from memory at session start, probe
+before any discovery, use `repocontext_context` (not a `search` + `view` crawl)
+before reading source you intend to change, and capture at each durable finding -
+plus a self-check for the symptoms of under-use. Follow them; a session that files
+memories it never reads back, or that never calls `context`, is using a fraction
+of the surface. When several sessions work one epic or workstream, memory is also
+their **coordination bus**: one topic per workstream, `author` set, and a one-week
+TTL (`ttlSeconds: 604800`) on the handoffs.
+
+Treat an
 explicit user instruction to *remember*, *note*, *keep in mind*, or *don't
 forget* a standing fact, decision, or convention as a `repocontext_remember`
 request - persist it durably under the right topic rather than only
