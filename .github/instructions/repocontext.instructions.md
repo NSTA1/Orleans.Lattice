@@ -361,6 +361,20 @@ need the actual source to *do* a task (not just locate a file).
   Suppressed content is acknowledged in `reused` and never charged against `top` or
   the budget. Reuse the same `session` id across a multi-step task to keep each
   follow-up bundle cheap.
+- **Known defect - the budget bounds the bundle, not the response (issue #1811).**
+  `responseBudgetTokens` caps the summed *content*, but the response envelope is
+  currently far larger than `totalTokens` suggests: the payload is emitted as both
+  structured and text content, and each entry repeats its body in both
+  `entries[].content` and `entries[].units[].content`, so source crosses the wire
+  about **four times** on top of the per-entry metadata. A bundle reporting a few
+  thousand tokens can therefore overflow your harness's tool-output limit and be
+  spilled to a file. **When that happens, do not abandon `context`** - that is the
+  single most common way this tool falls out of use. Retry it smaller: drop `top`
+  to 3-5, ask for `detail: "outline"` first and only request `slices` for the files
+  the outline shows you actually need, and keep the same `session` id so the retry
+  is not re-charged for what the first call already delivered. If the spill file is
+  written, it is still readable - grep it rather than discarding the call you
+  already paid for.
 
 ### stats - usage accounting
 
@@ -388,6 +402,31 @@ removed - not a live figure you must keep above zero.
 - Creates or updates a memory entry under a `topic` (both `repoId` and `topic`
   required). Omit `id` to create a new entry with a generated id; pass an
   existing `id` to **CRDT-merge in place** rather than blind-overwrite.
+- **Prefer a caller-chosen, deterministic `id` on a durable entry.** `id` reads
+  as server-owned because it defaults to a generated GUID, but you may choose it:
+  `explorer-token-contrast-1801` rather than `e11f414a...`. A stable, meaningful
+  id makes the write **idempotent** (so a retry cannot double-write), makes a
+  later revision a one-liner instead of a hunt, and makes the entry addressable
+  by `recall` without a search. Use the workstream, component, or issue it
+  belongs to.
+- **Keep the `id` the call returns, and pass it back when you revise.** If you
+  rewrite, extend, or improve the same note later in the same session - normal,
+  since you often learn the rest of the story after first writing it down - pass
+  that `id` so the entry CRDT-merges in place. Omitting it creates a second,
+  near-duplicate entry instead of revising the first. If you have lost the id,
+  `search` or `scan` the topic for your own entry (match on `author`) and reuse
+  its id rather than writing afresh.
+- **`repoId` is required on `remember`, and it is easy to drop.** Read calls
+  carry it too, but a write that omits it fails with
+  `ArgumentException: ... missing a value for the required parameter 'repoId'`.
+  That particular failure is **pre-write** - nothing reached the store, so a
+  straight retry is safe.
+- **Retrying an ambiguous write: check before you re-send.** A validation error
+  that names a missing parameter is safe to retry. Any *ambiguous* failure - a
+  timeout, a dropped connection, an error that does not clearly precede the
+  write - may have landed. `scan` (or `search`) the topic first and look for your
+  own entry by `author` before re-issuing, or retry with the same explicit `id`
+  so the write merges instead of duplicating.
 - Useful fields: `title`, `body`, `kind` (`Decision` / `Note` / `Memory`),
   `tags`, `author`, `provenance`, and `ttlSeconds`. To relate one entry to
   another, pass `addLinks` / `removeLinks` (see
@@ -429,6 +468,10 @@ synonyms (`decision` vs `decisions`):
   to "transient" is a deliberate **cross-session handoff** (see
   [Coordination](#coordination---memory-as-a-cross-session-bus)), which is
   transient by design and therefore carries a TTL.
+- **Capture each finding once.** Prefer one well-formed entry written when you
+  actually understand the finding, over a first draft plus a near-duplicate
+  "better" version. If you do improve it, revise in place with its `id` (see
+  `remember` above).
 - **A user telling you to remember counts as a capture request.** When the user
   says *remember* / *note* / *keep in mind* / *don't forget* a standing fact,
   decision, or convention, that is a `repocontext_remember` request - not a cue
