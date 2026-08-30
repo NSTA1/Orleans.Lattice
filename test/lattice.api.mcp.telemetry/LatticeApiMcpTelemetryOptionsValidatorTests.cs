@@ -93,6 +93,28 @@ public sealed class LatticeApiMcpTelemetryOptionsValidatorTests
     }
 
     [Test]
+    public void Basic_mode_with_a_username_validates()
+    {
+        var options = Valid();
+        options.AuthMode = LatticeTelemetryBackendAuthMode.Basic;
+        options.Credential = new LatticeTelemetryBackendCredential
+        {
+            BasicUsername = "prometheus",
+            BasicPassword = "secret",
+        };
+        Assert.That(IsValid(options), Is.True);
+    }
+
+    [Test]
+    public void None_mode_needs_no_credential_to_validate()
+    {
+        var options = Valid();
+        options.AuthMode = LatticeTelemetryBackendAuthMode.None;
+        options.Credential = null;
+        Assert.That(IsValid(options), Is.True);
+    }
+
+    [Test]
     public void Mutual_tls_mode_without_a_certificate_is_rejected()
     {
         var options = Valid();
@@ -142,6 +164,128 @@ public sealed class LatticeApiMcpTelemetryOptionsValidatorTests
         options.MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed;
         options.AllowedMetrics.Add("lattice_wal_*");
         Assert.That(IsValid(options), Is.True);
+    }
+
+    [Test]
+    public void Basic_mode_with_no_credential_at_all_is_rejected()
+    {
+        var options = Valid();
+        options.AuthMode = LatticeTelemetryBackendAuthMode.Basic;
+        options.Credential = null;
+        Assert.That(IsValid(options), Is.False);
+    }
+
+    [Test]
+    public void Bearer_mode_with_no_credential_at_all_is_rejected()
+    {
+        var options = Valid();
+        options.AuthMode = LatticeTelemetryBackendAuthMode.Bearer;
+        options.Credential = null;
+        Assert.That(IsValid(options), Is.False);
+    }
+
+    [Test]
+    public void Mutual_tls_mode_with_a_credential_holding_no_certificate_is_rejected()
+    {
+        var options = Valid();
+        options.AuthMode = LatticeTelemetryBackendAuthMode.MutualTls;
+        options.Credential = new LatticeTelemetryBackendCredential();
+        Assert.That(IsValid(options), Is.False);
+    }
+
+    [Test]
+    public void An_undefined_auth_mode_is_rejected()
+    {
+        var options = Valid();
+        options.AuthMode = (LatticeTelemetryBackendAuthMode)int.MaxValue;
+
+        var result = Validator.Validate(name: null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(
+                result.Failures,
+                Has.Some.Contains(nameof(LatticeApiMcpTelemetryOptions.AuthMode)),
+                "An undefined auth mode must be named in the failure so an operator can find it.");
+        });
+    }
+
+    [Test]
+    public void An_undefined_metric_access_mode_is_rejected()
+    {
+        var options = Valid();
+        options.MetricAccess = (LatticeTelemetryMetricAccessMode)int.MaxValue;
+
+        var result = Validator.Validate(name: null, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(
+                result.Failures,
+                Has.Some.Contains(nameof(LatticeApiMcpTelemetryOptions.MetricAccess)));
+        });
+    }
+
+    [Test]
+    public void An_undefined_auth_mode_is_not_also_reported_as_a_missing_credential()
+    {
+        // The credential check is an else-arm of the defined-enum check: an
+        // undefined mode has no credential contract to violate, so reporting one
+        // would be noise on top of the real fault.
+        var options = Valid();
+        options.AuthMode = (LatticeTelemetryBackendAuthMode)int.MaxValue;
+
+        var result = Validator.Validate(name: null, options);
+
+        Assert.That(
+            result.Failures,
+            Has.None.Contains(nameof(LatticeApiMcpTelemetryOptions.Credential)));
+    }
+
+    [Test]
+    public void An_undefined_metric_access_mode_is_not_also_reported_as_a_missing_allow_list()
+    {
+        var options = Valid();
+        options.MetricAccess = (LatticeTelemetryMetricAccessMode)int.MaxValue;
+
+        var result = Validator.Validate(name: null, options);
+
+        Assert.That(
+            result.Failures,
+            Has.None.Contains(nameof(LatticeApiMcpTelemetryOptions.AllowedMetrics)));
+    }
+
+    [Test]
+    public void Every_independent_misconfiguration_is_reported_in_one_pass()
+    {
+        // The validator accumulates rather than failing at the first fault, so an
+        // operator fixes a wholly broken configuration in a single edit.
+        var options = new LatticeApiMcpTelemetryOptions
+        {
+            BackendAddress = null,
+            AuthMode = LatticeTelemetryBackendAuthMode.Bearer,
+            RequestTimeout = TimeSpan.Zero,
+            MaxRange = TimeSpan.Zero,
+            MaxStep = TimeSpan.Zero,
+            MetricAccess = LatticeTelemetryMetricAccessMode.DenyAllExceptAllowed,
+        };
+
+        var result = Validator.Validate(name: null, options);
+        var failures = result.Failures?.ToArray() ?? [];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(failures, Has.Exactly(1).Contains(nameof(LatticeApiMcpTelemetryOptions.BackendAddress)));
+            Assert.That(failures, Has.Exactly(1).Contains(nameof(LatticeTelemetryBackendCredential.BearerToken)));
+            Assert.That(failures, Has.Exactly(1).Contains(nameof(LatticeApiMcpTelemetryOptions.RequestTimeout)));
+            Assert.That(failures, Has.Exactly(1).Contains(nameof(LatticeApiMcpTelemetryOptions.MaxRange)));
+            Assert.That(failures, Has.Exactly(1).Contains(nameof(LatticeApiMcpTelemetryOptions.MaxStep)));
+            Assert.That(failures, Has.Exactly(1).Contains(nameof(LatticeApiMcpTelemetryOptions.AllowedMetrics)));
+            Assert.That(failures, Has.Length.EqualTo(6), "Exactly the six independent faults, with no duplicates.");
+        });
     }
 
     [Test]

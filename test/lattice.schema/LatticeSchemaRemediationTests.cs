@@ -111,4 +111,25 @@ public class LatticeSchemaRemediationTests
         Assert.ThrowsAsync<ArgumentException>(
             async () => await LatticeSchemaRemediation.DryRunAsync(Entries(), LatticeValueTransform.Passthrough(), policy));
     }
+
+    [Test]
+    public async Task DryRunCoreAsync_transform_failure_with_empty_value_reports_empty_preview()
+    {
+        async IAsyncEnumerable<KeyValuePair<string, byte[]>> EmptyValue()
+        {
+            yield return new KeyValuePair<string, byte[]>("k1", Array.Empty<byte>());
+            await Task.CompletedTask;
+        }
+
+        var outcome = await LatticeSchemaRemediation.DryRunCoreAsync(
+            EmptyValue(),
+            _ => throw new InvalidOperationException("cannot rewrite"),
+            policyView: null,
+            policy: null,
+            previewMaxBytes: 4,
+            CancellationToken.None);
+
+        Assert.That(outcome.Succeeded, Is.False);
+        Assert.That(outcome.OffendingValuePreview, Is.Empty);
+    }
 }

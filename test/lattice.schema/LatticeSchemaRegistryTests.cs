@@ -55,6 +55,18 @@ public sealed class LatticeSchemaRegistryTests
     }
 
     [Test]
+    public void AddUpcaster_transform_id_overload_registers_a_di_backed_hop()
+    {
+        var registry = new LatticeSchemaRegistryBuilder()
+            .AddUpcaster(1, 1, 2, "normalize")
+            .Build(new LatticeValueTransformRegistry(new[] { new SetVersionTransform() }));
+
+        var result = registry.Upcast(1, 1, 2, Utf8("{\"a\":1}"));
+
+        Assert.That(Encoding.UTF8.GetString(result), Is.EqualTo("{\"version\":2}"));
+    }
+
+    [Test]
     public void AddUpcaster_null_upcaster_throws()
     {
         var builder = new LatticeSchemaRegistryBuilder();
@@ -166,5 +178,12 @@ public sealed class LatticeSchemaRegistryTests
         var registry = new LatticeSchemaRegistryBuilder().Build();
 
         Assert.That(() => registry.Upcast(1, 1, 2, null!), Throws.ArgumentNullException);
+    }
+
+    private sealed class SetVersionTransform : ILatticeValueTransform
+    {
+        public string Id => "normalize";
+
+        public byte[] Transform(byte[] value) => Utf8("{\"version\":2}");
     }
 }

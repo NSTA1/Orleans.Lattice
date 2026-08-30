@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Api.Telemetry.Tests;
 /// the unresolvable flag the deny-all gate rejects on.
 /// </summary>
 [TestFixture]
-public sealed class PromQlMetricExtractorTests
+public sealed partial class PromQlMetricExtractorTests
 {
     private static IReadOnlyList<string> Names(string query)
         => PromQlMetricExtractor.ExtractReferences(query).Names;

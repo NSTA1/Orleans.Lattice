@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Schema.Tests;
 /// <c>WriteStateAsync</c> failure. All phases are driven synchronously - no timing
 /// or ordering dependence.
 /// </summary>
-public class LatticeSchemaRemediationGrainTests
+public partial class LatticeSchemaRemediationGrainTests
 {
     private const string TreeId = "orders";
 

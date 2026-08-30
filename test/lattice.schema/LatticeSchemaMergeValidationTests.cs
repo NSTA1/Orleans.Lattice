@@ -129,6 +129,25 @@ public class LatticeSchemaMergeValidationTests
     }
 
     [Test]
+    public void MergeTree_scope_restores_nested_previous_value_and_dispose_is_idempotent()
+    {
+        Assert.That(LatticeSchemaMergeTree.Current, Is.Null);
+        using (LatticeSchemaMergeTree.Enter("outer"))
+        {
+            var inner = LatticeSchemaMergeTree.Enter("inner");
+            Assert.That(LatticeSchemaMergeTree.Current, Is.EqualTo("inner"));
+
+            inner.Dispose();
+            Assert.That(LatticeSchemaMergeTree.Current, Is.EqualTo("outer"));
+
+            inner.Dispose();
+            Assert.That(LatticeSchemaMergeTree.Current, Is.EqualTo("outer"));
+        }
+
+        Assert.That(LatticeSchemaMergeTree.Current, Is.Null);
+    }
+
+    [Test]
     public async Task Observer_resolves_tree_from_context_treeId_without_ambient_scope()
     {
         // The core merge seam stamps ctx.TreeId; the observer must resolve the policy
