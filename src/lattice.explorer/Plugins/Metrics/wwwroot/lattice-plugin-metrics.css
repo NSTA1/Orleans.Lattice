@@ -49,6 +49,14 @@
     color: var(--lx-color-danger);
 }
 
+/* Detail counts and per-shard hotness go dark while the table is too busy to
+   sample. That is a degraded reading rather than a failure, so it takes the
+   warning colour rather than the danger one .lx-metrics-error uses - the two
+   read differently because they mean different things. */
+.lx-metrics-paused {
+    color: var(--lx-color-warning);
+}
+
 .lx-metrics-muted {
     color: var(--lx-color-text-dim);
     font-size: var(--lx-text-small);

@@ -262,6 +262,15 @@
     cursor: not-allowed;
 }
 
+/* The overflow toggle is a bar item, but it is not a destination: it is the
+   handle for the ones that did not fit. Left with the `flex: 1 1 auto` every
+   other item carries it would claim an equal share of the bar and take that
+   width from the destinations it exists to make room for, so it holds its own
+   content width instead. */
+.lx-nav-overflow-toggle {
+    flex: 0 0 auto;
+}
+
 .lx-nav-overflow {
     position: absolute;
     right: var(--lx-space-2);

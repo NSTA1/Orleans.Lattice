@@ -185,6 +185,9 @@ Tests must be reliable: nothing timing-dependent, ordering-dependent,
 - [ ] No width media query; branches on the cascaded breakpoint.
 - [ ] Stylesheet linked in **both** heads, `NUGET_README.md`, and the csproj
       `<Description>`.
-- [ ] Compact-reflow render assertions for every adaptive table.
+- [ ] Compact-reflow render assertions for every adaptive table: a real `<table>`
+      at `Expanded`; `lx-cardlist` and no `<table>` at `Compact`; every field
+      asserted individually across the reflow; and every row action still
+      reachable in the card. See [Testing](#testing).
 - [ ] Tag glob in `publish.yml` and rows in both `docs/RELEASING.md` tables.
 - [ ] A `README.md` row under Child Packages.

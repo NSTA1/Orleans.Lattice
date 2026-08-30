@@ -13,7 +13,7 @@
         <span class="lx-history-time" title="@HistoryFormat.FormatAbsolute(Row.Hlc)">@HistoryFormat.FormatRelative(Row.Hlc)</span>
         <span class="lx-history-origin">@HistoryFormat.OriginLabel(Row.OriginClusterId)</span>
     </div>
-    <div class="lx-history-rowbody">
+    <div>
         @switch (Row.RenderMode)
         {
             case HistoryRowRenderMode.ValueDiff:

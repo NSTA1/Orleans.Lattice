@@ -29,6 +29,40 @@
     color: var(--lx-color-text);
 }
 
+/* ---- Sub-surface and section stacks ------------------------------------
+
+   Each sub-surface root, and each section inside one, is a vertical stack.
+   Without a rule here the banners, lists, forms and tables inside a surface sit
+   flush against one another: the design system's reset strips the block margins
+   these children would otherwise carry, so the spacing has to come from the
+   container - the same job .lxt-panel does one level up.
+
+   The spacing is an adjacent-sibling margin rather than a flex gap so it
+   collapses with the margin the shared surface headers already carry, which
+   keeps a header from taking the space twice.
+*/
+
+.lxt-list > * + *,
+.lxt-access > * + *,
+.lxt-quotas > * + *,
+.lxt-regions > * + * {
+    margin-block-start: var(--lx-space-5);
+}
+
+.lxt-subjects > * + *,
+.lxt-grants > * + * {
+    margin-block-start: var(--lx-space-4);
+}
+
+/* The area's refresh rides in the tab strip's trailing slot, which is a plain
+   flex sibling of the strip - so without this it sits flush against the last
+   tab and reads as one more of them. Pushed to the trailing edge it reads as
+   what it is: an action on the area rather than a destination within it. Same
+   idiom the data filter's explore button and the topology legend use. */
+.lxt-refresh-action {
+    margin-inline-start: auto;
+}
+
 /* ---- Status banners --------------------------------------------------- */
 
 .lxt-status {

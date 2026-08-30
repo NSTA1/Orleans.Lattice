@@ -134,8 +134,7 @@ else
             <LatticeAdaptiveTabs Tabs="TenantsSurfaces.Tabs"
                                  ActiveId="@_state.ActiveSurfaceId"
                                  OnSelect="_state.SelectSurfaceAsync"
-                                 Label="Tenant administration sub-surfaces"
-                                 Class="lxt-tabs">
+                                 Label="Tenant administration sub-surfaces">
                 <TrailingContent>
                     <button type="button" class="lx-btn lxt-refresh-action"
                             disabled="@(_state.Busy || !_state.Allowed)"

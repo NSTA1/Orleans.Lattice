@@ -74,7 +74,15 @@ public partial class SchemaComplianceSection : ComponentBase
         _view = null;
     }
 
-    private Task ScanAsync()
+    /// <summary>
+    /// Runs the read-only audit of the selected tree against its policy.
+    /// </summary>
+    /// <remarks>
+    /// Internal rather than private so a render test can reach the audited
+    /// state, which is otherwise only produced by clicking the scan control.
+    /// The same seam the Backups panel exposes for its row selection.
+    /// </remarks>
+    internal Task ScanAsync()
     {
         if (Session.TreeId is not { Length: > 0 } treeId)
         {

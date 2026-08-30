@@ -22,20 +22,20 @@
         <span class="lxm-gauge-figures">
             @if (Gauge.Usage is { } usage)
             {
-                <span class="lxm-gauge-usage">@usage.ToString("N0")</span>
+                <span>@usage.ToString("N0")</span>
             }
             else
             {
-                <span class="lxm-gauge-usage lxm-muted">@TenantQuotaLabels.UnmeasuredText</span>
+                <span class="lxm-muted">@TenantQuotaLabels.UnmeasuredText</span>
             }
             <span class="lxm-gauge-sep">of</span>
             @if (Gauge.Limit is { } limit)
             {
-                <span class="lxm-gauge-limit">@limit.ToString("N0")</span>
+                <span>@limit.ToString("N0")</span>
             }
             else
             {
-                <span class="lxm-gauge-limit lxm-muted">@TenantQuotaLabels.UnboundedText</span>
+                <span class="lxm-muted">@TenantQuotaLabels.UnboundedText</span>
             }
             <span class="lxm-gauge-unit">@TenantQuotaLabels.Unit(Gauge.Kind)</span>
         </span>

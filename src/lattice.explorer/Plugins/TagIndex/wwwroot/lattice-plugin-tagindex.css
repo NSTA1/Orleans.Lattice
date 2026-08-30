@@ -67,6 +67,17 @@
     min-height: 0;
 }
 
+/* A grid item's automatic minimum size is its content, so a long tree id, a
+   long tag, or the members table would push its track wider than the share
+   .lx-tagindex-body granted it and spill the whole body sideways. Releasing
+   that floor is what makes .lx-tagindex-section's own `overflow: auto` take
+   effect, so the wide content scrolls inside its pane instead. */
+.lx-tagindex-trees,
+.lx-tagindex-tags,
+.lx-tagindex-members {
+    min-width: 0;
+}
+
 .lx-tagindex-heading {
     margin: 0 0 var(--lx-space-4);
     font-size: var(--lx-text-micro);
