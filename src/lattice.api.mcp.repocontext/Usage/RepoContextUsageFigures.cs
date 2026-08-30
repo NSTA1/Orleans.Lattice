@@ -18,7 +18,9 @@ internal static class RepoContextUsageFigures
 
     /// <summary>
     /// Computes the recorded figures for a completed context bundle. The response cost is the
-    /// bundle's exact precomputed BPE total; read-replacement credit is the sum of each delivered
+    /// bundle's estimated wire cost (<see cref="RepoContextContextResult.ResponseTokens"/>), so
+    /// the accounting charges what the caller actually received rather than only the source text
+    /// inside it; read-replacement credit is the sum of each delivered
     /// entry's whole-file read cost, but only when the bundle was packed at <c>slices</c> detail -
     /// the only level at which each delivered entry is a whole-body replacement. At every other
     /// detail level the delivery is partial, so no read-replacement credit is given. Suppressed and
@@ -45,6 +47,6 @@ internal static class RepoContextUsageFigures
             }
         }
 
-        return new RepoContextCallUsage(ContextCommand, result.TotalTokens, replaced);
+        return new RepoContextCallUsage(ContextCommand, result.ResponseTokens, replaced);
     }
 }

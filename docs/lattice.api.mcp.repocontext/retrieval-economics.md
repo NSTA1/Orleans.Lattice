@@ -20,7 +20,10 @@ The profile is selected by the `LATTICE_REPOCONTEXT_TOKENIZER` environment
 variable: `o200k` (the default, matching current-generation models) or `cl100k`.
 Because the same counter is used to compute the stored per-file counts and to pack
 a bundle, a bundle's `totalTokens` is an exact sum over the same encoding the
-consuming model uses, not an estimate.
+consuming model uses, not an estimate. The bundle's `responseTokens` builds on that
+exact content sum but is itself a deliberately conservative **estimate**, because it
+also accounts for JSON envelope and the SDK's dual emission (see
+[The budgeted context bundle](#the-budgeted-context-bundle)).
 
 ## Explainable search
 
@@ -85,8 +88,21 @@ level** under a hard token ceiling:
   with the concrete level reported back in `detail`.
 
 Every entry carries its match `reasons`, its exact BPE `tokenCount`, and the
-whole-file `fullReadTokenCount`. The bundle's `totalTokens` is the exact BPE sum
-and **never exceeds** `budgetTokens`. When even the cheapest entry does not fit,
+whole-file `fullReadTokenCount`. The bundle reports **two** figures, and it is the
+first that the ceiling bounds:
+
+- `responseTokens` - the estimated cost of the response **as the caller receives
+  it**: the delivered content plus each entry's JSON envelope (path, reasons,
+  content hash, per-unit receipts), multiplied by the MCP SDK's dual-emission
+  factor, because every tool result is serialized twice - once as structured
+  content and once as text. This **never exceeds** `budgetTokens`.
+- `totalTokens` - the narrower exact BPE sum of the packed source text alone.
+  Useful as "how much source did I get", but it is not what the budget bounds:
+  charging content alone once let a bundle reporting a few thousand tokens land
+  as a response many times that size (issue #1811).
+
+The estimate is deliberately conservative, so a bundle may come in slightly under
+the ceiling but never over it. When even the cheapest entry does not fit,
 the tool **fails closed**: `entries` is empty and `retryBudgetTokens` reports a
 budget guaranteed to admit at least one entry on a retry (null when the search
 matched nothing, so no larger budget would help). A `truncated` flag marks a
@@ -99,7 +115,12 @@ work.
 The bundle never makes an agent pay twice for context it already holds. Each
 delivered **unit** - a path pointer, a body span, or an outline symbol - carries a
 stable opaque `receipt`, and each entry carries a per-version `contentHash`. A
-caller feeds prior knowledge back in three ways:
+unit is a **descriptor, not a copy of the text**: the delivered text lives once,
+on its entry's `content`, and the units correspond one-to-one, in order, to that
+content's newline-separated segments. (Carrying the text on the units too would
+put every byte of source on the wire twice within a single payload, and four
+times across the emitted pair - see issue #1811.) A caller feeds prior knowledge
+back in three ways:
 
 - Hand receipts back in **`seen`** to suppress exactly those units; the rest of
   the file still arrives.

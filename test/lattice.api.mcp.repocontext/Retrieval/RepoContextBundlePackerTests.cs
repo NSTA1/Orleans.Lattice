@@ -20,6 +20,28 @@ public sealed class RepoContextBundlePackerTests
 
     private static string Words(int count) => string.Join(' ', Enumerable.Repeat("lattice", count));
 
+    /// <summary>
+    /// The bundle-level reserve the packer charges before any entry: the top-level and
+    /// <c>CallToolResult</c> scaffolding, after the dual-emission factor.
+    /// </summary>
+    private static int Reserve()
+        => RepoContextResponseCost.WithDualEmission(RepoContextResponseCost.BundleScaffoldTokens);
+
+    /// <summary>
+    /// The true response cost the packer charges for one candidate - its content plus its
+    /// JSON envelope, times the SDK dual-emission factor. Budget arithmetic in these tests
+    /// is expressed in these units, because that is what the ceiling now bounds.
+    /// </summary>
+    private static int Cost(RepoContextBundlePacker.Candidate candidate)
+        => RepoContextResponseCost.WithDualEmission(
+            RepoContextResponseCost.EntryEnvelopeTokens(
+                Counter.CountTokens(candidate.Content),
+                candidate.Path,
+                candidate.Reasons,
+                candidate.ContentHash,
+                candidate.Units ?? Array.Empty<RepoContextRenderedUnit>(),
+                Counter));
+
     [Test]
     public void Pack_with_no_candidates_returns_an_empty_outcome()
     {
@@ -55,6 +77,8 @@ public sealed class RepoContextBundlePackerTests
         var exactSum = outcome.Entries.Sum(e => Counter.CountTokens(e.Content));
         Assert.Multiple(() =>
         {
+            Assert.That(outcome.ResponseTokens, Is.LessThanOrEqualTo(budget),
+                "The hard ceiling bounds the response the caller receives, not merely the content inside it.");
             Assert.That(outcome.TotalTokens, Is.LessThanOrEqualTo(budget),
                 "The hard ceiling must never be exceeded.");
             Assert.That(outcome.TotalTokens, Is.EqualTo(exactSum),
@@ -76,7 +100,7 @@ public sealed class RepoContextBundlePackerTests
             Candidate("second", Words(5)),
             Candidate("third", Words(5)),
         };
-        var twoFit = Counter.CountTokens(Words(5)) * 2 + 1;
+        var twoFit = Reserve() + Cost(candidates[0]) + Cost(candidates[1]);
 
         var outcome = RepoContextBundlePacker.Pack(candidates, twoFit, Counter);
 
@@ -113,22 +137,22 @@ public sealed class RepoContextBundlePackerTests
     [Test]
     public void Pack_skips_an_oversized_candidate_and_still_admits_later_ones()
     {
-        var small = Counter.CountTokens(Words(3));
         var candidates = new List<RepoContextBundlePacker.Candidate>
         {
             Candidate("small-1", Words(3)),
             Candidate("huge", Words(500)),
             Candidate("small-2", Words(3)),
         };
+        var budget = Reserve() + Cost(candidates[0]) + Cost(candidates[2]);
 
-        var outcome = RepoContextBundlePacker.Pack(candidates, small * 2 + 1, Counter);
+        var outcome = RepoContextBundlePacker.Pack(candidates, budget, Counter);
 
         Assert.Multiple(() =>
         {
             Assert.That(outcome.Entries.Select(e => e.Path), Is.EqualTo(new[] { "small-1", "small-2" }),
                 "A candidate that does not fit is skipped, not a stop condition.");
             Assert.That(outcome.Truncated, Is.True, "Dropping a candidate marks the bundle truncated.");
-            Assert.That(outcome.TotalTokens, Is.LessThanOrEqualTo(small * 2 + 1));
+            Assert.That(outcome.ResponseTokens, Is.LessThanOrEqualTo(budget));
         });
     }
 
@@ -159,10 +183,11 @@ public sealed class RepoContextBundlePackerTests
             Candidate("cheapest", Words(1)),
             Candidate("mid", Words(20)),
         };
-        var cheapest = Counter.CountTokens(Words(1));
+        // The cheapest candidate's retry budget includes the bundle reserve it ships inside.
+        var cheapest = Reserve() + Cost(candidates[1]);
 
         // A budget below every candidate admits nothing.
-        var outcome = RepoContextBundlePacker.Pack(candidates, cheapest - 1 < 0 ? 0 : cheapest - 1, Counter);
+        var outcome = RepoContextBundlePacker.Pack(candidates, 1, Counter);
 
         Assert.Multiple(() =>
         {
@@ -194,7 +219,8 @@ public sealed class RepoContextBundlePackerTests
             Assert.That(failed.MinCandidateTokens, Is.GreaterThan(1));
             Assert.That(retried.Entries, Is.Not.Empty,
                 "The retry budget the packer reports must fit at least one entry.");
-            Assert.That(retried.TotalTokens, Is.LessThanOrEqualTo(failed.MinCandidateTokens));
+            Assert.That(retried.ResponseTokens, Is.LessThanOrEqualTo(failed.MinCandidateTokens),
+                "The retry must actually fit inside the budget it was told to use.");
         });
     }
 

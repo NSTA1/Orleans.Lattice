@@ -24,8 +24,11 @@ public sealed partial class RepoContextBundleServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(usage.Command, Is.EqualTo("repocontext_context"));
-            Assert.That(usage.ResponseTokens, Is.EqualTo(result.TotalTokens),
-                "The recorded response cost is the bundle's exact BPE total.");
+            Assert.That(usage.ResponseTokens, Is.EqualTo(result.ResponseTokens),
+                "The recorded cost is what the caller actually received - envelope and dual emission included - "
+                + "not merely the source text inside it (#1811).");
+            Assert.That(usage.ResponseTokens, Is.GreaterThan(result.TotalTokens),
+                "The wire cost always exceeds the content total, so recording the content total under-reports it.");
             Assert.That(usage.ReplacedReadTokens, Is.EqualTo(4096),
                 "A slices delivery credits the whole-file read cost it replaced.");
         });

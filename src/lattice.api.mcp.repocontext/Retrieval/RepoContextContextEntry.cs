@@ -72,6 +72,13 @@ public sealed record RepoContextContextEntry
     /// A paths or slices entry carries a single unit; an outline entry carries one unit
     /// per delivered symbol. Empty when reuse tracking did not apply to this call. Never
     /// <see langword="null"/>.
+    /// <para>
+    /// A unit is a <b>descriptor, not a copy of the text</b>: the units correspond
+    /// one-to-one, in order, to the newline-separated segments of <see cref="Content"/>,
+    /// so a caller that needs a unit's text takes the segment at the same index rather
+    /// than reading it from the unit. Carrying the text on both would double every byte
+    /// of source in the payload (issue #1811).
+    /// </para>
     /// </summary>
     public IReadOnlyList<RepoContextContextUnit> Units { get; init; } = Array.Empty<RepoContextContextUnit>();
 }
