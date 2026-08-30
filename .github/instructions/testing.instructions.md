@@ -489,7 +489,7 @@ Only these justify a Playwright test:
 
 - **Real viewport / breakpoint behaviour.** The design system resolves breakpoints through `window.matchMedia` (see `DesignSystem/wwwroot/lattice-breakpoints.js`), evaluated once at module init. Nothing in a unit test can drive it, and `window.resizeTo` is blocked in an ordinary page - only a browser automation API can set the viewport.
 - **Computed layout and CSS.** A stylesheet is invisible to every renderer-based test. #1792 shipped with correct markup and correct class names; the defect was `flex-shrink: 0` on a fixed-width pane. Assert `boundingBox()` geometry, not class names - a class-name assertion would have passed on the broken build.
-- **Automated accessibility scanning.** An axe sweep catches a whole category of defect without anyone having to think of it first.
+- **Automated accessibility scanning.** An axe sweep catches a class of defect without anyone having to think of it first. Know its limits, though: axe is **not** a substitute for asserting a specific attribute contract. It did **not** flag the `aria-selected` defect (#1793) - a valueless boolean attribute satisfies `aria-valid-attr-value` by its mere presence, so the `wcag2a`/`wcag2aa` sweep was clean against the buggy source. Where a specific ARIA contract matters, assert it explicitly and treat axe as a net for the defects you did not anticipate.
 - **Real JS interop against the real script**, where a mock would only re-assert your own assumptions.
 
 Everything else - selection state, gate behaviour, event wiring, conditional rendering, ARIA attribute values - belongs in bUnit.
