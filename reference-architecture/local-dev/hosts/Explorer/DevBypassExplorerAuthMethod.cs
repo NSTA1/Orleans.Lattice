@@ -18,10 +18,13 @@ namespace Orleans.Lattice.ReferenceArchitecture.Explorer;
 /// </summary>
 /// <remarks>
 /// It reuses the <see cref="ExplorerAuthSchemes.Basic"/> scheme so the console's
-/// launcher-friendly sign-in seed (<c>LATTICE_EXPLORER_USERNAME</c> /
-/// <c>LATTICE_EXPLORER_PASSWORD</c>) auto-applies it on first load with no dialog.
-/// The username is the identity to act as; the password is ignored (the
-/// seed merely requires one to be present). The host registers this method ONLY
+/// built-in username/password dialog drives it: the username is the identity to
+/// act as, and the password is ignored (the dialog merely requires one to be
+/// present). Sign-in is deliberately manual - the host does not opt in to the
+/// environment credential seed (<c>LATTICE_EXPLORER_USERNAME</c> /
+/// <c>LATTICE_EXPLORER_PASSWORD</c>), because on a web head that seed re-applies
+/// on the reload that follows sign-out and would make signing out, and therefore
+/// switching identity, impossible. The host registers this method ONLY
 /// when Entra is disabled, so it can never coexist with, or weaken, a real
 /// deployment's Entra sign-in.
 /// </remarks>
