@@ -10,12 +10,12 @@
                 <div class="lx-shell-body">
                     <ClusterBadge />
                     <AppShell>
-                        <div class="lx-shell-layout">
+                        <Catalog>
                             <NavigationPanel />
-                            <main class="lx-shell-main">
-                                @Body
-                            </main>
-                        </div>
+                        </Catalog>
+                        <ChildContent>
+                            @Body
+                        </ChildContent>
                     </AppShell>
                 </div>
             </ConfigurationGate>

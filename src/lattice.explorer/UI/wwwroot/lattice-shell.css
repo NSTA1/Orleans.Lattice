@@ -112,6 +112,23 @@ code {
     min-height: 0;
 }
 
+/*
+  Compact: the catalog stops being a pane. The frame stacks so the drawer's
+  toggle sits above the detail surface and the detail surface keeps the whole
+  width, instead of a fixed 20rem rail squeezing it to a sliver on a phone
+  (issue #1792). The catalog itself moves into the design system's drawer
+  presentation, which is an overlay, so it occupies no layout width at all.
+*/
+.lx-shell-layout.is-stacked {
+    flex-direction: column;
+}
+
+.lx-shell-layout.is-stacked > .lx-nav-drawer-host {
+    padding: var(--lx-space-3) var(--lx-shell-padding-inline);
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+}
+
 .lx-shell-body {
     display: flex;
     flex-direction: column;
@@ -327,6 +344,17 @@ code {
     width: var(--lx-nav-sidebar-width);
     border-right: 1px solid var(--lx-color-border);
     background: var(--lx-color-surface);
+}
+
+/*
+  Inside the compact drawer the catalog is the whole surface, so it fills the
+  drawer rather than holding the sidebar width that would overflow it.
+*/
+.lx-nav-drawer > .lx-shell-nav {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border-right: none;
 }
 
 .lx-shell-nav-header {
@@ -749,7 +777,9 @@ code {
 
 .lx-shell-areastrip {
     display: flex;
+    align-items: stretch;
     gap: var(--lx-space-2);
+    min-width: 0;
     padding: 0 var(--lx-space-6);
     border-bottom: 1px solid var(--lx-color-border);
     background: var(--lx-color-surface);
