@@ -56,6 +56,8 @@
 </div>
 
 @code {
+    private readonly Dictionary<string, RuleEdit> _editActions = new(StringComparer.Ordinal);
+
     private RenderFragment<RankedRule>? _editAction;
 
     /// <summary>The Access workspace this surface reads and drives.</summary>
@@ -70,5 +72,56 @@
 
     private RenderFragment<RankedRule> EditAction => ranked =>
         @<button type="button" class="lx-btn" disabled="@State.Busy"
-                 @onclick="@(() => State.EditRule(ranked.Rule))">Edit</button>;
+                 @onclick="Edit(ranked)">Edit</button>;
+
+    /// <summary>
+    /// The edit callback for one ranked rule, bound once and reused on every
+    /// later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// The template above is built once, but the lambda inside it was not: it
+    /// allocated a closure and an <see cref="EventCallback"/> per rule per
+    /// render, and gave the delegate a new identity each time, so Blazor's
+    /// attribute diffing re-registered every handler rather than skipping it.
+    /// The callback closes over the entry rather than over the ranked rule, and
+    /// the entry is re-bound to the instance being rendered, so editing opens
+    /// the rule as the cluster last reported it.
+    /// </remarks>
+    private EventCallback Edit(RankedRule ranked)
+    {
+        var ruleId = ranked.Rule.RuleId;
+        if (_editActions.TryGetValue(ruleId, out var entry))
+        {
+            entry.Bind(ranked);
+            return entry.Edit;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the rule list
+        // it serves is holding callbacks for rules no longer rendered.
+        if (_editActions.Count > State.RankedRules.Count * 2)
+        {
+            _editActions.Clear();
+        }
+
+        entry = new RuleEdit(this, ranked);
+        _editActions.Add(ruleId, entry);
+        return entry.Edit;
+    }
+
+    /// <summary>One rule row's pre-bound edit callback.</summary>
+    private sealed class RuleEdit
+    {
+        private RankedRule _ranked;
+
+        public RuleEdit(AccessPolicyView view, RankedRule ranked)
+        {
+            _ranked = ranked;
+            Edit = EventCallback.Factory.Create(view, () => view.State.EditRule(_ranked.Rule));
+        }
+
+        public EventCallback Edit { get; }
+
+        /// <summary>Re-points the bound callback at the rule instance being rendered.</summary>
+        public void Bind(RankedRule ranked) => _ranked = ranked;
+    }
 }

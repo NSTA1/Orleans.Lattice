@@ -61,7 +61,7 @@
                                 class="@(string.Equals(principal.Id, _model.SelectedId, StringComparison.Ordinal) ? SelectedResultClass : ResultClass)"
                                 disabled="@Disabled"
                                 title="@principal.Id"
-                                @onclick="@(() => OnResultSelectedAsync(principal.Id))">
+                                @onclick="SelectResult(principal.Id)">
                             @PrincipalLabel(principal)
                         </button>
                     </li>
@@ -97,6 +97,8 @@
 
     private SubjectPickerModel _model = null!;
     private bool _initialized;
+
+    private readonly Dictionary<string, EventCallback> _selectResult = new(StringComparer.Ordinal);
 
     /// <summary>
     /// The plugin's domain contract, from which the picker creates its own
@@ -170,8 +172,38 @@
         }
     }
 
-    private void OnModelChanged() => InvokeAsync(StateHasChanged);
+    /// <summary>
+    /// The selection callback for one search result, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per result per render, and the result list
+    /// re-renders on every debounce tick, so it allocated per keystroke. The
+    /// principal id is both the row identity and the argument, so nothing can go
+    /// stale.
+    /// </remarks>
+    private EventCallback SelectResult(string principalId)
+    {
+        if (_selectResult.TryGetValue(principalId, out var callback))
+        {
+            return callback;
+        }
 
+        // Bounded rather than unbounded: a map that has outgrown the result page
+        // it serves is holding callbacks for principals no longer rendered, and
+        // a picker searches many disjoint pages over its lifetime.
+        if (_selectResult.Count > _model.Results.Count * 2)
+        {
+            _selectResult.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => OnResultSelectedAsync(principalId));
+        _selectResult.Add(principalId, callback);
+        return callback;
+    }
+
+    private void OnModelChanged() => InvokeAsync(StateHasChanged);
     private void OnModelSubjectSelected(string id, string displayName) =>
         InvokeAsync(async () =>
         {

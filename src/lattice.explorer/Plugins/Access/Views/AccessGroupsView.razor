@@ -1,3 +1,5 @@
+@using Orleans.Lattice.Api.Auth
+
 @*
     The Groups sub-surface: the membership directory's groups on the left, and
     the create / edit form (with the selected group's direct members) on the
@@ -24,14 +26,15 @@
                 @foreach (var group in State.Groups)
                 {
                     var id = group.GroupId;
+                    var actions = Actions(group);
                     <li class="@(id == State.SelectedGroupId ? SelectedRowClass : RowClass)"
-                        @onclick="@(() => State.SelectGroupAsync(group))">
+                        @onclick="actions.Select">
                         <span class="lxa-itemlabel" title="@id">
                             <span class="lxa-itemid">@(string.IsNullOrWhiteSpace(group.DisplayName) ? id : group.DisplayName)</span>
                         </span>
                         <button type="button" class="lx-btn lxa-edit"
                                 disabled="@(State.Busy || !State.Allowed)"
-                                @onclick="@(() => State.EditGroupAsync(group))"
+                                @onclick="actions.Edit"
                                 @onclick:stopPropagation="true">Edit</button>
                     </li>
                 }
@@ -61,6 +64,60 @@
     private const string RowClass = "lxa-itemrow";
     private const string SelectedRowClass = "lxa-itemrow is-selected";
 
+    private readonly Dictionary<string, RowActions> _actions = new(StringComparer.Ordinal);
+
     /// <summary>The Access workspace this surface reads and drives.</summary>
     [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+
+    /// <summary>
+    /// The select and edit callbacks for one group, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambdas inline allocated a closure and an
+    /// <see cref="EventCallback"/> per action per row per render, and gave each
+    /// delegate a new identity, so Blazor's attribute diffing re-registered every
+    /// handler instead of skipping it. The callbacks close over the entry rather
+    /// than over the group, and the entry is re-bound to the instance being
+    /// rendered, so a re-listed group is selected as it is now.
+    /// </remarks>
+    private RowActions Actions(AuthGroup group)
+    {
+        if (_actions.TryGetValue(group.GroupId, out var actions))
+        {
+            actions.Bind(group);
+            return actions;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for groups no longer rendered.
+        if (_actions.Count > State.Groups.Count * 2)
+        {
+            _actions.Clear();
+        }
+
+        actions = new RowActions(this, group);
+        _actions.Add(group.GroupId, actions);
+        return actions;
+    }
+
+    /// <summary>One group row's pre-bound callbacks.</summary>
+    private sealed class RowActions
+    {
+        private AuthGroup _group;
+
+        public RowActions(AccessGroupsView view, AuthGroup group)
+        {
+            _group = group;
+            Select = EventCallback.Factory.Create(view, () => view.State.SelectGroupAsync(_group));
+            Edit = EventCallback.Factory.Create(view, () => view.State.EditGroupAsync(_group));
+        }
+
+        public EventCallback Select { get; }
+
+        public EventCallback Edit { get; }
+
+        /// <summary>Re-points the bound callbacks at the group instance being rendered.</summary>
+        public void Bind(AuthGroup group) => _group = group;
+    }
 }

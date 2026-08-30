@@ -51,6 +51,8 @@
 
     private bool _built;
 
+    private readonly Dictionary<string, EventCallback> _toggle = new(StringComparer.Ordinal);
+
     /// <summary>The workspace this surface reads and drives.</summary>
     [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
 
@@ -109,7 +111,7 @@
                                  class="lx-btn"
                                  disabled="@(State.Busy || !State.Allowed || !row.CanToggle)"
                                  title="@RefusalText(row.Refusal)"
-                                 @onclick="@(() => State.ToggleRegion(row.RegionId))">
+                                 @onclick="Toggle(row.RegionId)">
                 @(row.IsPlannedResident ? "Remove" : "Add")
             </button>,
         };
@@ -127,4 +129,34 @@
         TenantResidencyRefusal.LastRegion => MyTenantWorkspace.LastRegionRefusal,
         _ => null,
     };
+
+    /// <summary>
+    /// The residency-toggle callback for one region, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// The column set is built once, but the lambda inside the action cell was
+    /// not: it allocated a closure and an <see cref="EventCallback"/> per region
+    /// per render, and the table re-renders on every busy transition and every
+    /// applied plan. The region id is both the row identity and the argument, so
+    /// nothing can go stale.
+    /// </remarks>
+    private EventCallback Toggle(string regionId)
+    {
+        if (_toggle.TryGetValue(regionId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the region list
+        // it serves is holding callbacks for regions no longer rendered.
+        if (_toggle.Count > State.Regions.Rows.Count * 2)
+        {
+            _toggle.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.ToggleRegion(regionId));
+        _toggle.Add(regionId, callback);
+        return callback;
+    }
 }

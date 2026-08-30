@@ -38,7 +38,7 @@
                                 <button type="button" class="lx-btn lx-btn-icon lx-backups-remove"
                                         title="Remove tree" aria-label="@($"Remove {id}")"
                                         disabled="@Owner.Busy"
-                                        @onclick="@(() => Owner.RemoveTreeAsync(id))">x</button>
+                                        @onclick="Remove(id)">x</button>
                                 <span class="lx-backups-selected-id">@id</span>
                             </li>
                         }
@@ -146,6 +146,40 @@
 </div>
 
 @code {
+    private readonly Dictionary<string, EventCallback> _remove = new(StringComparer.Ordinal);
+
     /// <summary>The Backups panel this form reads and drives.</summary>
     [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
+
+    /// <summary>
+    /// The remove callback for one selected tree, bound once and reused on every
+    /// later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per selected tree per render - the form
+    /// re-renders on every keystroke in the schedule fields - and gave the
+    /// delegate a new identity each time, so Blazor's attribute diffing
+    /// re-registered every handler rather than skipping it. The tree id is both
+    /// the row identity and the argument, so a cached callback removes exactly
+    /// the tree its row names.
+    /// </remarks>
+    private EventCallback Remove(string treeId)
+    {
+        if (_remove.TryGetValue(treeId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the selection it
+        // serves is holding callbacks for trees no longer selected.
+        if (_remove.Count > Owner.SelectedTrees.Count * 4)
+        {
+            _remove.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => Owner.RemoveTreeAsync(treeId));
+        _remove.Add(treeId, callback);
+        return callback;
+    }
 }

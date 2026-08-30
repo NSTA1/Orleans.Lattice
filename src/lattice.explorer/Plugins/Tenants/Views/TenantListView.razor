@@ -81,6 +81,8 @@
     // boxing per row per render.
     private static readonly Func<TenantRow, object> _key = static row => row.TenantId;
 
+    private readonly Dictionary<string, RowActions> _actions = new(StringComparer.Ordinal);
+
     private LatticeTableColumn<TenantRow>[] _columns = default!;
 
     /// <summary>The workspace this view renders.</summary>
@@ -146,25 +148,78 @@
                 Cell = row => @<span class="lxt-row-actions">
                     <button type="button" class="lx-btn lxt-row-action"
                             disabled="@State.Busy"
-                            @onclick="@(() => State.SelectTenantAsync(row.TenantId))">Manage</button>
+                            @onclick="Actions(row.TenantId).Manage">Manage</button>
                     @if (row.IsSuspended)
                     {
                         <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@(State.Busy || row.IsDefault)"
-                                @onclick="@(() => State.ResumeTenantAsync(row.TenantId))">Resume</button>
+                                @onclick="Actions(row.TenantId).Resume">Resume</button>
                     }
                     else
                     {
                         <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@(State.Busy || row.IsDefault)"
                                 title="@(row.IsDefault ? "The reserved default tenant cannot be suspended." : null)"
-                                @onclick="@(() => State.RequestSuspend(row.TenantId))">Suspend</button>
+                                @onclick="Actions(row.TenantId).Suspend">Suspend</button>
                     }
                     <button type="button" class="lx-btn lxt-row-action lxt-danger"
                             disabled="@(State.Busy || row.IsDefault)"
                             title="@(row.IsDefault ? "The reserved default tenant cannot be deleted." : null)"
-                            @onclick="@(() => State.RequestDeleteAsync(row.TenantId))">Delete</button>
+                            @onclick="Actions(row.TenantId).Delete">Delete</button>
                 </span>,
             },
         ];
+
+    /// <summary>
+    /// The four lifecycle callbacks for one tenant, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambdas inline in the cell template allocated a closure and an
+    /// <see cref="EventCallback"/> per action per row per render - the table
+    /// re-renders on every busy transition, every gate change, and every page
+    /// turn - and gave the delegate a new identity each time, so Blazor's
+    /// attribute diffing re-registered every handler rather than skipping it.
+    /// The row identity is the tenant id, which is what each action takes, so a
+    /// re-listed tenant reuses its callbacks unchanged.
+    /// </remarks>
+    private RowActions Actions(string tenantId)
+    {
+        if (_actions.TryGetValue(tenantId, out var actions))
+        {
+            return actions;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the page it
+        // serves is holding callbacks for tenants no longer listed, and
+        // rebuilding it costs one allocation per visible row.
+        if (_actions.Count > TenantsWorkspace.PageSize * 2)
+        {
+            _actions.Clear();
+        }
+
+        actions = new RowActions(this, tenantId);
+        _actions.Add(tenantId, actions);
+        return actions;
+    }
+
+    /// <summary>One tenant row's pre-bound lifecycle callbacks.</summary>
+    private sealed class RowActions
+    {
+        public RowActions(TenantListView view, string tenantId)
+        {
+            Manage = EventCallback.Factory.Create(view, () => view.State.SelectTenantAsync(tenantId));
+            Resume = EventCallback.Factory.Create(view, () => view.State.ResumeTenantAsync(tenantId));
+            Suspend = EventCallback.Factory.Create(view, () => view.State.RequestSuspend(tenantId));
+            Delete = EventCallback.Factory.Create(view, () => view.State.RequestDeleteAsync(tenantId));
+        }
+
+        public EventCallback Manage { get; }
+
+        public EventCallback Resume { get; }
+
+        public EventCallback Suspend { get; }
+
+        public EventCallback Delete { get; }
+    }
 }

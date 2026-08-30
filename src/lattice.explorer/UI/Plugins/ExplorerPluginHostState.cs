@@ -25,12 +25,12 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
     private readonly IExplorerTenantView _tenants;
 
     // Orders overlapping tenant-scope refreshes. The shell starts a refresh from
-    // several fire-and-forget paths (mount, sign-in change, reconnect), so two
-    // can be in flight at once and resolve in either order. Publishing on
-    // completion order would let a resolution issued while the caller still
-    // validated as a platform operator restore the cross-tenant scope after a
-    // newer resolution had already narrowed it - a fail-open widening driven
-    // purely by which round trip finished first.
+    // several fire-and-forget paths (mount, sign-in change, reconnect, and a
+    // tenant switch), so two can be in flight at once and resolve in either
+    // order. Publishing on completion order would let a resolution issued while
+    // the caller still validated as a platform operator restore the cross-tenant
+    // scope after a newer resolution had already narrowed it - a fail-open
+    // widening driven purely by which round trip finished first.
     private readonly object _tenantGate = new();
     private long _tenantIssued;
     private long _tenantApplied;
@@ -89,8 +89,9 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
     /// <summary>
     /// Re-resolves the tenant scope from the tenant view and republishes it when
     /// it changed. The host calls this on the same occasions it re-probes the
-    /// plugin gates (mount, sign-in change, reconnect), so the published scope is
-    /// refreshed deterministically rather than on a background timer.
+    /// plugin gates (mount, sign-in change, reconnect, and a tenant switch), so
+    /// the published scope is refreshed deterministically rather than on a
+    /// background timer.
     /// <para>
     /// Fail-closed and fault-isolated: a tenant view that throws leaves the scope
     /// at the active-tenant default rather than widening it, and never propagates

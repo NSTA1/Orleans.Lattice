@@ -54,6 +54,35 @@ public interface IExplorerPluginAccessStore
     ExplorerPluginAccess Get(string pluginId, string scope);
 
     /// <summary>
+    /// Reports whether any <em>scoped</em> decision filed for
+    /// <paramref name="pluginId"/> whose scope satisfies
+    /// <paramref name="scopeFilter"/> currently reads
+    /// <see cref="ExplorerPluginAccess.Allowed"/>.
+    /// <para>
+    /// This is the derivation seam for a plugin whose coarse gate is "the
+    /// plugin as a whole, <em>or</em> any single scope I can still reach".
+    /// Deriving that at probe time from the entries a
+    /// <see cref="Clear(string)"/>, a <see cref="Reset"/>, or the next scope
+    /// probe overwrites keeps such a gate self-healing; caching the answer in
+    /// the plugin instead latches an admission that outlives the grant behind
+    /// it.
+    /// </para>
+    /// <para>
+    /// The plugin-level entry is never consulted, so a plugin cannot re-admit
+    /// itself through its own coarse decision.
+    /// </para>
+    /// </summary>
+    /// <param name="pluginId">The plugin id whose scoped entries to consider. Must not be <see langword="null"/>.</param>
+    /// <param name="scopeFilter">
+    /// Selects which of the plugin's scope names count. Prefer a cached
+    /// delegate: this runs on the probe path, not the render path, but a
+    /// per-call lambda still allocates.
+    /// </param>
+    /// <returns><see langword="true"/> when at least one matching scope reads allowed.</returns>
+    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    bool AnyScopeAllowed(string pluginId, Func<string, bool> scopeFilter);
+
+    /// <summary>
     /// Files <paramref name="access"/> under <paramref name="key"/>, raising
     /// <see cref="Changed"/> when that alters the stored value.
     /// </summary>

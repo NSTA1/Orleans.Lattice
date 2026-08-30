@@ -56,6 +56,8 @@ else
     private bool _builtWithHealth;
     private bool _built;
 
+    private readonly Dictionary<string, RowSelect> _select = new(StringComparer.Ordinal);
+
     /// <summary>The Backups panel this catalogue reads and drives.</summary>
     [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
 
@@ -85,7 +87,7 @@ else
             Cell = row =>@<button type="button"
                                  class="lx-backups-rowbutton @(Owner.IsSelected(row.DisplayId) ? "is-selected" : null) @(Owner.IsHighlighted(row.DisplayId) ? "is-new" : null)"
                                  aria-pressed="@(Owner.IsSelected(row.DisplayId) ? "true" : "false")"
-                                 @onclick="@(() => Owner.SelectRowAsync(row.Row))">@row.Name</button>,
+                                 @onclick="Select(row)">@row.Name</button>,
         };
 
         var kind = new LatticeTableColumn<BackupCatalogueRow>
@@ -119,5 +121,55 @@ else
         };
 
         return [name, kind, scope, created, health];
+    }
+
+    /// <summary>
+    /// The selection callback for one catalogue row, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// The column set above is built once, but the lambda inside the name cell
+    /// was not: it allocated a closure and an <see cref="EventCallback"/> per row
+    /// per render, and the catalogue re-renders on every filter keystroke and
+    /// every page turn. The callback closes over the entry rather than over the
+    /// row, and the entry is re-bound to the instance being rendered, so
+    /// selecting opens the backup as the catalogue last reported it.
+    /// </remarks>
+    private EventCallback Select(BackupCatalogueRow row)
+    {
+        if (_select.TryGetValue(row.DisplayId, out var entry))
+        {
+            entry.Bind(row);
+            return entry.Callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the page it
+        // serves is holding callbacks for backups no longer listed, and a
+        // catalogue pages through many disjoint sets over its lifetime.
+        if (_select.Count > Owner.Rows.Count * 2)
+        {
+            _select.Clear();
+        }
+
+        entry = new RowSelect(this, row);
+        _select.Add(row.DisplayId, entry);
+        return entry.Callback;
+    }
+
+    /// <summary>One catalogue row's pre-bound selection callback.</summary>
+    private sealed class RowSelect
+    {
+        private BackupCatalogueRow _row;
+
+        public RowSelect(BackupsCatalogue view, BackupCatalogueRow row)
+        {
+            _row = row;
+            Callback = EventCallback.Factory.Create(view, () => view.Owner.SelectRowAsync(_row.Row));
+        }
+
+        public EventCallback Callback { get; }
+
+        /// <summary>Re-points the bound callback at the row instance being rendered.</summary>
+        public void Bind(BackupCatalogueRow row) => _row = row;
     }
 }

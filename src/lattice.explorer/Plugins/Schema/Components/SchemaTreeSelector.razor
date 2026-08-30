@@ -46,11 +46,14 @@
         else
         {
             <ul class="lx-schema-treeitems" role="listbox" aria-label="Trees">
+                @* aria-selected is enumerated, not boolean: it must carry the
+                   literal "true" or "false" on every option, or a screen reader
+                   cannot tell which tree is selected. *@
                 @for (var i = 0; i < _rows.Length; i++)
                 {
                     var row = _rows[i];
                     var isSelected = string.Equals(Session.TreeId, row.Id, StringComparison.Ordinal);
-                    <li role="option" aria-selected="@isSelected" @key="row.Id">
+                    <li role="option" aria-selected="@(isSelected ? "true" : "false")" @key="row.Id">
                         <button type="button"
                                 class="@(isSelected ? SelectedItemClass : ItemClass)"
                                 disabled="@Session.IsBusy"

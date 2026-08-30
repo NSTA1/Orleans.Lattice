@@ -17,10 +17,11 @@ public class ExplorerTenantSwitcherTests
 
     private static ExplorerTenantSwitcher ActiveSwitcher(
         ExplorerTenantContext context,
-        bool isOperator)
+        bool isOperator,
+        IExplorerTenantScopeRefresher? scopeRefresher = null)
     {
         var view = new ExplorerTenantView(context, new StubOperatorGate(isOperator));
-        return new ExplorerTenantSwitcher(view, context, new StubOperatorGate(isOperator));
+        return new ExplorerTenantSwitcher(view, context, new StubOperatorGate(isOperator), scopeRefresher);
     }
 
     private static ExplorerTenantSwitcher InactiveSwitcher(
@@ -176,5 +177,119 @@ public class ExplorerTenantSwitcherTests
 
         Assert.That(applied, Is.False);
         Assert.That(context.ActiveTenant, Is.EqualTo(Acme));
+    }
+
+    // --- A tenant switch is a refresh occasion ---
+
+    [Test]
+    public async Task SwitchTenantAsync_applied_refreshesTheScope()
+    {
+        // Mount, a sign-in change, and a reconnect all re-resolve the tenant
+        // scope and re-probe the gates. A tenant switch changes the same inputs,
+        // so it is the fourth occasion rather than a silent context write.
+        var context = new ExplorerTenantContext { ActiveTenant = Acme };
+        var refresher = new RecordingScopeRefresher(context);
+        var switcher = ActiveSwitcher(context, isOperator: true, refresher);
+
+        var applied = await switcher.SwitchTenantAsync(Globex);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(applied, Is.True);
+            Assert.That(refresher.Calls, Is.EqualTo(1));
+            Assert.That(
+                refresher.TenantAtRefresh,
+                Is.EqualTo(Globex),
+                "the refresh must see the tenant that was switched to, not the one it replaced");
+        });
+    }
+
+    [Test]
+    public async Task SwitchTenantAsync_denied_doesNotRefreshTheScope()
+    {
+        var context = new ExplorerTenantContext { ActiveTenant = Acme };
+        var refresher = new RecordingScopeRefresher(context);
+        var switcher = ActiveSwitcher(context, isOperator: false, refresher);
+
+        await switcher.SwitchTenantAsync(Globex);
+
+        Assert.That(refresher.Calls, Is.Zero, "nothing changed, so nothing needs re-resolving");
+    }
+
+    [Test]
+    public async Task SetVisibilityAsync_applied_refreshesTheScope()
+    {
+        var context = new ExplorerTenantContext();
+        var refresher = new RecordingScopeRefresher(context);
+        var switcher = ActiveSwitcher(context, isOperator: true, refresher);
+
+        await switcher.SetVisibilityAsync(ExplorerTenantVisibility.AllTenants);
+
+        Assert.That(refresher.Calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task SetVisibilityAsync_denied_doesNotRefreshTheScope()
+    {
+        var context = new ExplorerTenantContext();
+        var refresher = new RecordingScopeRefresher(context);
+        var switcher = ActiveSwitcher(context, isOperator: false, refresher);
+
+        await switcher.SetVisibilityAsync(ExplorerTenantVisibility.AllTenants);
+
+        Assert.That(refresher.Calls, Is.Zero);
+    }
+
+    [Test]
+    public async Task A_failing_refresher_neverUnwindsAnAppliedSwitch()
+    {
+        // The mutation has already landed on the per-circuit context by the time
+        // the refresh runs, so reporting false would claim a switch that did
+        // happen did not. A missed refresh costs a stale projection; the cluster
+        // re-enforces on every call regardless.
+        var context = new ExplorerTenantContext { ActiveTenant = Acme };
+        var switcher = ActiveSwitcher(context, isOperator: true, new ThrowingScopeRefresher());
+
+        var applied = await switcher.SwitchTenantAsync(Globex);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(applied, Is.True);
+            Assert.That(context.ActiveTenant, Is.EqualTo(Globex));
+        });
+    }
+
+    [Test]
+    public async Task A_switcher_with_no_refresher_still_applies_the_switch()
+    {
+        // The refresher is optional: a deployment that registers no plugin host
+        // has nothing to notify, and the switch must behave exactly as before.
+        var context = new ExplorerTenantContext { ActiveTenant = Acme };
+        var switcher = ActiveSwitcher(context, isOperator: true);
+
+        Assert.That(await switcher.SwitchTenantAsync(Globex), Is.True);
+        Assert.That(context.ActiveTenant, Is.EqualTo(Globex));
+    }
+
+    /// <summary>Records each refresh, and the active tenant it observed.</summary>
+    private sealed class RecordingScopeRefresher(ExplorerTenantContext context) : IExplorerTenantScopeRefresher
+    {
+        public int Calls { get; private set; }
+
+        public ExplorerTenantId? TenantAtRefresh { get; private set; }
+
+        public Task RefreshAsync(CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            TenantAtRefresh = context.ActiveTenant;
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>A refresher that always faults, to prove the switch survives it.</summary>
+    private sealed class ThrowingScopeRefresher : IExplorerTenantScopeRefresher
+    {
+        public Task RefreshAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("the host could not re-project the scope");
     }
 }

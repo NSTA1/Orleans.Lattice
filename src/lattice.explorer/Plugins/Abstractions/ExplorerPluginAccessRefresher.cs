@@ -16,11 +16,12 @@ namespace Orleans.Lattice.Explorer.Plugins;
 /// <para>
 /// Overlapping refreshes are filed in <em>request</em> order rather than
 /// completion order. The shell starts a refresh from several fire-and-forget
-/// paths (mount, sign-in change, reconnect), so two can be probing the same gate
-/// at once; without an ordering guard a probe issued while the caller was still
-/// signed in could land after the sign-out that denied them and re-admit the
-/// plugin purely because it finished second. Ordering is per plugin, so a
-/// targeted re-probe of one plugin never discards a sibling's newer decision.
+/// paths (mount, sign-in change, reconnect, and a tenant switch), so two can be
+/// probing the same gate at once; without an ordering guard a probe issued while
+/// the caller was still signed in could land after the sign-out that denied them
+/// and re-admit the plugin purely because it finished second. Ordering is per
+/// plugin, so a targeted re-probe of one plugin never discards a sibling's newer
+/// decision.
 /// </para>
 /// </summary>
 /// <param name="catalog">The registered plugins to probe.</param>

@@ -73,7 +73,7 @@
                         <button type="button" class="lx-btn lx-btn-icon lxa-danger"
                                 title="Remove member" aria-label="@($"Remove {member}")"
                                 disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)"
-                                @onclick="@(() => State.RemoveMemberAsync(member))">x</button>
+                                @onclick="Remove(member)">x</button>
                         <span class="lxa-principal" title="@member">@State.Labels.Label(member)</span>
                     </li>
                 }
@@ -94,6 +94,8 @@
 </div>
 
 @code {
+    private readonly Dictionary<string, EventCallback> _remove = new(StringComparer.Ordinal);
+
     /// <summary>The Access workspace this form reads and drives.</summary>
     [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
 
@@ -102,4 +104,35 @@
     private void OnMemberIdChanged(string id) => State.MemberIdInput = id;
 
     private void OnMemberKindChanged(LatticeSubjectSelectorKind kind) => State.MemberPickerKind = kind;
+
+    /// <summary>
+    /// The removal callback for one direct member, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per member per render, and gave the delegate
+    /// a new identity each time, so Blazor's attribute diffing re-registered
+    /// every handler rather than skipping it. The member id is both the row
+    /// identity and the argument the destructive action takes, so nothing can go
+    /// stale: a cached callback removes exactly the member its row names.
+    /// </remarks>
+    private EventCallback Remove(string memberId)
+    {
+        if (_remove.TryGetValue(memberId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for members no longer rendered.
+        if (_remove.Count > State.DirectMembers.Count * 2)
+        {
+            _remove.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.RemoveMemberAsync(memberId));
+        _remove.Add(memberId, callback);
+        return callback;
+    }
 }

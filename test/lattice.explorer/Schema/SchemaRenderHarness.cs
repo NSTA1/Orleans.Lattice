@@ -2,9 +2,12 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using NSubstitute;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Schema;
+using Orleans.Lattice.Explorer.Schema.Components;
 using Orleans.Lattice.Explorer.Schema.Domain;
 
 namespace Orleans.Lattice.Explorer.Tests.Schema;
@@ -57,6 +60,63 @@ internal static class SchemaRenderHarness
             TreeId = TreeId,
             Grants = SchemaTreeGrants.For(access, TreeId),
         };
+    }
+
+    /// <summary>
+    /// Renders the whole Schema panel - its tab strip and the tree selector it
+    /// owns - over <paramref name="domain"/>, beneath a cascaded shell context.
+    /// </summary>
+    /// <param name="domain">The scripted domain the panel resolves.</param>
+    /// <param name="breakpoint">The breakpoint to cascade.</param>
+    /// <param name="access">The plugin-level decision the gate has published.</param>
+    /// <returns>The rendered markup.</returns>
+    /// <remarks>
+    /// Unlike a single concern, the panel resolves two services of its own - the
+    /// host-context factory it reaches its declared domain contract through, and
+    /// the keyed access store its coarse gate reads - so this path registers
+    /// exactly those two and nothing else.
+    /// </remarks>
+    public static async Task<string> RenderPanelAsync(
+        StubSchemaDomain domain,
+        LatticeBreakpoint breakpoint = LatticeBreakpoint.Expanded,
+        ExplorerPluginAccess? access = null)
+    {
+        var store = new ExplorerPluginAccessStore();
+        store.Set(SchemaPluginKeys.PluginId, access ?? ExplorerPluginAccess.Allowed);
+
+        var context = Substitute.For<IExplorerPluginHostContext>();
+        context.PluginId.Returns(SchemaPluginKeys.PluginId);
+        context.GetDomain<ISchemaPluginDomain>().Returns(domain);
+
+        var factory = Substitute.For<IExplorerPluginHostContextFactory>();
+        factory.Create(SchemaPluginKeys.PluginId).Returns(context);
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(factory);
+        services.AddSingleton<IExplorerPluginAccessStore>(store);
+
+        await using var provider = services.BuildServiceProvider();
+        var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+        await using var renderer = new HtmlRenderer(provider, loggerFactory);
+
+        return await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Value"] = new LatticeAdaptiveContext(breakpoint, LatticeDensity.Cosy, IsMeasured: true),
+                ["ChildContent"] = (RenderFragment)(builder =>
+                {
+                    builder.OpenComponent<SchemaPanel>(0);
+                    builder.CloseComponent();
+                }),
+            });
+
+            var component = await renderer
+                .RenderComponentAsync<CascadingValue<LatticeAdaptiveContext>>(parameters);
+
+            return component.ToHtmlString();
+        });
     }
 
     /// <summary>

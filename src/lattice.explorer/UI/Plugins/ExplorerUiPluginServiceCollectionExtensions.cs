@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.UI.Plugins;
@@ -48,6 +49,21 @@ public static class ExplorerUiPluginServiceCollectionExtensions
         services.TryAddScoped<IExplorerPluginHostState>(
             static provider => provider.GetRequiredService<ExplorerPluginHostState>());
         services.TryAddScoped<IExplorerPluginPreferences, ExplorerPluginPreferences>();
+
+        // Makes a tenant switch a refresh occasion alongside mount, sign-in
+        // change, and reconnect. Registered here rather than by the tenancy core
+        // because only the head knows there are plugin gates to re-probe; the
+        // switcher resolves it optionally, so a deployment without the plugin
+        // adapters simply has nothing to notify.
+        //
+        // The gate refresher is handed over as a deferred accessor: its graph
+        // reaches every registered plugin, and a plugin may depend on the tenant
+        // switcher this notifies, so resolving it eagerly would close a
+        // container cycle.
+        services.TryAddScoped<IExplorerTenantScopeRefresher>(
+            static provider => new ExplorerPluginTenantScopeRefresher(
+                provider.GetRequiredService<ExplorerPluginHostState>(),
+                provider.GetRequiredService<IExplorerPluginAccessRefresher>));
 
         return services;
     }

@@ -108,6 +108,8 @@
 
     private bool _built;
 
+    private readonly Dictionary<string, EventCallback> _switch = new(StringComparer.Ordinal);
+
     /// <summary>The workspace this surface reads and drives.</summary>
     [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
 
@@ -163,7 +165,7 @@
             Cell = row =>@<button type="button"
                                  class="lx-btn lxm-switch-action"
                                  disabled="@(State.Busy || IsActive(row.TenantId))"
-                                 @onclick="@(() => State.SwitchTenantAsync(row.TenantId))">
+                                 @onclick="Switch(row.TenantId)">
                 @(IsActive(row.TenantId) ? "Viewing" : "Switch to")
             </button>,
         };
@@ -173,4 +175,33 @@
 
     private bool IsActive(string tenantId) =>
         string.Equals(State.TenantId, tenantId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The switch callback for one tenant, bound once and reused on every later
+    /// render of that row.
+    /// </summary>
+    /// <remarks>
+    /// The column set is built once, but the lambda inside the action cell was
+    /// not: it allocated a closure and an <see cref="EventCallback"/> per tenant
+    /// per render. The tenant id is both the row identity and the argument, so
+    /// nothing can go stale.
+    /// </remarks>
+    private EventCallback Switch(string tenantId)
+    {
+        if (_switch.TryGetValue(tenantId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for tenants no longer rendered.
+        if (_switch.Count > State.AccessibleTenants.Count * 2)
+        {
+            _switch.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.SwitchTenantAsync(tenantId));
+        _switch.Add(tenantId, callback);
+        return callback;
+    }
 }

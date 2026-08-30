@@ -16,24 +16,27 @@ namespace Orleans.Lattice.Explorer.Backup;
 /// </summary>
 /// <remarks>
 /// The plugin-level decision is the coarse catalog gate <em>or</em> any per-tree
-/// scope that has granted list access, so a caller who can read backups for at
-/// least one tree can reach the area even when the catalog-wide read is denied.
-/// The per-scope grants persist across a re-probe, exactly as the cached scope
-/// map they replace did.
+/// scope that currently grants list access, so a caller who can read backups for
+/// at least one tree can reach the area even when the catalog-wide read is
+/// denied. That second half is <em>re-derived from the keyed store on every
+/// probe</em> rather than remembered: a scope grant keeps the area reachable for
+/// exactly as long as the store still says the scope grants list, so revoking
+/// every scope - or resetting the store on sign-out - closes the area again on
+/// the next probe.
 /// </remarks>
 public sealed class BackupCapabilityService(
     IBackupControlClient client,
     IExplorerPluginAccessStore store) : IBackupCapabilityService
 {
+    // Bound once. The plugin-level probe asks the store this on every refresh
+    // occasion, and a lambda written at the call site would allocate a delegate
+    // on each of them.
+    private static readonly Func<string, bool> ListScopes = BackupsPluginKeys.IsListScope;
+
     private readonly IBackupControlClient _client = client ?? throw new ArgumentNullException(nameof(client));
 
     private readonly IExplorerPluginAccessStore _store =
         store ?? throw new ArgumentNullException(nameof(store));
-
-    // Set once any probed scope grants list access. Read on the probe path only
-    // (never per render), and never cleared, so a scope grant keeps the area
-    // reachable across a later coarse re-probe.
-    private volatile bool _anyScopeGrantsList;
 
     /// <inheritdoc />
     public async ValueTask<ExplorerPluginAccess> ProbeAsync(
@@ -43,7 +46,11 @@ public sealed class BackupCapabilityService(
         ArgumentNullException.ThrowIfNull(context);
 
         var allowed = await ProbeCoarseAsync(cancellationToken).ConfigureAwait(false);
-        return allowed || _anyScopeGrantsList
+
+        // Derived, never latched: the store is the only thing that remembers a
+        // scope grant, and it is overwritten by the next scope probe and dropped
+        // on a reset, so this answer heals when the grant behind it goes away.
+        return allowed || _store.AnyScopeAllowed(BackupsPluginKeys.PluginId, ListScopes)
             ? ExplorerPluginAccess.Allowed
             : ExplorerPluginAccess.Denied;
     }
@@ -102,7 +109,9 @@ public sealed class BackupCapabilityService(
         }
 
         // A scope that grants list access also implies the plugin-level gate.
-        _anyScopeGrantsList = true;
+        // The scoped entry filed above is what keeps that true across a later
+        // coarse denial; this write only saves the area waiting for the next
+        // gate refresh to notice.
         _store.Set(BackupsPluginKeys.PluginId, ExplorerPluginAccess.Allowed);
     }
 

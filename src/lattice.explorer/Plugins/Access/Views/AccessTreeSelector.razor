@@ -45,14 +45,17 @@
         else
         {
             <ul class="lxa-list" role="listbox" aria-label="Trees">
+                @* aria-selected is enumerated, not boolean: it must carry the
+                   literal "true" or "false" on every option, or a screen reader
+                   cannot tell which tree is selected. *@
                 @foreach (var tree in State.Trees)
                 {
                     var isSelected = string.Equals(State.SelectedTreeId, tree.Id, StringComparison.Ordinal);
-                    <li role="option" aria-selected="@isSelected">
+                    <li role="option" aria-selected="@(isSelected ? "true" : "false")">
                         <button type="button"
                                 class="@(isSelected ? SelectedItemClass : ItemClass)"
                                 disabled="@State.Busy"
-                                @onclick="@(() => State.SelectTree(tree.Id))">
+                                @onclick="Select(tree.Id)">
                             <span class="lxa-itemid">@tree.Label</span>
                             @if (tree.Lifecycle is not null || tree.ShardCount is int)
                             {
@@ -81,6 +84,39 @@
     private const string ItemClass = "lxa-navitem";
     private const string SelectedItemClass = "lxa-navitem is-selected";
 
+    private readonly Dictionary<string, EventCallback> _select = new(StringComparer.Ordinal);
+
     /// <summary>The Access workspace this panel selects a tree in.</summary>
     [Parameter, EditorRequired] public AccessWorkspace State { get; set; } = null!;
+
+    /// <summary>
+    /// The selection callback for one tree, bound once and reused on every later
+    /// render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per row per render - the panel re-renders on
+    /// every selection and every load - and gave the delegate a new identity each
+    /// time, so Blazor's attribute diffing re-registered every handler rather
+    /// than skipping it. The tree id is both the row identity and the argument,
+    /// so nothing can go stale.
+    /// </remarks>
+    private EventCallback Select(string treeId)
+    {
+        if (_select.TryGetValue(treeId, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for trees no longer rendered.
+        if (_select.Count > State.Trees.Count * 2)
+        {
+            _select.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.SelectTree(treeId));
+        _select.Add(treeId, callback);
+        return callback;
+    }
 }
