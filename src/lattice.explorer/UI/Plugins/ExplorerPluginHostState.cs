@@ -24,6 +24,17 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
     private readonly ILatticeStateConnection _connection;
     private readonly IExplorerTenantView _tenants;
 
+    // Orders overlapping tenant-scope refreshes. The shell starts a refresh from
+    // several fire-and-forget paths (mount, sign-in change, reconnect), so two
+    // can be in flight at once and resolve in either order. Publishing on
+    // completion order would let a resolution issued while the caller still
+    // validated as a platform operator restore the cross-tenant scope after a
+    // newer resolution had already narrowed it - a fail-open widening driven
+    // purely by which round trip finished first.
+    private readonly object _tenantGate = new();
+    private long _tenantIssued;
+    private long _tenantApplied;
+
     // Projected once per upstream transition rather than per read, so the render
     // path and every gate probe read a field instead of rebuilding a projection.
     private ExplorerPluginSelection? _projectedSelection;
@@ -85,10 +96,23 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
     /// at the active-tenant default rather than widening it, and never propagates
     /// to the caller.
     /// </para>
+    /// <para>
+    /// Overlapping refreshes are applied in <em>request</em> order, not
+    /// completion order: a resolution that finishes after a newer one has already
+    /// published is discarded rather than restoring the scope it resolved. That
+    /// is what stops a slow probe issued before the caller's operator standing
+    /// was revoked from widening the scope back to cross-tenant afterwards.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the visibility resolution.</param>
     public async Task RefreshTenantScopeAsync(CancellationToken cancellationToken = default)
     {
+        long issued;
+        lock (_tenantGate)
+        {
+            issued = ++_tenantIssued;
+        }
+
         ExplorerPluginTenantVisibility visibility;
         try
         {
@@ -107,7 +131,7 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
             visibility = ExplorerPluginTenantVisibility.ActiveTenant;
         }
 
-        Publish(ProjectTenant(visibility));
+        Publish(ProjectTenant(visibility), issued);
     }
 
     /// <inheritdoc />
@@ -147,15 +171,34 @@ public sealed class ExplorerPluginHostState : IExplorerPluginHostState, IDisposa
         Changed?.Invoke(ExplorerPluginHostChange.Connection);
     }
 
-    private void Publish(ExplorerPluginTenantScope scope)
+    private void Publish(ExplorerPluginTenantScope scope, long issued)
     {
-        if (scope == _projectedTenant)
+        bool changed;
+        lock (_tenantGate)
         {
-            return;
+            // Discard a resolution a newer one has already overtaken, so the
+            // published scope is the one asked for last rather than the one that
+            // happened to finish last.
+            if (issued <= _tenantApplied)
+            {
+                return;
+            }
+
+            _tenantApplied = issued;
+            changed = scope != _projectedTenant;
+            if (changed)
+            {
+                _projectedTenant = scope;
+            }
         }
 
-        _projectedTenant = scope;
-        Changed?.Invoke(ExplorerPluginHostChange.Tenant);
+        // Raised outside the gate: a subscriber re-reads the scope and may
+        // re-enter, and holding the gate across a render would serialize the
+        // whole shell behind one publication.
+        if (changed)
+        {
+            Changed?.Invoke(ExplorerPluginHostChange.Tenant);
+        }
     }
 
     private ExplorerPluginTenantScope ProjectTenant(ExplorerPluginTenantVisibility visibility) =>
