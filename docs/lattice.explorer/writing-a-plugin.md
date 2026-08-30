@@ -127,6 +127,25 @@ restore for every consumer of the whole Explorer family.
 Style against the design system (`Orleans.Lattice.Explorer.DesignSystem`), which
 ships the token layer, the named breakpoints, and the adaptive primitives.
 
+**Reach for a primitive before writing a rule.** The design system already ships:
+
+| Family | Classes |
+|---|---|
+| Layout | `lx-root`, `lx-table` (+ `lx-cell`), `lx-cardlist` (+ `lx-card`, `lx-card-title`, `lx-card-fields`) |
+| Navigation | `lx-nav` family, including the drawer, bottom bar, sidebar and overflow variants |
+| Tabs | `lx-tabstrip`, `lx-tab`, `lx-tabpanel`, and their overflow variants |
+| Buttons | `lx-btn` with `lx-btn-primary`, `lx-btn-danger`, `lx-btn-icon`, `lx-btn-link` |
+| Dialogs | `lx-modal`, `lx-modal-backdrop`, `lx-modal-actions` |
+| Status | `lx-badge`, `lx-badge-muted` |
+
+`lx-tab` and `lx-btn` spend `--lx-target-min`, so they meet the compact touch-target
+size without a plugin doing anything. A hand-rolled button will not.
+
+A plugin stylesheet should contain only what is genuinely specific to that plugin.
+The `explorer-` class prefix is **retired**: a hygiene test fails the build on any
+`explorer-*` class in a `.razor` class attribute or a stylesheet selector. If you find
+one in an old file you are copying, it is a leftover, not a pattern.
+
 **Never write a width media query.** Branch on the cascaded
 `LatticeAdaptiveContext.Breakpoint` - `Compact`, `Medium`, or `Expanded` - which
 the shell's `LatticeAdaptiveRoot` supplies. A hygiene test fails the build on a
@@ -183,6 +202,8 @@ Tests must be reliable: nothing timing-dependent, ordering-dependent,
 - [ ] Declares its domain contract via `IExplorerPlugin<TDomain>`.
 - [ ] Declares an access gate, with a stated reason when it is `Allowed`.
 - [ ] No width media query; branches on the cascaded breakpoint.
+- [ ] Uses design-system primitives rather than hand-rolled buttons, dialogs or
+      badges; no `explorer-*` class anywhere.
 - [ ] Stylesheet linked in **both** heads, `NUGET_README.md`, and the csproj
       `<Description>`.
 - [ ] Compact-reflow render assertions for every adaptive table.
