@@ -47,6 +47,21 @@ public sealed class ComputePressureMathTests
     }
 
     [Test]
+    public void NormaliseResource_ignores_memory_when_no_usage_is_reported()
+    {
+        // A silo that reports a memory ceiling but no usage yet must contribute
+        // only its CPU term rather than a divide-by-usage artefact.
+        var sample = new SiloResourceSample
+        {
+            CpuUsagePercent = 30,
+            MemoryUsedBytes = 0,
+            MaximumAvailableMemoryBytes = 100,
+        };
+
+        Assert.That(ComputePressureMath.NormaliseResource(sample), Is.EqualTo(0.3).Within(1e-9));
+    }
+
+    [Test]
     public void NormaliseResource_uses_memory_when_memory_is_the_worse_dimension()
     {
         var sample = new SiloResourceSample
