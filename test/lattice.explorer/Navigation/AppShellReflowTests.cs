@@ -200,50 +200,15 @@ public sealed class AppShellReflowTests
     }
 
     // ---- the ARIA state the strip publishes (issue #1793) -------------------
-
-    [Test]
-    public async Task The_area_strip_publishes_an_explicit_aria_selected_state_on_every_tab()
-    {
-        var html = await AppShellRenderHarness.RenderAsync(
-            LatticeBreakpoint.Expanded,
-            isCatalogOpen: false,
-            isOverflowOpen: false,
-            AppShellRenderHarness.Plugin("a", "Alpha", 100),
-            AppShellRenderHarness.Plugin("b", "Bravo", 200));
-
-        var tabs = AppShellRenderHarness.CountOccurrences(html, Tab);
-        var selected = AppShellRenderHarness.CountOccurrences(html, "aria-selected=\"true\"");
-        var unselected = AppShellRenderHarness.CountOccurrences(html, "aria-selected=\"false\"");
-
-        // aria-selected is an enumerated ARIA attribute, not an HTML boolean
-        // one. Blazor renders a bool parameter as a boolean attribute, so the
-        // shell used to emit the bare attribute name on the active tab and omit
-        // it entirely everywhere else - which tells a screen-reader user nothing.
-        //
-        // Derive the invalid count rather than matching a broken spelling. The
-        // static renderer emits the bare name, not aria-selected="", so asserting
-        // the empty form is absent is vacuous - it never fires in either
-        // direction. Subtracting the two valid spellings from the total catches
-        // the bare form, the empty form, and any rendering nobody anticipated.
-        var invalid = AppShellRenderHarness.CountOccurrences(html, "aria-selected")
-            - selected
-            - unselected;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(html, Does.Contain("role=\"tablist\""));
-            Assert.That(tabs, Is.EqualTo(3));
-            Assert.That(selected, Is.EqualTo(1), "exactly one area is selected");
-            Assert.That(
-                selected + unselected,
-                Is.EqualTo(tabs),
-                "and every tab states its selection rather than omitting it");
-            Assert.That(
-                invalid,
-                Is.Zero,
-                "a bare or empty aria-selected is not a valid enumerated value");
-        });
-    }
+    //
+    // The explicit-aria-selected guarantee is now asserted through the parsed DOM
+    // in AppShellAriaSelectedBunitTests. That is the point of the bUnit pattern:
+    // a static-markup version had to derive an invalid count by string arithmetic
+    // (total minus the two valid spellings) because the naive
+    // Does.Not.Contain("aria-selected=\"\"") guard is vacuous - the renderer emits
+    // the bare attribute name, so the empty-string form never appears in raw
+    // markup, only in a browser DOM after parsing. bUnit reads GetAttribute(...)
+    // and sees the browser value, so the assertion catches the bug naturally.
 
     [Test]
     public async Task The_selected_area_moves_with_the_active_surface()
