@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Api.Mcp.Telemetry;
@@ -20,6 +22,7 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
     private readonly HttpClient _http;
     private readonly IOptions<LatticeApiMcpTelemetryOptions> _options;
     private readonly ITelemetryBackendTokenProvider? _tokenProvider;
+    private readonly ILogger<PrometheusQueryClient>? _logger;
 
     /// <summary>
     /// Creates the client over a preconfigured <paramref name="http"/> (whose base
@@ -38,16 +41,25 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
     /// <see cref="LatticeTelemetryBackendAuthMode.DynamicBearer"/> mode. Left
     /// <see langword="null"/> for every static auth mode.
     /// </param>
+    /// <param name="logger">
+    /// The optional server-side sink for backend-request faults. The MCP tool
+    /// result deliberately carries a fixed, non-interpolated error message so the
+    /// backend credential can never ride out on exception text, which makes this
+    /// the only place the operator-facing detail is retained. Left
+    /// <see langword="null"/> when the host registered no logging.
+    /// </param>
     public PrometheusQueryClient(
         HttpClient http,
         IOptions<LatticeApiMcpTelemetryOptions> options,
-        ITelemetryBackendTokenProvider? tokenProvider = null)
+        ITelemetryBackendTokenProvider? tokenProvider = null,
+        ILogger<PrometheusQueryClient>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(options);
         _http = http;
         _options = options;
         _tokenProvider = tokenProvider;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -129,17 +141,69 @@ internal sealed class PrometheusQueryClient : IPrometheusQueryClient
     private async Task<JsonDocument> SendAsync(string relativeUri, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, relativeUri);
-        await StampBackendCredentialAsync(request, cancellationToken).ConfigureAwait(false);
 
-        using var response = await _http
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        try
+        {
+            // Inside the try: stamping resolves the backend credential and can
+            // itself fault (an unregistered dynamic-token provider, an empty
+            // minted token, or the provider's own auth failure). Those are pure
+            // misconfigurations, and the caller-facing message now points the
+            // operator at these logs - so they must actually land here.
+            await StampBackendCredentialAsync(request, cancellationToken).ConfigureAwait(false);
 
-        await using var stream = await response.Content
-            .ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+            using var response = await _http
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+
+            await using var stream = await response.Content
+                .ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The only place the fault detail is retained. The MCP tool result
+            // carries a fixed, non-interpolated message precisely because
+            // exception text from an unowned handler in this pipeline can echo
+            // the outbound Authorization header, so the detail must stay on the
+            // server side of the trust boundary. A 404 is not a fault - the
+            // metadata tool degrades it to an empty result - so it is logged at
+            // debug rather than warning.
+            //
+            // Cold path only: the request-path substring is the one allocation
+            // here and is computed only once a logger is present and the level
+            // is actually enabled, so a disabled or absent logger costs nothing.
+            var level = ex is HttpRequestException { StatusCode: HttpStatusCode.NotFound }
+                ? LogLevel.Debug
+                : LogLevel.Warning;
+            if (_logger?.IsEnabled(level) == true)
+            {
+                _logger.Log(
+                    level,
+                    ex,
+                    "Telemetry backend request to '{RequestPath}' failed.",
+                    RequestPathOf(relativeUri));
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The path portion of a request URI, with the query string dropped so the
+    /// log line names the backend endpoint without echoing the caller's PromQL
+    /// expression. Allocates a substring only when the URI carries a query, and
+    /// is reached only from the cold fault path.
+    /// </summary>
+    private static string RequestPathOf(string relativeUri)
+    {
+        var query = relativeUri.IndexOf('?', StringComparison.Ordinal);
+        return query < 0 ? relativeUri : relativeUri[..query];
     }
 
     private async Task StampBackendCredentialAsync(

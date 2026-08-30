@@ -40,10 +40,11 @@ public sealed class AtomicActionGrainTests
     private static (AtomicActionGrain Grain, FakePersistentState<AtomicActionState> State, IGrainFactory Factory) CreateGrain(
         IAtomicActionCatalog catalog,
         FakePersistentState<AtomicActionState>? existingState = null,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        string? operationId = null)
     {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("atomic-action", OperationId));
+        context.GrainId.Returns(GrainId.Create("atomic-action", operationId ?? OperationId));
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
@@ -73,6 +74,51 @@ public sealed class AtomicActionGrainTests
         HandlerId = handlerId,
         ArgsPayload = args ?? [],
     };
+
+    // --- Operation-id (grain-key) validation ---
+
+    /// <summary>
+    /// A tree-write step dispatches to an <see cref="AtomicWriteGrain"/> keyed
+    /// <c>{treeId}/{operationId}::aa::{index}</c>, which the saga splits at its
+    /// last separator - the only split that is correct for a tenant-composed tree
+    /// id, and one that requires the operation id to contribute no separator of
+    /// its own. An operation id carrying a <c>'/'</c> would silently produce a
+    /// wrong tree id and a wrong correlation id, so it is refused up front, at the
+    /// same bar the sibling atomic-write entry points already apply.
+    /// </summary>
+    [TestCase("tenant/4711")]
+    [TestCase("/leading")]
+    [TestCase("trailing/")]
+    public void ExecuteAsync_rejects_an_operation_id_containing_the_grain_key_separator(string operationId)
+    {
+        var catalog = Catalog(
+            ("a", "v1", _ => Task.CompletedTask, _ => Task.CompletedTask));
+        var (grain, state, _) = CreateGrain(catalog, operationId: operationId);
+
+        var plan = new AtomicActionPlan { Steps = [CustomStep("a")] };
+
+        var ex = Assert.ThrowsAsync<ArgumentException>(() => grain.ExecuteAsync(plan));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("'/'"));
+            Assert.That(state.State.Started, Is.False,
+                "The rejection must land before any state is seeded, so a refused "
+                + "operation id leaves no half-started saga behind.");
+        });
+    }
+
+    [Test]
+    public async Task ExecuteAsync_accepts_an_operation_id_without_the_grain_key_separator()
+    {
+        var catalog = Catalog(
+            ("a", "v1", _ => Task.CompletedTask, _ => Task.CompletedTask));
+        var (grain, _, _) = CreateGrain(catalog, operationId: "order-4711");
+
+        var outcome = await grain.ExecuteAsync(new AtomicActionPlan { Steps = [CustomStep("a")] });
+
+        Assert.That(outcome.Status, Is.EqualTo(AtomicActionStatus.Committed));
+    }
 
     // --- Happy path ---
 
