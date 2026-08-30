@@ -333,6 +333,16 @@
     min-width: 0;
 }
 
+/* The kind picker sits in .lxa-inline rather than in a .lxa-field, so the
+   minimum pointer target that `.lxa-field > select` grants does not reach it.
+   It is stated here instead: a control small enough to miss is the one failure
+   a wide desktop screen never reveals. It keeps its content width so the free
+   text box beside it takes the remaining space. */
+.lxa-subject-kind {
+    flex: 0 0 auto;
+    min-height: var(--lx-target-min);
+}
+
 .lxa-actions {
     display: flex;
     flex-wrap: wrap;
