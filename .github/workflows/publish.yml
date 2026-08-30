@@ -61,6 +61,7 @@ on:
       #   lattice.explorer.plugins.topology-v9.4.0
       #   lattice.explorer.plugins.tagindex-v9.4.0
       #   lattice.explorer.plugins.deadletter-v9.4.0
+      #   lattice.explorer.plugins.telemetry-v9.4.0
       #   lattice.explorer.plugins.tenancy-v9.4.0
       #   lattice.explorer.plugins.tenants-v9.4.0
       #   lattice.explorer.plugins.mytenant-v9.4.0
@@ -126,6 +127,7 @@ on:
       - 'lattice.explorer.plugins.topology-v*'
       - 'lattice.explorer.plugins.tagindex-v*'
       - 'lattice.explorer.plugins.deadletter-v*'
+      - 'lattice.explorer.plugins.telemetry-v*'
       - 'lattice.explorer.plugins.tenancy-v*'
       - 'lattice.explorer.plugins.tenants-v*'
       - 'lattice.explorer.plugins.mytenant-v*'

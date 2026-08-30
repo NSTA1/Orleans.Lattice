@@ -63,6 +63,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Explorer.Plugins.Topology` | `src/lattice.explorer/Plugins/Topology/Orleans.Lattice.Explorer.Plugins.Topology.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.TagIndex` | `src/lattice.explorer/Plugins/TagIndex/Orleans.Lattice.Explorer.Plugins.TagIndex.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.DeadLetter` | `src/lattice.explorer/Plugins/DeadLetter/Orleans.Lattice.Explorer.Plugins.DeadLetter.csproj` |
+| `Orleans.Lattice.Explorer.Plugins.Telemetry` | `src/lattice.explorer/Plugins/Telemetry/Orleans.Lattice.Explorer.Plugins.Telemetry.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.Tenancy` | `src/lattice.explorer/Plugins/Tenancy/Orleans.Lattice.Explorer.Plugins.Tenancy.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.Tenants` | `src/lattice.explorer/Plugins/Tenants/Orleans.Lattice.Explorer.Plugins.Tenants.csproj` |
 | `Orleans.Lattice.Explorer.Plugins.MyTenant` | `src/lattice.explorer/Plugins/MyTenant/Orleans.Lattice.Explorer.Plugins.MyTenant.csproj` |
@@ -130,6 +131,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Explorer.Plugins.Topology` | `lattice.explorer.plugins.topology-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.TagIndex` | `lattice.explorer.plugins.tagindex-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.DeadLetter` | `lattice.explorer.plugins.deadletter-v<X.Y.Z>` |
+| `Orleans.Lattice.Explorer.Plugins.Telemetry` | `lattice.explorer.plugins.telemetry-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.Tenancy` | `lattice.explorer.plugins.tenancy-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.Tenants` | `lattice.explorer.plugins.tenants-v<X.Y.Z>` |
 | `Orleans.Lattice.Explorer.Plugins.MyTenant` | `lattice.explorer.plugins.mytenant-v<X.Y.Z>` |

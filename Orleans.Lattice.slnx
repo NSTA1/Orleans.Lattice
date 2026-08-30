@@ -54,6 +54,7 @@
   <Project Path="src/lattice.explorer/Plugins/Tenancy/Orleans.Lattice.Explorer.Plugins.Tenancy.csproj" />
   <Project Path="src/lattice.explorer/Plugins/Tenants/Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
   <Project Path="src/lattice.explorer/Plugins/MyTenant/Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
+  <Project Path="src/lattice.explorer/Plugins/Telemetry/Orleans.Lattice.Explorer.Plugins.Telemetry.csproj" />
   <Project Path="src/lattice.explorer.entra/Orleans.Lattice.Explorer.Entra.csproj" />
   <Project Path="src/lattice.explorer.entra.web/Orleans.Lattice.Explorer.Entra.Web.csproj" />
   <Project Path="src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj" />

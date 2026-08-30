@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!--
+      Like the tenancy seam, this is a plain class library rather than a Razor
+      library: it ships the controlled domain model and the facade binding the
+      telemetry panels consume, and carries no components or stylesheet of its
+      own. The panel project brings its own Razor surface.
+    -->
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.Telemetry</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.Plugins.Telemetry</AssemblyName>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Telemetry</PackageId>
+    <Version>9.4.0</Version>
+    <Description>The shared telemetry seam for the Orleans.Lattice Explorer: the client wrapper over the telemetry gRPC binding, server-authored catalogue discovery so panels are driven by the queries the cluster actually offers, the Explorer-term domain model the telemetry panels operate against, the fault mapping that keeps a backend outage distinct from an invalid query, and the availability probe that reports the surface unavailable on a cluster that serves no telemetry facade. Registered with AddExplorerTelemetry().</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Explorer.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <!--
+    A sibling plugin project references its own facade's gRPC binding directly,
+    exactly as Access -> api.auth.grpc, Backup -> api.backup.grpc and
+    Schema -> api.schema.grpc do. Explorer.Core keeps its single
+    api.state.grpc reference untouched. No dependency is taken on the shared UI
+    library, so a head that ships no telemetry surface pays for none of it.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
+    <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\lattice.api.telemetry.grpc\Orleans.Lattice.Api.Telemetry.Grpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Serialization" Version="10.2.2" />
+  </ItemGroup>
+
+</Project>
