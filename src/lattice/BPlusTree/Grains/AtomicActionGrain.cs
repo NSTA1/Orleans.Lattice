@@ -382,14 +382,29 @@ internal sealed class AtomicActionGrain(
         {
             var tree = grainFactory.GetGrain<ILattice>(step.TreeId);
             var preImage = new AtomicActionTreePreImage { StepIndex = index };
+
+            // Capture every key's pre-image in a single batched read rather than
+            // one grain call per key: GetManyAsync fans out to the shards once and
+            // omits absent/tombstoned keys, so a key missing from the result maps
+            // to Existed = false exactly as a per-key GetAsync returning null did.
+            var keys = new List<string>(entries.Count);
             foreach (var entry in entries)
             {
-                var current = await tree.GetAsync(entry.Key);
+                keys.Add(entry.Key);
+            }
+
+            var current = keys.Count == 0
+                ? []
+                : await tree.GetManyAsync(keys);
+
+            foreach (var entry in entries)
+            {
+                var value = current.TryGetValue(entry.Key, out var v) ? v : null;
                 preImage.Values.Add(new AtomicActionTreePreValue
                 {
                     Key = entry.Key,
-                    Value = current,
-                    Existed = current is not null,
+                    Value = value,
+                    Existed = value is not null,
                 });
             }
 

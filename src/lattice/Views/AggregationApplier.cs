@@ -448,14 +448,18 @@ internal sealed class AggregationApplier(
         var extreme = kind == AggregationKind.Min ? double.PositiveInfinity : double.NegativeInfinity;
         var members = kind == AggregationKind.SetUnion ? new HashSet<string>(StringComparer.Ordinal) : null;
 
+        // Gather every inverse shard for the group in one batched read rather than
+        // one store call per slot; min/max/set-union are order-independent, so the
+        // arbitrary iteration order of the returned rows is immaterial.
+        var slotKeys = new List<string>(_fanout);
         for (var slot = 0; slot < _fanout; slot++)
         {
-            var bytes = await store.GetAsync(InverseKey(groupKey, slot), cancellationToken);
-            if (bytes is null)
-            {
-                continue;
-            }
+            slotKeys.Add(InverseKey(groupKey, slot));
+        }
 
+        var shards = await store.GetManyAsync(slotKeys, cancellationToken);
+        foreach (var bytes in shards.Values)
+        {
             foreach (var entry in DecodeInverse(bytes).Values)
             {
                 hasAny = true;
@@ -572,14 +576,20 @@ internal sealed class AggregationApplier(
         // convergent function of the group's member set regardless of delivery
         // order. The source-key tie-break makes equal-HLC members deterministic.
         var members = new List<(string SourceKey, FoldMember Member)>();
+
+        // Gather every fold-inverse shard for the group in one batched read
+        // rather than one store call per slot; the members are re-sorted by
+        // (HLC, sourceKey) below, so the arbitrary order of the returned rows
+        // does not affect the folded result.
+        var slotKeys = new List<string>(_fanout);
         for (var slot = 0; slot < _fanout; slot++)
         {
-            var bytes = await store.GetAsync(FoldInverseKey(groupKey, slot), cancellationToken);
-            if (bytes is null)
-            {
-                continue;
-            }
+            slotKeys.Add(FoldInverseKey(groupKey, slot));
+        }
 
+        var shards = await store.GetManyAsync(slotKeys, cancellationToken);
+        foreach (var bytes in shards.Values)
+        {
             foreach (var (sourceKey, member) in DecodeFoldInverse(bytes))
             {
                 members.Add((sourceKey, member));

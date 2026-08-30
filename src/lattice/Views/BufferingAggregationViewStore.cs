@@ -32,6 +32,39 @@ internal sealed class BufferingAggregationViewStore(IAggregationViewStore inner)
             : await inner.GetAsync(key, cancellationToken);
 
     /// <inheritdoc />
+    public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        List<string>? misses = null;
+        foreach (var key in keys)
+        {
+            if (_overlay.TryGetValue(key, out var buffered))
+            {
+                // A buffered null marks a delete, so the key reads as absent.
+                if (buffered is not null)
+                {
+                    result[key] = buffered;
+                }
+            }
+            else
+            {
+                (misses ??= []).Add(key);
+            }
+        }
+
+        if (misses is not null)
+        {
+            var fetched = await inner.GetManyAsync(misses, cancellationToken).ConfigureAwait(false);
+            foreach (var (key, value) in fetched)
+            {
+                result[key] = value;
+            }
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
     public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         _overlay[key] = value;

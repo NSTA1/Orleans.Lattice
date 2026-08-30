@@ -11,6 +11,15 @@ internal interface IAggregationViewStore
     /// <summary>Gets the value for <paramref name="key"/>, or <see langword="null"/> when absent.</summary>
     Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Gets the values for <paramref name="keys"/> in a single batched read.
+    /// Keys that are absent (or tombstoned) are omitted from the returned map,
+    /// mirroring <see cref="GetAsync"/> returning <see langword="null"/> for one.
+    /// Used to gather a group's inverse/fold-inverse shards in one round trip
+    /// instead of one read per shard slot.
+    /// </summary>
+    Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default);
+
     /// <summary>Sets <paramref name="key"/> to <paramref name="value"/>.</summary>
     Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default);
 

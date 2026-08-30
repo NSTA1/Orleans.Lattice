@@ -12,6 +12,10 @@ internal sealed class LatticeViewStore(ILattice viewTree) : IAggregationViewStor
         viewTree.GetAsync(key, cancellationToken);
 
     /// <inheritdoc />
+    public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken = default) =>
+        viewTree.GetManyAsync(keys, cancellationToken);
+
+    /// <inheritdoc />
     public Task SetAsync(string key, byte[] value, CancellationToken cancellationToken = default) =>
         viewTree.SetAsync(key, value, cancellationToken);
 
