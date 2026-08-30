@@ -32,7 +32,10 @@ honoured it.
 
 **1. Session start, once - orient before you act.**
 Before your first edit on any non-trivial task, spend one round:
-`repocontext_health`, then `index_status {repoId}` (which also calibrates you -
+`repocontext_health`, then `repocontext_list_repos` to learn the id of the
+repository you are in (**derive it from the listing, never from your current
+directory** - see [The repo id](#the-repo-id), which matters most in a git
+worktree), then `index_status {repoId}` (which also calibrates you -
 see [Health and degraded mode](#health-and-degraded-mode)), then **sweep the
 memory you are about to need**: `search` your task in natural language (it ranks
 code and memory together), and `scan` scope `Memory` - or `MemoryTopic` for a
@@ -83,6 +86,10 @@ next session:
   `scan` of `decisions` / `gotchas` / `conventions` would have handed you;
 - you read three or more whole files with `view` to answer one question, without
   first trying `outline` / `related` / `context`;
+- you concluded the repo "isn't indexed" because your current directory (a git
+  worktree name, say) did not appear in `repocontext_list_repos` - the base
+  repository is what is indexed, so resolve the id from the listing instead of
+  falling back to `grep`;
 - you are coordinating with another session (an epic, a stacked-PR chain,
   parallel workstreams) and passing state only through chat messages rather than
   the [coordination bus](#coordination---memory-as-a-cross-session-bus).
@@ -162,6 +169,13 @@ Two guardrails make it safe to lean on as primary - follow both every time:
      *uncommitted* edits - that is guardrail 1's job to handle, not a reason to
      fall back.
 
+   **Not a valid trigger: "my directory is not in `repocontext_list_repos`."**
+   In a git worktree it never will be, because the indexed repository is the base
+   repo, not your worktree directory. Resolve the id from the listing (see
+   [The repo id](#the-repo-id)) and carry on; concluding "this worktree is not
+   indexed, so I will explore directly" abandons a healthy index over a naming
+   mismatch.
+
    A stale, keyword-only, or partially-embedded index is a worse locator than a
    direct search, so do not force it - but confirm that with a probe first
    rather than assuming it.
@@ -181,9 +195,40 @@ mid-task.
 
 - **Derivation.** A repository's `repoId` defaults to the **final path segment of
   the indexed path** - the repo's own folder name - unless an explicit `repoId`
-  was passed to `repocontext_add_repo`. Do not assume it; confirm with
-  `repocontext_list_repos`. Examples in this file write it as `{repoId}` -
-  substitute the value you derived.
+  was passed to `repocontext_add_repo`. That is the *indexed* path, **not your
+  current working directory**: never derive the id from the directory you happen
+  to be sitting in. Do not assume it; confirm with `repocontext_list_repos`.
+  Examples in this file write it as `{repoId}` - substitute the value you derived.
+- **Working in a git worktree? The repo id is still the base repository's.**
+  This is the single most common way this surface gets wrongly written off. A
+  worktree lives at a path like
+  `.../copilot-worktrees/<repo>/<generated-worktree-name>`, so deriving the id
+  from your directory yields the *worktree's* name - which is not a repository id
+  and will never appear in `repocontext_list_repos`. **An absent worktree name
+  does not mean "this code is not indexed."** The base repository is indexed and
+  is what you should query: run `repocontext_list_repos` and use the entry that
+  names the repository (for example `lattice`), regardless of which worktree you
+  are in. If you are unsure of the indexed root, `repocontext_changed` names it
+  for you: passing a worktree path fails with "The path '...' is outside the
+  indexed root of repository '/workspace/lattice'", which tells you both the root
+  and the id.
+- **Do not "fix" a worktree miss by adding the worktree as a new repository.**
+  `repocontext_add_repo` on a worktree path would index a near-duplicate copy of
+  the same code under a throwaway id, splitting the store and every later search
+  across two repos. It is a destructive write; do not reach for it here. Query the
+  base repository instead.
+- **What the index does and does not know in a worktree.** The index reflects the
+  base repository's **last ingested (committed) state**, so it will not contain
+  your worktree's branch-local or uncommitted changes - and on a long-lived branch
+  it can be meaningfully behind what you are editing. That does not stop it being
+  the right tool for *discovery*: it still locates code, docs, symbols, and prior
+  decisions correctly. It does make guardrail 1 sharper than usual - locate with
+  `repocontext`, then `view` the real file in **your** worktree before quoting or
+  editing it, because the file you are about to change may differ from the indexed
+  copy. Graph and drift tools scoped to the indexed root (`changed`, and any
+  `path` argument) only accept paths under that root, so they answer questions
+  about the base repository, not about your worktree's diff; use `git diff` for
+  the latter.
 - **Disambiguation.** If `repocontext_list_repos` returns more than one repo,
   select the one whose id matches the workspace you are working in and ignore
   unrelated indexes (for example throwaway test fixtures).
