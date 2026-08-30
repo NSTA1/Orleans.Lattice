@@ -32,7 +32,9 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry;
 /// A genuine caller cancellation propagates; a backend timeout, HTTP failure,
 /// non-success status, or malformed payload is caught and returned on the result's
 /// <c>Error</c> field so the agent observes a structured result instead of a
-/// transport fault.
+/// transport fault. The caught exception's own text is never propagated to the
+/// caller - see <see cref="BackendErrorMessage"/> for why that would be a
+/// backend-credential disclosure channel.
 /// </para>
 /// </remarks>
 internal static class TelemetryToolHandlers
@@ -67,9 +69,10 @@ internal static class TelemetryToolHandlers
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return TelemetryQueryResult.Failure(BackendErrorMessage(ex));
+            // The exception text is not propagated to the caller: see BackendErrorMessage.
+            return TelemetryQueryResult.Failure(BackendErrorMessage);
         }
     }
 
@@ -113,9 +116,10 @@ internal static class TelemetryToolHandlers
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return TelemetryQueryResult.Failure(BackendErrorMessage(ex));
+            // The exception text is not propagated to the caller: see BackendErrorMessage.
+            return TelemetryQueryResult.Failure(BackendErrorMessage);
         }
     }
 
@@ -151,9 +155,10 @@ internal static class TelemetryToolHandlers
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return TelemetryMetricListResult.Failure(BackendErrorMessage(ex));
+            // The exception text is not propagated to the caller: see BackendErrorMessage.
+            return TelemetryMetricListResult.Failure(BackendErrorMessage);
         }
     }
 
@@ -215,9 +220,10 @@ internal static class TelemetryToolHandlers
             // rather than surfacing a raw 404 passthrough (issue #1339).
             return TelemetryMetricMetadataResult.Empty();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return TelemetryMetricMetadataResult.Failure(BackendErrorMessage(ex));
+            // The exception text is not propagated to the caller: see BackendErrorMessage.
+            return TelemetryMetricMetadataResult.Failure(BackendErrorMessage);
         }
     }
 
@@ -393,8 +399,27 @@ internal static class TelemetryToolHandlers
             ? "The telemetry backend returned no status."
             : $"The telemetry backend reported status '{status}'.";
 
-    private static string BackendErrorMessage(Exception ex)
-        => $"The telemetry backend request failed: {ex.Message}";
+    /// <summary>
+    /// The fixed, non-interpolated caller-facing text for a backend transport,
+    /// timeout, or payload fault.
+    /// </summary>
+    /// <remarks>
+    /// The caught exception's message is deliberately <b>not</b> interpolated
+    /// here. The proxy does not own every <see cref="HttpMessageHandler"/> in its
+    /// own pipeline - a host may insert delegating handlers, and diagnostic or
+    /// retry handlers commonly include request headers in their messages - so
+    /// exception text is an uncontrolled channel that can carry the outbound
+    /// <c>Authorization</c> value. That value is the <b>backend</b> credential,
+    /// deliberately isolated from the caller, so it must never cross back to a
+    /// remote MCP caller. A fixed message cannot leak a value nobody anticipated;
+    /// the detail is logged server-side by the backend proxy instead. The
+    /// distinction callers act on - backend fault versus a guardrail or
+    /// metric-access rejection - is preserved, because those are separate
+    /// messages built on separate paths (<see cref="DeniedMessage"/>,
+    /// <see cref="StatusMessage"/>, and the range guardrail text).
+    /// </remarks>
+    private const string BackendErrorMessage =
+        "The telemetry backend request failed. See the server-side telemetry proxy logs for the detail.";
 
     private static string DeniedMessage(string metric)
         => TelemetryQueryAuthorizer.DeniedMessage(metric);

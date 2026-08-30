@@ -175,6 +175,67 @@ public sealed class RepoContextGraphToolTests
     }
 
     [Test]
+    public async Task Changed_scoped_to_a_subtree_does_not_report_the_rest_of_the_index_as_removed()
+    {
+        var workspace = NewWorkspace();
+        var repoRoot = WriteRepo(workspace, "app",
+            ("src/A.cs", "namespace N; public class A { }"),
+            ("src/B.cs", "namespace N; public class B { }"),
+            ("other/D.cs", "namespace N; public class D { }"));
+
+        await using var harness = await StartAsync(workspace);
+        await using var client = await harness.ConnectAsync(Ct);
+        await OnboardAsync(client, repoRoot, "app");
+
+        Write(repoRoot, "src/C.cs", "namespace N; public class C { }");
+
+        // Scope the report to a subdirectory. The walk must still be rooted at the indexed
+        // root so the scanned paths stay repository-relative; a subtree-rooted walk would
+        // put every scanned file in a different path space and report the whole index gone.
+        var subtree = Path.Combine(repoRoot, "src");
+        var json = (await client.CallToolAsync(
+            "repocontext_changed",
+            new Dictionary<string, object?> { ["repoId"] = "app", ["path"] = subtree },
+            cancellationToken: Ct)).RequireStructuredContent();
+
+        var added = Strings(json.GetProperty("added"));
+        var removed = Strings(json.GetProperty("removed"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(added, Does.Contain("src/C.cs"),
+                "the new file is reported under its repository-relative path");
+            Assert.That(added, Does.Not.Contain("C.cs"),
+                "paths are relative to the indexed root, never to the requested subtree");
+            Assert.That(removed, Is.Empty,
+                "nothing was deleted, so scoping to a subtree must not report the index as removed");
+            Assert.That(added, Does.Not.Contain("other/D.cs"),
+                "a file outside the requested scope is excluded from the report");
+        });
+    }
+
+    [Test]
+    public async Task Changed_refuses_a_path_outside_the_indexed_repository_root()
+    {
+        var workspace = NewWorkspace();
+        var repoRoot = WriteRepo(workspace, "app", ("src/A.cs", "namespace N; public class A { }"));
+        var outsider = WriteRepo(workspace, "elsewhere", ("src/Z.cs", "namespace N; public class Z { }"));
+
+        await using var harness = await StartAsync(workspace);
+        await using var client = await harness.ConnectAsync(Ct);
+        await OnboardAsync(client, repoRoot, "app");
+
+        // Inside the mounted workspace but outside this repository's indexed root: comparing
+        // it against the index would silently diff two unrelated path spaces, so it is refused.
+        var result = await client.CallToolAsync(
+            "repocontext_changed",
+            new Dictionary<string, object?> { ["repoId"] = "app", ["path"] = outsider },
+            cancellationToken: Ct);
+
+        Assert.That(result.IsError, Is.True, "a path outside the indexed root is refused, not compared");
+    }
+
+    [Test]
     public async Task Related_reports_outbound_imports_inbound_dependents_and_tests()
     {
         var workspace = NewWorkspace();

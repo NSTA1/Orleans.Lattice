@@ -290,6 +290,177 @@ internal static class TenantAdminTestSupport
         }
     }
 
+    /// <summary>
+    /// An <see cref="ITenantRegistry"/> double that models the real
+    /// <c>LatticeTenantRegistry.PutMergeAsync</c> CRDT join rather than a
+    /// last-writer-wins overwrite: a read hands out an independent
+    /// <see cref="TenantRecord.Clone"/>, and a write folds the caller's record
+    /// into the stored one with <see cref="TenantRecord.MergeFrom"/> and returns
+    /// the stored, merged result. That is what makes a read-check-write guard
+    /// testable: the caller's pre-merge view and the committed record are
+    /// genuinely different objects.
+    /// </summary>
+    internal class MergingTenantRegistry : ITenantRegistry
+    {
+        private readonly Dictionary<string, TenantRecord> _records = new(StringComparer.Ordinal);
+
+        public int Puts { get; private set; }
+
+        public int Deletes { get; private set; }
+
+        public void Seed(TenantRecord record) => _records[record.Id.Value] = record;
+
+        /// <summary>The committed record, without cloning, for assertions.</summary>
+        public TenantRecord? Peek(string tenantId) => _records.TryGetValue(tenantId, out var r) ? r : null;
+
+        public Task<TenantRecord?> GetAsync(TenantId tenant, CancellationToken cancellationToken = default)
+            => Task.FromResult(_records.TryGetValue(tenant.Value, out var record) ? record.Clone() : null);
+
+        public Task<bool> ExistsAsync(TenantId tenant, CancellationToken cancellationToken = default)
+            => Task.FromResult(_records.ContainsKey(tenant.Value));
+
+        public async IAsyncEnumerable<TenantRecord> ListAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var record in _records.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return record.Clone();
+            }
+
+            await Task.CompletedTask.ConfigureAwait(false);
+        }
+
+        public Task<TenantRecord> PutAsync(TenantRecord record, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            Puts++;
+            OnBeforeMerge(Puts);
+
+            if (!_records.TryGetValue(record.Id.Value, out var stored))
+            {
+                stored = record.Clone();
+                _records[record.Id.Value] = stored;
+                return Task.FromResult(stored.Clone());
+            }
+
+            stored.MergeFrom(record);
+
+            // The real PutMergeAsync returns the freshly-read stored record it
+            // merged into, which is never the same object as the caller's copy.
+            // Clone so a caller that mutates the returned record and writes it
+            // back cannot alias the store.
+            return Task.FromResult(stored.Clone());
+        }
+
+        public Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
+        {
+            Deletes++;
+            return Task.FromResult(_records.Remove(tenant.Value));
+        }
+
+        /// <summary>
+        /// Hook invoked immediately before the <paramref name="putNumber"/>-th
+        /// write is folded into the stored record - i.e. exactly inside the
+        /// caller's read-to-write window. A subclass injects a competing write
+        /// here; the base does nothing.
+        /// </summary>
+        protected virtual void OnBeforeMerge(int putNumber)
+        {
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="MergingTenantRegistry"/> that lands one competing residency
+    /// removal inside the read-to-write window of the very first write, at an
+    /// explicitly supplied stamp. This is the deterministic stand-in for a second
+    /// caller draining a <i>different</i> region concurrently: no threads, no
+    /// clock, and no ordering assumption.
+    /// </summary>
+    internal sealed class RacingResidencyRemovalRegistry : MergingTenantRegistry
+    {
+        private readonly TenantId _tenant;
+        private readonly string _regionId;
+        private readonly HybridLogicalClock _stamp;
+
+        public RacingResidencyRemovalRegistry(TenantId tenant, string regionId, HybridLogicalClock stamp)
+        {
+            _tenant = tenant;
+            _regionId = regionId;
+            _stamp = stamp;
+        }
+
+        protected override void OnBeforeMerge(int putNumber)
+        {
+            if (putNumber != 1)
+            {
+                return;
+            }
+
+            Peek(_tenant.Value)?.SetRegionStatus(
+                _regionId, TenantRegionStatus.Draining, _stamp, "racing-writer");
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="MergingTenantRegistry"/> that brings one region online inside
+    /// the read-to-write window of the first write, modelling a concurrent
+    /// residency change from another replica on a key the caller never touched.
+    /// </summary>
+    internal sealed class RacingResidencyGrantRegistry : MergingTenantRegistry
+    {
+        private readonly TenantId _tenant;
+        private readonly string _regionId;
+        private readonly HybridLogicalClock _stamp;
+
+        public RacingResidencyGrantRegistry(TenantId tenant, string regionId, HybridLogicalClock stamp)
+        {
+            _tenant = tenant;
+            _regionId = regionId;
+            _stamp = stamp;
+        }
+
+        protected override void OnBeforeMerge(int putNumber)
+        {
+            if (putNumber != 1)
+            {
+                return;
+            }
+
+            Peek(_tenant.Value)?.SetRegionStatus(
+                _regionId, TenantRegionStatus.Online, _stamp, "racing-writer");
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="MergingTenantRegistry"/> that authorizes one extra region
+    /// inside the read-to-write window of the first write, modelling a concurrent
+    /// operator change to the allowed set.
+    /// </summary>
+    internal sealed class RacingAllowedRegionRegistry : MergingTenantRegistry
+    {
+        private readonly TenantId _tenant;
+        private readonly string _regionId;
+        private readonly HybridLogicalClock _stamp;
+
+        public RacingAllowedRegionRegistry(TenantId tenant, string regionId, HybridLogicalClock stamp)
+        {
+            _tenant = tenant;
+            _regionId = regionId;
+            _stamp = stamp;
+        }
+
+        protected override void OnBeforeMerge(int putNumber)
+        {
+            if (putNumber != 1)
+            {
+                return;
+            }
+
+            Peek(_tenant.Value)?.AuthorizeRegion(_regionId, _stamp, "racing-writer");
+        }
+    }
+
     /// <summary>A minimal in-memory <see cref="ITenantRegistry"/> backed by a dictionary, with call counters.</summary>
     internal sealed class FakeTenantRegistry : ITenantRegistry
     {

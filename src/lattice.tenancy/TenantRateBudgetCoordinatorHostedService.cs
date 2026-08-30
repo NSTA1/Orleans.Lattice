@@ -140,7 +140,13 @@ internal sealed class TenantRateBudgetCoordinatorHostedService : IHostedService
         }
 
         var multiplier = 1L << Math.Min(consecutiveFailures, MaxBackoffShift);
-        var backedOff = interval.Ticks >= ceiling.Ticks / multiplier
+        // ceiling.Ticks / multiplier floors, so at the boundary where interval
+        // equals that floor but the division had a remainder, interval * multiplier
+        // is still strictly below the ceiling. A '>=' here would clamp to the
+        // ceiling prematurely, overstating the period; '>' keeps the exact doubled
+        // value in that case. The else branch is overflow-safe because interval <=
+        // floor(ceiling / multiplier) implies interval * multiplier <= ceiling.
+        var backedOff = interval.Ticks > ceiling.Ticks / multiplier
             ? ceiling
             : TimeSpan.FromTicks(interval.Ticks * multiplier);
 

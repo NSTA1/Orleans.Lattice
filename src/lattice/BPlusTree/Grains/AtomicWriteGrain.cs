@@ -143,8 +143,27 @@ internal sealed class AtomicWriteGrain(
     private string OperationKey => GrainContext.GrainId.Key.ToString()!;
 
     /// <summary>
+    /// The index of the separator between the tree id and the caller-supplied
+    /// operation id in a <c>{treeId}/{operationId}</c> composite grain key, or
+    /// <c>-1</c> when the key carries no separator.
+    /// </summary>
+    /// <remarks>
+    /// The boundary is the <b>last</b> separator, never the first: a
+    /// tenant-composed tree id is itself segmented
+    /// (<c>t/{tenantId}/{name}</c>), so splitting on the first separator lands
+    /// inside the tree id and yields a plausible-but-wrong operation id (for
+    /// <c>t/acme/orders/op-123</c> it would return <c>acme/orders/op-123</c>).
+    /// An operation id never contains a separator, so the last one is always the
+    /// boundary. The shared <c>LatticeTenantTrees</c> helpers parse a tree id
+    /// rather than this composite, so they do not apply here.
+    /// </remarks>
+    /// <param name="key">The composite grain key to split.</param>
+    /// <returns>The index of the tree-id / operation-id separator.</returns>
+    private static int OperationKeySeparator(string key) => key.LastIndexOf('/');
+
+    /// <summary>
     /// The caller-supplied idempotency key portion of <see cref="OperationKey"/>
-    /// (the segment after the <c>/</c> separator), used to attribute a
+    /// (the segment after the last <c>/</c> separator), used to attribute a
     /// key-set-mismatch rejection without leaking the internal composite key
     /// shape into the caller-facing message.
     /// </summary>
@@ -153,7 +172,7 @@ internal sealed class AtomicWriteGrain(
         get
         {
             var key = OperationKey;
-            var idx = key.IndexOf('/');
+            var idx = OperationKeySeparator(key);
             return idx < 0 || idx == key.Length - 1 ? key : key[(idx + 1)..];
         }
     }
@@ -2955,14 +2974,15 @@ internal sealed class AtomicWriteGrain(
 
     /// <summary>
     /// Extracts <c>operationId</c> from the composite grain key
-    /// (<c>{treeId}/{operationId}</c>) and stamps it into Orleans
+    /// (<c>{treeId}/{operationId}</c>, split at
+    /// <see cref="OperationKeySeparator"/>) and stamps it into Orleans
     /// <see cref="RequestContext"/> so downstream <c>SetAsync</c> /
     /// <c>DeleteAsync</c> calls made by this saga carry the correlation id
     /// onto their emitted <see cref="LatticeTreeEvent"/>s.
     /// </summary>
     private void StampOperationIdContext()
     {
-        var idx = OperationKey.IndexOf('/');
+        var idx = OperationKeySeparator(OperationKey);
         if (idx < 0 || idx == OperationKey.Length - 1) return;
         var opId = OperationKey[(idx + 1)..];
         RequestContext.Set(LatticeEventConstants.OperationIdRequestContextKey, opId);
@@ -3051,7 +3071,7 @@ internal sealed class AtomicWriteGrain(
         if (string.IsNullOrEmpty(treeId)) return;
         var options = optionsMonitor.Get(treeId);
         if (!await _eventsGate.IsEnabledAsync(grainFactory, treeId, options)) return;
-        var idx = OperationKey.IndexOf('/');
+        var idx = OperationKeySeparator(OperationKey);
         var opId = idx < 0 || idx == OperationKey.Length - 1 ? null : OperationKey[(idx + 1)..];
         var evt = new LatticeTreeEvent
         {
@@ -3105,15 +3125,13 @@ internal sealed class AtomicWriteGrain(
         // runs at saga entry, before PrepareAsync sets
         // state.State.TreeId; reading from state at that point would
         // cache a null tree tag for the activation's lifetime).
-        // The grain key is "{treeId}/{operationId}", and the operation
-        // id never contains a slash, so the segment after the LAST
-        // slash is the operation id and everything before it is the
-        // tree id. Splitting on the last (not the first) separator is
-        // what keeps this correct for a tenant-composed tree id, which
-        // is itself segmented as "t/{tenantId}/{name}".
+        // The grain key is "{treeId}/{operationId}", so the prefix before the
+        // last separator is the tree id - see OperationKeySeparator for why the
+        // last one and not the first (a tenant-composed tree id is itself
+        // segmented, so a first-slash split would report tree="t").
         var grainKey = GrainContext.GrainId.Key.ToString()!;
-        var slashIndex = grainKey.LastIndexOf('/');
-        var treeIdFromKey = slashIndex >= 0 ? grainKey.Substring(0, slashIndex) : grainKey;
+        var slashIndex = OperationKeySeparator(grainKey);
+        var treeIdFromKey = slashIndex >= 0 ? grainKey[..slashIndex] : grainKey;
         var built = (
             Tree: new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdFromKey),
             WalPartitions: new KeyValuePair<string, object?>(

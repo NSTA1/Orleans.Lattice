@@ -105,6 +105,14 @@ without re-running any effect, so a client that retries after a timeout observes
 original result rather than a duplicate action. Re-issuing a *different* plan under
 a used id is rejected.
 
+The operation id must be non-empty and must not contain `/`, which is reserved as
+the grain-key separator: a `TreeWrite` step dispatches to a per-tree saga keyed
+`{treeId}/{operationId}::aa::{index}`, and a tree id may itself be segmented (a
+tenant-composed `t/{tenant}/{name}`), so an operation id carrying a separator would
+make that key ambiguous. An id containing `/` is refused with an `ArgumentException`
+before any effect runs. `ILattice.SetManyAtomicAsync` and the cross-tree coordinator
+apply the same constraint.
+
 Poll a saga's outcome without starting or mutating it with `TryGetOutcomeAsync`,
 which returns `null` until the saga is terminal:
 

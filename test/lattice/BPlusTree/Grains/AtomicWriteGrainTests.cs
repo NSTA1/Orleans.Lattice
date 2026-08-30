@@ -25,14 +25,24 @@ public partial class AtomicWriteGrainTests
                      IShardRootGrain shard) CreateGrain(
         FakePersistentState<AtomicWriteState>? existingState = null,
         LatticeOptions? options = null,
-        Action<IGrainFactory>? configureFactory = null)
+        Action<IGrainFactory>? configureFactory = null,
+        string? treeId = null,
+        string? operationId = null,
+        IServiceProvider? activationServices = null)
     {
+        var effectiveTreeId = treeId ?? TreeId;
+        var effectiveOperationId = operationId ?? OperationId;
+
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("atomic-write", $"{TreeId}/{OperationId}"));
+        context.GrainId.Returns(GrainId.Create("atomic-write", $"{effectiveTreeId}/{effectiveOperationId}"));
+        if (activationServices is not null)
+        {
+            context.ActivationServices.Returns(activationServices);
+        }
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var lattice = Substitute.For<ILattice>();
-        grainFactory.GetGrain<ILattice>(TreeId).Returns(lattice);
+        grainFactory.GetGrain<ILattice>(effectiveTreeId).Returns(lattice);
 
         // Raw-entry reads now flow saga → IShardRootGrain directly (not through
         // ILattice), so the test harness mocks a single shard substitute and
@@ -70,7 +80,7 @@ public partial class AtomicWriteGrainTests
 
         var opts = options ?? new LatticeOptions();
         var routing = new RoutingInfo(
-            TreeId,
+            effectiveTreeId,
             ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount));
         lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
             .Returns(routing);

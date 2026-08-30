@@ -293,9 +293,15 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "updated, and removed - by comparing each file's content digest against the indexed digest, "
                     + "without invoking git, so it works in any checkout regardless of version-control state. It "
                     + "also lists the indexed files that depend on the changed ones (the reverse-reference impact "
-                    + "set), so an agent can see the blast radius of a set of edits before re-indexing. The "
-                    + "workspace is walked only through the fail-closed workspace boundary, so a supplied path "
-                    + "that resolves outside the mounted workspace is refused. Use it to find what an index needs "
+                    + "set), so an agent can see the blast radius of a set of edits before re-indexing. The walk is "
+                    + "rooted at the repository's indexed root and reuses the filters it was ingested with, so the "
+                    + "report always compares the same path space the index was built in; 'path' is therefore a "
+                    + "scope - pass the repository root for the whole tree, or a directory inside it to restrict "
+                    + "the report to that subtree. A path outside the indexed root is refused rather than compared. "
+                    + "Unchanged files are settled by a stat against the stored size and ingest anchor instead of "
+                    + "being re-read, so a whole-repository report stays cheap. The workspace is walked only "
+                    + "through the fail-closed workspace boundary, so a supplied path that resolves outside the "
+                    + "mounted workspace is refused. Use it to find what an index needs "
                     + "to catch up on, or to scope a review to what actually moved. Read-only.",
                 ReadOnly = true,
                 Destructive = false,

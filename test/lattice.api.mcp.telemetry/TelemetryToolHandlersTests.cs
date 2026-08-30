@@ -292,6 +292,49 @@ public sealed class TelemetryToolHandlersTests
     }
 
     [Test]
+    public async Task Query_in_deny_all_rejects_a_metric_hidden_behind_a_line_comment()
+    {
+        // Regression: Prometheus strips a '#' line comment before parsing, so an
+        // unterminated quote opened inside a comment is not a string to the
+        // backend. When the extractor lacked a comment rule it treated that quote
+        // as a string opener and swallowed the following line, extracting only
+        // ["up"] and admitting a query the backend then evaluated as
+        // secret_metric. The gate must fail closed on the hidden name.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, DenyAll("up"), CancellationToken.None, "up or #\"\nsecret_metric #\"");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Does.Contain("secret_metric"));
+            Assert.That(handler.LastRequest, Is.Null, "The bypass query must not reach the backend.");
+        });
+    }
+
+    [Test]
+    public async Task QueryRange_in_deny_all_rejects_a_metric_hidden_behind_a_line_comment()
+    {
+        // Regression: the same comment-hidden allow-list bypass on the range path.
+        var client = Client("{\"status\":\"success\",\"data\":{}}", out var handler);
+
+        var result = await TelemetryToolHandlers.QueryRangeAsync(
+            client, DenyAll("up"), Guardrails(), CancellationToken.None,
+            "up or #\"\nsecret_metric #\"",
+            DateTimeOffset.FromUnixTimeSeconds(0),
+            DateTimeOffset.FromUnixTimeSeconds(600),
+            TimeSpan.FromSeconds(30));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Does.Contain("secret_metric"));
+            Assert.That(handler.LastRequest, Is.Null, "The bypass query must not reach the backend.");
+        });
+    }
+
+    [Test]
     public async Task Query_in_read_all_passes_a_metric_that_deny_all_would_reject()
     {
         const string json =

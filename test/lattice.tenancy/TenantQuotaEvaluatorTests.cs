@@ -127,6 +127,49 @@ public sealed class TenantQuotaEvaluatorTests
     }
 
     [Test]
+    public void Burst_headroom_admits_over_a_small_ceiling_that_is_not_a_multiple_of_100()
+    {
+        // Regression: the burst allowance was computed as ceiling / 100 * burstPercent,
+        // which divides before multiplying. For any ceiling below 100 that floors the
+        // burst to zero (10 / 100 == 0), so a 50% burst over a ceiling of 10 wrongly
+        // resolved to 10 instead of 15 and refused writes the burst should admit.
+        var quotas = new TenantQuotas { MaxTreeCount = 10, BurstPercent = 50 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => TenantQuotaEvaluator.Admit(Acme, quotas, Sample(treeCount: 15), Tree),
+                Throws.Nothing,
+                "10 + 50% burst permits up to 15 owned trees");
+            Assert.That(
+                () => TenantQuotaEvaluator.Admit(Acme, quotas, Sample(treeCount: 16), Tree),
+                Throws.TypeOf<LatticeQuotaExceededException>(),
+                "usage past the burst-adjusted ceiling still refuses");
+        });
+    }
+
+    [Test]
+    public void Burst_headroom_rounds_a_fractional_allowance_down_without_losing_it()
+    {
+        // A 15% burst over a ceiling of 10 is 1.5 trees, which floors to 1 (effective
+        // ceiling 11) - not to zero, and not up to 2. The pre-fix divide-first math
+        // produced 10 / 100 * 15 == 0, losing the allowance entirely.
+        var quotas = new TenantQuotas { MaxKeys = 10, BurstPercent = 15 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => TenantQuotaEvaluator.Admit(Acme, quotas, Sample(keys: 11), Tree),
+                Throws.Nothing,
+                "10 + floor(15%) burst permits up to 11 keys");
+            Assert.That(
+                () => TenantQuotaEvaluator.Admit(Acme, quotas, Sample(keys: 12), Tree),
+                Throws.TypeOf<LatticeQuotaExceededException>(),
+                "usage past the floored burst-adjusted ceiling refuses");
+        });
+    }
+
+    [Test]
     public void A_null_dimension_ceiling_is_never_breached()
     {
         // Only MaxOpsPerSecond (the rate dimension, not this evaluator's concern) is
