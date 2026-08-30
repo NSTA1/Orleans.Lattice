@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// here against a live single-silo cluster.
 /// </summary>
 [Category("Integration")]
-public sealed class LatticeBackupCoordinatedRestoreEngineTests
+public sealed partial class LatticeBackupCoordinatedRestoreEngineTests
 {
     private const string Source = "orders";
 
