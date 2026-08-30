@@ -356,8 +356,24 @@ Every instrument is an **observable gauge** published on a fixed cadence (`Tenan
 | `orleans.lattice.tenancy.overage.memory_bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (memory) |
 | `orleans.lattice.tenancy.overage.trees` | observable gauge (`{tree}`) | `tenant` | Per-Tenant Observability | Metered overage by tenant (trees) |
 
-### Tenant attributability of the other meters
+### The derived `tenant` label
 
-`orleans.lattice.tenancy` is the only meter whose series carry a `tenant` tag. Every other instrument in this document is attributable to a tenant only **indirectly**, through the `tree` tag: the tenancy add-on encodes the owner inside the tree id itself (`t/{tenantId}/{name}`), and ownership is re-derived from that prefix rather than stored. An instrument with no `tree` tag (cluster-level, silo-level, or per-peer transport telemetry) is not tenant-attributable at all today.
+**Every instrument on every meter carries a `tenant` tag.** It is derived from the tree id rather than measured, and it is emitted on tenancy-on and tenancy-off clusters alike, so a panel or a named query is byte-identical in both deployment modes - there are no tenancy-on and tenancy-off variants of a query.
 
-Deriving a tenant by regex over the `tree` label is **not** a safe substitute: legacy pre-tenancy trees keep bare, unprefixed ids and are adopted by the reserved `default` tenant, while platform trees (`_lattice_`, `sys-`) are owned by no tenant, so a single `tree!~"^t/.*"` matcher conflates the default tenant with platform-internal series. Adding a derived `tenant` tag is tracked separately as part of epic #1716.
+The value is one of three kinds:
+
+| Value | Means |
+|---|---|
+| a tenant id | The series belongs to that tenant. Tenancy composes tree ids as `t/{tenantId}/{name}` and ownership is re-derived from that prefix. |
+| `default` | The reserved legacy-adoption tenant, which owns every bare unsegmented tree id - and therefore every series on a cluster with tenancy off. It is a real, queryable tenant. |
+| `_platform_` | A reserved sentinel for series that belong to the platform and to no tenant: the `_lattice_` and `sys-` tree namespaces, and every instrument carrying no tree dimension at all. |
+
+`_platform_` is a **sentinel rather than an absent label**, deliberately. If platform-owned series were simply untagged, a tenant-scoped matcher would exclude them only by accident of absence, and any later change that started tagging them would silently widen every existing query. Naming the platform explicitly means `{tenant="acme"}` excludes it by stating so. The value opens with an underscore, which the tenant-id grammar forbids, so it can never collide with a real tenant.
+
+**Do not derive a tenant by regex over the `tree` label.** Tree ownership is a genuine three-way classification and a single regex cannot reproduce it: tenant `acme` maps cleanly to `tree=~"^t/acme/.*"`, but the default tenant's adopted legacy ids are bare, so its matcher becomes `tree!~"^t/.*"` - which also matches the `_lattice_` and `sys-` platform namespaces and leaks platform-internal series into a tenant's view. An instrument with no `tree` tag cannot be scoped that way at all.
+
+The label is cardinality-neutral. `tree -> tenant` is a function, so it attaches to series that already exist rather than multiplying them: two measurements that shared a series before still share one after, because equal tree ids always derive equal tenant labels.
+
+A small number of instruments are documented as **unscopable** - cluster-level and per-peer telemetry that has no owning tree by construction. Those carry `_platform_` rather than being left untagged, for the reason above.
+
+`orleans.lattice.tenancy` remains the only meter whose instruments are *about* tenancy (quota, usage, enforcement). The `tenant` label described here is a dimension on everything else, which is a different thing: it says whose the series is, not what it measures.
