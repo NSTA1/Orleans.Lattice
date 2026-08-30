@@ -70,6 +70,14 @@ public sealed class TelemetryGrpcPackageGraphTests
     /// project, returning every reachable project file path. A re-coupling that
     /// hides one hop away is caught here rather than by the direct-reference check.
     /// </summary>
+    /// <remarks>
+    /// MSBuild writes a <c>ProjectReference</c> path with Windows separators, which are
+    /// ordinary filename characters on Unix. Left unnormalized, every hop resolves to a
+    /// path that does not exist, the walk never recurses, and every "reaches no such
+    /// project" assertion above passes for the wrong reason. Normalize before combining,
+    /// and treat an unresolvable reference as a failure rather than skipping it, so the
+    /// walk can never quietly go inert on one platform.
+    /// </remarks>
     private static IReadOnlyCollection<string> TransitiveProjectClosure()
     {
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -79,15 +87,23 @@ public sealed class TelemetryGrpcPackageGraphTests
         while (pending.Count > 0)
         {
             var current = pending.Pop();
-            if (!visited.Add(current) || !File.Exists(current))
+            if (!visited.Add(current))
             {
                 continue;
             }
 
+            Assert.That(
+                File.Exists(current),
+                Is.True,
+                $"The project-reference walk resolved {current}, which does not exist. The closure "
+                + "assertions are only meaningful if every hop resolves, so this is a broken walk "
+                + "rather than an absent dependency.");
+
             var directory = Path.GetDirectoryName(current)!;
             foreach (Match match in ProjectReferenceRegex.Matches(File.ReadAllText(current)))
             {
-                pending.Push(Path.GetFullPath(Path.Combine(directory, match.Groups["path"].Value)));
+                var reference = match.Groups["path"].Value.Replace('\\', '/');
+                pending.Push(Path.GetFullPath(Path.Combine(directory, reference)));
             }
         }
 
