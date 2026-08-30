@@ -110,7 +110,7 @@ Run only the project that owns the code you touched, excluding the slow categori
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj `
-  --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote"
+  --filter "TestCategory!=Chaos&TestCategory!=Integration&TestCategory!=Docs&TestCategory!=AzureStorageEmulator&TestCategory!=Coyote&TestCategory!=UI"
 ```
 
 The five test projects (`Orleans.Lattice.Tests`, `Orleans.Lattice.Replication.Tests`, `Orleans.Lattice.Replication.Grpc.Tests`, `Orleans.Lattice.Storage.AzureTable.Tests`, `Orleans.Lattice.Dashboards.Tests`) are independent - if you only touched `src/lattice.replication`, run only `Orleans.Lattice.Replication.Tests.csproj`.
@@ -159,6 +159,7 @@ The tier filters above only get sharper over time if tests are correctly categor
 - Tag tests that require an external service (Azurite, a real Azure resource, a gRPC server bound to a port, etc.) with the service name, e.g. `[Category("AzureStorageEmulator")]`.
 - Tag fixtures whose sole job is to verify documentation or sample code (e.g. `DocsSnippetCompilationTests`) with `[Category("Docs")]`.
 - Tag Coyote systematic-concurrency models (fixtures that drive a shared correctness core through `CoyoteModelHarness`) with `[Category("Coyote")]`. See "Coyote concurrency tier" below.
+- Tag browser-driven Playwright tests with `[Category("UI")]`. They live in their own project (`test/lattice.explorer.uitests/`), never in a package's test project. See "Browser UI tier" below.
 - Pure in-process unit tests (grains constructed directly with `FakePersistentState<T>`, primitive type tests, options tests) do not need a category.
 - Prefer fixture-level `[Category(...)]` over per-method tagging so the tag stays consistent across partial test files.
 
@@ -471,6 +472,71 @@ recorded as out-of-scope. The wall-clock, real-RPC, grain-serialized-in-memory,
 and trivial-adapter concerns the models deliberately do not encode remain listed
 under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
 
+## Browser UI tier
+
+Blazor UI has two distinct failure modes, and they need two different tools. Getting this split wrong is how #1792 and #1793 shipped despite the Explorer having over three thousand tests.
+
+### Which tool - the decision rule
+
+| Question you are answering | Tool | Where it lives |
+|---|---|---|
+| Does the component render and behave correctly? | **bUnit** | `test/<package>/` alongside the other unit tests |
+| Does a real browser agree? | **Playwright** | `test/lattice.explorer.uitests/` only |
+
+**Default to bUnit.** It runs in the ordinary unit tier - no browser, no host, milliseconds per test - so it costs nothing to keep and nothing to run. Reach for Playwright only when the assertion is genuinely impossible without a browser engine.
+
+Only these justify a Playwright test:
+
+- **Real viewport / breakpoint behaviour.** The design system resolves breakpoints through `window.matchMedia` (see `DesignSystem/wwwroot/lattice-breakpoints.js`), evaluated once at module init. Nothing in a unit test can drive it, and `window.resizeTo` is blocked in an ordinary page - only a browser automation API can set the viewport.
+- **Computed layout and CSS.** A stylesheet is invisible to every renderer-based test. #1792 shipped with correct markup and correct class names; the defect was `flex-shrink: 0` on a fixed-width pane. Assert `boundingBox()` geometry, not class names - a class-name assertion would have passed on the broken build.
+- **Automated accessibility scanning.** An axe sweep catches a whole category of defect without anyone having to think of it first.
+- **Real JS interop against the real script**, where a mock would only re-assert your own assumptions.
+
+Everything else - selection state, gate behaviour, event wiring, conditional rendering, ARIA attribute values - belongs in bUnit.
+
+### Assert against the parsed DOM, never against raw markup
+
+This is the rule that matters most, and it is why bUnit was adopted over the hand-rolled `HtmlRenderer` harnesses.
+
+`HtmlRenderer` produces a markup **string**. Asserting against it with `Contains` invites a silent failure mode: the guard written for #1793 was
+
+```csharp
+Assert.That(html, Does.Not.Contain("aria-selected=\"\""));   // never fires
+```
+
+which can never fail, because the static renderer emits the **bare attribute name** for a `true` bool. The empty string is what a *browser* reports after parsing. The author asserted against a raw string while holding a browser mental model, and the guard was dead from the day it was written.
+
+bUnit parses rendered markup through AngleSharp into a real DOM, so `element.GetAttribute("aria-selected")` returns `""` for a bare attribute - matching browser semantics. The natural assertion catches the bug without the author needing to know the quirk.
+
+If you find yourself doing arithmetic on substring counts to reason about markup, you are writing a test that can rot silently. Query the DOM instead.
+
+### Running them
+
+Browser tests are opt-in and excluded from every default filter, so nothing below changes your normal loop.
+
+```powershell
+# Prerequisite, once per clone (and after a Microsoft.Playwright version bump)
+pwsh test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1 install chromium
+
+# The browser suite
+dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj --filter "TestCategory=UI"
+```
+
+`[Category("UI")]` is mandatory on every fixture in that project and is enforced by its own hygiene gate. It is what keeps browser tests out of Tier 2, out of the CI package matrix, and out of the publish gate.
+
+### How CI runs them, and why it is a separate workflow
+
+- `test/lattice.explorer.uitests/**` is **carved out of the `code` and `nonSample` filters** in `ci.yml`, the same treatment `benchmark/**` and `apps/**` get. The core matrix therefore never tries to run browser tests without a browser.
+- The project has no `src/` counterpart, and `ci.yml` derives its package list from `src/*/`, so it can never enter the test matrix by accident.
+- `publish.yml` resolves a package's test project from the package directory, so publishing never runs it either.
+- `.github/workflows/ui-tests.yml` is its only runner. It is **path-filtered to the Explorer UI**, so an unrelated PR never provisions a browser, and it caches both NuGet and the pinned browser build.
+
+Like `Explorer CI`, it is **advisory rather than a required check** - it does not run on most PRs, and a required check that never reports leaves a PR pending forever. Treat a failure as blocking by convention.
+
+### Keep the suite small
+
+Browser tests are slow and are the easiest place in this repo to introduce flake. The review bar rejects timing-dependent tests: use Playwright's web-first assertions and auto-waiting, never `Task.Delay` or `Thread.Sleep`. If a browser test would pass as a bUnit test, it belongs in bUnit.
+
 ## TLA+ specification (not a required check)
 
 The atomic-commit protocol also has a design-level TLA+ specification under the
@@ -524,6 +590,7 @@ The shared bases are discovered through their per-project subclasses, so each ga
 | `MojibakeHygieneTests` | No byte-level mojibake (a UTF-8 stream decoded as Windows-1252 / CP437 / CP850 and re-encoded) in any tracked text file. | Author plain ASCII. Mojibake leaks when prose or PR-body text is pasted from a terminal or editor whose code page disagrees with the UTF-8 bytes, producing nonsense runs in place of smart quotes, apostrophes, ellipses, dashes, arrows, or check-marks. Runs per project over its own slice; the core project also covers repo-level files. |
 | `DeletionMandateHygieneTests` | Retired apply-mode / staging-buffer identifiers (`AtomicApplyEntry`, `ApplyManyAtomicAsync`, `IReplicationTxBufferGrain`, and siblings) never reappear in source or test code. | Use the universal cross-cluster atomic-visibility primitive instead. Runs in every project over its own `.cs` slice. |
 | `IntegrationCategoryHygieneTests` | Every fixture that stands up a cluster (a `TestCluster`, `TestServer`, `IHost`, `GrpcChannel`, or any `*ClusterFixture`-suffix helper) carries a slow category. | Tag the fixture `[Category("Integration")]` (or `("Chaos")` / `("AzureStorageEmulator")`). This keeps the tiered run filters safe. Runs in every test project against that project's own assembly. |
+| `UiCategoryHygieneTests` | Every `[TestFixture]` in `test/lattice.explorer.uitests/` carries `[Category("UI")]`. | Tag the fixture `[Category("UI")]`. Browser tests are excluded from every default filter by category alone, so an untagged fixture would silently run in lanes that have no browser installed - and fail there rather than in the UI workflow. |
 | `DocsSnippetCompilationTests` (`[Category("Docs")]`) | Every C# snippet under `docs/` uses the ` ```csharp verify ` fence and compiles against the real `Orleans.Lattice` surface. | Make snippets self-contained (declare referenced variables inline) or use the harness's ambient identifiers (`grainFactory`, `client`, `siloBuilder`, `tree`, `lattice`, `cancellationToken`, the `User` / `Order` records). Convert genuinely non-compiling illustrations to prose or a non-`csharp` fence. See the documentation skill. |
 | `PerformanceReportMarkerHygieneTests` | The mechanically-managed marker blocks (`perf-table:layer1`, `perf-table:layer2`) in `docs/lattice/performance-single-silo.md` keep their contract. | Do not hand-edit between the markers; `benchmark/performance-report.ps1` rewrites them on every run. Repo-level gate; runs only in the core project. |
 
