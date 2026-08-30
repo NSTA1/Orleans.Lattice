@@ -48,29 +48,50 @@ transport binding layered on top neither repeats nor reconfigures it.
 
 ## Options
 
-| Property | Type | Meaning |
-|---|---|---|
-| `BackendAddress` | `Uri?` | The Prometheus-compatible endpoint. Unset means no backend is configured, and every query reports as unoffered. |
-| `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer` (a token resolved per request through `ITelemetryBackendTokenProvider`). |
-| `Credential` | `LatticeTelemetryBackendCredential?` | The static credential for `Bearer`, `Basic`, or `MutualTls`. |
-| `RequestTimeout` | `TimeSpan` | Per-request timeout against the backend. |
-| `MaxRange` | `TimeSpan` | The widest window a range query may evaluate. |
-| `MaxStep` | `TimeSpan` | The coarsest step a range query may request. |
-| `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll`, or `DenyAllExceptAllowed` to serve only `AllowedMetrics`. |
-| `AllowedMetrics` | `IList<string>` | The allow-list consulted under `DenyAllExceptAllowed`. |
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `BackendAddress` | `Uri?` | `null` | The Prometheus-compatible endpoint. Must be absolute. Unset means no backend is configured, and every query reports as unoffered. |
+| `AuthMode` | `LatticeTelemetryBackendAuthMode` | `None` | `None`, `Bearer`, `Basic`, `MutualTls`, or `DynamicBearer` (a token resolved per request through `ITelemetryBackendTokenProvider`). |
+| `Credential` | `LatticeTelemetryBackendCredential?` | `null` | The static credential for `Bearer`, `Basic`, or `MutualTls`. Required whenever `AuthMode` is not `None`. |
+| `RequestTimeout` | `TimeSpan` | 30 seconds | Per-request timeout against the backend. |
+| `MaxRange` | `TimeSpan` | 24 hours | The widest window a range query may evaluate. |
+| `MaxStep` | `TimeSpan` | 1 hour | The coarsest step a range query may request. |
+| `MetricAccess` | `LatticeTelemetryMetricAccessMode` | `ReadAll` | `ReadAll`, or `DenyAllExceptAllowed` to serve only `AllowedMetrics`. |
+| `AllowedMetrics` | `IList<string>` | empty | The allow-list consulted under `DenyAllExceptAllowed`. Each entry is an exact metric name or a `*` wildcard pattern (for example `lattice_wal_*`). Ignored under `ReadAll`. |
+
+The proxy stamps the configured backend credential on every backend request and
+**never** forwards the caller's Lattice credential to it: the caller-side grant
+and the backend-side credential are two independent halves of the trust boundary.
 
 ## The allow-list is enforced on extracted names, not on the raw string
 
 Under `DenyAllExceptAllowed`, every metric name a query will actually evaluate is
 extracted from its PromQL by `PromQlMetricExtractor` and checked against
-`AllowedMetrics`. The extractor mirrors Prometheus's own lexer rather than
-approximating it, because the two must agree about what the backend will see.
+`AllowedMetrics` (each entry an exact name or a `*` wildcard pattern such as
+`lattice_wal_*`).
 
-That agreement is load-bearing. A `#` comment, for example, is discarded as
-whitespace exactly as Prometheus discards it. An earlier version had no rule for
-`#`, so a quote opened inside a comment was scanned as a string opener and
-swallowed the rest of the query - hiding a metric name from the allow-list that
-the backend then evaluated anyway.
+The extractor is **deliberately conservative rather than a full PromQL parser**:
+it recognises an identifier as a metric name only where one may legally appear -
+not when followed by `(`, not a keyword or aggregation operator, not inside a
+string or a numeric/duration literal, and not inside a `{...}` label matcher
+unless it is the reserved `__name__` label. Erring towards extracting more,
+rather than fewer, names is what keeps it fail-closed: a name it cannot resolve
+is refused, not admitted.
+
+Two rules are load-bearing, because the extractor and the backend must agree
+about what will be evaluated:
+
+- a `#` comment is discarded as whitespace exactly as Prometheus's own lexer
+  discards it, before any string or brace state is entered. An earlier version
+  had no rule for `#`, so a quote opened inside a comment was scanned as a string
+  opener and swallowed the rest of the query - hiding a metric name from the
+  allow-list that the backend then evaluated anyway;
+- an exact `__name__="up"` matcher contributes its value as a referenced name,
+  while a regex (`__name__=~`) or negative (`__name__!=`, `__name__!~`) matcher
+  cannot be reduced to a fixed set, so it sets
+  `PromQlMetricReferences.HasUnresolvableNameMatcher` and the gate fails closed.
+  That shuts the bypass where a caller named a denied series only through
+  `__name__`.
 
 ## `GetCatalogAsync` degrades; it does not fail
 

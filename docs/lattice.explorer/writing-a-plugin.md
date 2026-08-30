@@ -15,7 +15,7 @@ option flag, no enum to extend, and no `switch` in the shell to edit.
 
 | Surface | Where it renders | Applicability |
 |---|---|---|
-| `ExplorerPluginSurface.Area` | The top-level area strip (Backups, Access, Schema, Tenants, My Tenant) | Always applicable; ordered by `Order` |
+| `ExplorerPluginSurface.Area` | The top-level area strip (Backups, Access, Schema, Tenants, My Tenant, Telemetry) | Always applicable; ordered by `Order` |
 | `ExplorerPluginSurface.Selection` | The detail panel for the selected tree, view, or tag index | Filtered by `SelectionKinds` |
 
 A selection plugin declares which selection kinds it applies to, so a tag-index
@@ -96,9 +96,16 @@ The break appears only in a consumer's restore, after publish.
 ### A distinct `Order`
 
 Two area plugins sharing an `Order` compiles and renders, and hands the relative
-position of two tabs to whatever tie-break the catalogue's sort happens to use.
-Current area values are 100 (Backups), 200 (Access), 300 (Schema), 400 (Tenants)
-and 500 (My Tenant). Pick an unused one.
+position of two tabs to the catalogue's tie-break (ordinal `Label`, then ordinal
+`PluginId`) rather than to intent. Current area values are 100 (Backups), 200
+(Access), 300 (Schema), 400 (Tenants), 500 (My Tenant) and 600 (Telemetry), so
+the next one is 700. Pick an unused one: `Assembled_area_plugins_all_declare_a_distinct_order`
+composes every area a head can register at once and fails on a collision.
+
+On the selection surface the constraint is narrower, because two selection
+plugins only compete when they apply to the same selection kind - Metrics and
+the tag-index browser both sit at 100 and never render together. Share an
+`Order` only when the `SelectionKinds` are disjoint.
 
 ### An access gate
 
@@ -107,18 +114,32 @@ choice for a surface that exposes no capability of its own to probe, but it is a
 decision to state rather than a default to inherit - say why in the member's
 remarks, as the Metrics plugin does.
 
-A denied plugin is **never mounted**, rather than mounted and hidden. The gate is
-advisory for presentation only: the server remains the sole enforcement point for
-every call the plugin then issues.
+The four gate states render differently, so pick the one that matches what you
+mean:
+
+| State | The shell renders |
+|---|---|
+| `Allowed` | The tab is active and the view is mounted. |
+| `Denied` | The tab is **visible but disabled** - greyed out, with a tooltip - and the view is never mounted. |
+| `AuthenticationRequired` | The tab stays clickable and opens the sign-in dialog rather than the view. |
+| `Unavailable` | No entry at all. This is the state that hides a surface, not `Denied`. |
+
+Gating is advisory and is for presentation only: a denied plugin's view is never
+mounted, but the server remains the sole enforcement point for every call the
+plugin then issues.
 
 ### Release plumbing
 
-A new package must be registered in two places or it silently never ships:
+A new package must be registered in two places or it never ships:
 
 - a tag glob in `.github/workflows/publish.yml`;
 - a row in **both** tables in `docs/RELEASING.md`.
 
-This is not optional housekeeping. `Orleans.Lattice.Explorer.UI` is already
+`PackageReleasePlumbingTests` enforces both directions - every package has a glob
+and a row in each table, and neither table names a package that does not exist -
+so the omission fails the build rather than surfacing at release time.
+
+This still matters more than it looks. `Orleans.Lattice.Explorer.UI` is already
 published and depends on the plugin packages, so an unpublished dependency breaks
 restore for every consumer of the whole Explorer family.
 
@@ -131,25 +152,37 @@ ships the token layer, the named breakpoints, and the adaptive primitives.
 
 | Family | Classes |
 |---|---|
-| Layout | `lx-root`, `lx-table` (+ `lx-cell`), `lx-cardlist` (+ `lx-card`, `lx-card-title`, `lx-card-fields`) |
+| Layout | `lx-root`, `lx-table` (+ `lx-table-caption`, `lx-cell-code`), `lx-cardlist` (+ `lx-card`, `lx-card-title`, `lx-card-fields`, `lx-card-field`, `lx-card-field-label`) |
 | Navigation | `lx-nav` family, including the drawer, bottom bar, sidebar and overflow variants |
 | Tabs | `lx-tabstrip`, `lx-tab`, `lx-tabpanel`, and their overflow variants |
 | Buttons | `lx-btn` with `lx-btn-primary`, `lx-btn-danger`, `lx-btn-icon`, `lx-btn-link` |
 | Dialogs | `lx-modal`, `lx-modal-backdrop`, `lx-modal-actions` |
 | Status | `lx-badge`, `lx-badge-muted` |
+| Breakpoint visibility | `lx-only-compact`, `lx-only-medium`, `lx-only-expanded`, `lx-medium-up`, `lx-medium-down`, `lx-expanded-up` |
 
 `lx-tab` and `lx-btn` spend `--lx-target-min`, so they meet the compact touch-target
 size without a plugin doing anything. A hand-rolled button will not.
 
 A plugin stylesheet should contain only what is genuinely specific to that plugin.
 The `explorer-` class prefix is **retired**: a hygiene test fails the build on any
-`explorer-*` class in a `.razor` class attribute or a stylesheet selector. If you find
-one in an old file you are copying, it is a leftover, not a pattern.
+`explorer-*` class named in a `.razor` `class` attribute, built as a string literal
+in a `.razor.cs` code-behind, or declared as a stylesheet selector. If you find
+one in an old file you are copying, it is a leftover, not a pattern. Namespace a
+plugin-specific rule `lx-{plugin}-` instead; the shared shell owns `lx-shell-`.
 
 **Never write a width media query.** Branch on the cascaded
 `LatticeAdaptiveContext.Breakpoint` - `Compact`, `Medium`, or `Expanded` - which
-the shell's `LatticeAdaptiveRoot` supplies. A hygiene test fails the build on a
-raw breakpoint value in a plugin stylesheet.
+the shell's `LatticeAdaptiveRoot` supplies, or compose the `lx-only-compact` /
+`lx-medium-up` / `lx-expanded-up` utilities above. Two hygiene gates hold the
+line, and they cover different files:
+
+- no stylesheet under `src/lattice.explorer/` may contain a width or height media
+  feature at all - only the breakpoint layer
+  (`DesignSystem/wwwroot/lattice-breakpoints.css`) may. Non-dimensional queries
+  such as `prefers-reduced-motion` are unaffected;
+- no `.cs`, `.razor` or `.js` source may hard-code a breakpoint width, whether as
+  a bare number in a `matchMedia` string or as a stray copy of the constant. Only
+  `DesignSystem/Tokens/LatticeBreakpoints.cs` may name one.
 
 If your plugin ships a stylesheet, its static assets are served from
 `_content/<AssemblyName>/`, and you must add the `<link>` to **both** heads:
@@ -157,8 +190,16 @@ If your plugin ships a stylesheet, its static assets are served from
 - `src/lattice.explorer/WebHosting/Components/App.razor`
 - `src/lattice.explorer/Maui/wwwroot/index.html`
 
-A missing or stale link 404s silently. There is no build error, no console error
-a reviewer would notice, and no failing test - just an unstyled panel.
+A **stale** link - one naming an assembly or file no Explorer project ships - is
+caught: `ExplorerPackagingIdentityTests` resolves every `_content/` reference in
+both heads against the set of packaged static web assets, so a renamed assembly
+or a moved asset fails the build.
+
+A **missing** link is not, and that is the failure mode to watch. Nothing asserts
+that every packaged stylesheet is actually referenced, so a plugin whose `<link>`
+was simply never added 404s nothing and fails nothing - there is no build error,
+no console error a reviewer would notice, and no failing test, just an unstyled
+panel.
 
 ## Testing
 
@@ -197,8 +238,9 @@ Tests must be reliable: nothing timing-dependent, ordering-dependent,
 - [ ] Lives in its own folder under `src/lattice.explorer/Plugins/`.
 - [ ] Registered in `Orleans.Lattice.slnx` and
       `src/lattice.explorer/Orleans.Lattice.Explorer.slnx`.
-- [ ] Descriptor is `static readonly`; `Order` is unused by any other plugin on
-      the same surface.
+- [ ] Descriptor is `static readonly`; `Order` is unused by any other plugin it
+      can render alongside - any other area plugin, or any selection plugin
+      sharing a `SelectionKinds` flag.
 - [ ] Declares its domain contract via `IExplorerPlugin<TDomain>`.
 - [ ] Declares an access gate, with a stated reason when it is `Allowed`.
 - [ ] No width media query; branches on the cascaded breakpoint.

@@ -12,6 +12,10 @@ The add-on `orleans.lattice.replication.grpc` meter is charted by the bundled Re
 
 The add-on `orleans.lattice.tenancy` meter is charted by the bundled Per-Tenant Observability dashboard. Its coverage is enforced the same way, from `Orleans.Lattice.Tenancy.Tests` (deriving from `MeterDashboardCoverageTestsBase`).
 
+### How to read the Tags column
+
+Each table's **Tags** column lists only the dimensions specific to that instrument. The derived `tenant` label is **not** repeated on every row: it is present on every instrument on every meter, and is described once in [The derived `tenant` label](#the-derived-tenant-label) below. A row that names no tag therefore still carries `tenant`.
+
 ### Per-operation vs per-record contract
 
 A throughput-style counter measures either **operations** or **records**, and the two diverge sharply on batched and bulk paths. Every such instrument below declares which it is, so a panel title can never imply a semantic the instrument does not deliver:
@@ -341,7 +345,7 @@ Every instrument is an **observable gauge** published on a fixed cadence (`Tenan
 
 | Instrument | Type | Tags | Dashboard | Panel(s) |
 |------------|------|------|-----------|----------|
-| `orleans.lattice.tenancy.tenants` | observable gauge (`{tenant}`) | (none - cluster aggregate) | Per-Tenant Observability | Registered tenants |
+| `orleans.lattice.tenancy.tenants` | observable gauge (`{tenant}`) | `tenant` = `_platform_` (cluster aggregate) | Per-Tenant Observability | Registered tenants |
 | `orleans.lattice.tenancy.usage.bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Stored bytes by tenant |
 | `orleans.lattice.tenancy.quota.bytes` | observable gauge (`By`) | `tenant` | Per-Tenant Observability | Stored bytes by tenant (quota overlay) |
 | `orleans.lattice.tenancy.usage.keys` | observable gauge (`{key}`) | `tenant` | Per-Tenant Observability | Live keys by tenant |
