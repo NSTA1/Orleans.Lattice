@@ -1,0 +1,76 @@
+@*
+    One direction of a tenant's cross-tenant grants.
+
+    Its own component rather than a render fragment built inside the access
+    view: the surface renders both directions, so a fragment-returning helper
+    would allocate a closure and a delegate per direction per render. A
+    component is instantiated once and diffed thereafter.
+
+    Every row states its lifecycle state three ways - a badge, the words for
+    what it does and does not currently permit, and the transitions it still
+    allows - so a pending offer can never be read as live access.
+*@
+
+@if (Rows.Count == 0)
+{
+    <p class="lxt-empty" role="status">@EmptyText</p>
+}
+else
+{
+    <ul class="lxt-grant-list">
+        @foreach (var grant in Rows)
+        {
+            <li class="lxt-grant @grant.StateClass" @key="grant.GrantId">
+                <div class="lxt-grant-head">
+                    <span class="lxt-badge @grant.StateClass">@grant.StateLabel</span>
+                    <span class="lxt-grant-parties">
+                        <span class="lxt-tenant-id">@grant.GranterTenantId</span>
+                        <span class="lxt-grant-arrow" aria-label="grants to">to</span>
+                        <span class="lxt-tenant-id">@grant.GranteeTenantId</span>
+                    </span>
+                </div>
+                <p class="lxt-grant-scope">
+                    <span class="lxt-field-label">Scope</span>
+                    <span class="lxt-code">@grant.Scope</span>
+                </p>
+                <p class="lxt-grant-authority @(grant.Authorizes ? "is-live" : "is-inert")">@grant.AuthorityText</p>
+                <div class="lxt-grant-actions">
+                    @if (grant.CanAnswer)
+                    {
+                        <button type="button" class="explorer-btn lxt-row-action"
+                                disabled="@Disabled"
+                                @onclick="@(() => State.ApproveGrantAsync(grant))">Approve</button>
+                        <button type="button" class="explorer-btn lxt-danger lxt-row-action"
+                                disabled="@Disabled"
+                                @onclick="@(() => State.RequestRejectGrant(grant))">Reject</button>
+                    }
+                    @if (grant.CanRevoke)
+                    {
+                        <button type="button" class="explorer-btn lxt-danger lxt-row-action"
+                                disabled="@Disabled"
+                                @onclick="@(() => State.RequestRevokeGrant(grant))">Withdraw</button>
+                    }
+                    @if (grant.IsClosed)
+                    {
+                        <span class="lxt-grant-terminal">Closed. No transition remains.</span>
+                    }
+                </div>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    /// <summary>The workspace the row actions run against.</summary>
+    [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+
+    /// <summary>The grants to render, in the order the cluster reported them.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<TenantGrantRow> Rows { get; set; } =
+        Array.Empty<TenantGrantRow>();
+
+    /// <summary>What to say when this direction carries no grants at all.</summary>
+    [Parameter] public string EmptyText { get; set; } = "No grants.";
+
+    /// <summary>Whether every transition control renders disabled.</summary>
+    private bool Disabled => State.Busy || !State.Allowed;
+}

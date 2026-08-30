@@ -1,0 +1,167 @@
+@*
+    The selected tenant's usage against its quota ceilings, and the editor that
+    authors those ceilings.
+
+    Every figure is rendered from an explicit reading state, never from a number
+    with a null coalesced to zero. An unbounded dimension says "unlimited" and
+    draws no bar, because a bar would have to invent a denominator; an unmeasured
+    dimension says "not measured" and draws no bar, because an empty one would
+    read as "you are using none of this" when the truth is that nothing is being
+    measured. A bar appears only where consumption and a ceiling are both real.
+
+    The enforcement scope is captioned beside the figures: a per-cluster reading
+    is genuinely not a global total.
+*@
+
+<div class="lxt-quotas">
+    <header class="lxt-surface-header">
+        <h3 class="lxt-surface-title">Quotas for @State.SelectedTenantId</h3>
+        <button type="button" class="explorer-btn"
+                disabled="@(State.Busy || !State.Allowed)"
+                @onclick="State.RefreshQuotasAsync">Refresh</button>
+    </header>
+
+    @if (State.QuotaUsage is not null)
+    {
+        <p class="lxt-caption" role="status">@State.QuotaScopeCaption</p>
+
+        @if (!State.QuotaHasUsage)
+        {
+            <p class="lxt-caption is-warning" role="status">@State.QuotaNoUsageCaption</p>
+        }
+
+        @if (State.QuotaReadingIsBehind)
+        {
+            <p class="lxt-caption is-warning" role="status">@TenantsWorkspace.QuotaReadingBehindCaption</p>
+        }
+
+        <ul class="lxt-dimensions">
+            @foreach (var row in State.QuotaRows)
+            {
+                <li class="lxt-dimension" @key="row.Kind">
+                    <div class="lxt-dimension-head">
+                        <span class="lxt-dimension-label">@row.Label</span>
+                        <span class="lxt-dimension-figures">
+                            <span class="lxt-usage @(row.State == TenantQuotaReadingState.NotMeasured || row.State == TenantQuotaReadingState.Unknown ? "is-absent" : null)">@row.UsageText</span>
+                            <span class="lxt-of">of</span>
+                            <span class="lxt-limit @(row.State == TenantQuotaReadingState.Unlimited || row.State == TenantQuotaReadingState.Unknown ? "is-absent" : null)">@row.LimitText</span>
+                        </span>
+                    </div>
+
+                    @if (row.ShowsBar)
+                    {
+                        <div class="lxt-bar" role="img"
+                             aria-label="@row.UsageText of @row.LimitText used">
+                            <div class="lxt-bar-fill @(row.IsOverLimit ? "is-over" : null)"
+                                 style="width: @row.BarPercent%"></div>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="lxt-no-bar" role="status">@NoBarExplanation(row.State)</p>
+                    }
+
+                    <dl class="lxt-dimension-detail">
+                        <div class="lxt-detail-pair">
+                            <dt>Burst ceiling</dt>
+                            <dd>@row.BurstLimitText</dd>
+                        </div>
+                        @if (row.OverageText.Length > 0)
+                        {
+                            <div class="lxt-detail-pair is-over">
+                                <dt>Over ceiling by</dt>
+                                <dd>@row.OverageText</dd>
+                            </div>
+                        }
+                        @if (row.MeteredOverageText.Length > 0)
+                        {
+                            <div class="lxt-detail-pair is-over">
+                                <dt>Accrued overage</dt>
+                                <dd>@row.MeteredOverageText</dd>
+                            </div>
+                        }
+                    </dl>
+                </li>
+            }
+        </ul>
+    }
+
+    <form class="lxt-quota-editor" @onsubmit="State.SaveQuotasAsync" @onsubmit:preventDefault="true">
+        <h4 class="lxt-editor-title">Author ceilings</h4>
+        <p class="lxt-hint">
+            Leave a field blank for an unbounded dimension - no ceiling at all. A ceiling of zero is
+            not the same thing: it is a real cap that permits nothing, under which all usage is
+            already overage.
+        </p>
+
+        <label class="lxt-field">
+            <span class="lxt-field-label">Max stored bytes</span>
+            <input class="lxt-input" type="text" inputmode="numeric" placeholder="@TenantQuotaFormat.UnlimitedText"
+                   value="@State.QuotaDraft.MaxBytes"
+                   @onchange="@(e => State.QuotaDraft.MaxBytes = e.Value?.ToString() ?? string.Empty)" />
+        </label>
+        <label class="lxt-field">
+            <span class="lxt-field-label">Max live keys</span>
+            <input class="lxt-input" type="text" inputmode="numeric" placeholder="@TenantQuotaFormat.UnlimitedText"
+                   value="@State.QuotaDraft.MaxKeys"
+                   @onchange="@(e => State.QuotaDraft.MaxKeys = e.Value?.ToString() ?? string.Empty)" />
+        </label>
+        <label class="lxt-field">
+            <span class="lxt-field-label">Max resident memory (bytes)</span>
+            <input class="lxt-input" type="text" inputmode="numeric" placeholder="@TenantQuotaFormat.UnlimitedText"
+                   value="@State.QuotaDraft.MaxMemoryBytes"
+                   @onchange="@(e => State.QuotaDraft.MaxMemoryBytes = e.Value?.ToString() ?? string.Empty)" />
+        </label>
+        <label class="lxt-field">
+            <span class="lxt-field-label">Max owned trees</span>
+            <input class="lxt-input" type="text" inputmode="numeric" placeholder="@TenantQuotaFormat.UnlimitedText"
+                   value="@State.QuotaDraft.MaxTreeCount"
+                   @onchange="@(e => State.QuotaDraft.MaxTreeCount = e.Value?.ToString() ?? string.Empty)" />
+        </label>
+        <label class="lxt-field">
+            <span class="lxt-field-label">Max operations per second</span>
+            <input class="lxt-input" type="text" inputmode="numeric" placeholder="@TenantQuotaFormat.UnlimitedText"
+                   value="@State.QuotaDraft.MaxOpsPerSecond"
+                   @onchange="@(e => State.QuotaDraft.MaxOpsPerSecond = e.Value?.ToString() ?? string.Empty)" />
+            <span class="lxt-hint">
+                The sampler takes no rate sample, so this dimension normally reports its ceiling with
+                no usage figure.
+            </span>
+        </label>
+        <label class="lxt-field">
+            <span class="lxt-field-label">Burst percent</span>
+            <input class="lxt-input" type="text" inputmode="numeric" placeholder="0"
+                   value="@State.QuotaDraft.BurstPercent"
+                   @onchange="@(e => State.QuotaDraft.BurstPercent = e.Value?.ToString() ?? string.Empty)" />
+            <span class="lxt-hint">
+                How far above each steady-state ceiling admission tolerates a burst. Blank is no
+                headroom; unlike a ceiling, this is a number rather than an absence.
+            </span>
+        </label>
+
+        <div class="lxt-editor-actions">
+            <button type="submit" class="explorer-btn lxt-primary"
+                    disabled="@(State.Busy || !State.Allowed)">Save ceilings</button>
+        </div>
+    </form>
+</div>
+
+@code {
+    /// <summary>The workspace this view renders.</summary>
+    [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+
+    // Interned literals, so explaining an absent bar allocates nothing per row
+    // per render.
+    private static string NoBarExplanation(TenantQuotaReadingState state) => state switch
+    {
+        TenantQuotaReadingState.Unlimited =>
+            "No ceiling on this dimension, so there is no fraction to draw.",
+        TenantQuotaReadingState.NotMeasured =>
+            "This reading carries no consumption figure for this dimension, so there is nothing to "
+            + "draw. That is not the same as consuming none of it.",
+        TenantQuotaReadingState.Unknown =>
+            "This dimension has neither a ceiling nor a consumption figure, so nothing is asserted "
+            + "about it.",
+        _ => string.Empty,
+    };
+}

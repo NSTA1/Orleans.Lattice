@@ -1,0 +1,83 @@
+@*
+    The selected tenant's allowed regions and its per-region residency.
+
+    Allowed and resident are two sets, not one: the allowed set is the
+    operator's to author, and residency - which the tenant's own admins manage -
+    is always a subset of it. Both are shown per region, so an operator can see
+    that a region is allowed but not yet resident, or resident and draining
+    after an authorization was revoked.
+
+    Revoking a region the tenant is still resident in is refused by the cluster.
+    The surface says so on the row before the call, and the workspace refuses it
+    locally with that rule rather than sending it to come back as a precondition
+    failure the wire has stripped of its reason.
+*@
+
+<div class="lxt-regions">
+    <header class="lxt-surface-header">
+        <h3 class="lxt-surface-title">Allowed regions for @State.SelectedTenantId</h3>
+        <button type="button" class="explorer-btn"
+                disabled="@(State.Busy || !State.Allowed)"
+                @onclick="State.RefreshRegionsAsync">Refresh</button>
+    </header>
+
+    @if (State.Regions.Count == 0)
+    {
+        <p class="lxt-empty" role="status">
+            This tenant is neither allowed into nor resident in any region. Add one below to
+            authorize it.
+        </p>
+    }
+    else
+    {
+        <ul class="lxt-region-list">
+            @foreach (var region in State.Regions)
+            {
+                <li class="lxt-region @(region.IsChanged ? "is-changed" : null)" @key="region.RegionId">
+                    <label class="lxt-region-allow">
+                        <input type="checkbox" checked="@region.Allow" disabled="@(State.Busy || !State.Allowed)"
+                               @onchange="@(e => State.SetRegionAllowed(region.RegionId, e.Value is true))" />
+                        <span class="lxt-region-id">@region.RegionId</span>
+                    </label>
+                    <span class="lxt-badge @region.StatusClass">@region.StatusLabel</span>
+                    <span class="lxt-region-allowed-now">Currently @region.AllowedLabel.ToLowerInvariant()</span>
+                    @if (region.WouldRevokeResident)
+                    {
+                        <p class="lxt-region-warning" role="alert">
+                            The tenant is still resident here, so this authorization cannot be
+                            revoked. @TenantRefusal.ResidentRegionRule
+                        </p>
+                    }
+                </li>
+            }
+        </ul>
+    }
+
+    <form class="lxt-region-add" @onsubmit="@(() => State.AddRegion())" @onsubmit:preventDefault="true">
+        <label class="lxt-field">
+            <span class="lxt-field-label">Authorize another region</span>
+            <input class="lxt-input" type="text"
+                   value="@State.AddRegionId"
+                   @onchange="@(e => State.AddRegionId = e.Value?.ToString() ?? string.Empty)" />
+        </label>
+        <button type="submit" class="explorer-btn" disabled="@(State.Busy || !State.Allowed)">Add region</button>
+    </form>
+
+    <div class="lxt-region-actions">
+        @if (State.WouldStrandResidency)
+        {
+            <p class="lxt-caption is-warning" role="alert">
+                One or more of the pending revocations would strand the tenant's residency, so the
+                change cannot be applied as it stands.
+            </p>
+        }
+        <button type="button" class="explorer-btn lxt-primary"
+                disabled="@(State.Busy || !State.Allowed || !State.HasRegionChanges)"
+                @onclick="State.RequestAuthorizeRegionsAsync">Apply allowed set</button>
+    </div>
+</div>
+
+@code {
+    /// <summary>The workspace this view renders.</summary>
+    [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+}

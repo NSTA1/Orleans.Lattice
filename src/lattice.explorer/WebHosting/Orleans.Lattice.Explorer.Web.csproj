@@ -54,6 +54,12 @@
       no extra package reference, while the area stays absent by default.
     -->
     <ProjectReference Include="..\Plugins\Schema\Orleans.Lattice.Explorer.Schema.csproj" />
+    <!--
+      The Tenants plugin, likewise self-contained. It brings the shared tenancy
+      seam transitively, so a head that surfaces tenant administration takes
+      this one reference. Withholding it ships no Tenants area.
+    -->
+    <ProjectReference Include="..\Plugins\Tenants\Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
   </ItemGroup>
 
 </Project>
