@@ -52,22 +52,28 @@ internal sealed class PolicyAccessGate(
         }
 
         // Control-plane isolation (issue #1103, extended for tenant-administration
-        // capabilities and the tenant registry). The reserved authorization
-        // namespace (sys-auth-*) governs the gate itself - membership and policy -
+        // capabilities, the tenant registry, and the cluster-wide scopeless
+        // capability sentinel). The reserved authorization namespace (sys-auth-*)
+        // governs the gate itself - membership and policy -
         // the tenant-administration capability namespace
         // (LatticeTenantAdminScope.TenantScopePrefix, an _lattice_ platform-owned
         // control-plane id) names the platform-operator and delegated-per-tenant-admin
-        // capabilities, and the tenant-registry system-data namespace (sys-tenant-*,
+        // capabilities, the tenant-registry system-data namespace (sys-tenant-*,
         // LatticeConstants.TenantRegistryTreePrefix) holds the cross-tenant registry -
-        // every tenant's admin subjects, quotas, placement, and grants. All three are
+        // every tenant's admin subjects, quotas, placement, and grants - and the
+        // all-trees sentinel ("*") is only ever the target of a scopeless
+        // cluster-wide capability request such as Telemetry (issue #1795), never of a
+        // data-plane read or write, which always names a real tree. All four are
         // control-plane, so their access decision must be independent of the data-plane
         // DefaultEffect. A non-bootstrap caller only reaches this point because it is
         // not a break-glass administrator; an unmatched request MUST fail closed to Deny
         // even under DefaultEffect=Allow. Without this, an unmatched admin request would
         // inherit Allow and any caller (including an anonymous one) could rewrite
         // membership and policy, seize a tenant-admin capability across tenants - a full
-        // control-plane takeover - or read the whole tenant registry through a broad
-        // data-plane grant, leaking every tenant's metadata cross-tenant. The
+        // control-plane takeover - read the whole tenant registry through a broad
+        // data-plane grant, leaking every tenant's metadata cross-tenant, or acquire the
+        // elevated all-tree observability capability on any permissively configured
+        // host. The
         // infrastructure's own reads and writes of these namespaces run system-origin
         // and never reach the gate, so they are unaffected; only a genuine external
         // control-plane request is governed here. An explicit matched Allow is honoured:
@@ -78,10 +84,13 @@ internal sealed class PolicyAccessGate(
         // (authorable because the id is not sys-auth-*), so a delegated per-tenant admin
         // is honoured only for its own tenant and can never inherit Allow for another's;
         // for the tenant registry it is an explicit rule an operator deliberately scoped
-        // at the registry tree. A cluster-wide all-trees (Tree:*) wildcard never
-        // satisfies any of the three, because the evaluator excludes these namespaces
+        // at the registry tree; and for the sentinel it is the cluster-wide grant
+        // LatticeScope.ClusterWide() authors, which lands in the "*" bucket and is
+        // resolved against it directly. A cluster-wide all-trees (Tree:*) wildcard never
+        // satisfies the first three, because the evaluator excludes those namespaces
         // from the all-trees tier (see PolicyEvaluator.ShouldConsultAllTrees).
         if (LatticeAuthReservedTrees.IsReserved(request.TreeId)
+            || IsClusterWideCapabilityScope(request.TreeId)
             || IsTenantAdminCapabilityNamespace(request.TreeId)
             || AuthConstants.IsTenantRegistryTree(request.TreeId))
         {
@@ -239,6 +248,21 @@ internal sealed class PolicyAccessGate(
     private static bool IsTenantAdminCapabilityNamespace(string treeId) =>
         treeId.StartsWith(LatticeTenantAdminScope.TenantScopePrefix, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Whether <paramref name="treeId"/> is the all-trees sentinel
+    /// (<see cref="LatticeScope.ClusterWideTreeId"/>), which as a <b>request target</b>
+    /// can only mean a scopeless cluster-wide capability such as
+    /// <see cref="LatticeOperation.Telemetry"/>: a data-plane read or write always
+    /// names a real tree, and the evaluator already refuses to fold the all-trees tier
+    /// into a request on the sentinel itself. Such a request is therefore governed with
+    /// control-plane isolation, so an elevated cluster-wide capability is never
+    /// inherited from a permissive data-plane <see cref="LatticeAuthOptions.DefaultEffect"/>
+    /// and is granted only by the explicit rule <see cref="LatticeScope.ClusterWide"/>
+    /// authors (issue #1795).
+    /// </summary>
+    private static bool IsClusterWideCapabilityScope(string treeId) =>
+        string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal);
+
     private bool IsBootstrapAdministrator(string subjectId)
     {
         var admins = options.CurrentValue.BootstrapAdministrators;
@@ -266,14 +290,17 @@ internal sealed class PolicyAccessGate(
             return new ValueTask<bool>(true);
         }
 
-        // Control-plane isolation: the reserved authorization namespace and the
-        // tenant-registry system-data namespace are never visible to a non-bootstrap
-        // caller by default effect - only an explicit matched allow grant makes them
-        // so. Mirror the enforcement path so a caller that cannot administer (or, for
-        // the registry, read) the namespace also cannot learn it exists. As on the
-        // AuthorizeAsync path, a cluster-wide all-trees wildcard never satisfies this,
-        // because the evaluator excludes both namespaces from the all-trees tier.
+        // Control-plane isolation: the reserved authorization namespace, the
+        // tenant-registry system-data namespace, and the all-trees capability sentinel
+        // are never visible to a non-bootstrap caller by default effect - only an
+        // explicit matched allow grant makes them so. Mirror the enforcement path so a
+        // caller that cannot administer (or, for the registry, read) the namespace also
+        // cannot learn it exists, and so a probe can never out-reach the decision the
+        // enforcement path would return for the same scope. As on the AuthorizeAsync
+        // path, a cluster-wide all-trees wildcard never satisfies the first two, because
+        // the evaluator excludes both namespaces from the all-trees tier.
         if (LatticeAuthReservedTrees.IsReserved(treeId)
+            || IsClusterWideCapabilityScope(treeId)
             || AuthConstants.IsTenantRegistryTree(treeId))
         {
             var reserved = engine.Evaluate(subject, treeId, operation, key: null, rangeStart: null, rangeEnd: null, out var match);

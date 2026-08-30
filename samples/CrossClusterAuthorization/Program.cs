@@ -29,8 +29,9 @@ using Orleans.Lattice.Samples.CrossClusterAuthorization;
 // is allowed to see.
 // ---------------------------------------------------------------------------
 
-// gRPC over plaintext HTTP/2 (h2c) for the loopback replication transport.
-AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+// gRPC over plaintext HTTP/2 (h2c) for the loopback replication transport: each
+// site binds Kestrel to HTTP/2 with no certificate and grpc-dotnet speaks h2c by
+// prior knowledge over an http:// address.
 
 const string Tree = SiteFactory.TreeName;
 const string Scheme = DemoAuthenticator.Scheme;

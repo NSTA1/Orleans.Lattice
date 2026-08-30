@@ -96,7 +96,19 @@ internal static class PolicyEvaluator
         // per-key (exact/prefix) rules the decision is uniform, so return a plain
         // allow/deny. The all-trees verdict is itself whole-tree (uniform across
         // keys), so it folds cleanly into this uniform branch.
-        if (!hasTree || !tree!.HasPerKeyRules)
+        //
+        // A request targeting the sentinel takes this branch unconditionally. Such a
+        // request is a scopeless cluster-wide capability check (see
+        // ShouldConsultAllTrees), so it is whole-scope by construction and no key is
+        // ever supplied: a per-key rule that happens to sit in the "*" bucket is
+        // inert for the all-trees tier (ResolveAllTrees resolves tree-wide only) and
+        // must not decide the capability either. Without this the bucket's
+        // HasPerKeyRules would divert a scopeless request into the per-key Filtered
+        // path below, whose winning match is by definition "unmatched" - so one
+        // unrelated key- or prefix-scoped rule, possibly belonging to another
+        // subject, would silently deny cluster telemetry for every caller under
+        // control-plane isolation (issue #1795).
+        if (!hasTree || !tree!.HasPerKeyRules || IsClusterWideCapabilityRequest(treeId))
         {
             var uniform = hasTree ? tree!.ResolvePoint(subject, operation, key: null, userBeatsGroup) : default;
             if (allTreesBucket is not null)
@@ -151,7 +163,7 @@ internal static class PolicyEvaluator
             return false;
         }
 
-        if (string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal))
+        if (IsClusterWideCapabilityRequest(treeId))
         {
             return false;
         }
@@ -159,6 +171,17 @@ internal static class PolicyEvaluator
         return !LatticeAuthReservedTrees.IsReserved(treeId)
             && !AuthConstants.IsTenantRegistryTree(treeId);
     }
+
+    /// <summary>
+    /// Whether the request targets the all-trees sentinel itself, which means a
+    /// <b>scopeless cluster-wide capability</b> check (notably
+    /// <see cref="LatticeOperation.Telemetry"/>) rather than a data-plane request:
+    /// an ordinary read or write always names a real tree. Such a request resolves
+    /// against the <c>"*"</c> bucket's tree-wide tier directly, with no second
+    /// all-trees fold and no per-key narrowing.
+    /// </summary>
+    private static bool IsClusterWideCapabilityRequest(string treeId) =>
+        string.Equals(treeId, LatticeScope.ClusterWideTreeId, StringComparison.Ordinal);
 
     /// <summary>
     /// Resolves the all-trees verdict: the whole-tree resolution of the <c>"*"</c>

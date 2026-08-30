@@ -39,9 +39,6 @@ internal sealed class LoadDriverOptions
     /// <summary>The maximum number of concurrent in-flight RPCs.</summary>
     public required int MaxInFlight { get; init; }
 
-    /// <summary>When set, allow an <c>http://</c> (h2c) address for local testing. Never used against ACA.</summary>
-    public required bool AllowInsecure { get; init; }
-
     /// <summary>
     /// Parses the command line, returning <see langword="null"/> when required
     /// arguments are missing or malformed (the caller then prints usage).
@@ -130,7 +127,6 @@ internal sealed class LoadDriverOptions
             ReadRatio = readRatio,
             PayloadBytes = payloadBytes,
             MaxInFlight = maxInFlight,
-            AllowInsecure = allowInsecure,
         };
     }
 

@@ -46,9 +46,10 @@ const int WebPort = 5080;    // HTTP endpoint you browse the console on
 const string AdminUser = "explorer-admin";
 const string AdminPassword = "explorer";
 
-// h2c (HTTP/2 without TLS) keeps the sample dependency-free - no dev cert - and
-// matches the insecure-loopback-dev transport the console is seeded with below.
-AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+// h2c (HTTP/2 without TLS) keeps the sample dependency-free - no dev cert. The
+// silo below binds Kestrel to HttpProtocols.Http2 with no certificate, and
+// grpc-dotnet speaks h2c by prior knowledge over an http:// address, so no
+// process-global AppContext switch is needed.
 
 // -- Identity-directory mode selection --------------------------------------
 // The Access area's subject picker and validated create form run against an

@@ -121,10 +121,11 @@ converged either way - the rule is gone from `site-b`.
 
 ## Notes on this sample
 
-- Uses plaintext HTTP/2 (h2c) on loopback with the process-wide
-  `Http2UnencryptedSupport` switch and receiver authentication turned off,
-  because this is a loopback demo with no secret material. Production must use
-  `https://` peer endpoints and leave receiver authentication on.
+- Uses plaintext HTTP/2 (h2c) on loopback - each site binds Kestrel to HTTP/2
+  with no certificate and grpc-dotnet speaks h2c by prior knowledge over an
+  `http://` address - and turns receiver authentication off, because this is a
+  loopback demo with no secret material. Production must use `https://` peer
+  endpoints and leave receiver authentication on.
 - The gRPC ports default to `17001` / `17002`; change them in `Program.cs` if
   those are taken on your machine.
 - The bootstrap administrator (`root-admin`) is declared before initialization so

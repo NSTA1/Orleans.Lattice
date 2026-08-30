@@ -10,15 +10,18 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Both checks authorize over the reserved auth policy tree.</b> Telemetry
-/// addresses no single tree, and neither does platform-operator authority. Scoping
-/// them to <see cref="LatticeAuthReservedTrees.PolicyTreeId"/> rather than the
-/// data-plane all-trees sentinel routes them through the gate's control-plane
-/// isolation, which denies an unmatched request regardless of the data-plane
-/// default effect - so neither can fail open under
-/// <c>LatticeAuthOptions.DefaultEffect = Allow</c>. Authorizing over <c>"*"</c>
-/// would take the ordinary data-plane path and hand an elevated cluster-wide
-/// capability to an anonymous caller on any permissively configured host.
+/// <b>The capability check authorizes over the cluster-wide sentinel; the operator
+/// check over the reserved auth policy tree.</b> Telemetry addresses no single tree,
+/// so its capability is authorized over <see cref="LatticeScope.ClusterWideTreeId"/> -
+/// exactly the scope <see cref="LatticeScope.ClusterWide"/> authors, so a grant
+/// written the documented way is honoured (issue #1795). Platform-operator authority
+/// is a different thing - authority over the gate itself - and stays on
+/// <see cref="LatticeAuthReservedTrees.PolicyTreeId"/>. Both route through the gate's
+/// control-plane isolation, which denies an unmatched request regardless of the
+/// data-plane default effect, so neither can fail open under
+/// <c>LatticeAuthOptions.DefaultEffect = Allow</c>: the gate treats a request on the
+/// sentinel as a scopeless capability request rather than a data-plane one, because
+/// a data-plane read or write always names a real tree.
 /// </para>
 /// <para>
 /// <b>A filtered allow is refused.</b> Neither capability is attached to a key, so
@@ -65,7 +68,9 @@ public sealed class TelemetryAccessAuthorizer
     /// Authorizes the caller for the cluster-wide
     /// <see cref="LatticeOperation.Telemetry"/> capability, throwing when it is not
     /// granted. No other operation - not even <see cref="LatticeOperation.Admin"/> -
-    /// confers it.
+    /// confers it. The check targets <see cref="LatticeScope.ClusterWideTreeId"/>, so
+    /// the grant <see cref="LatticeScope.ClusterWide"/> authors is the one that
+    /// authorizes it.
     /// </summary>
     /// <param name="cancellationToken">Cancels the authorization.</param>
     /// <returns>A task that completes when the caller may read cluster telemetry.</returns>
@@ -79,13 +84,13 @@ public sealed class TelemetryAccessAuthorizer
 
         var subject = await ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
         var request = new LatticeAccessRequest(
-            LatticeAuthReservedTrees.PolicyTreeId, LatticeOperation.Telemetry, subject);
+            LatticeScope.ClusterWideTreeId, LatticeOperation.Telemetry, subject);
         var decision = await _gate.AuthorizeAsync(in request, cancellationToken).ConfigureAwait(false);
 
         if (!decision.Allowed)
         {
             throw new LatticeAuthorizationDeniedException(
-                LatticeAuthReservedTrees.PolicyTreeId,
+                LatticeScope.ClusterWideTreeId,
                 LatticeOperation.Telemetry,
                 subject.SubjectId,
                 decision.Reason ?? "Reading cluster telemetry requires the Telemetry capability.");
@@ -94,7 +99,7 @@ public sealed class TelemetryAccessAuthorizer
         if (decision.KeyFilter is not null)
         {
             throw new LatticeAuthorizationDeniedException(
-                LatticeAuthReservedTrees.PolicyTreeId,
+                LatticeScope.ClusterWideTreeId,
                 LatticeOperation.Telemetry,
                 subject.SubjectId,
                 decision.Reason ?? "Cluster telemetry is not attached to a key, so a key-filtered "
