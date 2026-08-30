@@ -56,7 +56,19 @@ shared explorer libraries it builds on restore transitively:
   connection configuration (the state-API endpoint and related settings), so a
   deployment can ship its target without an interactive first-run step.
 - **`UseEnvironmentBootstrap`** - default `true`; when set, the host also reads
-  connection configuration from the environment at startup.
+  the connection endpoint from the environment at startup.
+- **`AllowEnvironmentCredentialSeed`** - default `false`. The environment
+  bootstrap can also read a sign-in credential, but the web head's credential
+  store is per browser, so a seeded credential would sign every anonymous
+  visitor in as the operator. It is therefore withheld unless you opt in here,
+  which is only appropriate on a host reachable by exactly one trusted operator.
+- **`AllowInteractiveEndpointConfiguration`** - default `false`. The connection
+  configuration is a singleton shared by every circuit, so an unauthenticated
+  visitor who could change it would be able to repoint the deployment at a host
+  they control. Interactive changes are refused by the configuration store and
+  the connection-settings affordance is withheld; configure the endpoint with
+  `ConfigFilePath` or the environment bootstrap instead. Opt in only for a web
+  head that is genuinely configured through its own UI by a trusted operator.
 - **`EnableSchemaArea`** - default `false`. The schema-management area is withheld
   from the switcher for now because its versioning UI cannot yet express what
   differs between schema versions. Set it to `true` to surface the area; the

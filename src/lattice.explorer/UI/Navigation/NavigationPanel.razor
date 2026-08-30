@@ -1,18 +1,23 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Configuration
 @using Orleans.Lattice.Explorer.Core.DeadLetter
+@using Orleans.Lattice.Explorer.Core.Navigation
 @using Orleans.Lattice.Explorer.Core.Session
 @implements IDisposable
 @inject ICatalogReader CatalogReader
 @inject IDeadLetterReader DeadLetterReader
 @inject IExplorerSelection Selection
 @inject IExplorerSession Session
+@inject IServiceProvider Services
 @inject IUiPreferenceStore Preferences
 
 <nav class="explorer-nav" aria-label="Tree and view catalog">
     <header class="explorer-nav-header">
         <div class="explorer-nav-actions">
-            <CogButton Title="Connection settings" OnClick="OpenConfig" />
+            @if (_navOptions.AllowEndpointConfiguration)
+            {
+                <CogButton Title="Connection settings" OnClick="OpenConfig" />
+            }
 
             <button type="button"
                     class="explorer-nav-refresh"
@@ -162,6 +167,8 @@
 @code {
     private const int PageSize = 100;
 
+    private ExplorerNavigationOptions _navOptions = new();
+
     private readonly List<CatalogItem> _items = new();
 
     // Per-tree dead-letter-queue counts for the at-a-glance DLQ badge, keyed by
@@ -198,6 +205,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _navOptions = (ExplorerNavigationOptions?)Services.GetService(typeof(ExplorerNavigationOptions))
+            ?? new ExplorerNavigationOptions();
         Selection.SelectionChanged += OnSelectionChanged;
         Session.ConfigurationChanged += OnConfigurationChanged;
 
@@ -358,6 +367,14 @@
 
     private void OpenConfig()
     {
+        if (!_navOptions.AllowEndpointConfiguration)
+        {
+            // The affordance is withheld, but a circuit handler stays invokable, so
+            // do not open a dialog whose save the store would refuse. Presentation
+            // only - the enforcing check lives at the configuration store.
+            return;
+        }
+
         _showConfig = true;
         StateHasChanged();
     }
