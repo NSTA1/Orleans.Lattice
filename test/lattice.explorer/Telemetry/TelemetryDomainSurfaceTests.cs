@@ -1,0 +1,252 @@
+using System.Reflection;
+using Orleans.Lattice.Api.Telemetry;
+using Orleans.Lattice.Explorer.Telemetry;
+
+namespace Orleans.Lattice.Explorer.Tests.Telemetry;
+
+/// <summary>
+/// The D3 guard for telemetry: nothing a telemetry plugin can reach through its
+/// declared domain contract names a control-API or transport type.
+/// <para>
+/// The test walks the whole transitive public surface of
+/// <see cref="ITelemetryDomain"/> - every property type, method return type,
+/// parameter type, and generic argument, recursively - and fails on any type that
+/// comes from the control-API contract assembly, its gRPC binding, the gRPC
+/// libraries, or the Orleans serialization stack. A future edit that returns a
+/// wire record straight out of the domain model therefore breaks this test rather
+/// than quietly widening what a plugin reaches.
+/// </para>
+/// </summary>
+[TestFixture]
+public class TelemetryDomainSurfaceTests
+{
+    /// <summary>
+    /// The assemblies whose types are wire or transport vocabulary. A type from
+    /// any of them is exactly what the seam exists to keep out of a plugin.
+    /// </summary>
+    private static readonly string[] ForbiddenAssemblies =
+    [
+        "Orleans.Lattice.Api.Abstractions",
+        "Orleans.Lattice.Api.Telemetry.Grpc",
+        "Grpc.Core",
+        "Grpc.Core.Api",
+        "Grpc.Net.Client",
+        "Orleans.Serialization",
+        "Orleans.Serialization.Abstractions",
+        "Orleans.Core.Abstractions",
+    ];
+
+    [Test]
+    public void No_wire_type_is_reachable_from_the_plugin_facing_domain_model()
+    {
+        var leaks = FindForbiddenTypes(typeof(ITelemetryDomain));
+
+        Assert.That(
+            leaks,
+            Is.Empty,
+            $"a control-API or transport type is reachable from {nameof(ITelemetryDomain)}: "
+            + string.Join(", ", leaks));
+    }
+
+    [Test]
+    public void No_wire_type_is_reachable_from_the_operations_surface()
+    {
+        var leaks = FindForbiddenTypes(typeof(ITelemetryQueryService));
+
+        Assert.That(
+            leaks,
+            Is.Empty,
+            $"a control-API or transport type is reachable from {nameof(ITelemetryQueryService)}: "
+            + string.Join(", ", leaks));
+    }
+
+    [Test]
+    public void The_transport_seam_is_not_reachable_from_the_domain_model()
+    {
+        var reachable = Reachable(typeof(ITelemetryDomain));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reachable, Has.No.Member(typeof(ITelemetryQueryClient)));
+            Assert.That(reachable, Has.No.Member(typeof(GrpcTelemetryQueryClient)));
+        });
+    }
+
+    [Test]
+    public void The_transport_seam_does_name_wire_types_so_the_boundary_is_real()
+    {
+        // The mirror of the guard above: the wire vocabulary genuinely exists and
+        // is genuinely used - it just stops at the client. Without this, the guard
+        // could pass simply because nothing anywhere touched the wire.
+        var wireTypes = FindForbiddenTypes(typeof(ITelemetryQueryClient));
+
+        Assert.That(
+            wireTypes,
+            Is.Not.Empty,
+            "the transport seam is expected to speak the control API's own types");
+    }
+
+    [Test]
+    public void Every_telemetry_domain_member_is_covered_by_the_walk()
+    {
+        // Guards the guard: if the domain contract grows a member shape the walk
+        // does not inspect, the closure would silently stop covering it.
+        var reachable = Reachable(typeof(ITelemetryDomain));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reachable, Has.Member(typeof(ITelemetryQueryService)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryCatalog)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryQuery)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryBounds)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryInstrument)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryRequest)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryResult)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetrySeries)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryPoint)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryLabel)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryScope)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryVisibility)));
+            Assert.That(reachable, Has.Member(typeof(ExplorerTelemetryBoundsViolation)));
+            Assert.That(reachable, Has.Member(typeof(TelemetryQueryStatus)));
+        });
+    }
+
+    [Test]
+    public void The_forbidden_set_actually_matches_a_known_wire_type() =>
+        // Guards the guard the other way: a typo in an assembly name would make
+        // every check above pass vacuously.
+        Assert.Multiple(() =>
+        {
+            Assert.That(IsForbidden(typeof(TelemetryQueryCatalog)), Is.True);
+            Assert.That(IsForbidden(typeof(TelemetryQueryResponse)), Is.True);
+            Assert.That(IsForbidden(typeof(Grpc.Core.RpcException)), Is.True);
+        });
+
+    private static IReadOnlyList<string> FindForbiddenTypes(Type root) =>
+    [
+        .. Reachable(root)
+            .Where(IsForbidden)
+            .Select(type => type.FullName ?? type.Name)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal),
+    ];
+
+    private static bool IsForbidden(Type type)
+    {
+        var assembly = type.Assembly.GetName().Name;
+        return assembly is not null && ForbiddenAssemblies.Contains(assembly, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The transitive closure of types reachable from <paramref name="root"/>'s
+    /// public surface. Recursion continues through types the Explorer itself
+    /// owns; every encountered type is recorded either way, so a wire type is
+    /// caught even though the walk does not descend into it.
+    /// </summary>
+    private static HashSet<Type> Reachable(Type root)
+    {
+        var seen = new HashSet<Type>();
+        var pending = new Stack<Type>();
+        pending.Push(root);
+
+        while (pending.Count > 0)
+        {
+            var type = Normalize(pending.Pop());
+            if (type is null || !seen.Add(type))
+            {
+                continue;
+            }
+
+            foreach (var argument in type.GetGenericArguments())
+            {
+                pending.Push(argument);
+            }
+
+            // Only descend through the Explorer's own vocabulary: the framework
+            // types in between (Task, IReadOnlyList, string) have surfaces of
+            // their own that say nothing about this seam.
+            if (!IsExplorerOwned(type))
+            {
+                continue;
+            }
+
+            const BindingFlags Flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+                | BindingFlags.DeclaredOnly;
+
+            foreach (var property in type.GetProperties(Flags))
+            {
+                pending.Push(property.PropertyType);
+                foreach (var parameter in property.GetIndexParameters())
+                {
+                    pending.Push(parameter.ParameterType);
+                }
+            }
+
+            foreach (var field in type.GetFields(Flags))
+            {
+                pending.Push(field.FieldType);
+            }
+
+            foreach (var method in type.GetMethods(Flags))
+            {
+                pending.Push(method.ReturnType);
+                foreach (var parameter in method.GetParameters())
+                {
+                    pending.Push(parameter.ParameterType);
+                }
+            }
+
+            if (type.BaseType is { } baseType)
+            {
+                pending.Push(baseType);
+            }
+        }
+
+        return seen;
+    }
+
+    /// <summary>
+    /// Unwraps arrays, by-ref and pointer types, and nullable value types down to
+    /// the type that actually carries a surface, and drops the ones that carry
+    /// none (generic parameters, void, primitives, string).
+    /// </summary>
+    private static Type? Normalize(Type type)
+    {
+        while (type.IsArray || type.IsByRef || type.IsPointer)
+        {
+            var element = type.GetElementType();
+            if (element is null)
+            {
+                return null;
+            }
+
+            type = element;
+        }
+
+        if (type.IsGenericParameter)
+        {
+            return null;
+        }
+
+        var underlying = Nullable.GetUnderlyingType(type);
+        if (underlying is not null)
+        {
+            type = underlying;
+        }
+
+        if (type == typeof(void) || type.IsPrimitive || type == typeof(string) || type == typeof(object))
+        {
+            return null;
+        }
+
+        return type;
+    }
+
+    private static bool IsExplorerOwned(Type type)
+    {
+        var assembly = type.Assembly.GetName().Name;
+        return assembly is not null
+            && assembly.StartsWith("Orleans.Lattice.Explorer", StringComparison.Ordinal);
+    }
+}
