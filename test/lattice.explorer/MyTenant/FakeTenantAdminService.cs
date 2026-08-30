@@ -3,21 +3,27 @@ using Orleans.Lattice.Explorer.Plugins.Tenancy;
 namespace Orleans.Lattice.Explorer.Tests.MyTenant;
 
 /// <summary>
-/// A hand-rolled <see cref="ITenantAdminService"/> fake: each operation returns
-/// a canned result the test scripts, and every call is recorded so a test can
-/// assert not only what came back but <em>what the workspace asked for</em>.
+/// A hand-rolled <see cref="ITenantSelfAdminService"/> fake: each operation
+/// returns a canned result the test scripts, and every call is recorded so a
+/// test can assert not only what came back but <em>what the workspace asked
+/// for</em>.
 /// <para>
 /// That recording is what makes the tenant-isolation tests real. Asserting that
 /// a refused approval produced an error message would pass even if the call had
 /// gone out anyway; asserting that <see cref="ApproveCalls"/> stayed empty
 /// proves nothing left the process.
 /// </para>
+/// <para>
+/// It implements the narrowed contract the plugin is handed, not the full
+/// <see cref="ITenantAdminService"/>, so it carries no stub for an operator-only
+/// operation: those are not on the interface at all (issue #1785).
+/// </para>
 /// </summary>
 /// <remarks>
 /// Every reply is a fixed literal from <see cref="MyTenantSample"/>, so no test
 /// built on this fake depends on timing, ordering, or a live sampler.
 /// </remarks>
-internal sealed class FakeTenantAdminService : ITenantAdminService
+internal sealed class FakeTenantAdminService : ITenantSelfAdminService
 {
     /// <summary>One recorded grant transition: which one, and on which grant.</summary>
     /// <param name="Granter">The granting tenant named in the call.</param>
@@ -132,33 +138,6 @@ internal sealed class FakeTenantAdminService : ITenantAdminService
         return Task.FromResult(Detail);
     }
 
-    public Task<TenantOperationResult<ExplorerTenantCreation>> CreateTenantAsync(
-        string tenantId,
-        IReadOnlyCollection<string>? adminSubjects = null,
-        CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("The My Tenant plugin never creates a tenant.");
-
-    public Task<TenantOperationResult<ExplorerTenantStatusChange>> SuspendTenantAsync(
-        string tenantId,
-        CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("The My Tenant plugin never suspends a tenant.");
-
-    public Task<TenantOperationResult<ExplorerTenantStatusChange>> ResumeTenantAsync(
-        string tenantId,
-        CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("The My Tenant plugin never resumes a tenant.");
-
-    public Task<TenantOperationResult<ExplorerTenantDeletion>> DeleteTenantAsync(
-        string tenantId,
-        CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("The My Tenant plugin never deletes a tenant.");
-
-    public Task<TenantOperationResult<ExplorerTenantQuotaLimits>> SetQuotasAsync(
-        string tenantId,
-        ExplorerTenantQuotaLimits limits,
-        CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("Authoring quotas is an operator action, not a tenant one.");
-
     public Task<TenantOperationResult<ExplorerTenantQuotaUsage>> GetQuotaUsageAsync(
         string tenantId,
         CancellationToken cancellationToken = default)
@@ -166,12 +145,6 @@ internal sealed class FakeTenantAdminService : ITenantAdminService
         TenantIdsTouched.Add(tenantId);
         return Task.FromResult(QuotaUsage);
     }
-
-    public Task<TenantOperationResult<IReadOnlyList<string>>> AuthorizeAllowedRegionsAsync(
-        string tenantId,
-        IReadOnlyCollection<string> allowedRegions,
-        CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException("Widening the allowed set is an operator action.");
 
     public Task<TenantOperationResult<ExplorerTenantResidencyChange>> SetResidencyAsync(
         string tenantId,

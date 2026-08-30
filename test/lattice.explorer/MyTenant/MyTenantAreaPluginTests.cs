@@ -46,9 +46,11 @@ public sealed class MyTenantAreaPluginTests
     [Test]
     public void The_declared_domain_contract_is_the_tenancy_seam_and_nothing_wider() =>
         // The whole reach of the surface, stated once in the plugin's signature
-        // (epic decision D3). TenancyDomainSurfaceTests separately guards that
-        // no wire type is reachable from it.
-        Assert.That(((IExplorerPlugin)CreatePlugin()).DomainContract, Is.EqualTo(typeof(ITenancyDomain)));
+        // (epic decision D3). It is the narrowed, tenant-administrator half of
+        // the tenancy seam - not the operator-facing ITenancyDomain the Tenants
+        // plugin declares (issue #1785). TenancyDomainSurfaceTests separately
+        // guards that no wire type is reachable from it.
+        Assert.That(((IExplorerPlugin)CreatePlugin()).DomainContract, Is.EqualTo(typeof(IMyTenantDomain)));
 
     [Test]
     public void The_view_is_the_plugins_own_panel() =>

@@ -5,9 +5,17 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// The default <see cref="ITenancyDomain"/>: the host-side adapter that binds
-/// the tenancy plugins' declared contract to the three things they actually
+/// the tenancy plugins' declared contracts to the three things they actually
 /// need - the tenancy operations, the availability probe, and the Explorer's
 /// existing tenant-identity seam.
+/// <para>
+/// It serves both halves of the seam from one instance. Through
+/// <see cref="ITenancyDomain"/> it hands a platform-operator surface the full
+/// <see cref="ITenantAdminService"/>; through <see cref="IMyTenantDomain"/> it
+/// hands a tenant-administrator surface only
+/// <see cref="ITenantSelfAdminService"/>, so the operator-only operations are
+/// not reachable from that plugin's source at all.
+/// </para>
 /// <para>
 /// This type, not a panel, is where a tenancy plugin's reach is decided, which
 /// is the point of the controlled domain seam.
@@ -42,6 +50,15 @@ public sealed class TenancyDomain(
 
     /// <inheritdoc />
     public ITenantAdminService Tenants => _tenants;
+
+    /// <summary>
+    /// The same operations surface seen through the tenant-administrator
+    /// contract, which is the whole of what a surface holding
+    /// <see cref="IMyTenantDomain"/> can call. Implemented explicitly because the
+    /// two contracts return different (widening) types for the same underlying
+    /// service.
+    /// </summary>
+    ITenantSelfAdminService IMyTenantDomain.Tenants => _tenants;
 
     /// <inheritdoc />
     public bool IsTenancyEnabled => _switcher is { IsActive: true };

@@ -34,6 +34,7 @@ public sealed class ExplorerMyTenantServiceCollectionExtensionsTests
         Assert.Multiple(() =>
         {
             Assert.That(services.Any(d => d.ServiceType == typeof(ITenancyDomain)), Is.True);
+            Assert.That(services.Any(d => d.ServiceType == typeof(IMyTenantDomain)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(ITenantAdminService)), Is.True);
             Assert.That(services.Any(d => d.ServiceType == typeof(IMyTenantAccessGate)), Is.True);
         });
@@ -225,7 +226,7 @@ public sealed class ExplorerMyTenantServiceCollectionExtensionsTests
             Assert.That(plugins, Has.Length.EqualTo(1));
             Assert.That(plugins[0], Is.InstanceOf<MyTenantAreaPlugin>());
             Assert.That(plugins[0].Descriptor.PluginId, Is.EqualTo(MyTenantPluginKeys.PluginId));
-            Assert.That(plugins[0].DomainContract, Is.EqualTo(typeof(ITenancyDomain)));
+            Assert.That(plugins[0].DomainContract, Is.EqualTo(typeof(IMyTenantDomain)));
             Assert.That(plugins[0].AccessGate, Is.InstanceOf<IMyTenantAccessGate>());
         });
     }

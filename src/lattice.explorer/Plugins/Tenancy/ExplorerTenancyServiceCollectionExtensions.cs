@@ -46,10 +46,19 @@ public static class ExplorerTenancyServiceCollectionExtensions
         services.TryAddScoped<ITenantAdminService, TenantAdminService>();
         services.TryAddScoped<ITenancyAvailability, TenancyAvailability>();
 
-        // The controlled domain model the tenancy plugins declare. Registered
-        // here rather than by the head, so the one contract the host may resolve
-        // for a tenancy plugin ships with the package that defines it.
+        // The controlled domain models the tenancy plugins declare. Registered
+        // here rather than by the head, so the contracts the host may resolve for
+        // a tenancy plugin ship with the package that defines them.
+        //
+        // Two contracts, one instance: a platform-operator surface resolves
+        // ITenancyDomain and gets the full operations surface, while a
+        // tenant-administrator surface resolves IMyTenantDomain and gets only the
+        // narrowed one (issue #1785). The narrow registration is derived from the
+        // wide one rather than newed separately, so a head that substitutes
+        // ITenancyDomain cannot leave the two halves pointing at different
+        // objects.
         services.TryAddScoped<ITenancyDomain, TenancyDomain>();
+        services.TryAddScoped<IMyTenantDomain>(provider => provider.GetRequiredService<ITenancyDomain>());
         return services;
     }
 }

@@ -23,9 +23,17 @@ namespace Orleans.Lattice.Explorer.Tests.MyTenant;
 /// </summary>
 /// <remarks>
 /// A source scan rather than a reflection walk, because the point is that the
-/// call is never <em>written</em>: the seam exposes all of these on the one
-/// <see cref="ITenantAdminService"/> the plugin holds, so nothing in the type
-/// system stops a future edit from reaching for one.
+/// call is never <em>written</em>.
+/// <para>
+/// Since issue #1785 the type system holds this line first: the plugin is handed
+/// <see cref="IMyTenantDomain"/>, whose operations surface is
+/// <see cref="ITenantSelfAdminService"/>, and none of the six is on it - so a
+/// call to one no longer compiles. <c>TenancyPrivilegeSplitTests</c> pins that
+/// narrowing directly. This fixture is kept because it is what fails if the
+/// narrowing is ever undone (a plugin re-widened to
+/// <see cref="ITenancyDomain"/> would compile again), and because it also covers
+/// the Razor markup, which no type check reaches.
+/// </para>
 /// </remarks>
 [TestFixture]
 public sealed class MyTenantPrivilegeBoundaryTests
@@ -34,9 +42,9 @@ public sealed class MyTenantPrivilegeBoundaryTests
 
     /// <summary>
     /// The operations the tenant-administration facade reserves for a platform
-    /// operator. Every one of them is reachable from the
-    /// <see cref="ITenantAdminService"/> the plugin holds, and none of them may
-    /// be called by it.
+    /// operator. Since issue #1785 none of them is reachable from the
+    /// <see cref="ITenantSelfAdminService"/> the plugin holds, and none of them
+    /// may be called by it.
     /// </summary>
     private static readonly string[] OperatorOnlyOperations =
     [

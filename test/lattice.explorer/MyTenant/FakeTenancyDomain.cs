@@ -5,22 +5,24 @@ using Orleans.Lattice.Explorer.Plugins.Tenancy;
 namespace Orleans.Lattice.Explorer.Tests.MyTenant;
 
 /// <summary>
-/// A scriptable <see cref="ITenancyDomain"/> over
+/// A scriptable <see cref="IMyTenantDomain"/> over
 /// <see cref="FakeTenantAdminService"/>: the plugin's whole reach, under a
 /// test's control.
 /// <para>
 /// Because the plugin declares this one contract and receives nothing else from
 /// the host, substituting it here exercises the surface exactly as the shell
-/// drives it - there is no second channel to the cluster to stub out.
+/// drives it - there is no second channel to the cluster to stub out. It is the
+/// narrowed contract, so the operator-only reach is absent by construction
+/// rather than stubbed out (issue #1785).
 /// </para>
 /// </summary>
-internal sealed class FakeTenancyDomain : ITenancyDomain
+internal sealed class FakeTenancyDomain : IMyTenantDomain
 {
     /// <summary>The operations surface every call lands on.</summary>
     public FakeTenantAdminService Service { get; } = new();
 
     /// <inheritdoc />
-    public ITenantAdminService Tenants => Service;
+    public ITenantSelfAdminService Tenants => Service;
 
     /// <inheritdoc />
     public bool IsTenancyEnabled { get; set; } = true;
@@ -34,9 +36,6 @@ internal sealed class FakeTenancyDomain : ITenancyDomain
 
     /// <summary>The decision the availability probe returns.</summary>
     public ExplorerPluginAccess Availability { get; set; } = ExplorerPluginAccess.Allowed;
-
-    /// <summary>Whether the caller validates as a platform operator.</summary>
-    public bool IsOperator { get; set; }
 
     /// <summary>Whether a tenant switch is honoured.</summary>
     public bool AllowSwitch { get; set; } = true;
@@ -54,10 +53,6 @@ internal sealed class FakeTenancyDomain : ITenancyDomain
     public ValueTask<ExplorerPluginAccess> ProbeAvailabilityAsync(
         CancellationToken cancellationToken = default) =>
         new(Availability);
-
-    /// <inheritdoc />
-    public ValueTask<bool> IsPlatformOperatorAsync(CancellationToken cancellationToken = default) =>
-        new(IsOperator);
 
     /// <inheritdoc />
     public ValueTask<bool> SwitchTenantAsync(

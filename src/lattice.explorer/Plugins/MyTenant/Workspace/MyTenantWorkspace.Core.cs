@@ -9,8 +9,11 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 /// re-deriving the state the others depend on.
 /// <para>
 /// Everything it does runs against its single controlled domain contract
-/// (<see cref="ITenancyDomain"/>) plus the keyed plugin access store; it holds no
-/// connection, no channel, and no container (epic decision D3).
+/// (<see cref="IMyTenantDomain"/>) plus the keyed plugin access store; it holds
+/// no connection, no channel, and no container (epic decision D3). That contract
+/// is the tenant-administrator one: authoring quota ceilings, widening the
+/// allowed region set, switching tenant, and the tenant lifecycle are not on it,
+/// so this surface cannot call them at all (issue #1785).
 /// </para>
 /// <para>
 /// <b>Every read and every mutation is scoped to one tenant:
@@ -29,7 +32,7 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 /// </remarks>
 public sealed partial class MyTenantWorkspace : IDisposable
 {
-    private readonly ITenancyDomain _domain;
+    private readonly IMyTenantDomain _domain;
     private readonly IExplorerPluginAccessStore _store;
 
     private bool _initialized;
@@ -43,7 +46,7 @@ public sealed partial class MyTenantWorkspace : IDisposable
     /// <param name="domain">The plugin's controlled domain contract. Must not be <see langword="null"/>.</param>
     /// <param name="store">The keyed plugin access store. Must not be <see langword="null"/>.</param>
     /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
-    public MyTenantWorkspace(ITenancyDomain domain, IExplorerPluginAccessStore store)
+    public MyTenantWorkspace(IMyTenantDomain domain, IExplorerPluginAccessStore store)
     {
         ArgumentNullException.ThrowIfNull(domain);
         ArgumentNullException.ThrowIfNull(store);

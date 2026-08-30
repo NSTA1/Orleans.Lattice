@@ -61,6 +61,32 @@ public class TenancyDomainSurfaceTests
     }
 
     [Test]
+    public void No_wire_type_is_reachable_from_the_narrowed_plugin_facing_domain_model()
+    {
+        // The tenant-administrator half of the seam is a domain contract in its
+        // own right, so it carries the same obligation as the wide one.
+        var leaks = FindForbiddenTypes(typeof(IMyTenantDomain));
+
+        Assert.That(
+            leaks,
+            Is.Empty,
+            $"a control-API or transport type is reachable from {nameof(IMyTenantDomain)}: "
+            + string.Join(", ", leaks));
+    }
+
+    [Test]
+    public void No_wire_type_is_reachable_from_the_narrowed_operations_surface()
+    {
+        var leaks = FindForbiddenTypes(typeof(ITenantSelfAdminService));
+
+        Assert.That(
+            leaks,
+            Is.Empty,
+            $"a control-API or transport type is reachable from {nameof(ITenantSelfAdminService)}: "
+            + string.Join(", ", leaks));
+    }
+
+    [Test]
     public void The_transport_seam_is_not_reachable_from_the_domain_model()
     {
         var reachable = Reachable(typeof(ITenancyDomain));
@@ -182,6 +208,18 @@ public class TenancyDomainSurfaceTests
             if (type.BaseType is { } baseType)
             {
                 pending.Push(baseType);
+            }
+
+            // An interface's base interfaces are part of its surface, and
+            // reflection does not fold them into GetMethods/GetProperties the way
+            // class inheritance is folded in. Without this the walk would stop at
+            // the first interface in a hierarchy - and since the tenancy seam
+            // split into ITenancyDomain : IMyTenantDomain and
+            // ITenantAdminService : ITenantSelfAdminService, that would silently
+            // exclude most of the operations surface from the D3 guard.
+            foreach (var contract in type.GetInterfaces())
+            {
+                pending.Push(contract);
             }
         }
 
