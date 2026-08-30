@@ -40,23 +40,23 @@ public sealed class TenantMetricDimensionHygieneTests
     private static readonly (string File, string TagExpression, bool PlatformSentinel)[] PreBuiltTagCollections =
     [
         // (tree, shard, tenant) built once per activation.
-        (@"src\lattice\BPlusTree\Grains\ShardRootGrain.Hotness.cs", "GetMetricTags()", false),
-        (@"src\lattice\BPlusTree\Grains\ShardRootGrain.Hotness.cs", "tags", false),
+        ("src/lattice/BPlusTree/Grains/ShardRootGrain.Hotness.cs", "GetMetricTags()", false),
+        ("src/lattice/BPlusTree/Grains/ShardRootGrain.Hotness.cs", "tags", false),
         // (tree, shard, tenant) built once per replay.
-        (@"src\lattice\BPlusTree\Grains\SnapshotLeafGrain.cs", "tags", false),
+        ("src/lattice/BPlusTree/Grains/SnapshotLeafGrain.cs", "tags", false),
         // (tree, state, previous_state, tenant [, partition][, shard]) built per transition.
-        (@"src\lattice\BPlusTree\Grains\WalSaturationSampler.cs", "tags.ToArray()", false),
+        ("src/lattice/BPlusTree/Grains/WalSaturationSampler.cs", "tags.ToArray()", false),
         // (operation, tree, tenant, ...) TagList built once per authorization decision.
-        (@"src\lattice.auth\LatticeAuthDecisionObserver.cs", "tags", false),
+        ("src/lattice.auth/LatticeAuthDecisionObserver.cs", "tags", false),
         // (tree[, shard], tenant) built once per buffer.
-        (@"src\lattice.replication\CausalApplyBuffer.cs", "_treeTags", false),
-        (@"src\lattice.replication\CausalApplyBuffer.cs", "_treeShardTags", false),
+        ("src/lattice.replication/CausalApplyBuffer.cs", "_treeTags", false),
+        ("src/lattice.replication/CausalApplyBuffer.cs", "_treeShardTags", false),
         // A tag index spans every tree it covers, so a sweep is a multi-tree
         // aggregate and carries the platform sentinel.
-        (@"src\lattice\BPlusTree\Grains\TagIndexReconcileGrain.cs", "indexTags", true),
-        (@"src\lattice\BPlusTree\Grains\TagIndexReconcileGrain.cs", "outcomeTags", true),
+        ("src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs", "indexTags", true),
+        ("src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs", "outcomeTags", true),
         // Per-tenant snapshot measurements: the tenancy meter's own tenant tag.
-        (@"src\lattice.tenancy\TenantObservabilityGaugeSnapshot.cs", "tags", false),
+        ("src/lattice.tenancy/TenantObservabilityGaugeSnapshot.cs", "tags", false),
     ];
 
     /// <summary>
@@ -220,6 +220,30 @@ public sealed class TenantMetricDimensionHygieneTests
             "PreBuiltTagCollections names an emission site that no longer exists; remove the stale entry so " +
             $"the exemption list cannot silently widen:{Environment.NewLine}  - " +
             string.Join(Environment.NewLine + "  - ", stale));
+    }
+
+    [Test]
+    public void Every_registered_path_is_platform_neutral()
+    {
+        // The registry is compared ordinally against a scanned repo-relative
+        // path. Path.GetRelativePath yields '\' on Windows and '/' elsewhere,
+        // so a registry entry written with a backslash matches on a developer
+        // machine and matches nothing in Linux CI - every exemption lookup
+        // silently becomes a miss, and the failure only ever surfaces on one
+        // platform. Pin the separator so that divergence fails everywhere.
+        var offenders = PreBuiltTagCollections
+            .Select(static entry => entry.File)
+            .Where(static file => file.Contains('\\', StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static f => f, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.That(
+            offenders,
+            Is.Empty,
+            "A registered path must use '/' so it compares equal on every platform:"
+            + $"{Environment.NewLine}  - "
+            + string.Join(Environment.NewLine + "  - ", offenders));
     }
 
     [Test]

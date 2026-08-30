@@ -73,7 +73,14 @@ internal static class MetricEmissionScanner
             }
 
             var text = File.ReadAllText(path);
-            files.Add((Path.GetRelativePath(repoRoot, path), text));
+            // Normalize to '/' so a repo-relative path is the same string on
+            // every platform. The registries that name a site (for example
+            // TenantMetricDimensionHygieneTests.PreBuiltTagCollections) compare
+            // against this ordinally, and Path.GetRelativePath yields '\' on
+            // Windows and '/' elsewhere - so an un-normalized path matches the
+            // registry on a developer machine and matches nothing in Linux CI,
+            // silently turning every exemption lookup into a miss.
+            files.Add((Path.GetRelativePath(repoRoot, path).Replace('\\', '/'), text));
             foreach (Match m in InstrumentDeclaration.Matches(text))
             {
                 names.Add(m.Groups[1].Value);
