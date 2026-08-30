@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -145,6 +145,32 @@ if (string.Equals(suite, "mergefold", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> mergefold (CrdtMergeFoldBenchmarks)");
     var mergeFoldSummary = BenchmarkRunner.Run<CrdtMergeFoldBenchmarks>(config);
     return mergeFoldSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "fanout", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> fanout (FanOutReductionBenchmarks)");
+
+    // The round-trip census runs first and unconditionally: it is exact and
+    // deterministic (no host, core-count, or scheduler dependence), so it needs
+    // no BenchmarkDotNet job, and it is the figure the batching change actually
+    // targets. Set BENCH_FANOUT_ROUNDTRIPS_ONLY=true to stop after it when only
+    // the hop counts are wanted.
+    var fanoutCensus = FanOutRoundTripReport.MeasureAsync().GetAwaiter().GetResult();
+    Console.Write(FanOutRoundTripReport.Render(fanoutCensus));
+    FanOutRoundTripReport.Write(fanoutCensus, resultsPath);
+
+    if (string.Equals(
+            Environment.GetEnvironmentVariable("BENCH_FANOUT_ROUNDTRIPS_ONLY"),
+            "true",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine("[fanout] BENCH_FANOUT_ROUNDTRIPS_ONLY=true - skipping the latency suite.");
+        return 0;
+    }
+
+    var fanoutSummary = BenchmarkRunner.Run<FanOutReductionBenchmarks>(config);
+    return fanoutSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 if (string.Equals(suite, "catalog", StringComparison.OrdinalIgnoreCase))
