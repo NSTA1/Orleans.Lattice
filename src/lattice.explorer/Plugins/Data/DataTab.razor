@@ -18,13 +18,13 @@
        would only show opaque bytes. Route the operator to the source table's
        per-entry history instead, and skip the value scan and live follow loop
        entirely for this selection (see OnInitializedAsync). *@
-    <div class="explorer-data">
+    <div class="lx-data">
         <ChangeHistoryGuidance Selection="Selection" OnGoToSourceTree="_goToSourceTree" />
     </div>
 }
 else
 {
-    <div class="explorer-data">
+    <div class="lx-data">
         <DataToolbar Loading="_loading"
                      PageSize="_pageSize"
                      ScanMode="_scanMode"
@@ -56,8 +56,8 @@ else
                            OnExplore="_exploreTagIndex" />
         }
 
-        <div class="explorer-data-body @(IsCompact ? "is-stacked" : null)">
-            <div class="explorer-data-keys">
+        <div class="lx-data-body @(IsCompact ? "is-stacked" : null)">
+            <div class="lx-data-keys">
                 @if (_loading && CurrentEntries.Count == 0)
                 {
                     <div class="lx-selection-state">Loading entries...</div>
@@ -66,7 +66,7 @@ else
                 {
                     <div class="lx-selection-state lx-selection-state-error">
                         <span>@_error</span>
-                        <button type="button" class="explorer-btn-link" @onclick="_refresh">Try again</button>
+                        <button type="button" class="lx-btn-link" @onclick="_refresh">Try again</button>
                     </div>
                 }
                 else
@@ -77,7 +77,7 @@ else
                 }
             </div>
 
-            <div class="explorer-data-detail">
+            <div class="lx-data-detail">
                 <DataEntryDetail SelectedKey="_selectedKey"
                                  Entry="_detail"
                                  Rendered="_rendered"

@@ -16,7 +16,7 @@
 <div class="lxt-regions">
     <header class="lxt-surface-header">
         <h3 class="lxt-surface-title">Allowed regions for @State.SelectedTenantId</h3>
-        <button type="button" class="explorer-btn"
+        <button type="button" class="lx-btn"
                 disabled="@(State.Busy || !State.Allowed)"
                 @onclick="State.RefreshRegionsAsync">Refresh</button>
     </header>
@@ -60,7 +60,7 @@
                    value="@State.AddRegionId"
                    @onchange="@(e => State.AddRegionId = e.Value?.ToString() ?? string.Empty)" />
         </label>
-        <button type="submit" class="explorer-btn" disabled="@(State.Busy || !State.Allowed)">Add region</button>
+        <button type="submit" class="lx-btn" disabled="@(State.Busy || !State.Allowed)">Add region</button>
     </form>
 
     <div class="lxt-region-actions">
@@ -71,7 +71,7 @@
                 change cannot be applied as it stands.
             </p>
         }
-        <button type="button" class="explorer-btn lxt-primary"
+        <button type="button" class="lx-btn lxt-primary"
                 disabled="@(State.Busy || !State.Allowed || !State.HasRegionChanges)"
                 @onclick="State.RequestAuthorizeRegionsAsync">Apply allowed set</button>
     </div>

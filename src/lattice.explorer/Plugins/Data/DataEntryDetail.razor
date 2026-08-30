@@ -18,7 +18,7 @@ else if (Error is not null)
 {
     <div class="lx-selection-state lx-selection-state-error">
         <span>@Error</span>
-        <button type="button" class="explorer-btn-link" @onclick="OnRetry">Try again</button>
+        <button type="button" class="lx-btn-link" @onclick="OnRetry">Try again</button>
     </div>
 }
 else if (Entry is null)
@@ -28,22 +28,22 @@ else if (Entry is null)
 else
 {
     var d = Entry;
-    <div class="explorer-data-detail-head">
-        <code class="explorer-data-detail-key">@d.Key</code>
+    <div class="lx-data-detail-head">
+        <code class="lx-data-detail-key">@d.Key</code>
         @if (d.CrdtShape is null && Rendered is not null)
         {
-            <span class="explorer-data-format">@Rendered.Format.ToString().ToLowerInvariant()</span>
+            <span class="lx-data-format">@Rendered.Format.ToString().ToLowerInvariant()</span>
         }
         @if (ShowLiveIndicator)
         {
-            <span class="explorer-data-live" title="This entry refreshes automatically as it is mutated. The live feed only carries changes emitted while this surface is open.">
-                <span class="explorer-data-live-dot explorer-data-live-dot-@DotClass"></span>
-                <span class="explorer-data-live-label">@StateLabel</span>
+            <span class="lx-data-live" title="This entry refreshes automatically as it is mutated. The live feed only carries changes emitted while this surface is open.">
+                <span class="lx-data-live-dot lx-data-live-dot-@DotClass"></span>
+                <span class="lx-data-live-label">@StateLabel</span>
             </span>
         }
         @if (CanShowHistory)
         {
-            <button type="button" class="explorer-btn explorer-data-history-btn @(ShowHistory ? "is-active" : null)"
+            <button type="button" class="lx-btn lx-data-history-btn @(ShowHistory ? "is-active" : null)"
                     @onclick="OnToggleHistory">
                 @(ShowHistory ? "Hide history" : "History")
             </button>
@@ -52,7 +52,7 @@ else
 
     @if (LiveError is not null)
     {
-        <div class="explorer-data-live-error">Live updates stopped: @LiveError</div>
+        <div class="lx-data-live-error">Live updates stopped: @LiveError</div>
     }
 
     @if (ShowHistory && HistoryViewType is not null)
@@ -65,7 +65,7 @@ else
     }
     else
     {
-        <dl class="explorer-data-meta">
+        <dl class="lx-data-meta">
             <div><dt>Value length</dt><dd>@d.ValueLength.ToString("N0") bytes</dd></div>
             <div><dt>Timestamp</dt><dd>@FormatHlc(d)</dd></div>
             <div><dt>Tombstone</dt><dd>@(d.IsTombstone ? "yes" : "no")</dd></div>
@@ -78,7 +78,7 @@ else
 
         @if (d.CrdtShape is null && Rendered?.Note is not null)
         {
-            <p class="explorer-data-note">@Rendered.Note</p>
+            <p class="lx-data-note">@Rendered.Note</p>
         }
 
         @if (d.CrdtShape is not null)
@@ -89,28 +89,28 @@ else
                server-side. *@
             @if (d.CurrentMembers.Count > 0)
             {
-                <ul class="explorer-data-members">
+                <ul class="lx-data-members">
                     @foreach (var member in d.CurrentMembers)
                     {
-                        <li class="explorer-data-member">
-                            <code class="explorer-data-member-element">@MemberElementText(member)</code>
-                            <span class="explorer-data-member-replica">@MemberProvenance(member)</span>
+                        <li class="lx-data-member">
+                            <code class="lx-data-member-element">@MemberElementText(member)</code>
+                            <span class="lx-data-member-replica">@MemberProvenance(member)</span>
                         </li>
                     }
                 </ul>
             }
             else
             {
-                <p class="explorer-data-muted">Empty CRDT state - no current members.</p>
+                <p class="lx-data-muted">Empty CRDT state - no current members.</p>
             }
         }
         else if (Rendered is null || Rendered.Format == ValueFormat.Empty)
         {
-            <p class="explorer-data-muted">No value bytes.</p>
+            <p class="lx-data-muted">No value bytes.</p>
         }
         else
         {
-            <pre class="explorer-data-value explorer-data-value-@Rendered.Format.ToString().ToLowerInvariant()">@Rendered.Content</pre>
+            <pre class="lx-data-value lx-data-value-@Rendered.Format.ToString().ToLowerInvariant()">@Rendered.Content</pre>
         }
     }
 }

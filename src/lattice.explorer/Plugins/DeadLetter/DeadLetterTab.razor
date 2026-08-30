@@ -15,25 +15,25 @@
     the cascaded breakpoint rather than from a media query (epic decision D7).
 *@
 
-<div class="explorer-deadletter">
-    <div class="explorer-deadletter-toolbar">
-        <button type="button" class="explorer-btn" disabled="@_loading" @onclick="ReloadAsync">
+<div class="lx-deadletter">
+    <div class="lx-deadletter-toolbar">
+        <button type="button" class="lx-btn" disabled="@_loading" @onclick="ReloadAsync">
             @(_loading ? "Loading..." : "Refresh")
         </button>
         @if (_count > 0)
         {
-            <span class="explorer-deadletter-count" title="Dead-lettered items held for this tree">
+            <span class="lx-deadletter-count" title="Dead-lettered items held for this tree">
                 @_count dead-lettered
             </span>
         }
         else if (_loaded)
         {
-            <span class="explorer-deadletter-count is-empty">Queue empty</span>
+            <span class="lx-deadletter-count is-empty">Queue empty</span>
         }
     </div>
 
-    <div class="explorer-deadletter-body @(IsCompact ? "is-stacked" : null)">
-        <div class="explorer-deadletter-list">
+    <div class="lx-deadletter-body @(IsCompact ? "is-stacked" : null)">
+        <div class="lx-deadletter-list">
             @if (_loading && _entries.Count == 0)
             {
                 <div class="lx-selection-state">Loading dead-letter queue...</div>
@@ -42,7 +42,7 @@
             {
                 <div class="lx-selection-state lx-selection-state-error">
                     <span>@_error</span>
-                    <button type="button" class="explorer-btn-link" @onclick="ReloadAsync">Try again</button>
+                    <button type="button" class="lx-btn-link" @onclick="ReloadAsync">Try again</button>
                 </div>
             }
             else
@@ -57,7 +57,7 @@
                 @if (_hasMore)
                 {
                     <div class="lx-selection-state">
-                        <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadMoreAsync">
+                        <button type="button" class="lx-btn" disabled="@_loading" @onclick="LoadMoreAsync">
                             @(_loading ? "Loading..." : "Load more")
                         </button>
                     </div>
@@ -65,14 +65,14 @@
             }
         </div>
 
-        <div class="explorer-deadletter-detail">
+        <div class="lx-deadletter-detail">
             @if (_selected is null)
             {
                 <div class="lx-selection-state">Select a dead-lettered item to inspect it.</div>
             }
             else
             {
-                <dl class="explorer-deadletter-meta">
+                <dl class="lx-deadletter-meta">
                     <div><dt>Key</dt><dd><code>@_selected.Key</code></dd></div>
                     <div><dt>Reason</dt><dd>@_selected.Reason</dd></div>
                     <div><dt>Source</dt><dd>@SourceLabel(_selected.Source)</dd></div>
@@ -87,9 +87,9 @@
                 {
                     @if (_rendered.Note is not null)
                     {
-                        <p class="explorer-deadletter-note">@_rendered.Note</p>
+                        <p class="lx-deadletter-note">@_rendered.Note</p>
                     }
-                    <pre class="explorer-deadletter-value">@_rendered.Content</pre>
+                    <pre class="lx-deadletter-value">@_rendered.Content</pre>
                 }
             }
         </div>

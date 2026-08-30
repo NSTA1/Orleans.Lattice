@@ -12,7 +12,7 @@
   only place a width may be named).
 */
 
-.explorer-deadletter {
+.lx-deadletter {
     display: flex;
     flex-direction: column;
     gap: var(--lx-space-5);
@@ -20,24 +20,24 @@
     min-height: 0;
 }
 
-.explorer-deadletter-toolbar {
+.lx-deadletter-toolbar {
     display: flex;
     align-items: center;
     gap: var(--lx-space-6);
     flex-wrap: wrap;
 }
 
-.explorer-deadletter-count {
+.lx-deadletter-count {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-warning);
     font-variant-numeric: tabular-nums;
 }
 
-.explorer-deadletter-count.is-empty {
+.lx-deadletter-count.is-empty {
     color: var(--lx-color-text-dim);
 }
 
-.explorer-deadletter-body {
+.lx-deadletter-body {
     display: grid;
     grid-template-columns: minmax(220px, 1.2fr) 1fr;
     gap: var(--lx-space-5);
@@ -46,12 +46,12 @@
 }
 
 /* Compact: one column, list above detail, so nothing scrolls sideways. */
-.explorer-deadletter-body.is-stacked {
+.lx-deadletter-body.is-stacked {
     grid-template-columns: 1fr;
 }
 
-.explorer-deadletter-list,
-.explorer-deadletter-detail {
+.lx-deadletter-list,
+.lx-deadletter-detail {
     border: 1px solid var(--lx-color-border);
     border-radius: var(--lx-radius-lg);
     background: var(--lx-color-surface);
@@ -59,11 +59,11 @@
     min-height: 0;
 }
 
-.explorer-deadletter-detail {
+.lx-deadletter-detail {
     padding: var(--lx-space-6);
 }
 
-.explorer-deadletter-key {
+.lx-deadletter-key {
     display: inline-block;
     max-width: 100%;
     padding: 0;
@@ -77,42 +77,42 @@
     cursor: pointer;
 }
 
-.explorer-deadletter-key:hover {
+.lx-deadletter-key:hover {
     color: var(--lx-color-accent-hover);
     text-decoration: underline;
 }
 
-.explorer-deadletter-key.is-selected {
+.lx-deadletter-key.is-selected {
     font-weight: var(--lx-weight-semibold);
     text-decoration: underline;
 }
 
-.explorer-deadletter-key:focus-visible {
+.lx-deadletter-key:focus-visible {
     outline: none;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
     border-radius: var(--lx-radius-sm);
 }
 
-.explorer-deadletter-meta {
+.lx-deadletter-meta {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: var(--lx-space-3) var(--lx-space-6);
     margin: 0 0 var(--lx-space-5);
 }
 
-.explorer-deadletter-meta div {
+.lx-deadletter-meta div {
     display: flex;
     flex-direction: column;
 }
 
-.explorer-deadletter-meta dt {
+.lx-deadletter-meta dt {
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
     letter-spacing: var(--lx-tracking-wide);
     color: var(--lx-color-text-muted);
 }
 
-.explorer-deadletter-meta dd {
+.lx-deadletter-meta dd {
     margin: 0;
     font-family: var(--lx-font-mono);
     font-size: var(--lx-text-small);
@@ -120,13 +120,13 @@
     word-break: break-all;
 }
 
-.explorer-deadletter-note {
+.lx-deadletter-note {
     margin: 0 0 var(--lx-space-4);
     font-size: var(--lx-text-caption);
     color: var(--lx-color-warning);
 }
 
-.explorer-deadletter-value {
+.lx-deadletter-value {
     margin: 0;
     padding: var(--lx-space-5);
     background: var(--lx-color-surface-sunken);

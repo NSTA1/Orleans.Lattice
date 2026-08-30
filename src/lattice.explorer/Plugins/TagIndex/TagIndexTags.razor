@@ -2,20 +2,20 @@
     The tags a tag index carries. Selecting one asks the parent to load that
     tag's members; this component holds no state of its own.
 *@
-<section class="explorer-tagindex-section explorer-tagindex-tags">
-    <h4 class="explorer-tagindex-heading">Tags</h4>
+<section class="lx-tagindex-section lx-tagindex-tags">
+    <h4 class="lx-tagindex-heading">Tags</h4>
     @if (Tags.Count == 0)
     {
-        <p class="explorer-tagindex-empty">This index has no tags yet.</p>
+        <p class="lx-tagindex-empty">This index has no tags yet.</p>
     }
     else
     {
-        <ul class="explorer-tagindex-taglist">
+        <ul class="lx-tagindex-taglist">
             @foreach (var tag in Tags)
             {
                 <li>
                     <button type="button"
-                            class="explorer-tagindex-tag @(string.Equals(tag, SelectedTag, StringComparison.Ordinal) ? "is-active" : null)"
+                            class="lx-tagindex-tag @(string.Equals(tag, SelectedTag, StringComparison.Ordinal) ? "is-active" : null)"
                             @onclick="@(() => OnSelectTag.InvokeAsync(tag))">
                         @(tag.Length == 0 ? "(empty)" : tag)
                     </button>

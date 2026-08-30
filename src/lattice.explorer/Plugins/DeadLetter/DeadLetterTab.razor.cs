@@ -103,8 +103,8 @@ public partial class DeadLetterTab
             2,
             "class",
             ReferenceEquals(entry, _selected)
-                ? "explorer-deadletter-key is-selected"
-                : "explorer-deadletter-key");
+                ? "lx-deadletter-key is-selected"
+                : "lx-deadletter-key");
         builder.AddAttribute(3, "title", entry.Key);
         builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => Select(entry)));
         builder.AddContent(5, entry.Key);

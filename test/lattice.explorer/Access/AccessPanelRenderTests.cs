@@ -267,4 +267,24 @@ public sealed class AccessPanelRenderTests
             Assert.That(html, Does.Contain("aria-label=\"Groups\""));
         });
     }
+
+    [Test]
+    public async Task The_groups_surface_renders_the_design_systems_button_primitive()
+    {
+        // Access composed the button out of the app.css monolith in seven of its
+        // views. Deleting the file without migrating the primitive would have
+        // left every one of them as unstyled text, which no build and no
+        // behavioural test would have reported (issue #1770).
+        var html = await AccessRenderHarness.RenderPanelAsync(
+            StubAccessDomain.Create(groups:
+            [
+                new Api.Auth.AuthGroup { GroupId = "admins", DisplayName = "Administrators" },
+            ]));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("class=\"lx-btn\""));
+            Assert.That(html, Does.Not.Contain("explorer-btn"));
+        });
+    }
 }

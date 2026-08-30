@@ -6,11 +6,11 @@
 
 @if (!_initialized)
 {
-    <div class="explorer-config-loading">Loading configuration...</div>
+    <div class="lx-shell-config-loading">Loading configuration...</div>
 }
 else if (!Session.IsConfigured)
 {
-    <div class="explorer-config-overlay">
+    <div class="lx-shell-config-overlay">
         <ConfigurationDialog AllowCancel="false" OnSaved="OnConfigured" />
     </div>
 }

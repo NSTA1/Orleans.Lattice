@@ -6,25 +6,25 @@
 
 @if (AuthSession.IsAuthenticated)
 {
-    <div class="explorer-auth">
-        <span class="explorer-auth-user" title="Signed in">
+    <div class="lx-shell-auth">
+        <span class="lx-shell-auth-user" title="Signed in">
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
                 <path fill="currentColor"
                       d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.4 0-8 2.7-8 6v1h16v-1c0-3.3-3.6-6-8-6Z" />
             </svg>
-            <span class="explorer-auth-name">@AuthSession.Username</span>
+            <span class="lx-shell-auth-name">@AuthSession.Username</span>
         </span>
         <TenantControls />
         @if (_signOut.UseServerFormPost)
         {
-            <form method="post" action="@_signOut.FormAction" class="explorer-auth-form" data-enhance="false">
+            <form method="post" action="@_signOut.FormAction" class="lx-shell-auth-form" data-enhance="false">
                 <AntiforgeryToken />
-                <button type="submit" class="explorer-btn-link" title="Sign out">Sign out</button>
+                <button type="submit" class="lx-btn-link" title="Sign out">Sign out</button>
             </form>
         }
         else
         {
-            <button type="button" class="explorer-btn-link" title="Sign out" disabled="@_busy" @onclick="SignOutAsync">
+            <button type="button" class="lx-btn-link" title="Sign out" disabled="@_busy" @onclick="SignOutAsync">
                 Sign out
             </button>
         }
@@ -32,12 +32,12 @@
 }
 else
 {
-    <button type="button" class="explorer-auth-signin" title="Sign in" aria-label="Sign in" @onclick="OpenLogin">
+    <button type="button" class="lx-shell-auth-signin" title="Sign in" aria-label="Sign in" @onclick="OpenLogin">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
             <path fill="currentColor"
                   d="M10 17v-2H4V9h6V7l5 5-5 5Zm2-15a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z" />
         </svg>
-        <span class="explorer-auth-label">Sign in</span>
+        <span class="lx-shell-auth-label">Sign in</span>
     </button>
 }
 

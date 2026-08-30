@@ -139,7 +139,7 @@ else
                     <span class="lxm-tenant-chip" title="Every surface here is scoped to this tenant.">
                         @(_state.TenantId ?? "no active tenant")
                     </span>
-                    <button type="button" class="explorer-btn lxm-refresh-action"
+                    <button type="button" class="lx-btn lxm-refresh-action"
                             disabled="@(_state.Busy || !_state.Allowed)"
                             @onclick="_state.ReloadAsync">Refresh</button>
                 </TrailingContent>

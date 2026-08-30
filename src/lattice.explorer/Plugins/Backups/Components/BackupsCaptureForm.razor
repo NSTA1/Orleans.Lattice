@@ -35,7 +35,7 @@
                         @foreach (var id in Owner.SelectedTrees)
                         {
                             <li @key="id">
-                                <button type="button" class="explorer-btn explorer-btn-icon lx-backups-remove"
+                                <button type="button" class="lx-btn lx-btn-icon lx-backups-remove"
                                         title="Remove tree" aria-label="@($"Remove {id}")"
                                         disabled="@Owner.Busy"
                                         @onclick="@(() => Owner.RemoveTreeAsync(id))">x</button>
@@ -124,7 +124,7 @@
         <div class="lx-backups-field">
             <span class="lx-backups-field-label"></span>
             <div class="lx-backups-field-control lx-backups-field-stack">
-                <button type="button" class="explorer-btn explorer-btn-primary"
+                <button type="button" class="lx-btn lx-btn-primary"
                         disabled="@(!Owner.CanBackup)" @onclick="Owner.BackupAsync">Backup</button>
 
                 @if (Owner.ScheduleEnabled && !Owner.CanSchedule)

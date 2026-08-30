@@ -42,7 +42,7 @@
                        @oninput="OnSubjectInput" />
             </label>
             <button type="button"
-                    class="explorer-btn lxm-primary-action"
+                    class="lx-btn lxm-primary-action"
                     disabled="@(State.Busy || !State.Allowed)"
                     @onclick="State.AddAdminSubjectAsync">Add</button>
         </div>
@@ -94,7 +94,7 @@
         {
             Header = "",
             Cell = row =>@<button type="button"
-                                 class="explorer-btn lxm-destructive-action"
+                                 class="lx-btn lxm-destructive-action"
                                  disabled="@(State.Busy || !State.CanRemoveAdminSubject(row))"
                                  title="@(State.CanRemoveAdminSubject(row) ? null : MyTenantWorkspace.LastAdminSubjectRefusal)"
                                  @onclick="@(() => State.RemoveAdminSubjectAsync(row))">Remove</button>,

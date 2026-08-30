@@ -161,7 +161,7 @@
         {
             Header = "",
             Cell = row =>@<button type="button"
-                                 class="explorer-btn lxm-switch-action"
+                                 class="lx-btn lxm-switch-action"
                                  disabled="@(State.Busy || IsActive(row.TenantId))"
                                  @onclick="@(() => State.SwitchTenantAsync(row.TenantId))">
                 @(IsActive(row.TenantId) ? "Viewing" : "Switch to")

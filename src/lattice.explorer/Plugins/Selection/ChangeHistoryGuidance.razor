@@ -30,7 +30,7 @@
     @if (Selection.SourceTreeId is { Length: > 0 } sourceTreeId)
     {
         <button type="button"
-                class="explorer-btn lx-selection-guidance-action"
+                class="lx-btn lx-selection-guidance-action"
                 @onclick="@(() => OnGoToSourceTree.InvokeAsync(sourceTreeId))">
             Go to source table @sourceTreeId
         </button>

@@ -113,12 +113,12 @@
         </label>
     }
     <div class="lxa-actions">
-        <button type="button" class="explorer-btn"
+        <button type="button" class="lx-btn"
                 disabled="@(State.Busy || !State.Allowed || !State.CanSaveRule())"
                 @onclick="State.SaveRuleAsync">Save</button>
-        <button type="button" class="explorer-btn" disabled="@State.Busy"
+        <button type="button" class="lx-btn" disabled="@State.Busy"
                 @onclick="State.CancelRuleForm">Cancel</button>
-        <button type="button" class="explorer-btn lxa-danger"
+        <button type="button" class="lx-btn lxa-danger"
                 disabled="@(State.Busy || !State.Allowed || !State.EditingExistingRule)"
                 @onclick="State.DeleteRuleAsync">Delete</button>
     </div>

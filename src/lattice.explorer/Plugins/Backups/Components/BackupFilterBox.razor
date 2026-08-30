@@ -6,13 +6,13 @@
     clear button - but fires for any prefix length and takes its placeholder from the
     caller so the same control can drive the Name and Created filters.
 *@
-<div class="explorer-data-search-field">
-    <input type="text" class="explorer-data-search-input" placeholder="@Placeholder"
+<div class="lx-data-search-field">
+    <input type="text" class="lx-data-search-input" placeholder="@Placeholder"
            disabled="@Disabled"
            value="@_value" @oninput="OnInput" @onkeyup="OnKeyUp" @onblur="OnBlurAsync" />
     @if (!string.IsNullOrEmpty(_value))
     {
-        <button type="button" class="explorer-data-search-clear" title="Clear filter"
+        <button type="button" class="lx-data-search-clear" title="Clear filter"
                 disabled="@Disabled" @onclick="ClearAsync">&times;</button>
     }
 </div>

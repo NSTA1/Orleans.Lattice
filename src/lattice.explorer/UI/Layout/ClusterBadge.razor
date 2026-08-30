@@ -4,18 +4,18 @@
 @implements IDisposable
 @inject ILatticeStateConnection Connection
 
-<header class="explorer-brand">
-    <span class="explorer-brand-name">@ExplorerInfo.DisplayName</span>
+<header class="lx-shell-brand">
+    <span class="lx-shell-brand-name">@ExplorerInfo.DisplayName</span>
     @if (!string.IsNullOrEmpty(_clusterId))
     {
-        <span class="explorer-brand-sep">/</span>
-        <span class="explorer-cluster" title="@ClusterTooltip">
-            <span class="explorer-cluster-label">cluster</span>
-            <span class="explorer-cluster-id">@_clusterId</span>
+        <span class="lx-shell-brand-sep">/</span>
+        <span class="lx-shell-cluster" title="@ClusterTooltip">
+            <span class="lx-shell-cluster-label">cluster</span>
+            <span class="lx-shell-cluster-id">@_clusterId</span>
         </span>
     }
     <ConnectionStatusBanner />
-    <div class="explorer-brand-auth">
+    <div class="lx-shell-brand-auth">
         <AuthButton />
     </div>
 </header>

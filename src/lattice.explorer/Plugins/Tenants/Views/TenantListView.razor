@@ -21,7 +21,7 @@
                 <span class="lxt-page">Page @(State.PageIndex + 1) of @State.PageCount</span>
             }
         </p>
-        <button type="button" class="explorer-btn"
+        <button type="button" class="lx-btn"
                 disabled="@(State.Busy || !State.Allowed)"
                 @onclick="State.OpenCreateForm">New tenant</button>
     </header>
@@ -48,10 +48,10 @@
                 </span>
             </label>
             <div class="lxt-create-actions">
-                <button type="button" class="explorer-btn"
+                <button type="button" class="lx-btn"
                         disabled="@State.Busy"
                         @onclick="State.CloseCreateForm">Cancel</button>
-                <button type="submit" class="explorer-btn lxt-primary" disabled="@State.Busy">Create tenant</button>
+                <button type="submit" class="lx-btn lxt-primary" disabled="@State.Busy">Create tenant</button>
             </div>
         </form>
     }
@@ -67,10 +67,10 @@
     @if (State.PageCount > 1)
     {
         <nav class="lxt-pager" aria-label="Tenant list pages">
-            <button type="button" class="explorer-btn"
+            <button type="button" class="lx-btn"
                     disabled="@(State.Busy || !State.HasPreviousPage)"
                     @onclick="State.PreviousPageAsync">Previous</button>
-            <button type="button" class="explorer-btn"
+            <button type="button" class="lx-btn"
                     disabled="@(State.Busy || !State.HasNextPage)"
                     @onclick="State.NextPageAsync">Next</button>
         </nav>
@@ -145,23 +145,23 @@
                 // column stays on the table presentation only.
                 ShowOnCompact = false,
                 Cell = row => @<span class="lxt-row-actions">
-                    <button type="button" class="explorer-btn lxt-row-action"
+                    <button type="button" class="lx-btn lxt-row-action"
                             disabled="@State.Busy"
                             @onclick="@(() => State.SelectTenantAsync(row.TenantId))">Manage</button>
                     @if (row.IsSuspended)
                     {
-                        <button type="button" class="explorer-btn lxt-row-action"
+                        <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@(State.Busy || row.IsDefault)"
                                 @onclick="@(() => State.ResumeTenantAsync(row.TenantId))">Resume</button>
                     }
                     else
                     {
-                        <button type="button" class="explorer-btn lxt-row-action"
+                        <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@(State.Busy || row.IsDefault)"
                                 title="@(row.IsDefault ? "The reserved default tenant cannot be suspended." : null)"
                                 @onclick="@(() => State.RequestSuspend(row.TenantId))">Suspend</button>
                     }
-                    <button type="button" class="explorer-btn lxt-row-action lxt-danger"
+                    <button type="button" class="lx-btn lxt-row-action lxt-danger"
                             disabled="@(State.Busy || row.IsDefault)"
                             title="@(row.IsDefault ? "The reserved default tenant cannot be deleted." : null)"
                             @onclick="@(() => State.RequestDeleteAsync(row.TenantId))">Delete</button>

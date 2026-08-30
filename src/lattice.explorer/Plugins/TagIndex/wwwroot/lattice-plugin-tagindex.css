@@ -10,7 +10,7 @@
   only place a width may be named).
 */
 
-.explorer-tagindex {
+.lx-tagindex {
     display: flex;
     flex-direction: column;
     gap: var(--lx-space-5);
@@ -20,7 +20,7 @@
     padding: var(--lx-space-2);
 }
 
-.explorer-tagindex-summary {
+.lx-tagindex-summary {
     display: flex;
     align-items: center;
     gap: var(--lx-space-4);
@@ -29,23 +29,23 @@
     border-bottom: 1px solid var(--lx-color-border);
 }
 
-.explorer-tagindex-name {
+.lx-tagindex-name {
     font-family: var(--lx-font-mono);
     color: var(--lx-color-text);
     font-weight: var(--lx-weight-semibold);
     word-break: break-all;
 }
 
-.explorer-tagindex-stat {
+.lx-tagindex-stat {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-text-muted);
 }
 
-.explorer-tagindex-summary .explorer-btn {
+.lx-tagindex-summary .lx-btn {
     margin-left: auto;
 }
 
-.explorer-tagindex-body {
+.lx-tagindex-body {
     display: grid;
     grid-template-columns: minmax(180px, 0.8fr) minmax(160px, 0.7fr) 1.5fr;
     gap: var(--lx-space-5);
@@ -54,11 +54,11 @@
 }
 
 /* Compact: one column, so the three sections read as a single scroll. */
-.explorer-tagindex-body.is-stacked {
+.lx-tagindex-body.is-stacked {
     grid-template-columns: 1fr;
 }
 
-.explorer-tagindex-section {
+.lx-tagindex-section {
     border: 1px solid var(--lx-color-border);
     border-radius: var(--lx-radius-lg);
     background: var(--lx-color-surface);
@@ -67,7 +67,7 @@
     min-height: 0;
 }
 
-.explorer-tagindex-heading {
+.lx-tagindex-heading {
     margin: 0 0 var(--lx-space-4);
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
@@ -78,7 +78,7 @@
     gap: var(--lx-space-3);
 }
 
-.explorer-tagindex-membertag {
+.lx-tagindex-membertag {
     font-family: var(--lx-font-mono);
     color: var(--lx-color-accent);
     text-transform: none;
@@ -86,7 +86,7 @@
     word-break: break-all;
 }
 
-.explorer-tagindex-empty {
+.lx-tagindex-empty {
     color: var(--lx-color-text-muted);
     font-size: var(--lx-text-caption);
     margin: 0;
@@ -96,8 +96,8 @@
     gap: var(--lx-space-4);
 }
 
-.explorer-tagindex-treelist,
-.explorer-tagindex-taglist {
+.lx-tagindex-treelist,
+.lx-tagindex-taglist {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -106,9 +106,9 @@
     gap: var(--lx-space-2);
 }
 
-.explorer-tagindex-treelink,
-.explorer-tagindex-tag,
-.explorer-tagindex-memberlink {
+.lx-tagindex-treelink,
+.lx-tagindex-tag,
+.lx-tagindex-memberlink {
     width: 100%;
     min-height: var(--lx-target-min);
     text-align: left;
@@ -124,31 +124,31 @@
         color var(--lx-motion-fast) var(--lx-motion-ease);
 }
 
-.explorer-tagindex-treelink:hover,
-.explorer-tagindex-tag:hover,
-.explorer-tagindex-memberlink:hover {
+.lx-tagindex-treelink:hover,
+.lx-tagindex-tag:hover,
+.lx-tagindex-memberlink:hover {
     border-color: var(--lx-color-accent);
     color: var(--lx-color-accent);
 }
 
-.explorer-tagindex-treelink:focus-visible,
-.explorer-tagindex-tag:focus-visible,
-.explorer-tagindex-memberlink:focus-visible {
+.lx-tagindex-treelink:focus-visible,
+.lx-tagindex-tag:focus-visible,
+.lx-tagindex-memberlink:focus-visible {
     outline: none;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
-.explorer-tagindex-tag.is-active {
+.lx-tagindex-tag.is-active {
     border-color: var(--lx-color-accent);
     color: var(--lx-color-accent-contrast);
     background: var(--lx-color-accent);
 }
 
-.explorer-tagindex-memberlink {
+.lx-tagindex-memberlink {
     border-style: dashed;
 }
 
-.explorer-tagindex-pager {
+.lx-tagindex-pager {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -156,7 +156,7 @@
     margin-bottom: var(--lx-space-4);
 }
 
-.explorer-tagindex-pagenum {
+.lx-tagindex-pagenum {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-text-muted);
     font-variant-numeric: tabular-nums;

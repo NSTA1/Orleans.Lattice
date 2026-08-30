@@ -24,6 +24,12 @@ package.
   (a tab strip that collapses to an overflow menu rather than scrolling
   off-screen), and `LatticeAdaptiveTable<TItem>` (tabular on wide viewports, a
   card list on compact).
+- **Shared UI primitives** (`lattice-primitives.css`): the button family
+  (`lx-btn` with `lx-btn-primary`, `lx-btn-danger`, `lx-btn-icon` and
+  `lx-btn-link`), the `lx-badge` label, and the `lx-modal` dialog with its
+  backdrop and action row. These are the controls every plugin composes, so
+  they live here rather than in any one plugin - or, as they once did, in a
+  shared monolith a plugin had to depend on the shell to reach.
 
 ## Usage
 

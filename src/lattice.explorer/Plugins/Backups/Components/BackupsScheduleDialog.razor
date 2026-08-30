@@ -6,9 +6,9 @@
 
 @if (Owner.PendingSchedule is { } pending)
 {
-    <div class="explorer-modal-backdrop" role="presentation">
-        <div class="explorer-modal" role="dialog" aria-modal="true" aria-labelledby="explorer-schedule-title">
-            <h3 id="explorer-schedule-title">Manage schedule</h3>
+    <div class="lx-modal-backdrop" role="presentation">
+        <div class="lx-modal" role="dialog" aria-modal="true" aria-labelledby="lx-backups-schedule-title">
+            <h3 id="lx-backups-schedule-title">Manage schedule</h3>
             <p>
                 Recurring backup schedule for tree
                 <strong>@pending.Members[0].Scope.TreeId</strong>.
@@ -35,12 +35,12 @@
                                    @oninput="e => Owner.SetEditFullMinutes(e.Value)"
                                    disabled="@Owner.Busy" aria-label="Full interval minutes" /> m
                         </label>
-                        <button type="button" class="explorer-btn explorer-btn-primary"
+                        <button type="button" class="lx-btn lx-btn-primary"
                                 disabled="@(Owner.Busy || Owner.EditFullInterval <= TimeSpan.Zero)"
                                 @onclick="@(() => Owner.SaveScheduleAsync(incremental: false))">Save</button>
                         @if (Owner.ScheduleStatus?.FullScheduleRegistered ?? false)
                         {
-                            <button type="button" class="explorer-btn explorer-btn-danger"
+                            <button type="button" class="lx-btn lx-btn-danger"
                                     disabled="@Owner.Busy"
                                     @onclick="@(() => Owner.RemoveScheduleAsync(incremental: false))">Remove</button>
                         }
@@ -61,12 +61,12 @@
                                    @oninput="e => Owner.SetEditIncMinutes(e.Value)"
                                    disabled="@Owner.Busy" aria-label="Incremental interval minutes" /> m
                         </label>
-                        <button type="button" class="explorer-btn explorer-btn-primary"
+                        <button type="button" class="lx-btn lx-btn-primary"
                                 disabled="@(Owner.Busy || Owner.EditIncrementalInterval <= TimeSpan.Zero)"
                                 @onclick="@(() => Owner.SaveScheduleAsync(incremental: true))">Save</button>
                         @if (Owner.ScheduleStatus?.IncrementalScheduleRegistered ?? false)
                         {
-                            <button type="button" class="explorer-btn explorer-btn-danger"
+                            <button type="button" class="lx-btn lx-btn-danger"
                                     disabled="@Owner.Busy"
                                     @onclick="@(() => Owner.RemoveScheduleAsync(incremental: true))">Remove</button>
                         }
@@ -106,14 +106,14 @@
                                    @oninput="e => Owner.SetEditHealthMinutes(e.Value)"
                                    disabled="@(Owner.Busy || !Owner.EditHealthEnabled)" aria-label="Health interval minutes" /> m
                         </label>
-                        <button type="button" class="explorer-btn explorer-btn-primary"
+                        <button type="button" class="lx-btn lx-btn-primary"
                                 disabled="@(Owner.Busy || (Owner.EditHealthEnabled && Owner.EditHealthInterval <= TimeSpan.Zero))"
                                 @onclick="Owner.SaveHealthConfigAsync">Save</button>
                     </fieldset>
                 }
             }
-            <div class="explorer-modal-actions">
-                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CloseSchedule">Close</button>
+            <div class="lx-modal-actions">
+                <button type="button" class="lx-btn" disabled="@Owner.Busy" @onclick="Owner.CloseSchedule">Close</button>
             </div>
         </div>
     </div>

@@ -29,11 +29,11 @@
 
     <div class="lxm-form-row">
         <button type="button"
-                class="explorer-btn lxm-primary-action"
+                class="lx-btn lxm-primary-action"
                 disabled="@(State.Busy || !State.Allowed || !State.HasPendingResidencyChange)"
                 @onclick="State.ApplyResidencyAsync">Apply residency</button>
         <button type="button"
-                class="explorer-btn"
+                class="lx-btn"
                 disabled="@(State.Busy || !State.HasPendingResidencyChange)"
                 @onclick="State.RevertResidency">Revert</button>
         @if (State.HasPendingResidencyChange)
@@ -106,7 +106,7 @@
         {
             Header = "",
             Cell = row =>@<button type="button"
-                                 class="explorer-btn"
+                                 class="lx-btn"
                                  disabled="@(State.Busy || !State.Allowed || !row.CanToggle)"
                                  title="@RefusalText(row.Refusal)"
                                  @onclick="@(() => State.ToggleRegion(row.RegionId))">

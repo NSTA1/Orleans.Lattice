@@ -71,13 +71,13 @@
                             </p>
                             <div class="lxm-grant-actions">
                                 <button type="button"
-                                        class="explorer-btn lxm-approve-action"
+                                        class="lx-btn lxm-approve-action"
                                         disabled="@(State.Busy || !State.Allowed)"
                                         @onclick="@(() => State.ApproveGrantAsync(row))">
                                     Approve and make live
                                 </button>
                                 <button type="button"
-                                        class="explorer-btn"
+                                        class="lx-btn"
                                         disabled="@(State.Busy || !State.Allowed)"
                                         @onclick="@(() => State.RejectGrantAsync(row))">Reject</button>
                             </div>
@@ -86,7 +86,7 @@
                         {
                             <div class="lxm-grant-actions">
                                 <button type="button"
-                                        class="explorer-btn lxm-destructive-action"
+                                        class="lx-btn lxm-destructive-action"
                                         disabled="@(State.Busy || !State.Allowed)"
                                         @onclick="@(() => State.RevokeGrantAsync(row))">Withdraw</button>
                             </div>
@@ -141,7 +141,7 @@
                         {
                             <div class="lxm-grant-actions">
                                 <button type="button"
-                                        class="explorer-btn lxm-destructive-action"
+                                        class="lx-btn lxm-destructive-action"
                                         disabled="@(State.Busy || !State.Allowed)"
                                         @onclick="@(() => State.RevokeGrantAsync(row))">Withdraw</button>
                             </div>
@@ -188,7 +188,7 @@
                 </select>
             </label>
             <button type="button"
-                    class="explorer-btn"
+                    class="lx-btn"
                     disabled="@(State.Busy || !State.Allowed)"
                     @onclick="State.OfferGrantAsync">Offer</button>
         </div>

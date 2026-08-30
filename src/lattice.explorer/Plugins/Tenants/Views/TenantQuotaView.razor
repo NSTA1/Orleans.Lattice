@@ -16,7 +16,7 @@
 <div class="lxt-quotas">
     <header class="lxt-surface-header">
         <h3 class="lxt-surface-title">Quotas for @State.SelectedTenantId</h3>
-        <button type="button" class="explorer-btn"
+        <button type="button" class="lx-btn"
                 disabled="@(State.Busy || !State.Allowed)"
                 @onclick="State.RefreshQuotasAsync">Refresh</button>
     </header>
@@ -140,7 +140,7 @@
         </label>
 
         <div class="lxt-editor-actions">
-            <button type="submit" class="explorer-btn lxt-primary"
+            <button type="submit" class="lx-btn lxt-primary"
                     disabled="@(State.Busy || !State.Allowed)">Save ceilings</button>
         </div>
     </form>

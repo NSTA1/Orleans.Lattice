@@ -11,11 +11,12 @@
   1. Nothing here declares a width media query. Breakpoints live in exactly one
      file, `lattice-breakpoints.css`, and a hygiene guard fails the build if a
      width media query appears anywhere else.
-  2. Every colour token derives from the Explorer's existing theme variables
-     (`--bg`, `--text`, `--accent`, ...) with a literal fallback. That means the
-     design system inherits the product's current visual language when it is
-     loaded alongside `app.css`, and still renders correctly on its own for a
-     head that only ships plugins.
+  2. Every value below is declared here outright. The layer used to derive each
+     colour from a theme variable in the `app.css` monolith, with the literal as
+     a fallback; issue #1770 deleted that monolith, which left the indirection
+     resolving to its own fallback on every head. The fallbacks - the values now
+     inlined below - are byte-for-byte what the monolith declared, so nothing
+     changed visually when it went.
 
   Theming works exactly as it did before: `data-theme="light"` on <html> selects
   the light palette, the dark palette is the default, and a future high-contrast
@@ -40,11 +41,10 @@
     --lx-space-10: 3rem;    /* 48px */
 
     /* --------------------------------------------------------------------
-       Type scale. Sizes match the values `app.css` already uses, so a surface
-       converted onto the tokens does not visually shift.
+       Type scale.
        -------------------------------------------------------------------- */
-    --lx-font-ui: var(--font-ui, "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
-    --lx-font-mono: var(--font-mono, ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace);
+    --lx-font-ui: "Inter", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --lx-font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 
     --lx-text-micro: 0.7rem;
     --lx-text-caption: 0.78rem;
@@ -68,8 +68,8 @@
        Radius.
        -------------------------------------------------------------------- */
     --lx-radius-none: 0;
-    --lx-radius-sm: var(--radius-sm, 4px);
-    --lx-radius-md: var(--radius, 6px);
+    --lx-radius-sm: 4px;
+    --lx-radius-md: 6px;
     --lx-radius-lg: 10px;
     --lx-radius-pill: 999px;
 
@@ -79,11 +79,11 @@
        all of them at once.
        -------------------------------------------------------------------- */
     --lx-motion-instant: 0ms;
-    --lx-motion-fast: var(--motion-fast, 120ms);
+    --lx-motion-fast: 120ms;
     --lx-motion-medium: 200ms;
     --lx-motion-slow: 320ms;
 
-    --lx-motion-ease: var(--motion-ease, ease);
+    --lx-motion-ease: ease;
     --lx-motion-ease-out: cubic-bezier(0.2, 0, 0, 1);
     --lx-motion-ease-in: cubic-bezier(0.4, 0.14, 1, 1);
 
@@ -124,75 +124,77 @@
 }
 
 /*
-  Colour, dark palette (the default). Each token derives from the Explorer's
-  existing theme variable so the two stay in step, with the current literal as
-  the fallback for a standalone head.
+  Colour, dark palette (the default).
 */
 :root,
 :root[data-theme="dark"] {
-    --lx-color-canvas: var(--bg, #0b0e14);
-    --lx-color-surface: var(--bg-panel, #0f131c);
-    --lx-color-surface-raised: var(--bg-elevated, #131927);
-    --lx-color-surface-sunken: var(--bg-input, #0c1019);
+    color-scheme: dark;
 
-    --lx-color-border: var(--border, #1e2532);
-    --lx-color-border-strong: var(--border-strong, #2b3545);
-    --lx-color-focus-ring: var(--focus-ring, rgba(76, 194, 255, 0.35));
+    --lx-color-canvas: #0b0e14;
+    --lx-color-surface: #0f131c;
+    --lx-color-surface-raised: #131927;
+    --lx-color-surface-sunken: #0c1019;
 
-    --lx-color-text: var(--text, #d8dee9);
-    --lx-color-text-muted: var(--text-muted, #8a93a3);
-    --lx-color-text-dim: var(--text-dim, #5a6373);
+    --lx-color-border: #1e2532;
+    --lx-color-border-strong: #2b3545;
+    --lx-color-focus-ring: rgba(76, 194, 255, 0.35);
 
-    --lx-color-accent: var(--accent, #4cc2ff);
-    --lx-color-accent-hover: var(--accent-hover, #74d1ff);
-    --lx-color-accent-contrast: var(--accent-contrast, #04111c);
+    --lx-color-text: #d8dee9;
+    --lx-color-text-muted: #8a93a3;
+    --lx-color-text-dim: #5a6373;
 
-    --lx-color-success: var(--ok, #3ad29f);
-    --lx-color-warning: var(--warn, #ffc857);
-    --lx-color-danger: var(--danger, #ff6b6b);
+    --lx-color-accent: #4cc2ff;
+    --lx-color-accent-hover: #74d1ff;
+    --lx-color-accent-contrast: #04111c;
 
-    --lx-color-scrim: var(--overlay, rgba(4, 7, 12, 0.72));
-    --lx-color-danger-surface: var(--danger-surface, rgba(255, 107, 107, 0.08));
-    --lx-color-danger-border: var(--danger-border, rgba(255, 107, 107, 0.3));
+    --lx-color-success: #3ad29f;
+    --lx-color-warning: #ffc857;
+    --lx-color-danger: #ff6b6b;
+
+    --lx-color-scrim: rgba(4, 7, 12, 0.72);
+    --lx-color-danger-surface: rgba(255, 107, 107, 0.08);
+    --lx-color-danger-border: rgba(255, 107, 107, 0.3);
 
     /* Elevation. Dark surfaces read depth from shadow spread, not lightness. */
     --lx-elevation-0: none;
     --lx-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --lx-elevation-2: 0 4px 12px rgba(0, 0, 0, 0.45);
-    --lx-elevation-3: var(--shadow, 0 8px 30px rgba(0, 0, 0, 0.55));
+    --lx-elevation-3: 0 8px 30px rgba(0, 0, 0, 0.55);
 }
 
 /* Colour, light palette. Applied only when a caller opts in with data-theme="light". */
 :root[data-theme="light"] {
-    --lx-color-canvas: var(--bg, #f6f8fb);
-    --lx-color-surface: var(--bg-panel, #ffffff);
-    --lx-color-surface-raised: var(--bg-elevated, #ffffff);
-    --lx-color-surface-sunken: var(--bg-input, #ffffff);
+    color-scheme: light;
 
-    --lx-color-border: var(--border, #dfe4ec);
-    --lx-color-border-strong: var(--border-strong, #c4ccd8);
-    --lx-color-focus-ring: var(--focus-ring, rgba(20, 110, 180, 0.3));
+    --lx-color-canvas: #f6f8fb;
+    --lx-color-surface: #ffffff;
+    --lx-color-surface-raised: #ffffff;
+    --lx-color-surface-sunken: #ffffff;
 
-    --lx-color-text: var(--text, #1b2330);
-    --lx-color-text-muted: var(--text-muted, #5a6473);
-    --lx-color-text-dim: var(--text-dim, #8a93a3);
+    --lx-color-border: #dfe4ec;
+    --lx-color-border-strong: #c4ccd8;
+    --lx-color-focus-ring: rgba(20, 110, 180, 0.3);
 
-    --lx-color-accent: var(--accent, #1b73c4);
-    --lx-color-accent-hover: var(--accent-hover, #155a9b);
-    --lx-color-accent-contrast: var(--accent-contrast, #ffffff);
+    --lx-color-text: #1b2330;
+    --lx-color-text-muted: #5a6473;
+    --lx-color-text-dim: #8a93a3;
 
-    --lx-color-success: var(--ok, #1a9c6e);
-    --lx-color-warning: var(--warn, #b07a16);
-    --lx-color-danger: var(--danger, #c92a2a);
+    --lx-color-accent: #1b73c4;
+    --lx-color-accent-hover: #155a9b;
+    --lx-color-accent-contrast: #ffffff;
 
-    --lx-color-scrim: var(--overlay, rgba(20, 28, 40, 0.4));
-    --lx-color-danger-surface: var(--danger-surface, rgba(201, 42, 42, 0.07));
-    --lx-color-danger-border: var(--danger-border, rgba(201, 42, 42, 0.3));
+    --lx-color-success: #1a9c6e;
+    --lx-color-warning: #b07a16;
+    --lx-color-danger: #c92a2a;
+
+    --lx-color-scrim: rgba(20, 28, 40, 0.4);
+    --lx-color-danger-surface: rgba(201, 42, 42, 0.07);
+    --lx-color-danger-border: rgba(201, 42, 42, 0.3);
 
     --lx-elevation-0: none;
     --lx-elevation-1: 0 1px 2px rgba(20, 28, 40, 0.08);
     --lx-elevation-2: 0 4px 12px rgba(20, 28, 40, 0.12);
-    --lx-elevation-3: var(--shadow, 0 8px 30px rgba(20, 28, 40, 0.18));
+    --lx-elevation-3: 0 8px 30px rgba(20, 28, 40, 0.18);
 }
 
 /*

@@ -11,7 +11,7 @@
     a media query (epic decision D7).
 *@
 
-<div class="explorer-metrics">
+<div class="lx-metrics">
     @if (Selection.IsHistory)
     {
         @* A change-history view has no tree metrics of its own; rather than the
@@ -21,45 +21,45 @@
     }
     else
     {
-        <div class="explorer-metrics-toolbar">
+        <div class="lx-metrics-toolbar">
             <button type="button"
-                    class="explorer-btn explorer-metrics-refresh"
+                    class="lx-btn lx-metrics-refresh"
                     disabled="@_loading"
                     @onclick="LoadAsync">
                 @(_loading ? "Refreshing..." : "Refresh")
             </button>
             @if (_metrics is not null)
             {
-                <span class="explorer-metrics-sampled">Sampled @_sampledAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                <span class="lx-metrics-sampled">Sampled @_sampledAt.ToLocalTime().ToString("HH:mm:ss")</span>
             }
         </div>
 
         @if (_loading && _metrics is null)
         {
-            <div class="explorer-metrics-state">Loading metrics...</div>
+            <div class="lx-metrics-state">Loading metrics...</div>
         }
         else if (_error is not null)
         {
-            <div class="explorer-metrics-state explorer-metrics-error">
+            <div class="lx-metrics-state lx-metrics-error">
                 <span>@_error</span>
-                <button type="button" class="explorer-btn-link" @onclick="LoadAsync">Try again</button>
+                <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
             </div>
         }
         else if (_metrics is null)
         {
-            <div class="explorer-metrics-state">No metrics reported for this id.</div>
+            <div class="lx-metrics-state">No metrics reported for this id.</div>
         }
         else
         {
             var m = _metrics;
             @if (m.DetailPaused)
             {
-                <div class="explorer-metrics-state explorer-metrics-paused">
+                <div class="lx-metrics-state lx-metrics-paused">
                     Live counts and per-shard hotness are paused while this table is very busy.
                     They will return automatically once it settles.
                 </div>
             }
-            <div class="explorer-tiles">
+            <div class="lx-metrics-tiles">
                 <MetricTile Label="Lifecycle" Value="@m.Lifecycle.ToString()" />
                 <MetricTile Label="Shards" Value="@m.ShardCount.ToString()" />
                 <MetricTile Label="Live keys" Value="@(m.DetailPaused ? PausedValue : m.LiveKeys.ToString("N0"))" />
@@ -76,11 +76,11 @@
                 }
             </div>
 
-            <section class="explorer-hotness">
-                <h3 class="explorer-section-title">Per-shard hotness</h3>
+            <section class="lx-metrics-hotness">
+                <h3 class="lx-metrics-section-title">Per-shard hotness</h3>
                 @if (m.DetailPaused)
                 {
-                    <p class="explorer-metrics-muted">Per-shard hotness is paused while this table is very busy.</p>
+                    <p class="lx-metrics-muted">Per-shard hotness is paused while this table is very busy.</p>
                 }
                 else
                 {

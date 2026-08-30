@@ -100,10 +100,9 @@
 
 /*
   Accessibility: honour a reduced-motion preference (or a future reduced-motion
-  toggle that sets the same media state) without touching individual rules. This
-  mirrors the rule the Explorer already ships in `app.css`, so the design-system
-  layer holds the guarantee on its own for a head that does not load the legacy
-  stylesheet.
+  toggle that sets the same media state) without touching individual rules. The
+  design-system layer holds this guarantee on its own, so a head that loads only
+  the tokens and the primitives still honours it.
 */
 @media (prefers-reduced-motion: reduce) {
     *,

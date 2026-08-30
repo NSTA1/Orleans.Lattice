@@ -3,17 +3,17 @@
     the row's render mode calls for - a value diff, retained metadata only, the
     CRDT members that changed, or a not-yet-durable live marker.
 *@
-<li class="explorer-history-row @HistoryFormat.RowClass(Row)">
-    <div class="explorer-history-rowhead">
-        <span class="explorer-history-kind explorer-history-kind-@HistoryFormat.KindClass(Row.Kind)">@HistoryFormat.KindLabel(Row.Kind)</span>
+<li class="lx-history-row @HistoryFormat.RowClass(Row)">
+    <div class="lx-history-rowhead">
+        <span class="lx-history-kind lx-history-kind-@HistoryFormat.KindClass(Row.Kind)">@HistoryFormat.KindLabel(Row.Kind)</span>
         @if (Row.IsLiveTail)
         {
-            <span class="explorer-history-live-tag" title="Appended live from the change feed; metadata only, pending durable backfill.">live</span>
+            <span class="lx-history-live-tag" title="Appended live from the change feed; metadata only, pending durable backfill.">live</span>
         }
-        <span class="explorer-history-time" title="@HistoryFormat.FormatAbsolute(Row.Hlc)">@HistoryFormat.FormatRelative(Row.Hlc)</span>
-        <span class="explorer-history-origin">@HistoryFormat.OriginLabel(Row.OriginClusterId)</span>
+        <span class="lx-history-time" title="@HistoryFormat.FormatAbsolute(Row.Hlc)">@HistoryFormat.FormatRelative(Row.Hlc)</span>
+        <span class="lx-history-origin">@HistoryFormat.OriginLabel(Row.OriginClusterId)</span>
     </div>
-    <div class="explorer-history-rowbody">
+    <div class="lx-history-rowbody">
         @switch (Row.RenderMode)
         {
             case HistoryRowRenderMode.ValueDiff:
@@ -21,23 +21,23 @@
                 {
                     @if (Row.Diff.Count > 0)
                     {
-                        <pre class="explorer-history-diff">@foreach (var line in Row.Diff)
-{<span class="explorer-history-diff-@HistoryFormat.DiffClass(line.Kind)">@HistoryFormat.DiffPrefix(line.Kind)@line.Text
+                        <pre class="lx-history-diff">@foreach (var line in Row.Diff)
+{<span class="lx-history-diff-@HistoryFormat.DiffClass(line.Kind)">@HistoryFormat.DiffPrefix(line.Kind)@line.Text
 </span>}</pre>
                     }
                     else
                     {
-                        <pre class="explorer-history-value">@rendered.Content</pre>
+                        <pre class="lx-history-value">@rendered.Content</pre>
                     }
                     @if (rendered.Note is not null)
                     {
-                        <p class="explorer-history-note">@rendered.Note</p>
+                        <p class="lx-history-note">@rendered.Note</p>
                     }
                 }
                 break;
             case HistoryRowRenderMode.MetadataOnly:
-                <p class="explorer-history-metaonly">Values not retained - metadata only.</p>
-                <dl class="explorer-history-meta">
+                <p class="lx-history-metaonly">Values not retained - metadata only.</p>
+                <dl class="lx-history-meta">
                     <div><dt>Value hash</dt><dd>@HistoryFormat.FormatHash(Row.ValueHash)</dd></div>
                     <div><dt>Value length</dt><dd>@Row.ValueLength.ToString("N0") bytes</dd></div>
                 </dl>
@@ -45,30 +45,30 @@
             case HistoryRowRenderMode.CrdtMembers:
                 @if (Row.MemberChanges.Count > 0)
                 {
-                    <ul class="explorer-history-members">
+                    <ul class="lx-history-members">
                         @foreach (var member in Row.MemberChanges)
                         {
-                            <li class="explorer-history-member explorer-history-member-@HistoryFormat.MemberClass(member.Kind)">
-                                <span class="explorer-history-member-kind">@HistoryFormat.MemberLabel(member.Kind)</span>
-                                <code class="explorer-history-member-element">@HistoryFormat.ElementText(member)</code>
-                                <span class="explorer-history-member-replica">@member.ReplicaId (dot @member.Ordinal)</span>
+                            <li class="lx-history-member lx-history-member-@HistoryFormat.MemberClass(member.Kind)">
+                                <span class="lx-history-member-kind">@HistoryFormat.MemberLabel(member.Kind)</span>
+                                <code class="lx-history-member-element">@HistoryFormat.ElementText(member)</code>
+                                <span class="lx-history-member-replica">@member.ReplicaId (dot @member.Ordinal)</span>
                             </li>
                         }
                     </ul>
                 }
                 else
                 {
-                    <p class="explorer-history-metaonly">CRDT delta not retained in full - member changes unavailable for this revision.</p>
+                    <p class="lx-history-metaonly">CRDT delta not retained in full - member changes unavailable for this revision.</p>
                 }
                 break;
             case HistoryRowRenderMode.Delete:
-                <p class="explorer-history-metaonly">Key deleted.</p>
+                <p class="lx-history-metaonly">Key deleted.</p>
                 break;
             case HistoryRowRenderMode.RangeTombstone:
-                <p class="explorer-history-metaonly">Swept by a range delete@(Row.EndKey is not null ? $" up to {Row.EndKey}" : string.Empty).</p>
+                <p class="lx-history-metaonly">Swept by a range delete@(Row.EndKey is not null ? $" up to {Row.EndKey}" : string.Empty).</p>
                 break;
             case HistoryRowRenderMode.LiveTail:
-                <p class="explorer-history-metaonly explorer-history-livetail">
+                <p class="lx-history-metaonly lx-history-livetail">
                     Live @HistoryFormat.KindLabel(Row.Kind)@(Row.EndKey is not null ? $" up to {Row.EndKey}" : string.Empty) - metadata only, pending durable backfill.
                 </p>
                 break;

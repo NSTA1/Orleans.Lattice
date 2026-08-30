@@ -29,21 +29,21 @@
     --topo-load-4: #cc4a28;
 }
 
-.explorer-topology {
+.lx-topology {
     display: flex;
     flex-direction: column;
     gap: var(--lx-space-5);
     height: 100%;
 }
 
-.explorer-topology-toolbar {
+.lx-topology-toolbar {
     display: flex;
     align-items: center;
     gap: var(--lx-space-6);
     flex-wrap: wrap;
 }
 
-.explorer-topology-toggle {
+.lx-topology-toggle {
     display: inline-flex;
     align-items: center;
     gap: var(--lx-space-3);
@@ -53,21 +53,21 @@
     min-height: var(--lx-target-min);
 }
 
-.explorer-topology-trunc {
+.lx-topology-trunc {
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
     letter-spacing: var(--lx-tracking-wide);
     color: var(--lx-color-warning);
 }
 
-.explorer-topology-legend {
+.lx-topology-legend {
     display: inline-flex;
     align-items: center;
     gap: var(--lx-space-3);
     margin-left: auto;
 }
 
-.explorer-topology-legend-label {
+.lx-topology-legend-label {
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
     letter-spacing: var(--lx-tracking-wide);
@@ -75,20 +75,20 @@
     margin-right: var(--lx-space-1);
 }
 
-.explorer-topo-swatch {
+.lx-topo-swatch {
     width: 14px;
     height: 14px;
     border-radius: var(--lx-radius-sm);
     display: inline-block;
 }
 
-.explorer-topo-load-0 { fill: var(--topo-load-0); background: var(--topo-load-0); }
-.explorer-topo-load-1 { fill: var(--topo-load-1); background: var(--topo-load-1); }
-.explorer-topo-load-2 { fill: var(--topo-load-2); background: var(--topo-load-2); }
-.explorer-topo-load-3 { fill: var(--topo-load-3); background: var(--topo-load-3); }
-.explorer-topo-load-4 { fill: var(--topo-load-4); background: var(--topo-load-4); }
+.lx-topo-load-0 { fill: var(--topo-load-0); background: var(--topo-load-0); }
+.lx-topo-load-1 { fill: var(--topo-load-1); background: var(--topo-load-1); }
+.lx-topo-load-2 { fill: var(--topo-load-2); background: var(--topo-load-2); }
+.lx-topo-load-3 { fill: var(--topo-load-3); background: var(--topo-load-3); }
+.lx-topo-load-4 { fill: var(--topo-load-4); background: var(--topo-load-4); }
 
-.explorer-topology-canvas {
+.lx-topology-canvas {
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
@@ -97,7 +97,7 @@
     background: var(--lx-color-surface-sunken);
 }
 
-.explorer-topo-svg {
+.lx-topo-svg {
     display: block;
     width: 100%;
     height: 100%;
@@ -105,48 +105,48 @@
     touch-action: none;
 }
 
-.explorer-topo-svg.is-panning {
+.lx-topo-svg.is-panning {
     cursor: grabbing;
 }
 
-.explorer-topology-reset {
+.lx-topology-reset {
     padding: var(--lx-space-3) var(--lx-space-5);
     font-size: var(--lx-text-caption);
 }
 
-.explorer-topology-hint {
+.lx-topology-hint {
     font-size: var(--lx-text-micro);
     color: var(--lx-color-text-muted);
 }
 
-.explorer-topo-edge {
+.lx-topo-edge {
     stroke: var(--lx-color-border-strong);
     stroke-width: 1.5;
 }
 
-.explorer-topo-node {
+.lx-topo-node {
     cursor: default;
 }
 
-.explorer-topo-node.is-expandable {
+.lx-topo-node.is-expandable {
     cursor: pointer;
 }
 
-.explorer-topo-dot {
+.lx-topo-dot {
     stroke: var(--lx-color-surface-sunken);
     stroke-width: 2;
 }
 
-.explorer-topo-node.is-splitting .explorer-topo-dot {
+.lx-topo-node.is-splitting .lx-topo-dot {
     stroke: var(--lx-color-warning);
     stroke-width: 2.5;
 }
 
-.explorer-topo-node.is-expandable:hover .explorer-topo-dot {
+.lx-topo-node.is-expandable:hover .lx-topo-dot {
     stroke: var(--lx-color-accent);
 }
 
-.explorer-topo-badge {
+.lx-topo-badge {
     fill: var(--lx-color-accent-contrast);
     font-family: var(--lx-font-mono);
     font-size: var(--lx-text-micro);
@@ -154,14 +154,14 @@
     pointer-events: none;
 }
 
-.explorer-topo-expand {
+.lx-topo-expand {
     fill: var(--lx-color-text-muted);
     font-size: var(--lx-text-caption);
     text-anchor: middle;
     pointer-events: none;
 }
 
-.explorer-topology-state {
+.lx-topology-state {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -171,6 +171,6 @@
     font-size: var(--lx-text-body);
 }
 
-.explorer-topology-error {
+.lx-topology-error {
     color: var(--lx-color-danger);
 }

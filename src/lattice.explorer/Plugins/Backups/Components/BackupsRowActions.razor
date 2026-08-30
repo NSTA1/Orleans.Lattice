@@ -56,15 +56,15 @@
     <div class="lx-backups-field">
         <span class="lx-backups-field-label"></span>
         <div class="lx-backups-field-control">
-            <button type="button" class="explorer-btn"
+            <button type="button" class="lx-btn"
                     disabled="@(Owner.Busy || (!Row.IsSet && string.IsNullOrWhiteSpace(Owner.RestoreTargetFor(Row.Members[0]))))"
                     @onclick="Restore">Restore</button>
-            <button type="button" class="explorer-btn explorer-btn-danger"
+            <button type="button" class="lx-btn lx-btn-danger"
                     disabled="@Owner.Busy"
                     @onclick="Delete">Delete</button>
             @if (!Row.IsSet)
             {
-                <button type="button" class="explorer-btn"
+                <button type="button" class="lx-btn"
                         disabled="@Owner.Busy"
                         @onclick="OpenScheduleAsync"
                         title="Edit or remove this scope's recurring backup schedule">Schedule</button>

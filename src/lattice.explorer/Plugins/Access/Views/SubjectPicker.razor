@@ -69,7 +69,7 @@
             </ul>
             @if (_model.HasMore)
             {
-                <button type="button" class="explorer-btn" disabled="@(Disabled || _model.IsSearching)"
+                <button type="button" class="lx-btn" disabled="@(Disabled || _model.IsSearching)"
                         @onclick="OnLoadMoreAsync">Load more</button>
             }
         }
@@ -92,8 +92,8 @@
 
     // Composed once rather than interpolated per result per keystroke: the
     // result list re-renders on every debounce tick.
-    private const string ResultClass = "explorer-btn-link lxa-subject-result";
-    private const string SelectedResultClass = "explorer-btn-link lxa-subject-result is-selected";
+    private const string ResultClass = "lx-btn-link lxa-subject-result";
+    private const string SelectedResultClass = "lx-btn-link lxa-subject-result is-selected";
 
     private SubjectPickerModel _model = null!;
     private bool _initialized;

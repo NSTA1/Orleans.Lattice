@@ -3,8 +3,8 @@
     the hand-off into that index's dedicated browser. Rendered only when the
     selection is covered by at least one tag index.
 *@
-<div class="explorer-data-toolbar explorer-data-tagfilter">
-    <label class="explorer-data-tagfilter-field">
+<div class="lx-data-toolbar lx-data-tagfilter">
+    <label class="lx-data-tagfilter-field">
         Tag index
         <select disabled="@Loading" value="@SelectedIndex" @onchange="OnIndexSelected">
             @foreach (var index in Indexes)
@@ -14,7 +14,7 @@
         </select>
     </label>
 
-    <label class="explorer-data-tagfilter-field">
+    <label class="lx-data-tagfilter-field">
         Tag
         <select disabled="@(Loading || TagValuesLoading)" value="@TagValue" @onchange="OnTagSelected">
             <option value="">@(TagValuesLoading ? "Loading..." : "(any)")</option>
@@ -27,14 +27,14 @@
 
     @if (ActiveFilter is not null)
     {
-        <span class="explorer-data-tagfilter-active">
+        <span class="lx-data-tagfilter-active">
             Showing rows tagged <code>@ActiveFilter.Tag</code> in <code>@ActiveFilter.IndexName</code>
         </span>
     }
 
     @if (!string.IsNullOrEmpty(SelectedIndex))
     {
-        <button type="button" class="explorer-btn explorer-data-tagfilter-explore"
+        <button type="button" class="lx-btn lx-data-tagfilter-explore"
                 disabled="@Loading"
                 title="@($"Browse the {SelectedIndex} tag index")"
                 @onclick="OnExplore">

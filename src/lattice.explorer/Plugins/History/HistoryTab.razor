@@ -15,20 +15,20 @@
     (epic decision D7).
 *@
 
-<div class="explorer-history">
-    <div class="explorer-history-toolbar">
+<div class="lx-history">
+    <div class="lx-history-toolbar">
         @if (_key is not null)
         {
-            <div class="explorer-history-live">
-                <span class="explorer-history-live-dot explorer-history-live-dot-@HistoryFormat.LiveDotClass(_connectionState)"></span>
-                <span class="explorer-history-live-label">@HistoryFormat.LiveLabel(_connectionState)</span>
-                <span class="explorer-history-live-note"
+            <div class="lx-history-live">
+                <span class="lx-history-live-dot lx-history-live-dot-@HistoryFormat.LiveDotClass(_connectionState)"></span>
+                <span class="lx-history-live-label">@HistoryFormat.LiveLabel(_connectionState)</span>
+                <span class="lx-history-live-note"
                       title="The live feed only carries changes emitted while this surface is open: it extends the timeline forward from now and is not a substitute for durable retention of past changes. New rows show kind, time and origin first, then upgrade to the value diff or CRDT members once the durable backfill arrives.">
                     forward-only
                 </span>
             </div>
 
-            <label class="explorer-history-order">
+            <label class="lx-history-order">
                 <input type="checkbox" checked="@_newestFirst" @onchange="ToggleOrder" disabled="@_loading" />
                 Newest first
             </label>
@@ -37,53 +37,53 @@
 
     @if (_liveError is not null)
     {
-        <div class="explorer-history-hint explorer-history-error">Live updates stopped: @_liveError</div>
+        <div class="lx-history-hint lx-history-error">Live updates stopped: @_liveError</div>
     }
 
     @if (_key is null)
     {
-        <div class="explorer-history-state">Select a key in the Data tab to see its revision history.</div>
+        <div class="lx-history-state">Select a key in the Data tab to see its revision history.</div>
     }
     else if (_loading && _timeline is null)
     {
-        <div class="explorer-history-state">Loading history...</div>
+        <div class="lx-history-state">Loading history...</div>
     }
     else if (_error is not null)
     {
-        <div class="explorer-history-state explorer-history-error">
+        <div class="lx-history-state lx-history-error">
             <span>@_error</span>
         </div>
     }
     else if (_timeline is null)
     {
-        <div class="explorer-history-state">No history loaded.</div>
+        <div class="lx-history-state">No history loaded.</div>
     }
     else if (_timeline.Status == StateQueryStatus.TreeNotFound)
     {
-        <div class="explorer-history-state">Tree not found (it may have been deleted since the catalog was listed).</div>
+        <div class="lx-history-state">Tree not found (it may have been deleted since the catalog was listed).</div>
     }
     else if (_timeline.Status == StateQueryStatus.KeyNotFound || !_timeline.HasRows)
     {
-        <div class="explorer-history-state">No revisions recorded for <code>@_key</code>.</div>
+        <div class="lx-history-state">No revisions recorded for <code>@_key</code>.</div>
     }
     else
     {
         var t = _timeline;
-        <div class="explorer-history-head">
-            <code class="explorer-history-key" title="@_key">@_key</code>
+        <div class="lx-history-head">
+            <code class="lx-history-key" title="@_key">@_key</code>
             @if (t.ActiveRetentionMode is { } mode)
             {
-                <span class="explorer-history-badge explorer-history-badge-retention" title="Active retention mode for this key">
+                <span class="lx-history-badge lx-history-badge-retention" title="Active retention mode for this key">
                     @HistoryFormat.RetentionBadge(mode, t.ActiveValueRetained)
                 </span>
             }
-            <span class="explorer-history-badge explorer-history-badge-bound">@HistoryFormat.BoundBadge(t.Bound)</span>
+            <span class="lx-history-badge lx-history-badge-bound">@HistoryFormat.BoundBadge(t.Bound)</span>
         </div>
 
         @switch (t.Bound)
         {
             case EntryHistoryBound.Truncated:
-                <div class="explorer-history-banner explorer-history-banner-truncated">
+                <div class="lx-history-banner lx-history-banner-truncated">
                     History truncated by retention. Older revisions
                     @if (t.EarliestAvailable.WallClockTicks > 0)
                     {
@@ -93,12 +93,12 @@
                 </div>
                 break;
             case EntryHistoryBound.WalWindowFallback:
-                <div class="explorer-history-hint">
+                <div class="lx-history-hint">
                     No durable history view is enabled for this tree; showing only the retained write-ahead-log window.
                 </div>
                 break;
             default:
-                <div class="explorer-history-hint">
+                <div class="lx-history-hint">
                     Durable history view, bounded only by the configured retention age.
                 </div>
                 break;
@@ -108,8 +108,8 @@
 
         @if (t.HasMore)
         {
-            <div class="explorer-history-more">
-                <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadMoreAsync">
+            <div class="lx-history-more">
+                <button type="button" class="lx-btn" disabled="@_loading" @onclick="LoadMoreAsync">
                     @(_loading ? "Loading..." : "Load more revisions")
                 </button>
             </div>

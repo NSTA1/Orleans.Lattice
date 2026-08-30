@@ -2,12 +2,12 @@
     The scan controls: refresh, page size, cursor isolation, and the pager. All
     state lives on the parent; this component only renders and raises.
 *@
-<div class="explorer-data-toolbar">
-    <button type="button" class="explorer-btn" disabled="@Loading" @onclick="OnRefresh">
+<div class="lx-data-toolbar">
+    <button type="button" class="lx-btn" disabled="@Loading" @onclick="OnRefresh">
         @(Loading ? "Loading..." : "Refresh")
     </button>
 
-    <label class="explorer-data-pagesize">
+    <label class="lx-data-pagesize">
         Page size
         <select disabled="@Loading" @onchange="OnPageSizeSelected">
             @foreach (var size in DataPaging.PageSizes)
@@ -17,19 +17,19 @@
         </select>
     </label>
 
-    <label class="explorer-data-scanmode">
+    <label class="lx-data-scanmode">
         <input type="checkbox" disabled="@Loading"
                checked="@(ScanMode == EntryScanMode.Snapshot)" @onchange="OnScanModeToggled" />
         Consistent snapshot
-        <span class="explorer-data-infoicon" tabindex="0" role="img"
+        <span class="lx-data-infoicon" tabindex="0" role="img"
               aria-label="Consistent snapshot scan mode explanation"
               title="Off (default): a live scan reads current data cheaply, so entries written after you start paging can appear on later pages. On: a consistent snapshot freezes the table at the moment you open the scan, so every page reflects one instant - at the cost of a heavier per-shard capture that can be shed while the table is very busy.">i</span>
     </label>
 
-    <div class="explorer-data-pager">
-        <button type="button" class="explorer-btn" disabled="@(Loading || !CanGoPrevious)" @onclick="OnPrevious">Prev</button>
-        <span class="explorer-data-pagenum">Page @(PageIndex + 1)</span>
-        <button type="button" class="explorer-btn" disabled="@(Loading || !CanGoNext)" @onclick="OnNext">Next</button>
+    <div class="lx-data-pager">
+        <button type="button" class="lx-btn" disabled="@(Loading || !CanGoPrevious)" @onclick="OnPrevious">Prev</button>
+        <span class="lx-data-pagenum">Page @(PageIndex + 1)</span>
+        <button type="button" class="lx-btn" disabled="@(Loading || !CanGoNext)" @onclick="OnNext">Next</button>
     </div>
 </div>
 

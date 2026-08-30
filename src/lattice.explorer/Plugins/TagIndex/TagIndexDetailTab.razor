@@ -11,7 +11,7 @@
     never from a media query (epic decision D7).
 *@
 
-<div class="explorer-tagindex">
+<div class="lx-tagindex">
     @if (string.IsNullOrEmpty(IndexName))
     {
         <div class="lx-selection-state">This selection is not a tag index.</div>
@@ -24,22 +24,22 @@
     {
         <div class="lx-selection-state lx-selection-state-error">
             <span>@_error</span>
-            <button type="button" class="explorer-btn-link" @onclick="LoadAsync">Try again</button>
+            <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
         </div>
     }
     else
     {
-        <div class="explorer-tagindex-summary">
-            <span class="explorer-badge">index</span>
-            <span class="explorer-tagindex-name">@IndexName</span>
-            <span class="explorer-tagindex-stat">@_coveredTrees.Count covered tree@(_coveredTrees.Count == 1 ? "" : "s")</span>
-            <span class="explorer-tagindex-stat">@_tags.Count tag@(_tags.Count == 1 ? "" : "s")</span>
-            <button type="button" class="explorer-btn" disabled="@_loading" @onclick="LoadAsync">
+        <div class="lx-tagindex-summary">
+            <span class="lx-badge">index</span>
+            <span class="lx-tagindex-name">@IndexName</span>
+            <span class="lx-tagindex-stat">@_coveredTrees.Count covered tree@(_coveredTrees.Count == 1 ? "" : "s")</span>
+            <span class="lx-tagindex-stat">@_tags.Count tag@(_tags.Count == 1 ? "" : "s")</span>
+            <button type="button" class="lx-btn" disabled="@_loading" @onclick="LoadAsync">
                 @(_loading ? "Loading..." : "Refresh")
             </button>
         </div>
 
-        <div class="explorer-tagindex-body @(IsCompact ? "is-stacked" : null)">
+        <div class="lx-tagindex-body @(IsCompact ? "is-stacked" : null)">
             <TagIndexTrees Trees="_coveredTrees" OnOpenTree="_openTree" />
 
             <TagIndexTags Tags="_tags" SelectedTag="_selectedTag" OnSelectTag="_selectTag" />

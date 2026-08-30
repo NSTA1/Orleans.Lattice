@@ -38,23 +38,23 @@
     lifetime token by hand.
 *@
 
-<section class="explorer-detail" aria-label="Detail">
-    <header class="explorer-detail-header">
+<section class="lx-shell-detail" aria-label="Detail">
+    <header class="lx-shell-detail-header">
         <LatticeAdaptiveTabs Tabs="_tabs"
                              ActiveId="@(_restored ? _activePluginId : null)"
                              OnSelect="_activate"
                              Label="Detail tabs"
-                             Class="explorer-detail-tabs" />
+                             Class="lx-shell-detail-tabs" />
         @if (_selected is not null)
         {
-            <span class="explorer-detail-title" title="@_selected.Id">@_selected.Label</span>
+            <span class="lx-shell-detail-title" title="@_selected.Id">@_selected.Label</span>
         }
     </header>
 
-    <div class="explorer-detail-body">
+    <div class="lx-shell-detail-body">
         @if (_selected is null)
         {
-            <div class="explorer-detail-empty">
+            <div class="lx-shell-detail-empty">
                 <p>Select a tree or view to inspect it.</p>
             </div>
         }
@@ -62,11 +62,11 @@
         {
             @* Hold the body until the retained surface is known so the default
                one never renders first and then switches (a visible flicker). *@
-            <div class="explorer-detail-empty" aria-busy="true"></div>
+            <div class="lx-shell-detail-empty" aria-busy="true"></div>
         }
         else if (_activePlugin is null)
         {
-            <div class="explorer-detail-empty">
+            <div class="lx-shell-detail-empty">
                 <p>@_emptyBodyMessage</p>
             </div>
         }
