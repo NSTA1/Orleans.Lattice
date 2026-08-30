@@ -217,8 +217,18 @@ public sealed class AppShellReflowTests
 
         // aria-selected is an enumerated ARIA attribute, not an HTML boolean
         // one. Blazor renders a bool parameter as a boolean attribute, so the
-        // shell used to emit aria-selected="" on the active tab and omit it
-        // entirely everywhere else - which tells a screen-reader user nothing.
+        // shell used to emit the bare attribute name on the active tab and omit
+        // it entirely everywhere else - which tells a screen-reader user nothing.
+        //
+        // Derive the invalid count rather than matching a broken spelling. The
+        // static renderer emits the bare name, not aria-selected="", so asserting
+        // the empty form is absent is vacuous - it never fires in either
+        // direction. Subtracting the two valid spellings from the total catches
+        // the bare form, the empty form, and any rendering nobody anticipated.
+        var invalid = AppShellRenderHarness.CountOccurrences(html, "aria-selected")
+            - selected
+            - unselected;
+
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("role=\"tablist\""));
@@ -229,9 +239,9 @@ public sealed class AppShellReflowTests
                 Is.EqualTo(tabs),
                 "and every tab states its selection rather than omitting it");
             Assert.That(
-                html,
-                Does.Not.Contain("aria-selected=\"\""),
-                "the empty boolean form is invalid for an enumerated attribute");
+                invalid,
+                Is.Zero,
+                "a bare or empty aria-selected is not a valid enumerated value");
         });
     }
 
