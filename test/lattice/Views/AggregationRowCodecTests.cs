@@ -146,4 +146,124 @@ public class AggregationRowCodecTests
             Assert.That(decoded["s1"].Timestamp, Is.EqualTo(ts));
         });
     }
+
+    // The row payloads are persisted opaquely in the view tree, so the encoders
+    // must stay byte-for-byte compatible with the BinaryWriter layout they were
+    // written with (7-bit length-prefixed UTF-8 strings, one bool byte,
+    // little-endian numerics, raw value bytes). These tests pin that wire format
+    // against a reference BinaryWriter across empty, unicode, null-member,
+    // long-string (multi-byte length prefix) and empty-collection inputs.
+
+    private static readonly string LongAscii = new('x', 200);
+    private static readonly string Unicode = "grp-\u00e9\u00fc-\u4e2d\u6587-\U0001F600";
+
+    private static byte[] ReferenceMembership(in AggregationRowCodec.MembershipRow row)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8);
+        writer.Write(row.GroupKey);
+        writer.Write(row.Member is not null);
+        writer.Write(row.Numeric);
+        if (row.Member is not null)
+        {
+            writer.Write(row.Member);
+        }
+
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static byte[] ReferenceInverse(IReadOnlyDictionary<string, AggregationRowCodec.MemberEntry> entries)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8);
+        writer.Write(entries.Count);
+        foreach (var (sourceKey, entry) in entries)
+        {
+            writer.Write(sourceKey);
+            writer.Write(entry.Member is not null);
+            writer.Write(entry.Numeric);
+            if (entry.Member is not null)
+            {
+                writer.Write(entry.Member);
+            }
+        }
+
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static byte[] ReferenceFoldInverse(IReadOnlyDictionary<string, AggregationRowCodec.FoldMember> entries)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8);
+        writer.Write(entries.Count);
+        foreach (var (sourceKey, entry) in entries)
+        {
+            writer.Write(sourceKey);
+            writer.Write(entry.Timestamp.WallClockTicks);
+            writer.Write(entry.Timestamp.Counter);
+            writer.Write(entry.Value.Length);
+            writer.Write(entry.Value);
+        }
+
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static IEnumerable<AggregationRowCodec.MembershipRow> MembershipCases()
+    {
+        yield return new AggregationRowCodec.MembershipRow("grp", 12.5, "mbr");
+        yield return new AggregationRowCodec.MembershipRow("grp", 3.0, null);
+        yield return new AggregationRowCodec.MembershipRow(string.Empty, 0.0, string.Empty);
+        yield return new AggregationRowCodec.MembershipRow(Unicode, -1.5, Unicode);
+        yield return new AggregationRowCodec.MembershipRow(LongAscii, double.MaxValue, LongAscii);
+    }
+
+    [Test]
+    public void EncodeMembership_is_byte_identical_to_reference()
+    {
+        foreach (var row in MembershipCases())
+        {
+            Assert.That(AggregationRowCodec.EncodeMembership(row), Is.EqualTo(ReferenceMembership(row)));
+        }
+    }
+
+    [Test]
+    public void EncodeInverse_is_byte_identical_to_reference()
+    {
+        foreach (var entries in new[]
+        {
+            new Dictionary<string, AggregationRowCodec.MemberEntry>(StringComparer.Ordinal),
+            new Dictionary<string, AggregationRowCodec.MemberEntry>(StringComparer.Ordinal)
+            {
+                ["s1"] = new(1.5, "m1"),
+                ["s2"] = new(2.5, null),
+                [Unicode] = new(double.MinValue, Unicode),
+                [LongAscii] = new(0.0, LongAscii),
+            },
+        })
+        {
+            Assert.That(AggregationRowCodec.EncodeInverse(entries), Is.EqualTo(ReferenceInverse(entries)));
+        }
+    }
+
+    [Test]
+    public void EncodeFoldInverse_is_byte_identical_to_reference()
+    {
+        var ts = new HybridLogicalClock { WallClockTicks = 123, Counter = 4 };
+        foreach (var entries in new[]
+        {
+            new Dictionary<string, AggregationRowCodec.FoldMember>(StringComparer.Ordinal),
+            new Dictionary<string, AggregationRowCodec.FoldMember>(StringComparer.Ordinal)
+            {
+                ["s1"] = new(new byte[] { 9, 8, 7 }, ts),
+                ["s2"] = new(Array.Empty<byte>(), HybridLogicalClock.Zero),
+                [Unicode] = new(new byte[300], new HybridLogicalClock { WallClockTicks = long.MaxValue, Counter = int.MaxValue }),
+            },
+        })
+        {
+            Assert.That(AggregationRowCodec.EncodeFoldInverse(entries), Is.EqualTo(ReferenceFoldInverse(entries)));
+        }
+    }
 }
