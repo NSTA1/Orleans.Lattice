@@ -43,6 +43,29 @@ public sealed class ExplorerPluginAccessStore : IExplorerPluginAccessStore
     }
 
     /// <inheritdoc />
+    public bool AnyScopeAllowed(string pluginId, Func<string, bool> scopeFilter)
+    {
+        ArgumentNullException.ThrowIfNull(pluginId);
+        ArgumentNullException.ThrowIfNull(scopeFilter);
+
+        foreach (var entry in _entries)
+        {
+            // Plugin-level entries carry no scope and are deliberately skipped:
+            // the caller is asking what its scopes say, not what it last
+            // decided about itself.
+            if (entry.Key.Scope is { } scope
+                && entry.Value.IsAllowed
+                && string.Equals(entry.Key.PluginId, pluginId, StringComparison.Ordinal)
+                && scopeFilter(scope))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc />
     public void Set(ExplorerPluginAccessKey key, ExplorerPluginAccess access)
     {
         ArgumentNullException.ThrowIfNull(key.PluginId);

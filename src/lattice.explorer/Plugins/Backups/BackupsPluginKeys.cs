@@ -62,6 +62,29 @@ public static class BackupsPluginKeys
     /// <exception cref="ArgumentNullException"><paramref name="treeId"/> is <see langword="null"/>.</exception>
     public static string DeleteScope(string treeId) => Compose(treeId, DeleteSuffix);
 
+    /// <summary>
+    /// Whether <paramref name="scope"/> names a tree's list / read decision
+    /// rather than one of its operation decisions. A list scope is the bare tree
+    /// id, so this is "carries none of the operation suffixes".
+    /// <para>
+    /// This is what lets the plugin gate re-derive "at least one tree still
+    /// grants me list access" from the keyed store at probe time, instead of
+    /// remembering that a scope once did.
+    /// </para>
+    /// </summary>
+    /// <param name="scope">The scope name to classify. Must not be <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the scope is a tree's list scope.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <see langword="null"/>.</exception>
+    public static bool IsListScope(string scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        return !scope.EndsWith(CaptureSuffix, StringComparison.Ordinal)
+            && !scope.EndsWith(CaptureIncrementalSuffix, StringComparison.Ordinal)
+            && !scope.EndsWith(RestoreSuffix, StringComparison.Ordinal)
+            && !scope.EndsWith(DeleteSuffix, StringComparison.Ordinal);
+    }
+
     private static string Compose(string treeId, string suffix)
     {
         ArgumentNullException.ThrowIfNull(treeId);

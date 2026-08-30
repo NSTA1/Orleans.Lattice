@@ -238,6 +238,91 @@ public sealed class ExplorerPluginAccessStoreTests
     }
 
     [Test]
+    public void AnyScopeAllowed_reads_the_scoped_entries_and_ignores_the_plugin_level_one()
+    {
+        var store = new ExplorerPluginAccessStore();
+
+        // A coarse admission is not a scope grant: a plugin must not be able to
+        // re-admit itself through its own plugin-level decision.
+        store.Set(PluginId, ExplorerPluginAccess.Allowed);
+        Assert.That(store.AnyScopeAllowed(PluginId, static _ => true), Is.False);
+
+        store.Set(PluginId, "tree-a", ExplorerPluginAccess.Allowed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.AnyScopeAllowed(PluginId, static _ => true), Is.True);
+            Assert.That(store.AnyScopeAllowed("other", static _ => true), Is.False);
+        });
+    }
+
+    [Test]
+    public void AnyScopeAllowed_honours_the_scope_filter()
+    {
+        var store = new ExplorerPluginAccessStore();
+        store.Set(PluginId, "tree-a/capture", ExplorerPluginAccess.Allowed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                store.AnyScopeAllowed(PluginId, static scope => !scope.EndsWith("/capture", StringComparison.Ordinal)),
+                Is.False);
+            Assert.That(
+                store.AnyScopeAllowed(PluginId, static scope => scope.EndsWith("/capture", StringComparison.Ordinal)),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void AnyScopeAllowed_only_counts_an_allowed_scope()
+    {
+        var store = new ExplorerPluginAccessStore();
+        store.Set(PluginId, "tree-a", ExplorerPluginAccess.Denied);
+        store.Set(PluginId, "tree-b", ExplorerPluginAccess.Unavailable);
+        store.Set(PluginId, "tree-c", ExplorerPluginAccess.AuthenticationRequired);
+
+        Assert.That(store.AnyScopeAllowed(PluginId, static _ => true), Is.False);
+    }
+
+    [Test]
+    public void AnyScopeAllowed_heals_when_the_grant_behind_a_scope_goes_away()
+    {
+        // The property the Backups gate depends on: the answer is derived from
+        // the entries, so overwriting a scope, clearing the plugin, or resetting
+        // the store all close it again. A cached bool would not.
+        var store = new ExplorerPluginAccessStore();
+        store.Set(PluginId, "tree-a", ExplorerPluginAccess.Allowed);
+        var granted = store.AnyScopeAllowed(PluginId, static _ => true);
+
+        store.Set(PluginId, "tree-a", ExplorerPluginAccess.Denied);
+        var afterOverwrite = store.AnyScopeAllowed(PluginId, static _ => true);
+
+        store.Set(PluginId, "tree-a", ExplorerPluginAccess.Allowed);
+        store.Clear(PluginId);
+        var afterClear = store.AnyScopeAllowed(PluginId, static _ => true);
+
+        store.Set(PluginId, "tree-a", ExplorerPluginAccess.Allowed);
+        store.Reset();
+        var afterReset = store.AnyScopeAllowed(PluginId, static _ => true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(granted, Is.True);
+            Assert.That(afterOverwrite, Is.False);
+            Assert.That(afterClear, Is.False);
+            Assert.That(afterReset, Is.False);
+        });
+    }
+
+    [Test]
+    public void AnyScopeAllowed_of_an_untouched_store_is_false()
+    {
+        Assert.That(
+            new ExplorerPluginAccessStore().AnyScopeAllowed(PluginId, static _ => true),
+            Is.False);
+    }
+
+    [Test]
     public void Null_arguments_throw()
     {
         var store = new ExplorerPluginAccessStore();
@@ -254,6 +339,8 @@ public sealed class ExplorerPluginAccessStoreTests
                 () => store.Set(default(ExplorerPluginAccessKey), ExplorerPluginAccess.Allowed),
                 Throws.ArgumentNullException);
             Assert.That(() => store.Clear(null!), Throws.ArgumentNullException);
+            Assert.That(() => store.AnyScopeAllowed(null!, static _ => true), Throws.ArgumentNullException);
+            Assert.That(() => store.AnyScopeAllowed("a", null!), Throws.ArgumentNullException);
         });
     }
 

@@ -98,6 +98,31 @@ public class SchemaAdminCapabilityServiceTests
     }
 
     [Test]
+    public async Task A_denied_plugin_re_opens_when_the_control_endpoint_becomes_reachable_again()
+    {
+        // The allowed -> denied -> allowed transition. It is the shape that has
+        // twice turned an idempotent initializer into a second-call no-op, so
+        // the gate is asserted to make the round trip rather than only the first
+        // leg of it.
+        var client = new FakeSchemaAdminClient();
+        var service = Create(client);
+        var first = await service.ProbeAsync(Context);
+
+        client.ProbeThrows = new RpcException(new Status(StatusCode.Unavailable, "gone"));
+        var denied = await service.ProbeAsync(Context);
+
+        client.ProbeThrows = null;
+        var reopened = await service.ProbeAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
+            Assert.That(denied.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
+            Assert.That(reopened.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
+        });
+    }
+
+    [Test]
     public async Task ProbeTreeAsync_maps_all_capability_flags()
     {
         var client = new FakeSchemaAdminClient

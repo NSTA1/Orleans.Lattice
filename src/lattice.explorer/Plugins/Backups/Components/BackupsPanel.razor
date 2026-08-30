@@ -20,14 +20,22 @@
         <p class="lx-backups-result @ResultClass(result.Status)" role="status">@result.Message</p>
     }
 
+    @*
+        aria-selected takes the literal string "true" or "false": it is an
+        enumerated ARIA attribute, not an HTML boolean one. Handing Blazor a bool
+        emits aria-selected="" for the active tab and omits the attribute
+        entirely for the others, so a screen-reader user cannot tell which tab is
+        selected. Before the restore completes neither tab is active, and both
+        must then say "false" rather than say nothing.
+    *@
     <div class="lx-tabstrip" role="tablist" aria-label="Backups tabs">
         <button type="button" role="tab"
                 class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "is-active" : null)"
-                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.New)"
+                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "true" : "false")"
                 @onclick="@(() => SetSubTabAsync(BackupsSubTab.New))">New Backup</button>
         <button type="button" role="tab"
                 class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "is-active" : null)"
-                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.Existing)"
+                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "true" : "false")"
                 @onclick="@(() => SetSubTabAsync(BackupsSubTab.Existing))">Existing Backups</button>
     </div>
 

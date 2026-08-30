@@ -42,6 +42,7 @@
             <ul class="lxm-grants">
                 @foreach (var row in State.Inbound)
                 {
+                    var actions = Actions(row);
                     <li class="lxm-grant @(row.NeedsDecision ? "is-decision" : null)" @key="row.Grant.GrantId">
                         <div class="lxm-grant-head">
                             <span class="lxm-grant-party">
@@ -73,13 +74,13 @@
                                 <button type="button"
                                         class="lx-btn lxm-approve-action"
                                         disabled="@(State.Busy || !State.Allowed)"
-                                        @onclick="@(() => State.ApproveGrantAsync(row))">
+                                        @onclick="actions.Approve">
                                     Approve and make live
                                 </button>
                                 <button type="button"
                                         class="lx-btn"
                                         disabled="@(State.Busy || !State.Allowed)"
-                                        @onclick="@(() => State.RejectGrantAsync(row))">Reject</button>
+                                        @onclick="actions.Reject">Reject</button>
                             </div>
                         }
                         else if (row.CanRevoke)
@@ -88,7 +89,7 @@
                                 <button type="button"
                                         class="lx-btn lxm-destructive-action"
                                         disabled="@(State.Busy || !State.Allowed)"
-                                        @onclick="@(() => State.RevokeGrantAsync(row))">Withdraw</button>
+                                        @onclick="actions.Revoke">Withdraw</button>
                             </div>
                         }
                     </li>
@@ -109,6 +110,7 @@
             <ul class="lxm-grants">
                 @foreach (var row in State.Outbound)
                 {
+                    var actions = Actions(row);
                     <li class="lxm-grant" @key="row.Grant.GrantId">
                         <div class="lxm-grant-head">
                             <span class="lxm-grant-party">
@@ -143,7 +145,7 @@
                                 <button type="button"
                                         class="lx-btn lxm-destructive-action"
                                         disabled="@(State.Busy || !State.Allowed)"
-                                        @onclick="@(() => State.RevokeGrantAsync(row))">Withdraw</button>
+                                        @onclick="actions.Revoke">Withdraw</button>
                             </div>
                         }
                     </li>
@@ -202,8 +204,49 @@
 </div>
 
 @code {
+    private readonly Dictionary<string, RowActions> _actions = new(StringComparer.Ordinal);
+
     /// <summary>The workspace this surface reads and drives.</summary>
     [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
+
+    /// <summary>
+    /// The three decision callbacks for one grant, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambdas inline allocated a closure and an
+    /// <see cref="EventCallback"/> per action per row per render, and gave each
+    /// delegate a new identity, so Blazor's attribute diffing re-registered every
+    /// handler instead of skipping it. The callbacks close over the entry rather
+    /// than over the row, and the entry is re-bound to the row instance being
+    /// rendered, so a reloaded grant is acted on as it is now. That matters here
+    /// above all: approving is the step that turns an offer into live access, and
+    /// withdrawing revokes it.
+    /// <para>
+    /// One map serves both directions because a grant id is unique across them,
+    /// and a grant never appears in both.
+    /// </para>
+    /// </remarks>
+    private RowActions Actions(TenantGrantRow row)
+    {
+        var grantId = row.Grant.GrantId;
+        if (_actions.TryGetValue(grantId, out var actions))
+        {
+            actions.Bind(row);
+            return actions;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the two lists it
+        // serves is holding callbacks for grants no longer rendered.
+        if (_actions.Count > (State.Inbound.Count + State.Outbound.Count) * 2)
+        {
+            _actions.Clear();
+        }
+
+        actions = new RowActions(this, row);
+        _actions.Add(grantId, actions);
+        return actions;
+    }
 
     private void OnGranteeInput(ChangeEventArgs args) =>
         State.OfferGranteeTenantId = args.Value?.ToString() ?? string.Empty;
@@ -218,4 +261,27 @@
             Enum.TryParse<ExplorerTenantGrantAccess>(args.Value?.ToString(), out var parsed)
                 ? parsed
                 : ExplorerTenantGrantAccess.Read;
+
+    /// <summary>One grant row's pre-bound decision callbacks.</summary>
+    private sealed class RowActions
+    {
+        private TenantGrantRow _row;
+
+        public RowActions(MyTenantSharing view, TenantGrantRow row)
+        {
+            _row = row;
+            Approve = EventCallback.Factory.Create(view, () => view.State.ApproveGrantAsync(_row));
+            Reject = EventCallback.Factory.Create(view, () => view.State.RejectGrantAsync(_row));
+            Revoke = EventCallback.Factory.Create(view, () => view.State.RevokeGrantAsync(_row));
+        }
+
+        public EventCallback Approve { get; }
+
+        public EventCallback Reject { get; }
+
+        public EventCallback Revoke { get; }
+
+        /// <summary>Re-points the bound callbacks at the row instance being rendered.</summary>
+        public void Bind(TenantGrantRow row) => _row = row;
+    }
 }

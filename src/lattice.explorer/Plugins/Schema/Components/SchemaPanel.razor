@@ -32,13 +32,19 @@
             </p>
             <header class="lx-schema-header">
                 <div class="lx-tabstrip" role="tablist" aria-label="Schema tabs">
+                    @*
+                        aria-selected takes the literal string "true" or "false":
+                        it is an enumerated ARIA attribute, not an HTML boolean
+                        one, so a bool emits aria-selected="" on the active tab
+                        and omits the attribute on the others.
+                    *@
                     @for (var i = 0; i < _tabs.Length; i++)
                     {
                         var tab = _tabs[i];
                         var isActive = tab.Tab == _tab;
                         <button type="button" role="tab"
                                 class="@(isActive ? ActiveTabClass : TabClass)"
-                                aria-selected="@isActive"
+                                aria-selected="@(isActive ? "true" : "false")"
                                 @onclick="tab.Activate">@tab.Label</button>
                     }
                 </div>

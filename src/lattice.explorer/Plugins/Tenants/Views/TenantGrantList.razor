@@ -20,6 +20,7 @@ else
     <ul class="lxt-grant-list">
         @foreach (var grant in Rows)
         {
+            var actions = Actions(grant);
             <li class="lxt-grant @grant.StateClass" @key="grant.GrantId">
                 <div class="lxt-grant-head">
                     <span class="lxt-badge @grant.StateClass">@grant.StateLabel</span>
@@ -39,16 +40,16 @@ else
                     {
                         <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@Disabled"
-                                @onclick="@(() => State.ApproveGrantAsync(grant))">Approve</button>
+                                @onclick="actions.Approve">Approve</button>
                         <button type="button" class="lx-btn lxt-danger lxt-row-action"
                                 disabled="@Disabled"
-                                @onclick="@(() => State.RequestRejectGrant(grant))">Reject</button>
+                                @onclick="actions.Reject">Reject</button>
                     }
                     @if (grant.CanRevoke)
                     {
                         <button type="button" class="lx-btn lxt-danger lxt-row-action"
                                 disabled="@Disabled"
-                                @onclick="@(() => State.RequestRevokeGrant(grant))">Withdraw</button>
+                                @onclick="actions.Revoke">Withdraw</button>
                     }
                     @if (grant.IsClosed)
                     {
@@ -61,6 +62,8 @@ else
 }
 
 @code {
+    private readonly Dictionary<string, RowActions> _actions = new(StringComparer.Ordinal);
+
     /// <summary>The workspace the row actions run against.</summary>
     [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
 
@@ -73,4 +76,62 @@ else
 
     /// <summary>Whether every transition control renders disabled.</summary>
     private bool Disabled => State.Busy || !State.Allowed;
+
+    /// <summary>
+    /// The three transition callbacks for one grant, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambdas inline allocated a closure and an
+    /// <see cref="EventCallback"/> per action per row per render, and gave each
+    /// delegate a new identity, so Blazor's attribute diffing re-registered every
+    /// handler instead of skipping it. The callbacks close over the entry rather
+    /// than over the row, and the entry is re-bound to the row instance being
+    /// rendered, so a reloaded grant is acted on as it is now - never as it was
+    /// when its callbacks were first built. That matters here: reject and
+    /// withdraw are destructive and build a confirmation from the row they are
+    /// handed.
+    /// </remarks>
+    private RowActions Actions(TenantGrantRow grant)
+    {
+        if (_actions.TryGetValue(grant.GrantId, out var actions))
+        {
+            actions.Bind(grant);
+            return actions;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for grants no longer rendered.
+        if (_actions.Count > Rows.Count * 2)
+        {
+            _actions.Clear();
+        }
+
+        actions = new RowActions(this, grant);
+        _actions.Add(grant.GrantId, actions);
+        return actions;
+    }
+
+    /// <summary>One grant row's pre-bound transition callbacks.</summary>
+    private sealed class RowActions
+    {
+        private TenantGrantRow _grant;
+
+        public RowActions(TenantGrantList view, TenantGrantRow grant)
+        {
+            _grant = grant;
+            Approve = EventCallback.Factory.Create(view, () => view.State.ApproveGrantAsync(_grant));
+            Reject = EventCallback.Factory.Create(view, () => view.State.RequestRejectGrant(_grant));
+            Revoke = EventCallback.Factory.Create(view, () => view.State.RequestRevokeGrant(_grant));
+        }
+
+        public EventCallback Approve { get; }
+
+        public EventCallback Reject { get; }
+
+        public EventCallback Revoke { get; }
+
+        /// <summary>Re-points the bound callbacks at the row instance being rendered.</summary>
+        public void Bind(TenantGrantRow grant) => _grant = grant;
+    }
 }

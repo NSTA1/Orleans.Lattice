@@ -45,7 +45,7 @@
                         <button type="button" class="lx-btn lxt-danger lxt-row-action"
                                 disabled="@(State.Busy || !State.Allowed || !State.CanRemoveAdminSubject)"
                                 title="@(State.CanRemoveAdminSubject ? null : TenantRefusal.LastAdminSubjectRule)"
-                                @onclick="@(() => State.RequestRemoveAdminSubject(subject))">Revoke</button>
+                                @onclick="Revoke(subject)">Revoke</button>
                     </li>
                 }
             </ul>
@@ -134,6 +134,8 @@
 </div>
 
 @code {
+    private readonly Dictionary<string, EventCallback> _revoke = new(StringComparer.Ordinal);
+
     /// <summary>The workspace this view renders.</summary>
     [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
 
@@ -141,4 +143,35 @@
         State.OfferOperations = Enum.TryParse<ExplorerTenantGrantAccess>(args.Value?.ToString(), out var parsed)
             ? parsed
             : ExplorerTenantGrantAccess.Read;
+
+    /// <summary>
+    /// The revoke callback for one admin subject, bound once and reused on every
+    /// later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// Writing the lambda inline allocated a closure and an
+    /// <see cref="EventCallback"/> per subject per render, and gave the delegate
+    /// a new identity each time, so Blazor's attribute diffing re-registered
+    /// every handler rather than skipping it. The subject id is both the row
+    /// identity and the argument the destructive action takes, so a cached
+    /// callback builds the confirmation for exactly the subject its row names.
+    /// </remarks>
+    private EventCallback Revoke(string subject)
+    {
+        if (_revoke.TryGetValue(subject, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for subjects no longer rendered.
+        if (_revoke.Count > State.AdminSubjects.Count * 2)
+        {
+            _revoke.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.RequestRemoveAdminSubject(subject));
+        _revoke.Add(subject, callback);
+        return callback;
+    }
 }

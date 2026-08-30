@@ -62,6 +62,8 @@
     private LatticeTableColumn<string>[] _columns = Array.Empty<LatticeTableColumn<string>>();
     private bool _built;
 
+    private readonly Dictionary<string, EventCallback> _remove = new(StringComparer.Ordinal);
+
     /// <summary>The workspace this surface reads and drives.</summary>
     [Parameter, EditorRequired] public MyTenantWorkspace State { get; set; } = default!;
 
@@ -97,9 +99,39 @@
                                  class="lx-btn lxm-destructive-action"
                                  disabled="@(State.Busy || !State.CanRemoveAdminSubject(row))"
                                  title="@(State.CanRemoveAdminSubject(row) ? null : MyTenantWorkspace.LastAdminSubjectRefusal)"
-                                 @onclick="@(() => State.RemoveAdminSubjectAsync(row))">Remove</button>,
+                                 @onclick="Remove(row)">Remove</button>,
         };
 
         return [subject, action];
+    }
+
+    /// <summary>
+    /// The removal callback for one admin subject, bound once and reused on
+    /// every later render of that row.
+    /// </summary>
+    /// <remarks>
+    /// The column set is built once, but the lambda inside the action cell was
+    /// not: it allocated a closure and an <see cref="EventCallback"/> per subject
+    /// per render. The subject id is both the row identity and the argument the
+    /// destructive action takes, so a cached callback removes exactly the subject
+    /// its row names.
+    /// </remarks>
+    private EventCallback Remove(string subject)
+    {
+        if (_remove.TryGetValue(subject, out var callback))
+        {
+            return callback;
+        }
+
+        // Bounded rather than unbounded: a map that has outgrown the list it
+        // serves is holding callbacks for subjects no longer rendered.
+        if (_remove.Count > State.AdminSubjects.Count * 2)
+        {
+            _remove.Clear();
+        }
+
+        callback = EventCallback.Factory.Create(this, () => State.RemoveAdminSubjectAsync(subject));
+        _remove.Add(subject, callback);
+        return callback;
     }
 }
