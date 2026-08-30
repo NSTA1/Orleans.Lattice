@@ -4,11 +4,11 @@ using Microsoft.Extensions.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Samples.CrossClusterReplication;
 
-// Cross-cluster replication ships batches over grpc-dotnet. For a loopback
-// dev sample we talk plaintext HTTP/2 (h2c), which grpc-dotnet only permits
-// when this process-wide switch is set. Production uses https:// and needs no
-// switch. Must be set before any GrpcChannel is created.
-AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+// Cross-cluster replication ships batches over grpc-dotnet. For a loopback dev
+// sample we talk plaintext HTTP/2 (h2c): each site binds Kestrel to HTTP/2 with
+// no certificate, and grpc-dotnet speaks h2c by prior knowledge over an http://
+// address. Production uses https:// instead. No process-global switch is
+// involved either way.
 
 // Two mirror-image sites. Site A ships to B; B ships to A (active-active).
 // Distinct Orleans ports let both clusters live in one process; distinct gRPC

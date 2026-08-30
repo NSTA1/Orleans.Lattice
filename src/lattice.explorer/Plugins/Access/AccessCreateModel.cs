@@ -84,12 +84,16 @@ public sealed class AccessCreateModel
     /// The operator-facing helper text shown beside the all-trees (cluster-wide)
     /// grant affordance. States that the grant governs every application tree and
     /// that the cluster must have all-trees grants enabled for the server to
-    /// enforce it, since the UI cannot read the server-side flag.
+    /// enforce the data-plane operations, since the UI cannot read the server-side
+    /// flag, and that Telemetry is honoured regardless because it is a scopeless
+    /// cluster-wide capability rather than a data-plane grant.
     /// </summary>
     public const string AllTreesHelpText =
         "Grants the chosen operations on every application tree in the cluster (the reserved " +
-        "authorization and system trees are always excluded). Takes effect only when the cluster's " +
-        "all-trees grants option is enabled; if it is off, the rule is recorded but stays inert.";
+        "authorization and system trees are always excluded). The data-plane operations take " +
+        "effect only when the cluster's all-trees grants option is enabled; if it is off, they " +
+        "are recorded but stay inert. Telemetry is the exception: it is a cluster-wide capability " +
+        "attached to no tree, so a Telemetry grant here is honoured whether or not that option is on.";
 
     /// <summary>
     /// Builds an all-trees (cluster-wide) grant: a <b>whole-tree</b> rule over the

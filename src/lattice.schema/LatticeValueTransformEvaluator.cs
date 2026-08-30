@@ -216,7 +216,14 @@ internal static class LatticeValueTransformEvaluator
         LatticeConstantKind.String => constant.StringValue is null ? null : JsonValue.Create(constant.StringValue),
         LatticeConstantKind.Int64 => JsonValue.Create(constant.Int64Value),
         LatticeConstantKind.Double => JsonValue.Create(constant.DoubleValue),
-        _ => null,
+        // Fail closed, exactly as the unknown-operator and non-value-expression
+        // arms above do. An unrecognised kind is reachable on a mixed-version
+        // cluster (the enum is wire format and is persisted in
+        // SchemaRemediationState.Transform), and projecting it as JSON null is
+        // indistinguishable from an explicit Null constant - so a transform this
+        // node cannot map would silently overwrite the member's existing value
+        // across an entire remediation pass while reporting success.
+        _ => throw new InvalidOperationException($"Unknown constant kind '{constant.Kind}'."),
     };
 
     private static byte[] Serialize(JsonNode? output)

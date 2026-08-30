@@ -204,31 +204,32 @@ public class StallWatchdogTests
         // frozen AND the per-sample failure delta exceeds the threshold,
         // even with inFlight = 0 (the "chain drained because every
         // batch faulted, but FINAL never emits" wedge phenotype).
+        //
+        // The failure stream is driven by the snapshot callback itself
+        // rather than a background pump on its own timer. The watchdog
+        // reads the failed total exactly once per poll, so every poll
+        // observes a fresh delta above the threshold and the armed
+        // window is never reset by a poll that happened to land between
+        // two pump ticks. Racing two independent equal-period timers
+        // made this assertion intermittently fail (an unarmed poll
+        // resets lastProgressAt, so the watchdog needed another five
+        // consecutive armed polls inside the budget).
         long failedTotal = 0L;
-        var failureIncrement = 200L; // above the 100 threshold
+        const long failureIncrement = 200L; // above the 100 threshold
         var watchdog = Create(
             writtenTotal: () => 1_000L,
             inFlight: () => 0L,
-            failedTotal: () => Interlocked.Read(ref failedTotal),
+            failedTotal: () => Interlocked.Add(ref failedTotal, failureIncrement),
             failedDeltaThreshold: 100L,
             stallWindow: TimeSpan.FromMilliseconds(50),
             pollInterval: TimeSpan.FromMilliseconds(10));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        // The cancellation budget is deliberately well clear of the
+        // assertion deadline below so the two no longer race.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var run = watchdog.RunAsync(cts.Token);
 
-        // Pump failures faster than the poll cadence so each sample
-        // sees a fresh delta above the threshold.
-        var pump = Task.Run(async () =>
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                Interlocked.Add(ref failedTotal, failureIncrement);
-                await Task.Delay(10);
-            }
-        });
-
-        var deadline = DateTime.UtcNow.AddSeconds(2);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
         while (!watchdog.HasFiredForTesting && DateTime.UtcNow < deadline)
         {
             await Task.Delay(20);
@@ -239,7 +240,6 @@ public class StallWatchdogTests
 
         cts.Cancel();
         try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* shutdown */ }
-        try { await pump.WaitAsync(TimeSpan.FromSeconds(1)); } catch { /* shutdown */ }
     }
 
     [Test]
@@ -278,9 +278,14 @@ public class StallWatchdogTests
         // Healthy operation: writtenTotal increments every sample,
         // inFlight is pinned. The watchdog must NOT fire because
         // progress resets lastProgressAt on every sample.
+        //
+        // Progress is driven from the snapshot callback (the watchdog
+        // reads it once per poll) rather than a background pump, so no
+        // timer race can starve a poll of progress and let the
+        // in-flight arm accumulate a stall window.
         long written = 0L;
         var watchdog = Create(
-            writtenTotal: () => Interlocked.Read(ref written),
+            writtenTotal: () => Interlocked.Increment(ref written),
             inFlight: () => 16L, // pinned at "cap"
             failedTotal: () => 0L,
             failedDeltaThreshold: 100L,
@@ -290,24 +295,12 @@ public class StallWatchdogTests
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
         var run = watchdog.RunAsync(cts.Token);
 
-        // Drive progress every 5ms so each 10ms poll sees a new
-        // writtenTotal.
-        var pump = Task.Run(async () =>
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                Interlocked.Increment(ref written);
-                await Task.Delay(5);
-            }
-        });
-
         await Task.Delay(300);
         Assert.That(watchdog.HasFiredForTesting, Is.False,
             "healthy operation: must not fire while writtenTotal is advancing");
 
         cts.Cancel();
         try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch { /* shutdown */ }
-        try { await pump.WaitAsync(TimeSpan.FromSeconds(1)); } catch { /* shutdown */ }
     }
 
     [Test]
