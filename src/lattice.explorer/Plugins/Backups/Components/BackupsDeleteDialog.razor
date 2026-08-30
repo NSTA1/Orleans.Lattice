@@ -6,9 +6,9 @@
 
 @if (Owner.PendingDelete is { } pending)
 {
-    <div class="explorer-modal-backdrop" role="presentation">
-        <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-delete-title">
-            <h3 id="explorer-delete-title">Delete backup?</h3>
+    <div class="lx-modal-backdrop" role="presentation">
+        <div class="lx-modal" role="alertdialog" aria-modal="true" aria-labelledby="lx-backups-delete-title">
+            <h3 id="lx-backups-delete-title">Delete backup?</h3>
             @if (pending.IsIncrementalChain)
             {
                 <p>
@@ -33,9 +33,9 @@
                     ('@pending.Name'). <strong>This action cannot be undone.</strong>
                 </p>
             }
-            <div class="explorer-modal-actions">
-                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CancelDelete">Cancel</button>
-                <button type="button" class="explorer-btn explorer-btn-danger" disabled="@Owner.Busy" @onclick="Owner.ConfirmDeleteAsync">Delete</button>
+            <div class="lx-modal-actions">
+                <button type="button" class="lx-btn" disabled="@Owner.Busy" @onclick="Owner.CancelDelete">Cancel</button>
+                <button type="button" class="lx-btn lx-btn-danger" disabled="@Owner.Busy" @onclick="Owner.ConfirmDeleteAsync">Delete</button>
             </div>
         </div>
     </div>

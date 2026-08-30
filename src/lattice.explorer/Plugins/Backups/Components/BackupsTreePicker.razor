@@ -10,15 +10,15 @@
     <span class="lx-backups-picker-label" id="lx-backups-treepicker-label">Trees</span>
     @if (Owner.OrdinaryTrees.Count > 0 || Owner.RestoreShadowGroups.Count > 0)
     {
-        <ul class="explorer-nav-list" role="listbox" aria-labelledby="lx-backups-treepicker-label">
+        <ul class="lx-nav-list" role="listbox" aria-labelledby="lx-backups-treepicker-label">
             @foreach (var tree in Owner.OrdinaryTrees)
             {
                 <li role="option" aria-selected="@Owner.IsTreeSelected(tree.Id)" @key="tree.Id">
                     <button type="button"
-                            class="explorer-nav-item @(Owner.IsTreeSelected(tree.Id) ? "is-selected" : null)"
+                            class="lx-nav-item @(Owner.IsTreeSelected(tree.Id) ? "is-selected" : null)"
                             disabled="@Owner.Busy"
                             @onclick="@(() => Owner.AddTreeAsync(tree.Id))">
-                        <span class="explorer-nav-item-id">@tree.Id</span>
+                        <span class="lx-nav-item-id">@tree.Id</span>
                     </button>
                 </li>
             }
@@ -29,10 +29,10 @@
                 {
                     <li role="option" aria-selected="@Owner.IsTreeSelected(shadow.Id)" @key="shadow.Id">
                         <button type="button"
-                                class="explorer-nav-item @(Owner.IsTreeSelected(shadow.Id) ? "is-selected" : null)"
+                                class="lx-nav-item @(Owner.IsTreeSelected(shadow.Id) ? "is-selected" : null)"
                                 disabled="@Owner.Busy"
                                 @onclick="@(() => Owner.AddTreeAsync(shadow.Id))">
-                            <span class="explorer-nav-item-id">@shadow.Id</span>
+                            <span class="lx-nav-item-id">@shadow.Id</span>
                         </button>
                     </li>
                 }

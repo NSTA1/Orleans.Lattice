@@ -38,11 +38,16 @@ internal static class BackupsRenderHarness
     /// <param name="domain">The controlled domain model the panel resolves.</param>
     /// <param name="subTab">The sub-tab the stub preference store restores.</param>
     /// <param name="breakpoint">The breakpoint to cascade, or <see langword="null"/> for none.</param>
+    /// <param name="afterFirstRender">
+    /// An optional action run against the rendered panel before the markup is
+    /// read, so a test can reach a state that only an interaction produces.
+    /// </param>
     /// <returns>The rendered markup.</returns>
     public static async Task<string> RenderPanelAsync(
         IBackupsDomain domain,
         BackupsSubTab subTab = BackupsSubTab.Existing,
-        LatticeBreakpoint? breakpoint = LatticeBreakpoint.Expanded)
+        LatticeBreakpoint? breakpoint = LatticeBreakpoint.Expanded,
+        Func<BackupsPanel, Task>? afterFirstRender = null)
     {
         var preferences = Substitute.For<IExplorerPluginPreferences>();
         preferences.IsLoaded.Returns(true);
@@ -66,6 +71,8 @@ internal static class BackupsRenderHarness
 
         return await renderer.Dispatcher.InvokeAsync(async () =>
         {
+            BackupsPanel? panel = null;
+
             var parameters = breakpoint is null
                 ? ParameterView.Empty
                 : ParameterView.FromDictionary(new Dictionary<string, object?>
@@ -77,6 +84,12 @@ internal static class BackupsRenderHarness
                     ["ChildContent"] = (RenderFragment)(builder =>
                     {
                         builder.OpenComponent<BackupsPanel>(0);
+
+                        // Captured so a test can drive the panel into a state
+                        // only an interaction reaches - opening a dialog, for
+                        // instance - and then read the markup that produces.
+                        builder.AddComponentReferenceCapture(
+                            1, instance => panel = (BackupsPanel)instance);
                         builder.CloseComponent();
                     }),
                 });
@@ -84,6 +97,12 @@ internal static class BackupsRenderHarness
             var component = breakpoint is null
                 ? await renderer.RenderComponentAsync<BackupsPanel>(parameters)
                 : await renderer.RenderComponentAsync<CascadingValue<LatticeAdaptiveContext>>(parameters);
+
+            if (afterFirstRender is not null)
+            {
+                Assert.That(panel, Is.Not.Null, "the panel must render before a test can drive it");
+                await afterFirstRender(panel!);
+            }
 
             return component.ToHtmlString();
         });

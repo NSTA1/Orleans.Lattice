@@ -12,31 +12,31 @@
   width may be named).
 */
 
-.explorer-metrics {
+.lx-metrics {
     display: flex;
     flex-direction: column;
     gap: var(--lx-space-7);
 }
 
-.explorer-metrics-toolbar {
+.lx-metrics-toolbar {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: var(--lx-space-5);
 }
 
-.explorer-metrics-refresh {
+.lx-metrics-refresh {
     padding: var(--lx-space-3) var(--lx-space-5);
     font-size: var(--lx-text-caption);
 }
 
-.explorer-metrics-sampled {
+.lx-metrics-sampled {
     font-family: var(--lx-font-mono);
     font-size: var(--lx-text-caption);
     color: var(--lx-color-text-dim);
 }
 
-.explorer-metrics-state {
+.lx-metrics-state {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -45,11 +45,11 @@
     font-size: var(--lx-text-body);
 }
 
-.explorer-metrics-error {
+.lx-metrics-error {
     color: var(--lx-color-danger);
 }
 
-.explorer-metrics-muted {
+.lx-metrics-muted {
     color: var(--lx-color-text-dim);
     font-size: var(--lx-text-small);
 }
@@ -58,13 +58,13 @@
   Tiles auto-fill, so the grid collapses to a single column on a phone and
   spreads across a desktop window with no breakpoint of its own.
 */
-.explorer-tiles {
+.lx-metrics-tiles {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
     gap: var(--lx-space-5);
 }
 
-.explorer-tile {
+.lx-metrics-tile {
     display: flex;
     flex-direction: column;
     gap: var(--lx-space-3);
@@ -74,20 +74,20 @@
     border-radius: var(--lx-radius-md);
 }
 
-.explorer-tile-label {
+.lx-metrics-tile-label {
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
     letter-spacing: var(--lx-tracking-wide);
     color: var(--lx-color-text-muted);
 }
 
-.explorer-tile-value {
+.lx-metrics-tile-value {
     font-family: var(--lx-font-mono);
     font-size: var(--lx-text-title);
     color: var(--lx-color-text);
 }
 
-.explorer-section-title {
+.lx-metrics-section-title {
     margin: 0 0 var(--lx-space-4);
     font-size: var(--lx-text-small);
     font-weight: var(--lx-weight-semibold);

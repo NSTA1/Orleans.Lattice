@@ -12,7 +12,7 @@
 
 <section class="lx-backups" aria-label="Backups">
     <header class="lx-backups-header">
-        <button type="button" class="explorer-btn" disabled="@Busy" @onclick="ReloadAsync">Refresh</button>
+        <button type="button" class="lx-btn" disabled="@Busy" @onclick="ReloadAsync">Refresh</button>
     </header>
 
     @if (LastResult is { } result)
@@ -20,13 +20,13 @@
         <p class="lx-backups-result @ResultClass(result.Status)" role="status">@result.Message</p>
     }
 
-    <div class="explorer-tabstrip" role="tablist" aria-label="Backups tabs">
+    <div class="lx-tabstrip" role="tablist" aria-label="Backups tabs">
         <button type="button" role="tab"
-                class="explorer-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "is-active" : null)"
+                class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "is-active" : null)"
                 aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.New)"
                 @onclick="@(() => SetSubTabAsync(BackupsSubTab.New))">New Backup</button>
         <button type="button" role="tab"
-                class="explorer-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "is-active" : null)"
+                class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "is-active" : null)"
                 aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.Existing)"
                 @onclick="@(() => SetSubTabAsync(BackupsSubTab.Existing))">Existing Backups</button>
     </div>

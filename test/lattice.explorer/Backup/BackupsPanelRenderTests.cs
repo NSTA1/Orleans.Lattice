@@ -236,6 +236,92 @@ public sealed class BackupsPanelRenderTests
         var html = await BackupsRenderHarness.RenderPanelAsync(
             StubBackupsDomain.Create(new[] { SampleBackup.Manifest("backup-1") }));
 
-        Assert.That(html, Does.Not.Contain("explorer-modal-backdrop"));
+        Assert.That(html, Does.Not.Contain("lx-modal-backdrop"));
+    }
+
+    [Test]
+    public async Task The_sub_tab_strip_is_the_design_systems_tab_strip()
+    {
+        var html = await BackupsRenderHarness.RenderPanelAsync(StubBackupsDomain.Create());
+
+        // Backups was the last surface still declaring its own tab strip, in
+        // the app.css monolith. Composing the shared primitive is what gives it
+        // the same focus, disabled and compact-target behaviour as every other
+        // strip - and it is not something a build can check (issue #1770).
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("class=\"lx-tabstrip\""));
+            Assert.That(html, Does.Contain("lx-tab"));
+            Assert.That(html, Does.Not.Contain("explorer-tabstrip"));
+        });
+    }
+
+    [Test]
+    public async Task The_tree_picker_is_the_design_systems_navigation_list()
+    {
+        var html = await BackupsRenderHarness.RenderPanelAsync(
+            StubBackupsDomain.Create(trees: new[] { new BackupTreeOption("orders", null) }),
+            subTab: BackupsSubTab.New);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("class=\"lx-nav-list\""));
+            Assert.That(html, Does.Contain("lx-nav-item"));
+            Assert.That(html, Does.Contain("lx-nav-item-id"));
+        });
+    }
+
+    [Test]
+    public async Task The_row_actions_render_the_design_systems_button_primitives()
+    {
+        var html = await BackupsRenderHarness.RenderPanelAsync(
+            StubBackupsDomain.Create(new[] { SampleBackup.Manifest("backup-1") }),
+            afterFirstRender: panel => panel.SelectRowAsync(panel.Rows[0].Row));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("lx-btn"));
+            Assert.That(html, Does.Contain("lx-btn-danger"), "delete is the outlined destructive variant");
+        });
+    }
+
+    [Test]
+    public async Task The_capture_form_renders_the_design_systems_button_primitives()
+    {
+        var html = await BackupsRenderHarness.RenderPanelAsync(
+            StubBackupsDomain.Create(trees: new[] { new BackupTreeOption("orders", null) }),
+            subTab: BackupsSubTab.New,
+            afterFirstRender: panel => panel.AddTreeAsync("orders"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("lx-btn-primary"), "capture is the form's one affirmative action");
+            Assert.That(html, Does.Contain("lx-btn-icon"), "the per-tree remove control is the compact variant");
+        });
+    }
+
+    [Test]
+    public async Task The_delete_dialog_renders_the_design_systems_modal_primitives()
+    {
+        // The modal family had no rule outside app.css, so deleting the file
+        // without migrating it would have left all four Backups dialogs as
+        // unstyled blocks in the page flow - no backdrop, no centring, no
+        // surface. Nothing but a render assertion catches that (issue #1770).
+        var html = await BackupsRenderHarness.RenderPanelAsync(
+            StubBackupsDomain.Create(new[] { SampleBackup.Manifest("backup-1") }),
+            afterFirstRender: async panel =>
+            {
+                await panel.SelectRowAsync(panel.Rows[0].Row);
+                panel.RequestDelete(panel.Rows[0].Row);
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("lx-modal-backdrop"));
+            Assert.That(html, Does.Contain("class=\"lx-modal\""));
+            Assert.That(html, Does.Contain("lx-modal-actions"));
+            Assert.That(html, Does.Contain("role=\"alertdialog\""));
+            Assert.That(html, Does.Contain("lx-btn-danger"));
+        });
     }
 }

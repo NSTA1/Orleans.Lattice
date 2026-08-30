@@ -3,66 +3,66 @@
 @inject IExplorerAuthSession AuthSession
 @inject IServiceProvider Services
 
-<div class="explorer-config-dialog" role="dialog" aria-modal="true" aria-label="Sign in to the state API">
+<div class="lx-shell-config-dialog" role="dialog" aria-modal="true" aria-label="Sign in to the state API">
     <h2>Sign in</h2>
 
     @if (_mode == SignInMode.Unsupported)
     {
-        <p class="explorer-config-help">
+        <p class="lx-shell-config-help">
             This endpoint requires the <strong>@_unsupportedScheme</strong> sign-in method, which is not
             available in this build of the explorer. Install the matching login provider package (for example
             <code>Orleans.Lattice.Explorer.Entra</code> for Entra ID) and reconnect.
         </p>
-        <div class="explorer-config-actions">
-            <button type="button" class="explorer-btn" @onclick="Cancel">Close</button>
+        <div class="lx-shell-config-actions">
+            <button type="button" class="lx-btn" @onclick="Cancel">Close</button>
         </div>
     }
     else if (_mode == SignInMode.Token)
     {
-        <p class="explorer-config-help">
+        <p class="lx-shell-config-help">
             This endpoint uses <strong>@_selectedDisplay</strong>. Continue to sign in; a browser window
             or device-code prompt may open to complete authentication.
         </p>
 
         @if (!string.IsNullOrEmpty(_error))
         {
-            <p class="explorer-config-error" role="alert">@_error</p>
+            <p class="lx-shell-config-error" role="alert">@_error</p>
         }
 
-        <div class="explorer-config-actions">
-            <button type="button" class="explorer-btn" disabled="@_busy" @onclick="Cancel">Cancel</button>
-            <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_busy" @onclick="SignInWithMethodAsync">
+        <div class="lx-shell-config-actions">
+            <button type="button" class="lx-btn" disabled="@_busy" @onclick="Cancel">Cancel</button>
+            <button type="button" class="lx-btn lx-btn-primary" disabled="@_busy" @onclick="SignInWithMethodAsync">
                 @(_busy ? "Signing in..." : $"Sign in with {_selectedDisplay}")
             </button>
         </div>
     }
     else if (_options.UseServerFormPost)
     {
-        <p class="explorer-config-help">
+        <p class="lx-shell-config-help">
             Enter the username and password for the Lattice state-API endpoint.
         </p>
         <form method="post" action="@_options.LoginPath">
             <AntiforgeryToken />
-            <label class="explorer-config-field">
+            <label class="lx-shell-config-field">
                 <span>Username</span>
                 <input type="text" name="username" autocomplete="username" />
             </label>
-            <label class="explorer-config-field">
+            <label class="lx-shell-config-field">
                 <span>Password</span>
                 <input type="password" name="password" autocomplete="current-password" />
             </label>
-            <div class="explorer-config-actions">
-                <button type="button" class="explorer-btn" @onclick="Cancel">Cancel</button>
-                <button type="submit" class="explorer-btn explorer-btn-primary">Sign in</button>
+            <div class="lx-shell-config-actions">
+                <button type="button" class="lx-btn" @onclick="Cancel">Cancel</button>
+                <button type="submit" class="lx-btn lx-btn-primary">Sign in</button>
             </div>
         </form>
     }
     else
     {
-        <p class="explorer-config-help">
+        <p class="lx-shell-config-help">
             Enter the username and password for the Lattice state-API endpoint.
         </p>
-        <label class="explorer-config-field">
+        <label class="lx-shell-config-field">
             <span>Username</span>
             <input type="text"
                    autocomplete="username"
@@ -70,7 +70,7 @@
                    @oninput="OnUsernameInput"
                    @onkeydown="OnKeyDown" />
         </label>
-        <label class="explorer-config-field">
+        <label class="lx-shell-config-field">
             <span>Password</span>
             <input type="password"
                    autocomplete="current-password"
@@ -81,12 +81,12 @@
 
         @if (!string.IsNullOrEmpty(_error))
         {
-            <p class="explorer-config-error" role="alert">@_error</p>
+            <p class="lx-shell-config-error" role="alert">@_error</p>
         }
 
-        <div class="explorer-config-actions">
-            <button type="button" class="explorer-btn" disabled="@_busy" @onclick="Cancel">Cancel</button>
-            <button type="button" class="explorer-btn explorer-btn-primary" disabled="@_busy" @onclick="SignInAsync">
+        <div class="lx-shell-config-actions">
+            <button type="button" class="lx-btn" disabled="@_busy" @onclick="Cancel">Cancel</button>
+            <button type="button" class="lx-btn lx-btn-primary" disabled="@_busy" @onclick="SignInAsync">
                 @(_busy ? "Signing in..." : "Sign in")
             </button>
         </div>

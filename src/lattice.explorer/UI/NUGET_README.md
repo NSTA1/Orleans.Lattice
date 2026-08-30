@@ -10,9 +10,15 @@ identical UI.
 
 - The `Routes` root router and all routable explorer pages.
 - The shared layout and reusable UI components.
-- The packaged **static web assets** (css, favicon, topology interop JS). A
-  referencing app serves them automatically at
-  `_content/Orleans.Lattice.Explorer.UI/` with no extra wiring.
+- `lattice-shell.css`, the stylesheet for the shell chrome those components
+  render: the brand bar, the navigation rail, the detail panel, the area strip,
+  and the authentication, tenant, and configuration surfaces. Shared UI
+  primitives (buttons, badges, modals, navigation, tab strips) come from
+  [`Orleans.Lattice.Explorer.DesignSystem`](https://www.nuget.org/packages/Orleans.Lattice.Explorer.DesignSystem)
+  instead, so a plugin composes them without referencing this package.
+- The packaged **static web assets** (css, favicon). A referencing app serves
+  them automatically at `_content/Orleans.Lattice.Explorer.UI/` with no extra
+  wiring.
 
 ## Usage
 
@@ -22,7 +28,7 @@ which maps the components with an interactive server render mode. Reference the
 static assets from the host document:
 
 ```html
-<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/app.css" />
+<link rel="stylesheet" href="_content/Orleans.Lattice.Explorer.UI/lattice-shell.css" />
 ```
 
 See the

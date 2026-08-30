@@ -548,8 +548,8 @@
     touch target minimum instead of crowding a phone row; from medium up they
     sit inline.
 */
-.lx-only-compact .lxt-row-actions .explorer-btn,
-.lx-only-compact .lxt-grant-actions .explorer-btn {
+.lx-only-compact .lxt-row-actions .lx-btn,
+.lx-only-compact .lxt-grant-actions .lx-btn {
     flex: 1 1 100%;
     min-block-size: var(--lx-target-min-touch);
 }

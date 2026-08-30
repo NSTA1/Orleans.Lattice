@@ -70,8 +70,8 @@ internal static class HistoryFormat
     /// <summary>The class list for a timeline row, marking a not-yet-durable live marker.</summary>
     internal static string RowClass(HistoryRevisionRow row) =>
         row.IsLiveTail
-            ? $"explorer-history-row-{KindClass(row.Kind)} explorer-history-row-live"
-            : $"explorer-history-row-{KindClass(row.Kind)}";
+            ? $"lx-history-row-{KindClass(row.Kind)} lx-history-row-live"
+            : $"lx-history-row-{KindClass(row.Kind)}";
 
     /// <summary>The label for a CRDT member change.</summary>
     internal static string MemberLabel(CrdtMemberChangeKind kind) =>

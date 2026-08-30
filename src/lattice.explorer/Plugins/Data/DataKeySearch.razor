@@ -7,20 +7,20 @@
     A starts-with prefix maps to a cheap ranged seek over the sorted keys, so it
     is the only efficient server-side key filter offered.
 *@
-<div class="explorer-data-toolbar explorer-data-search">
-    <div class="explorer-data-search-field">
-        <input type="text" class="explorer-data-search-input" placeholder="Key starts with..."
+<div class="lx-data-toolbar lx-data-search">
+    <div class="lx-data-search-field">
+        <input type="text" class="lx-data-search-input" placeholder="Key starts with..."
                disabled="@Disabled"
                value="@_value" @oninput="OnInput" @onkeyup="OnKeyUp" @onblur="OnBlurAsync" />
         @if (!string.IsNullOrEmpty(_value))
         {
-            <button type="button" class="explorer-data-search-clear" title="Clear search"
+            <button type="button" class="lx-data-search-clear" title="Clear search"
                     disabled="@(Loading || Disabled)" @onclick="ClearAsync">&times;</button>
         }
     </div>
     @if (Disabled)
     {
-        <span class="explorer-data-search-hint">Key search is unavailable while a tag filter is active.</span>
+        <span class="lx-data-search-hint">Key search is unavailable while a tag filter is active.</span>
     }
 </div>
 

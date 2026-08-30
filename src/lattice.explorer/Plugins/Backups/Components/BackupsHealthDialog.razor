@@ -8,9 +8,9 @@
 
 @if (Owner.HealthDialog is { } report)
 {
-    <div class="explorer-modal-backdrop" role="presentation">
-        <div class="explorer-modal" role="dialog" aria-modal="true" aria-labelledby="explorer-health-title">
-            <h3 id="explorer-health-title">Backup health</h3>
+    <div class="lx-modal-backdrop" role="presentation">
+        <div class="lx-modal" role="dialog" aria-modal="true" aria-labelledby="lx-backups-health-title">
+            <h3 id="lx-backups-health-title">Backup health</h3>
             <p>
                 Backup <strong>@report.BackupId</strong> is
                 <strong>@report.Status</strong>.
@@ -37,10 +37,10 @@
                 </ul>
             }
             <p class="lx-backups-hint">Last checked @report.CheckedAtUtc.UtcDateTime.ToString("u", CultureInfo.InvariantCulture).</p>
-            <div class="explorer-modal-actions">
-                <button type="button" class="explorer-btn explorer-btn-primary" disabled="@Owner.Busy"
+            <div class="lx-modal-actions">
+                <button type="button" class="lx-btn lx-btn-primary" disabled="@Owner.Busy"
                         @onclick="@(() => Owner.RecheckHealthAsync(report.BackupId))">Re-check now</button>
-                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CloseHealthDialog">Close</button>
+                <button type="button" class="lx-btn" disabled="@Owner.Busy" @onclick="Owner.CloseHealthDialog">Close</button>
             </div>
         </div>
     </div>

@@ -21,10 +21,10 @@
                 <p class="lxt-confirm-caution" role="alert">@caution</p>
             }
             <div class="lxt-confirm-actions">
-                <button type="button" class="explorer-btn"
+                <button type="button" class="lx-btn"
                         disabled="@State.Busy"
                         @onclick="State.CancelConfirmation">Cancel</button>
-                <button type="button" class="explorer-btn lxt-danger"
+                <button type="button" class="lx-btn lxt-danger"
                         disabled="@State.Busy"
                         @onclick="State.ConfirmAsync">@pending.ConfirmLabel</button>
             </div>

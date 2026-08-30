@@ -5,14 +5,14 @@
 
 <CascadingValue Value="_login" IsFixed="true">
     <LatticeAdaptiveRoot>
-        <div class="explorer-shell">
+        <div class="lx-shell">
             <ConfigurationGate>
-                <div class="explorer-body">
+                <div class="lx-shell-body">
                     <ClusterBadge />
                     <AppShell>
-                        <div class="explorer-layout">
+                        <div class="lx-shell-layout">
                             <NavigationPanel />
-                            <main class="explorer-main">
+                            <main class="lx-shell-main">
                                 @Body
                             </main>
                         </div>
@@ -24,7 +24,7 @@
 
     @if (_login.IsVisible)
     {
-        <div class="explorer-config-overlay">
+        <div class="lx-shell-config-overlay">
             <LoginDialog OnClosed="_login.Close" />
         </div>
     }

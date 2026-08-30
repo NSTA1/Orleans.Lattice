@@ -2,20 +2,20 @@
     The trees a tag index covers. Each is a link back into the tree's own value
     drill-down surface; the parent owns what "open there" means.
 *@
-<section class="explorer-tagindex-section explorer-tagindex-trees">
-    <h4 class="explorer-tagindex-heading">Covered trees</h4>
+<section class="lx-tagindex-section lx-tagindex-trees">
+    <h4 class="lx-tagindex-heading">Covered trees</h4>
     @if (Trees.Count == 0)
     {
-        <p class="explorer-tagindex-empty">This index covers no trees yet.</p>
+        <p class="lx-tagindex-empty">This index covers no trees yet.</p>
     }
     else
     {
-        <ul class="explorer-tagindex-treelist">
+        <ul class="lx-tagindex-treelist">
             @foreach (var tree in Trees)
             {
                 <li>
                     <button type="button"
-                            class="explorer-tagindex-treelink"
+                            class="lx-tagindex-treelink"
                             title="@($"Open {tree}")"
                             @onclick="@(() => OnOpenTree.InvokeAsync(tree))">
                         @tree

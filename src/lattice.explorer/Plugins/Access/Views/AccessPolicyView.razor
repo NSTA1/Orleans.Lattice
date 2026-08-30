@@ -17,7 +17,7 @@
             <div class="lxa-listcol">
                 <div class="lxa-listhead">
                     <h3 class="lxa-title">Rules</h3>
-                    <button type="button" class="explorer-btn"
+                    <button type="button" class="lx-btn"
                             disabled="@(State.Busy || !State.Allowed)" @onclick="State.NewRule">New rule</button>
                 </div>
                 @if (State.Rules.Count == 0)
@@ -36,7 +36,7 @@
                     </p>
                     @if (State.RulesNextToken is not null)
                     {
-                        <button type="button" class="explorer-btn" disabled="@(State.Busy || !State.Allowed)"
+                        <button type="button" class="lx-btn" disabled="@(State.Busy || !State.Allowed)"
                                 @onclick="State.LoadMoreRulesAsync">Load more</button>
                     }
                 }
@@ -69,6 +69,6 @@
         _editAction = EditAction;
 
     private RenderFragment<RankedRule> EditAction => ranked =>
-        @<button type="button" class="explorer-btn" disabled="@State.Busy"
+        @<button type="button" class="lx-btn" disabled="@State.Busy"
                  @onclick="@(() => State.EditRule(ranked.Rule))">Edit</button>;
 }

@@ -5,40 +5,40 @@
     aligned columns at medium and expanded and reflows to a card list at compact
     width without this package writing a media query (epic decision D7).
 *@
-<section class="explorer-tagindex-section explorer-tagindex-members">
-    <h4 class="explorer-tagindex-heading">
+<section class="lx-tagindex-section lx-tagindex-members">
+    <h4 class="lx-tagindex-heading">
         Members
         @if (Tag is not null)
         {
-            <span class="explorer-tagindex-membertag">@(Tag.Length == 0 ? "(empty)" : Tag)</span>
+            <span class="lx-tagindex-membertag">@(Tag.Length == 0 ? "(empty)" : Tag)</span>
         }
     </h4>
 
     @if (Tag is null)
     {
-        <p class="explorer-tagindex-empty">Select a tag to list its members.</p>
+        <p class="lx-tagindex-empty">Select a tag to list its members.</p>
     }
     else if (Loading && !HasLoadedPage)
     {
-        <p class="explorer-tagindex-empty">Loading members...</p>
+        <p class="lx-tagindex-empty">Loading members...</p>
     }
     else if (Error is not null)
     {
-        <p class="explorer-tagindex-empty lx-selection-state-error">
+        <p class="lx-tagindex-empty lx-selection-state-error">
             <span>@Error</span>
-            <button type="button" class="explorer-btn-link" @onclick="OnRetry">Try again</button>
+            <button type="button" class="lx-btn-link" @onclick="OnRetry">Try again</button>
         </p>
     }
     else
     {
         @if (Members.Count > 0)
         {
-            <div class="explorer-tagindex-pager">
-                <button type="button" class="explorer-btn"
+            <div class="lx-tagindex-pager">
+                <button type="button" class="lx-btn"
                         disabled="@(Loading || !CanGoPrevious)"
                         @onclick="OnPrevious">Prev</button>
-                <span class="explorer-tagindex-pagenum">Page @(PageIndex + 1)</span>
-                <button type="button" class="explorer-btn"
+                <span class="lx-tagindex-pagenum">Page @(PageIndex + 1)</span>
+                <button type="button" class="lx-btn"
                         disabled="@(Loading || !CanGoNext)"
                         @onclick="OnNext">Next</button>
             </div>
@@ -114,7 +114,7 @@
                 {
                     builder.OpenElement(0, "button");
                     builder.AddAttribute(1, "type", "button");
-                    builder.AddAttribute(2, "class", "explorer-tagindex-memberlink");
+                    builder.AddAttribute(2, "class", "lx-tagindex-memberlink");
                     builder.AddAttribute(3, "title", "Open this key in its tree");
                     builder.AddAttribute(
                         4,

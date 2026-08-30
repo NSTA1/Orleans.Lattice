@@ -34,6 +34,11 @@ namespace Orleans.Lattice.Explorer.Tests;
 /// <see cref="LatticeBreakpoints"/>, so the CSS and .NET copies can never drift
 /// apart in silence.</item>
 /// </list>
+/// <para>
+/// The reduced-motion guarantee gets the same treatment: the design system
+/// carries its own copy, so it survived the deletion of the <c>app.css</c>
+/// monolith that used to carry the only other one (issue #1770).
+/// </para>
 /// </remarks>
 [TestFixture]
 public sealed class BreakpointTokenHygieneTests
@@ -229,15 +234,19 @@ public sealed class BreakpointTokenHygieneTests
     }
 
     [Test]
-    public void The_legacy_stylesheet_still_carries_its_reduced_motion_rule()
+    public void The_reduced_motion_guarantee_survived_the_monolith()
     {
+        // The retired app.css monolith carried its own copy of the
+        // reduced-motion rule. Issue #1770 deleted it, so the design system's
+        // copy is now the only one - which is exactly why the test above must
+        // keep passing, and why this one asserts the monolith is gone rather
+        // than that it still carries a rule.
         var repoRoot = HygieneRepository.FindRepoRoot();
         var appCss = Path.Combine(
             repoRoot,
             "src/lattice.explorer/UI/wwwroot/app.css".Replace('/', Path.DirectorySeparatorChar));
 
-        Assert.That(File.Exists(appCss), Is.True, "app.css is retired by a later issue in the epic, not this one");
-        Assert.That(File.ReadAllText(appCss), Does.Contain("prefers-reduced-motion"));
+        Assert.That(File.Exists(appCss), Is.False, "app.css is retired by issue #1770");
     }
 
     [Test]

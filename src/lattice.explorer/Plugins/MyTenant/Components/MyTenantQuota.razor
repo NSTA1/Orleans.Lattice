@@ -21,7 +21,7 @@
                 @(State.EnforcementScope is { } scope ? TenantQuotaLabels.EnforcementLabel(scope) : null)
             </span>
             <button type="button"
-                    class="explorer-btn"
+                    class="lx-btn"
                     disabled="@(State.Busy || !State.Allowed)"
                     @onclick="State.RefreshQuotaAsync">Refresh usage</button>
         </div>

@@ -11,7 +11,7 @@
                       Columns="_columns"
                       KeySelector="_rowKey"
                       Label="Entries"
-                      Class="explorer-data-keytable"
+                      Class="lx-data-keytable"
                       EmptyText="No entries on this page." />
 
 @code {
@@ -51,8 +51,8 @@
                         2,
                         "class",
                         string.Equals(entry.Key, SelectedKey, StringComparison.Ordinal)
-                            ? "explorer-data-key is-selected"
-                            : "explorer-data-key");
+                            ? "lx-data-key is-selected"
+                            : "lx-data-key");
                     builder.AddAttribute(3, "title", entry.Key);
                     builder.AddAttribute(
                         4,
@@ -76,7 +76,7 @@
                     if (entry.IsTombstone)
                     {
                         builder.OpenElement(0, "span");
-                        builder.AddAttribute(1, "class", "explorer-data-flag explorer-data-flag-tomb");
+                        builder.AddAttribute(1, "class", "lx-data-flag lx-data-flag-tomb");
                         builder.AddContent(2, "tomb");
                         builder.CloseElement();
                     }
@@ -84,7 +84,7 @@
                     if (entry.CrdtShape is not null)
                     {
                         builder.OpenElement(3, "span");
-                        builder.AddAttribute(4, "class", "explorer-data-flag");
+                        builder.AddAttribute(4, "class", "lx-data-flag");
                         builder.AddContent(5, entry.CrdtShape);
                         builder.CloseElement();
                     }

@@ -4,12 +4,12 @@
     pager's cache, so only a frontier advance reaches the server.
 *@
 
-<div class="explorer-data-pager lx-backups-pager">
-    <button type="button" class="explorer-btn"
+<div class="lx-data-pager lx-backups-pager">
+    <button type="button" class="lx-btn"
             disabled="@(Owner.Busy || !Owner.Pager.CanGoPrevious)"
             @onclick="Owner.PreviousPageAsync">Prev</button>
-    <span class="explorer-data-pagenum" aria-live="polite">Page @(Owner.Pager.PageIndex + 1)</span>
-    <button type="button" class="explorer-btn"
+    <span class="lx-data-pagenum" aria-live="polite">Page @(Owner.Pager.PageIndex + 1)</span>
+    <button type="button" class="lx-btn"
             disabled="@(Owner.Busy || !Owner.Pager.CanGoNext)"
             @onclick="Owner.NextPageAsync">Next</button>
 </div>

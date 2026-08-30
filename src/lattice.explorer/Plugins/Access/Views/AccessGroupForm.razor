@@ -47,12 +47,12 @@
                placeholder="optional" />
     </label>
     <div class="lxa-actions">
-        <button type="button" class="explorer-btn"
+        <button type="button" class="lx-btn"
                 disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable || string.IsNullOrWhiteSpace(State.GroupIdInput))"
                 @onclick="State.SaveGroupAsync">Save</button>
-        <button type="button" class="explorer-btn" disabled="@State.Busy"
+        <button type="button" class="lx-btn" disabled="@State.Busy"
                 @onclick="State.CancelGroupForm">Cancel</button>
-        <button type="button" class="explorer-btn lxa-danger"
+        <button type="button" class="lx-btn lxa-danger"
                 disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable || !State.EditingExistingGroup)"
                 @onclick="State.DeleteGroupAsync">Delete</button>
     </div>
@@ -70,7 +70,7 @@
                 @foreach (var member in State.DirectMembers)
                 {
                     <li>
-                        <button type="button" class="explorer-btn explorer-btn-icon lxa-danger"
+                        <button type="button" class="lx-btn lx-btn-icon lxa-danger"
                                 title="Remove member" aria-label="@($"Remove {member}")"
                                 disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)"
                                 @onclick="@(() => State.RemoveMemberAsync(member))">x</button>
@@ -86,7 +86,7 @@
                            SubjectId="@State.MemberIdInput"
                            SubjectIdChanged="OnMemberIdChanged"
                            Disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)" />
-            <button type="button" class="explorer-btn"
+            <button type="button" class="lx-btn"
                     disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable || string.IsNullOrWhiteSpace(State.MemberIdInput))"
                     @onclick="State.AddMemberAsync">Add member</button>
         </div>

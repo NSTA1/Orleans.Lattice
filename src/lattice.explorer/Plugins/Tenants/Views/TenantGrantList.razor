@@ -37,16 +37,16 @@ else
                 <div class="lxt-grant-actions">
                     @if (grant.CanAnswer)
                     {
-                        <button type="button" class="explorer-btn lxt-row-action"
+                        <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@Disabled"
                                 @onclick="@(() => State.ApproveGrantAsync(grant))">Approve</button>
-                        <button type="button" class="explorer-btn lxt-danger lxt-row-action"
+                        <button type="button" class="lx-btn lxt-danger lxt-row-action"
                                 disabled="@Disabled"
                                 @onclick="@(() => State.RequestRejectGrant(grant))">Reject</button>
                     }
                     @if (grant.CanRevoke)
                     {
-                        <button type="button" class="explorer-btn lxt-danger lxt-row-action"
+                        <button type="button" class="lx-btn lxt-danger lxt-row-action"
                                 disabled="@Disabled"
                                 @onclick="@(() => State.RequestRevokeGrant(grant))">Withdraw</button>
                     }

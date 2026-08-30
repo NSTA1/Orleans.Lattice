@@ -11,7 +11,7 @@
   width may be named).
 */
 
-.explorer-data {
+.lx-data {
     display: flex;
     flex-direction: column;
     gap: var(--lx-space-5);
@@ -19,7 +19,7 @@
     min-height: 0;
 }
 
-.explorer-data-toolbar {
+.lx-data-toolbar {
     display: flex;
     align-items: center;
     gap: var(--lx-space-6);
@@ -28,11 +28,11 @@
 
 /* Push the tag-index explore button to the trailing edge of the filter row so
    it sits apart from the index / tag pickers rather than crowding them. */
-.explorer-data-tagfilter-explore {
+.lx-data-tagfilter-explore {
     margin-left: auto;
 }
 
-.explorer-data-tagfilter-field {
+.lx-data-tagfilter-field {
     display: inline-flex;
     align-items: center;
     gap: var(--lx-space-3);
@@ -40,12 +40,12 @@
     color: var(--lx-color-text-muted);
 }
 
-.explorer-data-tagfilter-active {
+.lx-data-tagfilter-active {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-text-muted);
 }
 
-.explorer-data-pagesize {
+.lx-data-pagesize {
     display: inline-flex;
     align-items: center;
     gap: var(--lx-space-3);
@@ -53,8 +53,8 @@
     color: var(--lx-color-text-muted);
 }
 
-.explorer-data-pagesize select,
-.explorer-data-tagfilter-field select {
+.lx-data-pagesize select,
+.lx-data-tagfilter-field select {
     background: var(--lx-color-surface-sunken);
     color: var(--lx-color-text);
     border: 1px solid var(--lx-color-border);
@@ -65,14 +65,14 @@
     min-height: var(--lx-target-min);
 }
 
-.explorer-data-pager {
+.lx-data-pager {
     display: inline-flex;
     align-items: center;
     gap: var(--lx-space-4);
     margin-left: auto;
 }
 
-.explorer-data-scanmode {
+.lx-data-scanmode {
     display: inline-flex;
     align-items: center;
     gap: var(--lx-space-3);
@@ -82,11 +82,11 @@
     min-height: var(--lx-target-min);
 }
 
-.explorer-data-scanmode input {
+.lx-data-scanmode input {
     cursor: pointer;
 }
 
-.explorer-data-infoicon {
+.lx-data-infoicon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -103,20 +103,20 @@
     user-select: none;
 }
 
-.explorer-data-infoicon:hover,
-.explorer-data-infoicon:focus {
+.lx-data-infoicon:hover,
+.lx-data-infoicon:focus {
     color: var(--lx-color-text);
     border-color: var(--lx-color-text-muted);
     outline: none;
 }
 
-.explorer-data-pagenum {
+.lx-data-pagenum {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-text-muted);
     font-variant-numeric: tabular-nums;
 }
 
-.explorer-data-body {
+.lx-data-body {
     display: grid;
     grid-template-columns: minmax(220px, 0.9fr) 1.4fr;
     gap: var(--lx-space-5);
@@ -126,12 +126,12 @@
 
 /* Compact: one column, key list above the inspector, so nothing scrolls
    sideways off a phone. */
-.explorer-data-body.is-stacked {
+.lx-data-body.is-stacked {
     grid-template-columns: 1fr;
 }
 
-.explorer-data-keys,
-.explorer-data-detail {
+.lx-data-keys,
+.lx-data-detail {
     border: 1px solid var(--lx-color-border);
     border-radius: var(--lx-radius-lg);
     background: var(--lx-color-surface);
@@ -139,11 +139,11 @@
     min-height: 0;
 }
 
-.explorer-data-keytable {
+.lx-data-keytable {
     width: 100%;
 }
 
-.explorer-data-key {
+.lx-data-key {
     display: inline-block;
     max-width: 100%;
     padding: 0;
@@ -157,23 +157,23 @@
     cursor: pointer;
 }
 
-.explorer-data-key:hover {
+.lx-data-key:hover {
     color: var(--lx-color-accent-hover);
     text-decoration: underline;
 }
 
-.explorer-data-key.is-selected {
+.lx-data-key.is-selected {
     font-weight: var(--lx-weight-semibold);
     text-decoration: underline;
 }
 
-.explorer-data-key:focus-visible {
+.lx-data-key:focus-visible {
     outline: none;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
     border-radius: var(--lx-radius-sm);
 }
 
-.explorer-data-flag {
+.lx-data-flag {
     display: inline-block;
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
@@ -185,16 +185,16 @@
     margin-right: var(--lx-space-1);
 }
 
-.explorer-data-flag-tomb {
+.lx-data-flag-tomb {
     color: var(--lx-color-danger);
     border-color: var(--lx-color-danger-border);
 }
 
-.explorer-data-detail {
+.lx-data-detail {
     padding: var(--lx-space-6);
 }
 
-.explorer-data-detail-head {
+.lx-data-detail-head {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -202,13 +202,13 @@
     margin-bottom: var(--lx-space-4);
 }
 
-.explorer-data-detail-key {
+.lx-data-detail-key {
     font-family: var(--lx-font-mono);
     color: var(--lx-color-text);
     word-break: break-all;
 }
 
-.explorer-data-format {
+.lx-data-format {
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
     letter-spacing: var(--lx-tracking-wide);
@@ -218,11 +218,11 @@
     padding: 0 var(--lx-space-3);
 }
 
-.explorer-data-history-btn {
+.lx-data-history-btn {
     margin-left: auto;
 }
 
-.explorer-data-live {
+.lx-data-live {
     margin-left: auto;
     display: flex;
     align-items: center;
@@ -231,63 +231,63 @@
     color: var(--lx-color-text-muted);
 }
 
-.explorer-data-live + .explorer-data-history-btn {
+.lx-data-live + .lx-data-history-btn {
     margin-left: 0;
 }
 
-.explorer-data-live-dot {
+.lx-data-live-dot {
     width: 0.55rem;
     height: 0.55rem;
     border-radius: var(--lx-radius-pill);
     flex: 0 0 auto;
 }
 
-.explorer-data-live-dot-on {
+.lx-data-live-dot-on {
     background: var(--lx-color-success);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--lx-color-success) 25%, transparent);
 }
 
-.explorer-data-live-dot-warn {
+.lx-data-live-dot-warn {
     background: var(--lx-color-warning);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--lx-color-warning) 25%, transparent);
 }
 
-.explorer-data-live-dot-down {
+.lx-data-live-dot-down {
     background: var(--lx-color-danger);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--lx-color-danger) 25%, transparent);
 }
 
-.explorer-data-live-label {
+.lx-data-live-label {
     font-weight: var(--lx-weight-semibold);
     color: var(--lx-color-text);
 }
 
-.explorer-data-live-error {
+.lx-data-live-error {
     margin: 0 0 var(--lx-space-4);
     font-size: var(--lx-text-caption);
     color: var(--lx-color-danger);
 }
 
-.explorer-data-meta {
+.lx-data-meta {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: var(--lx-space-3) var(--lx-space-6);
     margin: 0 0 var(--lx-space-5);
 }
 
-.explorer-data-meta div {
+.lx-data-meta div {
     display: flex;
     flex-direction: column;
 }
 
-.explorer-data-meta dt {
+.lx-data-meta dt {
     font-size: var(--lx-text-micro);
     text-transform: uppercase;
     letter-spacing: var(--lx-tracking-wide);
     color: var(--lx-color-text-muted);
 }
 
-.explorer-data-meta dd {
+.lx-data-meta dd {
     margin: 0;
     font-family: var(--lx-font-mono);
     font-size: var(--lx-text-small);
@@ -295,13 +295,13 @@
     word-break: break-all;
 }
 
-.explorer-data-note {
+.lx-data-note {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-warning);
     margin: 0 0 var(--lx-space-4);
 }
 
-.explorer-data-value {
+.lx-data-value {
     margin: 0;
     padding: var(--lx-space-5);
     background: var(--lx-color-surface-sunken);
@@ -316,17 +316,17 @@
     max-height: 60vh;
 }
 
-.explorer-data-value-text {
+.lx-data-value-text {
     white-space: pre-wrap;
     word-break: break-word;
 }
 
-.explorer-data-muted {
+.lx-data-muted {
     color: var(--lx-color-text-muted);
     font-size: var(--lx-text-small);
 }
 
-.explorer-data-members {
+.lx-data-members {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -335,7 +335,7 @@
     gap: var(--lx-space-2);
 }
 
-.explorer-data-member {
+.lx-data-member {
     display: flex;
     align-items: baseline;
     flex-wrap: wrap;
@@ -343,13 +343,13 @@
     font-size: var(--lx-text-caption);
 }
 
-.explorer-data-member-element {
+.lx-data-member-element {
     font-family: var(--lx-font-mono);
     color: var(--lx-color-text);
     word-break: break-all;
 }
 
-.explorer-data-member-replica {
+.lx-data-member-replica {
     color: var(--lx-color-text-muted);
     margin-left: auto;
     font-family: var(--lx-font-mono);
@@ -361,7 +361,7 @@
   declares for the Backups filter box: both surfaces render the same control, and
   the shell's copy is retired with the legacy stylesheet, not by this package.
 */
-.explorer-data-search-field {
+.lx-data-search-field {
     position: relative;
     display: inline-flex;
     align-items: center;
@@ -369,7 +369,7 @@
     max-width: 420px;
 }
 
-.explorer-data-search-input {
+.lx-data-search-input {
     width: 100%;
     padding: var(--lx-space-3) var(--lx-space-9) var(--lx-space-3) var(--lx-space-5);
     font-family: var(--lx-font-mono);
@@ -383,21 +383,21 @@
         box-shadow var(--lx-motion-fast) var(--lx-motion-ease);
 }
 
-.explorer-data-search-input::placeholder {
+.lx-data-search-input::placeholder {
     color: var(--lx-color-text-dim);
 }
 
-.explorer-data-search-input:focus {
+.lx-data-search-input:focus {
     outline: none;
     border-color: var(--lx-color-accent);
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
-.explorer-data-search-input:disabled {
+.lx-data-search-input:disabled {
     opacity: 0.55;
 }
 
-.explorer-data-search-clear {
+.lx-data-search-clear {
     position: absolute;
     right: var(--lx-space-3);
     display: inline-flex;
@@ -415,12 +415,12 @@
     cursor: pointer;
 }
 
-.explorer-data-search-clear:hover:not(:disabled) {
+.lx-data-search-clear:hover:not(:disabled) {
     color: var(--lx-color-text);
     background: var(--lx-color-surface-raised);
 }
 
-.explorer-data-search-hint {
+.lx-data-search-hint {
     font-size: var(--lx-text-caption);
     color: var(--lx-color-text-dim);
 }

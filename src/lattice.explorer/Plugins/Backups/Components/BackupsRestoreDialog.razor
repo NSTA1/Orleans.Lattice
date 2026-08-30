@@ -6,9 +6,9 @@
 
 @if (Owner.PendingRestore is { } pending)
 {
-    <div class="explorer-modal-backdrop" role="presentation">
-        <div class="explorer-modal" role="alertdialog" aria-modal="true" aria-labelledby="explorer-restore-title">
-            <h3 id="explorer-restore-title">Restore backup?</h3>
+    <div class="lx-modal-backdrop" role="presentation">
+        <div class="lx-modal" role="alertdialog" aria-modal="true" aria-labelledby="lx-backups-restore-title">
+            <h3 id="lx-backups-restore-title">Restore backup?</h3>
             @if (pending.IsIncrementalChain)
             {
                 <p>
@@ -42,9 +42,9 @@
                     @Owner.RestoreModeDescription.
                 </p>
             }
-            <div class="explorer-modal-actions">
-                <button type="button" class="explorer-btn" disabled="@Owner.Busy" @onclick="Owner.CancelRestore">Cancel</button>
-                <button type="button" class="explorer-btn explorer-btn-primary" disabled="@Owner.Busy" @onclick="Owner.ConfirmRestoreAsync">Proceed</button>
+            <div class="lx-modal-actions">
+                <button type="button" class="lx-btn" disabled="@Owner.Busy" @onclick="Owner.CancelRestore">Cancel</button>
+                <button type="button" class="lx-btn lx-btn-primary" disabled="@Owner.Busy" @onclick="Owner.ConfirmRestoreAsync">Proceed</button>
             </div>
         </div>
     </div>

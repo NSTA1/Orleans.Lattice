@@ -94,6 +94,16 @@
     cursor: not-allowed;
 }
 
+/*
+  The identity a nav item is chosen by. Technical values read as code, and an
+  id long enough to overflow wraps rather than widening the rail.
+*/
+.lx-nav-item-id {
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-small);
+    overflow-wrap: anywhere;
+}
+
 /* --------------------------------------------------------------------------
    Navigation - expanded: a persistent sidebar
    -------------------------------------------------------------------------- */
@@ -564,4 +574,195 @@
     margin: 0;
     color: var(--lx-color-text-dim);
     font-size: var(--lx-text-small);
+}
+
+/* ==========================================================================
+   Button
+
+   The control every surface presses. It was previously declared in the
+   `app.css` monolith, which meant a plugin could only use it by depending on
+   the shared shell's stylesheet - the coupling this design system exists to
+   remove (issue #1770). It lives here because a button is not any one
+   plugin's, and eight private copies would drift with nothing to detect it.
+
+   `min-height` spends `--lx-target-min`, which the breakpoint layer raises to
+   the 44px recommended for finger input at compact, so every button in the
+   product grows for touch without a single width media query.
+   ========================================================================== */
+
+.lx-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-4) var(--lx-space-6);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    background: transparent;
+    color: var(--lx-color-text);
+    font-family: var(--lx-font-ui);
+    font-size: var(--lx-text-small);
+    font-weight: var(--lx-weight-medium);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                background var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-btn:hover:not(:disabled) {
+    border-color: var(--lx-color-text-muted);
+    background: var(--lx-color-surface);
+}
+
+.lx-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+/* The one affirmative action on a surface. */
+.lx-btn-primary {
+    border-color: var(--lx-color-accent);
+    background: var(--lx-color-accent);
+    color: var(--lx-color-accent-contrast);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-btn-primary:hover:not(:disabled) {
+    border-color: var(--lx-color-accent-hover);
+    background: var(--lx-color-accent-hover);
+}
+
+/* A destructive action: outlined rather than filled, so it is never the
+   button a hurried reader presses by muscle memory. */
+.lx-btn-danger {
+    border-color: var(--lx-color-danger);
+    color: var(--lx-color-danger);
+}
+
+.lx-btn-danger:hover:not(:disabled) {
+    border-color: var(--lx-color-danger);
+    background: var(--lx-color-danger-surface);
+}
+
+/* A compact button that sits inside a dense row. */
+.lx-btn-icon {
+    min-height: 0;
+    padding: var(--lx-space-1) var(--lx-space-3);
+    font-size: var(--lx-text-caption);
+}
+
+/* A button that reads as a link: an in-flow action inside running text or a
+   table cell, where a bordered control would break the line. */
+.lx-btn-link {
+    min-height: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--lx-color-accent);
+    font: inherit;
+    cursor: pointer;
+}
+
+.lx-btn-link:hover:not(:disabled) {
+    color: var(--lx-color-accent-hover);
+    text-decoration: underline;
+    background: none;
+}
+
+/* ==========================================================================
+   Badge
+
+   A small, non-interactive label attached to a row: a lifecycle state, a
+   count, a provenance marker.
+   ========================================================================== */
+
+.lx-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--lx-space-1) var(--lx-space-3);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-pill);
+    color: var(--lx-color-text-muted);
+    font-family: var(--lx-font-mono);
+    font-size: var(--lx-text-micro);
+    text-transform: lowercase;
+}
+
+/* Secondary provenance: present, but not competing with the row's own text. */
+.lx-badge-muted {
+    border-color: var(--lx-color-border);
+    color: var(--lx-color-text-dim);
+}
+
+/*
+  State variants carry a literal value, so they opt out of the lowercasing the
+  plain badge applies to a keyword.
+*/
+.lx-badge.is-on {
+    border-color: var(--lx-color-success);
+    color: var(--lx-color-success);
+    text-transform: none;
+}
+
+.lx-badge.is-off {
+    border-color: var(--lx-color-warning);
+    color: var(--lx-color-warning);
+    text-transform: none;
+}
+
+/* ==========================================================================
+   Modal
+
+   A centred dialog over a scrim. The layering tokens keep it above the
+   navigation drawer and its scrim, so a dialog opened from a drawer can never
+   render underneath it.
+   ========================================================================== */
+
+.lx-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--lx-layer-dialog);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--lx-space-6);
+    background: var(--lx-color-scrim);
+}
+
+.lx-modal {
+    max-width: 30rem;
+    max-height: 100%;
+    overflow: auto;
+    padding: var(--lx-space-7) var(--lx-space-8);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-text);
+    box-shadow: var(--lx-elevation-3);
+}
+
+.lx-modal h3 {
+    margin: 0 0 var(--lx-space-5);
+    font-size: var(--lx-text-title);
+}
+
+.lx-modal p {
+    margin: 0 0 var(--lx-space-6);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-body);
+}
+
+/* The dialog's decision row: trailing-aligned, so the affirmative action sits
+   where the eye finishes rather than where it starts. */
+.lx-modal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--lx-space-4);
+    margin-top: var(--lx-space-6);
 }

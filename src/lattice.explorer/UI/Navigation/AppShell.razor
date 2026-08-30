@@ -23,7 +23,7 @@
     unavailable renders no entry at all.
 *@
 
-<div class="explorer-areastrip" role="tablist" aria-label="Application areas">
+<div class="lx-shell-areastrip" role="tablist" aria-label="Application areas">
     <button type="button"
             role="tab"
             class="@(_activePlugin is null ? ActiveTabClass : TabClass)"
@@ -54,7 +54,7 @@
     }
 </div>
 
-<div class="explorer-area-content">
+<div class="lx-shell-area-content">
     @if (_activePlugin is null)
     {
         @ChildContent
@@ -71,8 +71,8 @@
     // The two class strings a tab can carry, composed once. Interpolating them
     // per tab per render would allocate on every access change and every
     // connection transition, and the strip re-renders on both.
-    private const string TabClass = "explorer-area-tab";
-    private const string ActiveTabClass = "explorer-area-tab is-active";
+    private const string TabClass = "lx-shell-area-tab";
+    private const string ActiveTabClass = "lx-shell-area-tab is-active";
 
     private AreaTab[] _tabs = NoTabs;
     private IExplorerPlugin? _activePlugin;
