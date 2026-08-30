@@ -8,7 +8,7 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 
 - **A read-only tree browser** - the catalog of trees and materialised views, each tree's shard-root structure, key-ordered snapshot-isolated entry scans and single-key record inspection, live change observation, and per-tree metrics, all over the [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) gRPC surface.
 - **Capability-gated admin areas** - a Backups area over the backup control API and an Access (membership and access-control) area over the auth control API, each surfaced only after a capability probe confirms the connected endpoint offers it and the signed-in principal is allowed to use it.
-- **A Schema area** - management over the schema control API. It ships but is withheld from the area switcher by default (`EnableSchemaArea`) because its versioning UI cannot yet express what differs between schema versions.
+- **A Schema plugin** - management over the schema control API. It ships as its own package but is withheld by default because its versioning UI cannot yet express what differs between schema versions: a head surfaces it by calling `AddExplorerSchemaPlugin()`, and renders no Schema tab by not calling it.
 - **Auth-aware sign-in** - a pluggable `IExplorerAuthMethod` model (Basic, [Entra](connecting-to-an-auth-enabled-state-api.md) via the optional companion package, or a custom method) that acquires and attaches a bearer token to an auth-enabled State API.
 - **Two hosting shapes from one code path** - run the bundled standalone `Orleans.Lattice.Explorer.WebHost` process, or embed the console in your own ASP.NET application; both are built on the same `AddLatticeExplorerWeb` / `MapLatticeExplorer` pair, so they cannot drift.
 
@@ -18,7 +18,7 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 
 - **Read-only over the data plane.** The console observes cluster state and drives only the backup, access, and schema *control* facades. There is no direct write, delete, split, or reconfigure path into a tree's data.
 - **Out-of-cluster by construction.** The Explorer reaches a cluster purely over its gRPC endpoints, so it can be deployed and scaled independently and never taxes Orleans membership or the silo's activation budget.
-- **Fail-closed and capability-gated.** Each admin area whose capability probe does not prove the endpoint exposes it and the principal may use it renders **visible but disabled (greyed out)**, not hidden; the grey-out is advisory and the server still enforces access when an action runs. An area is omitted from the switcher entirely only when configuration withholds it (for example the Schema area, off unless `EnableSchemaArea` is set).
+- **Fail-closed and capability-gated.** Each plugin whose access gate does not prove the endpoint exposes it and the principal may use it renders **visible but disabled (greyed out)**, not hidden; the grey-out is advisory and the server still enforces access when an action runs. A plugin is absent from the tab strip entirely only when the head did not register it - registration is the whole of the opt-in, and there is no per-area option flag.
 - **Head-agnostic core.** The connection, configuration, session, capability, and navigation services live in `Orleans.Lattice.Explorer.Core` and depend only on the public read-only state-API gRPC client, so every head renders the same behaviour.
 - **Embeddable without wiring.** The shared UI ships its static web assets at `_content/Orleans.Lattice.Explorer.UI/`, served automatically; a host mounts the whole console with two extension calls under a configurable base path.
 
@@ -29,7 +29,7 @@ An opt-in, auth-aware web console for a running [Orleans.Lattice](../../README.m
 | Tree browser | State-API gRPC surface | Catalog, shard structure, snapshot-isolated entry scans, single-key inspection, change feed, and per-tree metrics. |
 | Backups area | Backup control API | Capability-gated capture, restore, catalog listing, chain describe, and retention over the [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) binding. |
 | Access area | Auth control API | Capability-gated membership and policy administration and decision explanation over the [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/README.md) binding. |
-| Schema area | Schema control API | Schema policy, dead letters, versioning, and remediation. Ships hidden; enable with `EnableSchemaArea`. |
+| Schema plugin | Schema control API | Schema policy, dead letters, versioning, and remediation. Ships withheld; surface it with `AddExplorerSchemaPlugin()`. |
 | Auth-aware sign-in | `IExplorerAuthMethod` | Pluggable login (Basic, Entra, or custom) that attaches a bearer token to an auth-enabled State API. |
 | Standalone or embedded hosting | `AddLatticeExplorerWeb` / `MapLatticeExplorer` | One code path for the bundled `WebHost` process and for embedding in an existing ASP.NET app, under a configurable base path. |
 
@@ -57,8 +57,11 @@ builder.Services.AddLatticeExplorerWeb(options =>
 {
     options.BasePath = "/explorer";
     options.ConfigFilePath = "explorer-config.json";
-    options.EnableSchemaArea = true;
 });
+
+// The Schema area is an opt-in plugin: registering it is the whole of the
+// opt-in, and a head that does not register it renders no Schema tab.
+builder.Services.AddExplorerSchemaPlugin();
 
 // ...after building the app:
 app.MapLatticeExplorer();

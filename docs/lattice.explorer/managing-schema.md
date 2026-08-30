@@ -2,7 +2,7 @@
 
 > **Hidden by default.** The Schema area is withheld from the Explorer's switcher
 > for the initial release because its versioning UI cannot yet express what
-> differs between schema versions. Surface it by setting `EnableSchemaArea` to
+> differs between schema versions. Surface it by calling `AddExplorerSchemaPlugin()`, replacing the retired `EnableSchemaArea` flag with
 > `true` on `LatticeExplorerWebOptions` (see
 > [Running the Explorer](running-the-explorer.md)). The schema control services
 > ship and stay registered regardless, so this only toggles visibility. Tracking
