@@ -60,6 +60,7 @@
       this one reference. Withholding it ships no Tenants area.
     -->
     <ProjectReference Include="..\Plugins\Tenants\Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
+    <ProjectReference Include="..\Plugins\MyTenant\Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
   </ItemGroup>
 
 </Project>

@@ -13,8 +13,10 @@ using Orleans.Lattice.Explorer.Core.History;
 using Orleans.Lattice.Explorer.Core.Metrics;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Core.Topology;
 using Orleans.Lattice.Explorer.DesignSystem;
+using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.UI.Authentication;
@@ -143,6 +145,16 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // tenant-view seam and the shared tenancy client, and refuses to compose
         // at all if the gate it needs is the fail-closed default.
         services.AddExplorerTenantsPlugin();
+        // The My Tenant self-service area, for a tenant administrator. Its
+        // registration must follow AddExplorerAccess(): AddExplorerTenantView()
+        // registers a fail-closed placeholder platform-operator gate with
+        // TryAdd, and Access registers the real one, so calling them the other
+        // way round keeps the placeholder and every tenant switch quietly does
+        // nothing. On a cluster without the tenancy add-on the plugin's gate
+        // reports the surface unavailable and no My Tenant tab is rendered.
+        services.AddExplorerTenantView();
+        services.AddExplorerMyTenant();
+        services.AddExplorerMyTenantPlugin();
 
         // The Schema management area: the schema control-API client, its policy,
         // versioning, and compliance services, and the access gate that gates the
