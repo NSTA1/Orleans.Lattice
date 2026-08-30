@@ -165,6 +165,25 @@ Each authored set is a **replacement, not a delta**: the supplied collection
 becomes the whole set, so a currently-allowed or currently-resident region absent from
 it is revoked or drained.
 
+#### Concurrent residency changes
+
+The tenant record is CRDT-merged, and its per-region status is a map keyed by region
+id, so two removals of **different** regions do not conflict - the join keeps both. A
+guard that only checked before writing would therefore let two concurrent callers each
+drop a different region and leave the tenant resident nowhere. `SetResidencyAsync`
+closes that by checking the invariant **twice**: once before the write, and again on
+the record the registry commits. Because the pre-write check has already refused the
+single-writer case, a merged record with no resident region can only mean a concurrent
+removal, so the call repairs the regions **it** drained (restoring their prior status
+at a strictly later stamp), leaves the other caller's removal standing, and refuses
+with `TenantLastRegionException`. Both racing callers are refused and the tenant keeps
+at least one resident region; retrying either call afterwards meets the ordinary
+pre-write guard.
+
+For the same reason both write operations report the **merged** record rather than the
+caller's pre-write view, so a concurrent change from another writer is present in the
+returned region set instead of silently absent.
+
 #### Authorization tiers
 
 | Operation | Tier | Who may call it |
@@ -187,7 +206,7 @@ specific status rather than an opaque fault:
 |---|---|
 | `TenantNotFoundException` | The tenant is not registered. |
 | `TenantRegionNotAllowedException` | Residency was set to a region outside the allowed set, or an allowed region a tenant is still resident in was revoked. |
-| `TenantLastRegionException` | The change would remove the tenant's last resident region. |
+| `TenantLastRegionException` | The change would remove the tenant's last resident region - either as submitted, or once merged with a concurrent removal (see [Concurrent residency changes](#concurrent-residency-changes)). |
 | `LatticeAuthorizationDeniedException` | The caller does not hold the required tier. |
 
 ### `ILatticeTenantSelfService`
@@ -263,7 +282,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantAlreadyExistsException` | exception | A tenant with the same id is already registered. |
 | `ReservedTenantOperationException` | exception | Attempted suspend, delete, or set-quotas on the reserved `default` tenant. |
 | `TenantRegionNotAllowedException` | exception | A residency region is not in the allowed set (or a revoked region is still resident). |
-| `TenantLastRegionException` | exception | The change would remove the last resident region. |
+| `TenantLastRegionException` | exception | The change would remove the last resident region, as submitted or once merged with a concurrent removal. |
 
 ## See also
 

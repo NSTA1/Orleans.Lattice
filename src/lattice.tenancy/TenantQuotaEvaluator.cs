@@ -54,8 +54,17 @@ internal static class TenantQuotaEvaluator
         }
 
         // Burst allows a transient overage above the base ceiling before admission
-        // engages. Divide before multiply so a large ceiling cannot overflow.
-        var effectiveCeiling = burstPercent > 0 ? ceiling + ceiling / 100L * burstPercent : ceiling;
+        // engages. Multiply through a 128-bit intermediate so a large ceiling
+        // cannot overflow while a small one keeps its burst allowance: dividing
+        // first (ceiling / 100 * burstPercent) floors any ceiling below 100 to a
+        // zero burst, wrongly refusing writes the burst headroom should admit.
+        var effectiveCeiling = ceiling;
+        if (burstPercent > 0 && ceiling > 0)
+        {
+            var burstAdjusted = (UInt128)ceiling + ((UInt128)ceiling * (uint)burstPercent / 100);
+            effectiveCeiling = burstAdjusted > (UInt128)long.MaxValue ? long.MaxValue : (long)burstAdjusted;
+        }
+
         if (current <= effectiveCeiling)
         {
             return;

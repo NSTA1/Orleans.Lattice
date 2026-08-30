@@ -38,11 +38,16 @@ public class LatticeChangeObservationIntegrationTests
         int expectedCount,
         Func<Task> mutate)
     {
-        var collectTask = _fixture.CollectAsync(request, expectedCount, Timeout);
+        // Pin the observed window to a cursor captured BEFORE the mutation
+        // rather than to wherever a fresh subscription happens to seed its tail.
+        // An earlier revision slept 300ms and hoped the seeding had finished,
+        // which only narrowed the race and reopened it under any slowdown. A
+        // request that already carries a cursor (the resume test) keeps it.
+        var pinned = request.ContinuationToken is null
+            ? request with { ContinuationToken = await _fixture.CaptureTailAsync(request.TreeId) }
+            : request;
 
-        // Give the subscription a moment to seed its tail cursor before the
-        // mutations land, so a fresh subscription observes exactly them.
-        await Task.Delay(300);
+        var collectTask = _fixture.CollectAsync(pinned, expectedCount, Timeout);
         await mutate();
 
         return await collectTask;

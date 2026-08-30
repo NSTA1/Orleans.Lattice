@@ -42,6 +42,16 @@ public static class LatticeExplorerWebServiceCollectionExtensions
     /// plumbing. Map the endpoints with
     /// <see cref="LatticeExplorerWebEndpointRouteBuilderExtensions.MapLatticeExplorer"/>.
     /// </summary>
+    /// <remarks>
+    /// The web head is multi-user, so two seams the single-operator desktop head
+    /// leaves open are closed by default here: the environment <b>credential</b>
+    /// seed is withheld (see
+    /// <see cref="LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed"/>), and
+    /// the shared configuration store refuses browser-driven writes (see
+    /// <see cref="LatticeExplorerWebOptions.AllowInteractiveEndpointConfiguration"/>).
+    /// The secret-free endpoint seed is unaffected, so a head is still configured
+    /// by <c>LATTICE_EXPLORER_ENDPOINT</c> or a pre-provisioned document.
+    /// </remarks>
     /// <param name="services">The consuming application's service collection.</param>
     /// <param name="configure">
     /// An optional callback to configure the mount point, configuration file path,
@@ -71,6 +81,15 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // the area tier.
         services.AddExplorerSelectionPlugins();
 
+        // Do not advertise a connection-settings affordance the store refuses.
+        // Presentation only; the enforcing check is on the store below. There is
+        // no per-area flag here any more - an area is surfaced by registering its
+        // plugin, so the only navigation option left is this one.
+        services.TryAddSingleton(new ExplorerNavigationOptions
+        {
+            AllowEndpointConfiguration = options.AllowInteractiveEndpointConfiguration,
+        });
+
         // The web head is Blazor Server: the server process holds the gRPC channel
         // to the cluster's state API and the browser renders over the SignalR
         // circuit. Interactive server components host the shared UI class library.
@@ -81,6 +100,23 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // JSON store path is taken from the options, else the LATTICE_EXPLORER_CONFIG
         // environment variable, else the per-user local app-data default.
         var configFilePath = ResolveConfigFilePath(options);
+
+        if (!options.AllowInteractiveEndpointConfiguration)
+        {
+            // Security: the persisted configuration is one process-wide document
+            // shared by every browser, and it names the endpoint every circuit
+            // dials and every sign-in is challenged against. Nothing upstream
+            // authenticates the caller who writes it, so an anonymous visitor could
+            // repoint the whole head at a host they control. Wrap the store so
+            // writes are refused at the one seam every writer funnels through,
+            // registered ahead of AddExplorerConfiguration so its TryAdd of the
+            // raw JSON store is skipped. Reads are untouched, so the endpoint still
+            // arrives from the environment or a pre-provisioned document.
+            services.TryAddSingleton<IExplorerConfigStore>(sp =>
+                new ReadOnlyExplorerConfigStore(
+                    new JsonExplorerConfigStore(sp.GetRequiredService<ExplorerConfigStoreOptions>())));
+        }
+
         services.AddExplorerConfiguration(storeOptions =>
         {
             if (!string.IsNullOrWhiteSpace(configFilePath))
@@ -89,11 +125,22 @@ public static class LatticeExplorerWebServiceCollectionExtensions
             }
         });
 
+        if (!options.AllowEnvironmentCredentialSeed)
+        {
+            // Security: the web head is multi-user and its credential store is per
+            // browser, so it is empty for every anonymous visitor. Seeding the
+            // process-wide environment credential there would sign each of them in
+            // as the operator. Register the no-op seed ahead of the bootstrap below
+            // so its TryAdd of the environment credential seed is skipped; the
+            // secret-free endpoint seed it also registers is left in place.
+            services.TryAddSingleton<IExplorerCredentialSeed, NullExplorerCredentialSeed>();
+        }
+
         if (options.UseEnvironmentBootstrap)
         {
-            // Launcher-friendly first-run bootstrap: seed the endpoint (and an
-            // optional sign-in credential) from environment variables when nothing
-            // is persisted yet.
+            // Launcher-friendly first-run bootstrap: seed the endpoint (and, when
+            // explicitly opted in above, a sign-in credential) from environment
+            // variables when nothing is persisted yet.
             services.AddExplorerEnvironmentBootstrap();
         }
 

@@ -134,9 +134,14 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
 - **Use the GitHub CLI (`gh`) for every GitHub interaction on this repo, authenticated as your own intended GitHub account.** Do not use the app's `create_issue` / `create_pull_request` / `update_pull_request` tools or the GitHub MCP write tools: they authenticate with the ambient `GH_TOKEN` / app identity, which is often not the account you intend to act as, so they can act under the wrong identity and PR creation may 403 (for example when the ambient identity must fork). Which account to use for this repo is a per-user preference and belongs in your personal/global configuration, not in this shared file. Select it explicitly for each command: put the intended account's token on the command, e.g. `$env:GH_TOKEN = (gh auth token --user <your-account>)` before the `gh` command (`gh issue create`, `gh pr create`, `gh issue edit --body-file`, ...). Do not use the git credential helper. **`git push` needs the same care and `GH_TOKEN` alone does not fix it** - a plain `git push` over HTTPS ignores `GH_TOKEN` and falls through to the credential helper, which can authenticate as an unintended identity and 403 ("Permission ... denied to ..."). Push with your intended account's token embedded in the URL and the helper disabled for that one command:
   ```powershell
   $tok = (gh auth token --user <your-account>)
-  git -c credential.helper= push -u "https://x-access-token:$tok@github.com/<owner>/<repo>.git" <branch>
+  git -c credential.helper= push "https://x-access-token:$tok@github.com/<owner>/<repo>.git" <branch>
+  # Set tracking separately. Never pass -u above: it persists the tokenized
+  # URL into .git/config as branch.<branch>.remote, leaving a credential at rest.
+  git config branch.<branch>.remote origin
+  git config branch.<branch>.merge refs/heads/<branch>
+  git fetch origin <branch>
   ```
-  Do **not** try `-c http.<url>.extraheader="AUTHORIZATION: bearer $tok"` - it collides with the helper's own header and fails with "unable to get password from user". The tokenized-URL form above is the one that works.
+  Do **not** try `-c http.<url>.extraheader="AUTHORIZATION: bearer $tok"` - it collides with the helper's own header and fails with "unable to get password from user". The tokenized-URL form above is the one that works. Do **not** add `-u` to that push: `-u` records the push URL verbatim as `branch.<branch>.remote`, so the token is written into `.git/config` and stays there. Set the upstream with the `git config` / `git fetch` lines above instead, which leave `origin` as the recorded remote. Audit a clone with `git config --local --list | Select-String 'x-access-token' -SimpleMatch`; it should return nothing.
 - Do not add author attribution or `Co-authored-by` / `Copilot-Session` trailers to commits.
 - Branch names use a type prefix (`feat/`, `docs/`, `fix/`, ...), never a username.
 - When a PR fully implements an issue, add a `Closes XXX` line to the PR body.

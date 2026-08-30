@@ -249,6 +249,79 @@ public sealed class PromQlMetricExtractorTests
     }
 
     [Test]
+    public void A_comment_cannot_hide_a_metric_name_on_a_later_line()
+    {
+        // Security regression: a '#' comment runs to end-of-line, so the quote it
+        // contains opens no string literal. Before the fix the scanner treated it
+        // as a string opener and swallowed the whole next line up to the second
+        // quote, so 'secret_metric' never reached the deny-all gate while
+        // Prometheus - which strips comments before parsing - still evaluated it.
+        var references = PromQlMetricExtractor.ExtractReferences("up or #\"\nsecret_metric #\"");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "up", "secret_metric" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+            Assert.That(references.HasUnconstrainedSelector, Is.False);
+        });
+    }
+
+    [Test]
+    public void A_comment_cannot_hide_a_bare_selector_on_a_later_line()
+    {
+        // The same swallowing trick applied to an unanchored label selector: the
+        // unconstrained flag must still be raised so the gate fails closed.
+        var references = PromQlMetricExtractor.ExtractReferences("up or #\"\n{job=\"api\"} #\"");
+        Assert.That(references.HasUnconstrainedSelector, Is.True);
+    }
+
+    [Test]
+    public void A_comment_cannot_hide_a_name_matcher_on_a_later_line()
+    {
+        var references = PromQlMetricExtractor.ExtractReferences("up or #'\n{__name__=~\"secret.*\"} #'");
+        Assert.That(references.HasUnresolvableNameMatcher, Is.True);
+    }
+
+    [Test]
+    public void A_trailing_comment_contributes_no_metric_name()
+    {
+        // Prometheus discards the comment, so its text must not be extracted as a
+        // referenced name either - extracting it would wrongly deny the query.
+        var references = PromQlMetricExtractor.ExtractReferences("up # secret_metric");
+        Assert.That(references.Names, Is.EqualTo(new[] { "up" }));
+    }
+
+    [Test]
+    public void A_comment_does_not_break_metric_selector_adjacency()
+    {
+        // A comment is discarded like whitespace, so the selector stays anchored to
+        // the metric name (which was itself allow-list checked when extracted).
+        var references = PromQlMetricExtractor.ExtractReferences("up #c\n{job=\"api\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "up" }));
+            Assert.That(references.HasUnconstrainedSelector, Is.False);
+        });
+    }
+
+    [Test]
+    public void A_hash_inside_a_string_literal_is_not_a_comment()
+    {
+        var references = PromQlMetricExtractor.ExtractReferences("{__name__=\"a#b\"}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(references.Names, Is.EqualTo(new[] { "a#b" }));
+            Assert.That(references.HasUnresolvableNameMatcher, Is.False);
+        });
+    }
+
+    [Test]
+    public void A_comment_terminated_by_a_carriage_return_ends_at_the_line_break()
+    {
+        var references = PromQlMetricExtractor.ExtractReferences("up or #\"\r\nsecret_metric");
+        Assert.That(references.Names, Is.EqualTo(new[] { "up", "secret_metric" }));
+    }
+
+    [Test]
     public void A_null_query_is_rejected()
         => Assert.Throws<ArgumentNullException>(() => PromQlMetricExtractor.ExtractReferences(query: null!));
 }

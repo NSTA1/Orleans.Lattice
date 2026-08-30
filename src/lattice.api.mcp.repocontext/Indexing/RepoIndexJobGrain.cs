@@ -122,6 +122,10 @@ internal sealed class RepoIndexJobGrain(
         Task.FromResult(state.State.ToProgress(RepoId));
 
     /// <inheritdoc />
+    public Task<RepoIndexJobRequest?> GetRequestAsync() =>
+        Task.FromResult(state.State.Request);
+
+    /// <inheritdoc />
     public async Task ReportProgressAsync(RepoIndexProgressUpdate update)
     {
         // A late report for a job that was cleared or already settled is ignored,
