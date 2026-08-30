@@ -13,6 +13,9 @@
   <Project Path="Plugins/Access/Orleans.Lattice.Explorer.Access.csproj" />
   <Project Path="Plugins/Schema/Orleans.Lattice.Explorer.Schema.csproj" />
   <Project Path="Plugins/MyTenant/Orleans.Lattice.Explorer.Plugins.MyTenant.csproj" />
+  <Project Path="Plugins/Tenancy/Orleans.Lattice.Explorer.Plugins.Tenancy.csproj" />
+  <Project Path="Plugins/Tenants/Orleans.Lattice.Explorer.Plugins.Tenants.csproj" />
+  <Project Path="Plugins/Telemetry/Orleans.Lattice.Explorer.Plugins.Telemetry.csproj" />
   <Project Path="UI/Orleans.Lattice.Explorer.UI.csproj" />
   <Project Path="WebHosting/Orleans.Lattice.Explorer.Web.csproj" />
   <Project Path="Web/Orleans.Lattice.Explorer.WebHost.csproj" />
