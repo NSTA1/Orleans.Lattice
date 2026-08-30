@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// One tenant quota dimension as the Explorer presents it: the consumption, the

@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// The subjects that hold tenant-admin authority over one tenant.

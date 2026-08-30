@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// The scope a quota reading was taken and is enforced under. A per-cluster

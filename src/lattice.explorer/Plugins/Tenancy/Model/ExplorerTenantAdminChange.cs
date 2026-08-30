@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// The outcome of granting or revoking one subject's tenant-admin authority,

@@ -1,6 +1,6 @@
 using System.Reflection;
 using Orleans.Lattice.Api.TenantAdmin;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenancy;
 

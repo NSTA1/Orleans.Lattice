@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// One tenant's cross-tenant grants in both directions, in every lifecycle

@@ -1,5 +1,5 @@
 using Orleans.Lattice.Explorer.Core.Tenancy;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 namespace Orleans.Lattice.Explorer.Plugins.MyTenant.Workspace;
 

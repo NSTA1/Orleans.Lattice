@@ -1,6 +1,6 @@
 using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// Decides whether the Explorer's tenancy surfaces exist for the current caller

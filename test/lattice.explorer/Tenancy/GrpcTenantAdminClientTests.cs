@@ -2,7 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Connection;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenancy;
 

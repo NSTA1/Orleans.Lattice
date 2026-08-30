@@ -1,5 +1,5 @@
 using System.Globalization;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 

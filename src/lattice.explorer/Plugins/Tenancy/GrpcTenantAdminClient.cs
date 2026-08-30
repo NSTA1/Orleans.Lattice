@@ -9,7 +9,7 @@ using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Serialization;
 
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// The production <see cref="ITenantAdminClient"/>. Builds both

@@ -1,6 +1,6 @@
 using Grpc.Core;
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 
 namespace Orleans.Lattice.Explorer.Tests.Tenancy;

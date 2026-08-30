@@ -10,9 +10,9 @@
       My Tenant plugins consume, and carries no components or stylesheet of
       its own. Each of those plugins brings its own Razor project.
     -->
-    <RootNamespace>Orleans.Lattice.Explorer.Tenancy</RootNamespace>
-    <AssemblyName>Orleans.Lattice.Explorer.Tenancy</AssemblyName>
-    <PackageId>Orleans.Lattice.Explorer.Tenancy</PackageId>
+    <RootNamespace>Orleans.Lattice.Explorer.Plugins.Tenancy</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Explorer.Plugins.Tenancy</AssemblyName>
+    <PackageId>Orleans.Lattice.Explorer.Plugins.Tenancy</PackageId>
     <Version>9.4.0</Version>
     <Description>The shared tenancy seam for the Orleans.Lattice Explorer: the client wrapper over the tenant-administration and tenant self-service gRPC bindings, the Explorer-term domain model the tenancy plugins operate against, the fault mapping that turns each documented facade refusal into its own result status, and the availability probe that reports the surface unavailable on a cluster without the tenancy add-on. Registered with AddExplorerTenancy().</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>

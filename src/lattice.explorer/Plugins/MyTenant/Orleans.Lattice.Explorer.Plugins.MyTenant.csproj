@@ -48,7 +48,7 @@
     <ProjectReference Include="..\..\Core\Orleans.Lattice.Explorer.Core.csproj" />
     <ProjectReference Include="..\..\DesignSystem\Orleans.Lattice.Explorer.DesignSystem.csproj" />
     <ProjectReference Include="..\Abstractions\Orleans.Lattice.Explorer.Plugins.Abstractions.csproj" />
-    <ProjectReference Include="..\Tenancy\Orleans.Lattice.Explorer.Tenancy.csproj" />
+    <ProjectReference Include="..\Tenancy\Orleans.Lattice.Explorer.Plugins.Tenancy.csproj" />
   </ItemGroup>
 
   <ItemGroup>

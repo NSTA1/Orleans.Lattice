@@ -2,7 +2,7 @@ using Grpc.Core;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// The default <see cref="ITenancyAvailability"/>, and a ready-made

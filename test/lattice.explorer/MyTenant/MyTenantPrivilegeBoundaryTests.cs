@@ -1,5 +1,5 @@
 using System.IO;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Explorer.Tests.MyTenant;

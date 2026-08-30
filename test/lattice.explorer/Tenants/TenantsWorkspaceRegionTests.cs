@@ -1,4 +1,4 @@
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.Plugins.Tenants.Workspace;
 

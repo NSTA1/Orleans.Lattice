@@ -1,6 +1,6 @@
 using Orleans.Lattice.Api.TenantAdmin;
 
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// Projects the tenant-administration control API's wire types onto the

@@ -6,7 +6,7 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
-using Orleans.Lattice.Explorer.Tenancy;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
 

@@ -1,7 +1,7 @@
 using Grpc.Core;
 using Orleans.Lattice.Api.TenantAdmin;
 
-namespace Orleans.Lattice.Explorer.Tenancy;
+namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
 /// Translates a tenancy fault into the Explorer's
