@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
 /// a fake <see cref="HttpMessageHandler"/> - no real network.
 /// </summary>
 [TestFixture]
-public sealed class PrometheusQueryClientTests
+public sealed partial class PrometheusQueryClientTests
 {
     private const string BackendBase = "https://prometheus.internal:9090/";
 

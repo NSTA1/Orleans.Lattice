@@ -104,6 +104,17 @@ public sealed class LatticeSchemaVersioningServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeSchemaVersioning_without_registry_delegate_builds_empty_registry()
+    {
+        var builder = new FakeSiloBuilder().WithCoreLattice();
+
+        builder.AddLatticeSchemaVersioning();
+        var registry = builder.Services.BuildServiceProvider().GetRequiredService<ILatticeSchemaRegistry>();
+
+        Assert.That(registry.TryGetDescriptor(1, 1, out _), Is.False);
+    }
+
+    [Test]
     public void ConfigureLatticeSchemaVersioning_layers_options_after_add()
     {
         var builder = new FakeSiloBuilder().WithCoreLattice();

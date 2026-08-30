@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Api.Mcp.Telemetry.Tests;
 /// backend traffic is served by a fake <see cref="HttpMessageHandler"/>.
 /// </summary>
 [TestFixture]
-public sealed class TelemetryToolHandlersTests
+public sealed partial class TelemetryToolHandlersTests
 {
     private const string BackendBase = "https://prometheus.internal:9090/";
 

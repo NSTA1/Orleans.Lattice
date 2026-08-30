@@ -109,6 +109,21 @@ public class LatticeSchemaPolicyProviderTests
     }
 
     [Test]
+    public async Task OnMutationAsync_policy_tree_write_with_empty_key_does_not_evict()
+    {
+        var store = Substitute.For<ILatticeSchemaPolicyStore>();
+        store.GetPolicyAsync("orders", Arg.Any<CancellationToken>()).Returns(JsonPolicy());
+        var provider = CreateProvider(store);
+
+        _ = await provider.GetCompiledPolicyAsync("orders");
+        await provider.OnMutationAsync(
+            new LatticeMutation { TreeId = "sys-schema-policy", Key = string.Empty }, CancellationToken.None);
+        _ = await provider.GetCompiledPolicyAsync("orders");
+
+        await store.Received(1).GetPolicyAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task OnMutationAsync_unrelated_tree_write_does_not_evict()
     {
         var store = Substitute.For<ILatticeSchemaPolicyStore>();

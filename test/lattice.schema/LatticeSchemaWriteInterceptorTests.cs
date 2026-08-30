@@ -127,6 +127,24 @@ public class LatticeSchemaWriteInterceptorTests
     }
 
     [Test]
+    public async Task OnWriteAsync_strict_ingest_empty_value_records_empty_preview()
+    {
+        var (interceptor, dlq, _) = Create(JsonPolicy(strictIngest: true), strictIngestEnabled: true);
+        LatticeSchemaDeadLetterEntry? captured = null;
+        dlq.When(x => x.AppendAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaDeadLetterEntry>(), Arg.Any<CancellationToken>()))
+            .Do(ci => captured = ci.Arg<LatticeSchemaDeadLetterEntry>());
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await interceptor.OnWriteAsync(Request(Array.Empty<byte>()));
+        }
+
+        Assert.That(captured, Is.Not.Null);
+        Assert.That(captured!.ValuePreview, Is.Empty);
+        Assert.That(captured.ValueByteLength, Is.Zero);
+    }
+
+    [Test]
     public async Task OnWriteAsync_restore_source_recorded_for_restore_operation()
     {
         var (interceptor, dlq, _) = Create(JsonPolicy(strictIngest: true), strictIngestEnabled: true);

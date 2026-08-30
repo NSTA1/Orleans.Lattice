@@ -100,6 +100,17 @@ public sealed class LatticeStateMetricsObserverTests
     }
 
     [Test]
+    public async Task ObserveAsync_orders_removed_tree_ids_by_tree_id()
+    {
+        var (observer, query) = Create();
+        query.SetTrees("metrics-tree-c", TreeB, TreeA);
+
+        var snapshots = await CollectAsync(observer, Request(), afterFirst: () => query.SetTrees());
+
+        Assert.That(snapshots[^1].RemovedTreeIds, Is.EqualTo(new[] { TreeA, TreeB, "metrics-tree-c" }));
+    }
+
+    [Test]
     public async Task ObserveAsync_reports_a_tree_whose_only_change_is_shard_hotness()
     {
         var (observer, query) = Create();

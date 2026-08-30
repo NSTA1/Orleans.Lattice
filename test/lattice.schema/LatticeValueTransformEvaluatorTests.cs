@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Schema.Tests;
 /// or malformed payload throws a clear exception rather than corrupting the value.
 /// </summary>
 [TestFixture]
-public sealed class LatticeValueTransformEvaluatorTests
+public sealed partial class LatticeValueTransformEvaluatorTests
 {
     private static byte[] Utf8(string json) => Encoding.UTF8.GetBytes(json);
 
@@ -176,6 +176,20 @@ public sealed class LatticeValueTransformEvaluatorTests
         var root = Evaluate("{\"n\":7}", transform);
 
         Assert.That(root.GetProperty("label").GetString(), Is.EqualTo("v7"));
+    }
+
+    [Test]
+    public void Compute_concat_renders_missing_operand_as_empty_string()
+    {
+        var transform = LatticeValueTransform.Passthrough(
+            LatticeValueTransform.SetMember("label", LatticeValueTransform.Compute(
+                LatticeComputeOperator.Concat,
+                LatticeValueTransform.Const(LatticeConstant.Text("v")),
+                LatticeValueTransform.Member("missing"))));
+
+        var root = Evaluate("{}", transform);
+
+        Assert.That(root.GetProperty("label").GetString(), Is.EqualTo("v"));
     }
 
     [Test]
