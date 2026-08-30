@@ -139,9 +139,21 @@
     --lx-color-border-strong: #2b3545;
     --lx-color-focus-ring: rgba(76, 194, 255, 0.35);
 
+    /*
+      Text. Each of these clears the WCAG 2.1 AA 4.5:1 minimum for normal-size
+      text against every background token in this palette, not just the canvas:
+      the tightest pairing is dim on the lightest one, --lx-color-surface-raised,
+      at 4.82:1. Measured against that same worst case the three read as a
+      descending emphasis ladder - 13.0:1, 5.7:1, 4.8:1 - so raising dim to clear
+      the bar did not collapse it into muted.
+
+      `text-dim` was #5a6373 until issue #1801, which measured it at 3.19:1 on
+      the canvas. `TextContrastTokenHygieneTests` re-measures every pair on every
+      build, so this cannot regress silently.
+    */
     --lx-color-text: #d8dee9;
     --lx-color-text-muted: #8a93a3;
-    --lx-color-text-dim: #5a6373;
+    --lx-color-text-dim: #7c8797;
 
     --lx-color-accent: #4cc2ff;
     --lx-color-accent-hover: #74d1ff;
@@ -175,9 +187,20 @@
     --lx-color-border-strong: #c4ccd8;
     --lx-color-focus-ring: rgba(20, 110, 180, 0.3);
 
+    /*
+      Text. The same AA guarantee as the dark palette. Here the light canvas is
+      the tightest background rather than the surfaces, because it is the only
+      one that is not pure white: dim reads 4.79:1 on it and 5.09:1 on white.
+
+      `text-dim` was #8a93a3 until issue #1801. That is 2.91:1 on this canvas -
+      a worse instance of the very defect the issue reported against the dark
+      palette, and one the axe sweep could never have found, because the sweep
+      runs the default (dark) theme. Fixing both is what lets the contrast guard
+      cover the whole token layer without carrying an exclusion of its own.
+    */
     --lx-color-text: #1b2330;
     --lx-color-text-muted: #5a6473;
-    --lx-color-text-dim: #8a93a3;
+    --lx-color-text-dim: #656f7d;
 
     --lx-color-accent: #1b73c4;
     --lx-color-accent-hover: #155a9b;
