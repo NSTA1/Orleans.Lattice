@@ -13,6 +13,15 @@ namespace Orleans.Lattice.Explorer.Plugins;
 /// <see cref="ExplorerPluginAccess.Denied"/> - the fail-closed answer - and is
 /// never treated as an admission.
 /// </para>
+/// <para>
+/// Overlapping refreshes are filed in <em>request</em> order rather than
+/// completion order. The shell starts a refresh from several fire-and-forget
+/// paths (mount, sign-in change, reconnect), so two can be probing the same gate
+/// at once; without an ordering guard a probe issued while the caller was still
+/// signed in could land after the sign-out that denied them and re-admit the
+/// plugin purely because it finished second. Ordering is per plugin, so a
+/// targeted re-probe of one plugin never discards a sibling's newer decision.
+/// </para>
 /// </summary>
 /// <param name="catalog">The registered plugins to probe.</param>
 /// <param name="store">The keyed store results are filed in.</param>
@@ -30,6 +39,9 @@ public sealed class ExplorerPluginAccessRefresher(
 
     private readonly IExplorerPluginHostContextFactory _contexts =
         contexts ?? throw new ArgumentNullException(nameof(contexts));
+
+    private readonly Dictionary<string, ProbeOrder> _orders = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
 
     /// <inheritdoc />
     public Task RefreshAsync(CancellationToken cancellationToken = default)
@@ -65,10 +77,15 @@ public sealed class ExplorerPluginAccessRefresher(
     {
         ExplorerPluginAccess access;
         string? pluginId = null;
+        var issued = 0L;
 
         try
         {
             pluginId = plugin.Descriptor.PluginId;
+
+            // Taken before the probe starts, so the sequence records the order
+            // the decisions were *asked* for.
+            issued = Issue(pluginId);
 
             var context = _contexts.Create(pluginId);
             var gate = plugin.AccessGate
@@ -90,7 +107,51 @@ public sealed class ExplorerPluginAccessRefresher(
         // to file under, and the plugin simply stays at the fail-closed default.
         if (pluginId is not null)
         {
+            Apply(pluginId, issued, access);
+        }
+    }
+
+    private long Issue(string pluginId)
+    {
+        lock (_gate)
+        {
+            if (!_orders.TryGetValue(pluginId, out var order))
+            {
+                order = new ProbeOrder();
+                _orders.Add(pluginId, order);
+            }
+
+            return ++order.Issued;
+        }
+    }
+
+    /// <summary>
+    /// Files <paramref name="access"/> unless a newer probe of the same plugin
+    /// already filed its own. The comparison and the write are one atomic step,
+    /// so a stale probe cannot pass the check and then be overtaken before it
+    /// writes.
+    /// </summary>
+    private void Apply(string pluginId, long issued, ExplorerPluginAccess access)
+    {
+        lock (_gate)
+        {
+            if (!_orders.TryGetValue(pluginId, out var order) || issued <= order.Applied)
+            {
+                return;
+            }
+
+            order.Applied = issued;
             _store.Set(pluginId, access);
         }
+    }
+
+    /// <summary>One plugin's issue and apply watermarks.</summary>
+    private sealed class ProbeOrder
+    {
+        /// <summary>The sequence of the most recently started probe.</summary>
+        public long Issued;
+
+        /// <summary>The sequence of the most recently filed decision.</summary>
+        public long Applied;
     }
 }

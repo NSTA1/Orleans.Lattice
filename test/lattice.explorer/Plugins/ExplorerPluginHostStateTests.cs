@@ -262,6 +262,102 @@ public sealed class ExplorerPluginHostStateTests
         Assert.That(state.Dispose, Throws.Nothing);
     }
 
+    [Test]
+    public async Task A_stale_tenant_scope_resolution_does_not_widen_a_newer_one()
+    {
+        // Two scope refreshes overlap - the shell fires one on an authentication
+        // change and another when the connection reaches the cluster, both
+        // fire-and-forget - and the older one resolves last. The scope published
+        // must be the one asked for last: a resolution issued while the caller
+        // still validated as a platform operator must not restore the
+        // cross-tenant view after a newer resolution narrowed it.
+        var tenants = new SequencedTenantView();
+        using var state = new ExplorerPluginHostState(
+            Substitute.For<IExplorerSelection>(),
+            DisconnectedConnection(),
+            tenants);
+
+        var stale = state.RefreshTenantScopeAsync();
+        var fresh = state.RefreshTenantScopeAsync();
+
+        tenants.Complete(1, ExplorerTenantVisibility.ActiveTenant);
+        tenants.Complete(0, ExplorerTenantVisibility.AllTenants);
+        await Task.WhenAll(stale, fresh);
+
+        Assert.That(
+            state.Tenant.Visibility,
+            Is.EqualTo(ExplorerPluginTenantVisibility.ActiveTenant),
+            "a stale resolution must never widen the scope a newer one narrowed");
+    }
+
+    [Test]
+    public async Task A_stale_tenant_scope_resolution_raises_no_transition()
+    {
+        // The discarded resolution must not announce itself either: a plugin
+        // that re-reads the scope on ExplorerPluginHostChange.Tenant would
+        // otherwise be told to re-render into a scope the host never adopted.
+        var tenants = new SequencedTenantView();
+        using var state = new ExplorerPluginHostState(
+            Substitute.For<IExplorerSelection>(),
+            DisconnectedConnection(),
+            tenants);
+        var changes = new List<ExplorerPluginHostChange>();
+        state.Changed += changes.Add;
+
+        var stale = state.RefreshTenantScopeAsync();
+        var fresh = state.RefreshTenantScopeAsync();
+        tenants.Complete(1, ExplorerTenantVisibility.ActiveTenant);
+        tenants.Complete(0, ExplorerTenantVisibility.AllTenants);
+        await Task.WhenAll(stale, fresh);
+
+        Assert.That(changes, Is.Empty, "the newer resolution matched the projected scope, so nothing changed");
+    }
+
+    [Test]
+    public async Task A_newer_tenant_scope_resolution_still_applies_when_it_resolves_last()
+    {
+        // The ordering guard must not degrade into "first answer wins": when the
+        // resolutions complete in request order the newest is still adopted.
+        var tenants = new SequencedTenantView();
+        using var state = new ExplorerPluginHostState(
+            Substitute.For<IExplorerSelection>(),
+            DisconnectedConnection(),
+            tenants);
+
+        var older = state.RefreshTenantScopeAsync();
+        var newer = state.RefreshTenantScopeAsync();
+
+        tenants.Complete(0, ExplorerTenantVisibility.ActiveTenant);
+        tenants.Complete(1, ExplorerTenantVisibility.AllTenants);
+        await Task.WhenAll(older, newer);
+
+        Assert.That(state.Tenant.Visibility, Is.EqualTo(ExplorerPluginTenantVisibility.AllTenants));
+    }
+
+    [Test]
+    public async Task A_refresh_after_a_discarded_resolution_is_still_applied()
+    {
+        // The guard orders publications, it does not latch one: a later refresh
+        // must still be able to widen the scope once the caller validates again.
+        var tenants = new SequencedTenantView();
+        using var state = new ExplorerPluginHostState(
+            Substitute.For<IExplorerSelection>(),
+            DisconnectedConnection(),
+            tenants);
+
+        var stale = state.RefreshTenantScopeAsync();
+        var fresh = state.RefreshTenantScopeAsync();
+        tenants.Complete(1, ExplorerTenantVisibility.ActiveTenant);
+        tenants.Complete(0, ExplorerTenantVisibility.AllTenants);
+        await Task.WhenAll(stale, fresh);
+
+        var later = state.RefreshTenantScopeAsync();
+        tenants.Complete(2, ExplorerTenantVisibility.AllTenants);
+        await later;
+
+        Assert.That(state.Tenant.Visibility, Is.EqualTo(ExplorerPluginTenantVisibility.AllTenants));
+    }
+
     private static ILatticeStateConnection DisconnectedConnection()
     {
         var connection = Substitute.For<ILatticeStateConnection>();
@@ -292,5 +388,52 @@ public sealed class ExplorerPluginHostStateTests
     {
         connection.Status.Returns(status);
         connection.StatusChanged += NSubstitute.Raise.Event<Action<LatticeConnectionStatus>>(status);
+    }
+
+    /// <summary>
+    /// A tenant view that hands every visibility resolution its own pending
+    /// completion source, so a test can answer overlapping resolutions in any
+    /// order it likes without a clock.
+    /// </summary>
+    private sealed class SequencedTenantView : IExplorerTenantView
+    {
+        private readonly List<TaskCompletionSource<ExplorerTenantVisibility>> _resolutions = [];
+
+        public bool IsActive => true;
+
+        public ExplorerTenantId? ActiveTenant => new("acme");
+
+        /// <summary>Completes the <paramref name="index"/>th resolution with <paramref name="visibility"/>.</summary>
+        public void Complete(int index, ExplorerTenantVisibility visibility)
+        {
+            TaskCompletionSource<ExplorerTenantVisibility> resolution;
+            lock (_resolutions)
+            {
+                resolution = _resolutions[index];
+            }
+
+            resolution.SetResult(visibility);
+        }
+
+        public ValueTask<ExplorerTenantVisibility> ResolveEffectiveVisibilityAsync(
+            CancellationToken cancellationToken = default)
+        {
+            var resolution = new TaskCompletionSource<ExplorerTenantVisibility>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_resolutions)
+            {
+                _resolutions.Add(resolution);
+            }
+
+            return new ValueTask<ExplorerTenantVisibility>(resolution.Task);
+        }
+
+        public bool IsVisible(ExplorerTenantVisibility effectiveVisibility, string treeId) => true;
+
+        public ValueTask<IReadOnlyList<TItem>> ScopeAsync<TItem>(
+            IReadOnlyList<TItem> items,
+            Func<TItem, string> treeIdSelector,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(items);
     }
 }

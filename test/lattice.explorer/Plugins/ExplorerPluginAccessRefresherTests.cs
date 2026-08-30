@@ -247,6 +247,127 @@ public sealed class ExplorerPluginAccessRefresherTests
         });
     }
 
+    [Test]
+    public async Task A_stale_probe_does_not_overwrite_a_newer_decision()
+    {
+        // Two refreshes overlap - the shell fires one on an authentication change
+        // and another when the connection reaches the cluster, both
+        // fire-and-forget - and the older one's gate answers last. The decision
+        // filed must be the one that was asked for last, not the one that
+        // happened to complete last: otherwise a probe issued while the caller
+        // was still signed in re-admits a plugin after the sign-out that denied
+        // it.
+        var gate = new SequencedExplorerPluginAccessGate();
+        var host = PluginTestHost.Create(new FakeExplorerPlugin("a", gate: gate));
+
+        var stale = host.Refresher.RefreshAsync();
+        var fresh = host.Refresher.RefreshAsync();
+
+        // The newer request answers first, then the older one answers with the
+        // admission it resolved before the caller signed out.
+        gate.Complete(1, ExplorerPluginAccess.Deny("signed out"));
+        gate.Complete(0, ExplorerPluginAccess.Allowed);
+        await Task.WhenAll(stale, fresh);
+
+        Assert.That(
+            host.Store.Get("a"),
+            Is.EqualTo(ExplorerPluginAccess.Deny("signed out")),
+            "the newest requested probe owns the decision, whatever order the probes complete in");
+    }
+
+    [Test]
+    public async Task A_stale_probe_does_not_overwrite_a_newer_decision_for_a_single_plugin_refresh()
+    {
+        // The same ordering hazard across the two refresh entry points: a
+        // whole-catalog refresh overlapping a targeted re-probe of one plugin.
+        var gate = new SequencedExplorerPluginAccessGate();
+        var host = PluginTestHost.Create(new FakeExplorerPlugin("a", gate: gate));
+
+        var stale = host.Refresher.RefreshAsync();
+        var fresh = host.Refresher.RefreshAsync("a");
+
+        gate.Complete(1, ExplorerPluginAccess.Deny("revoked"));
+        gate.Complete(0, ExplorerPluginAccess.Allowed);
+        await Task.WhenAll(stale, fresh);
+
+        Assert.That(host.Store.Get("a"), Is.EqualTo(ExplorerPluginAccess.Deny("revoked")));
+    }
+
+    [Test]
+    public async Task A_newer_probe_still_wins_when_it_completes_last()
+    {
+        // The ordering guard must not degrade into "first answer wins": when the
+        // probes complete in request order the newest answer is still the one
+        // filed.
+        var gate = new SequencedExplorerPluginAccessGate();
+        var host = PluginTestHost.Create(new FakeExplorerPlugin("a", gate: gate));
+
+        var stale = host.Refresher.RefreshAsync();
+        var fresh = host.Refresher.RefreshAsync();
+
+        gate.Complete(0, ExplorerPluginAccess.Allowed);
+        gate.Complete(1, ExplorerPluginAccess.Deny("revoked"));
+        await Task.WhenAll(stale, fresh);
+
+        Assert.That(host.Store.Get("a"), Is.EqualTo(ExplorerPluginAccess.Deny("revoked")));
+    }
+
+    [Test]
+    public async Task An_ordering_discarded_probe_does_not_hold_back_a_later_refresh()
+    {
+        // After a stale answer has been discarded, the plugin must still be
+        // re-probeable: the guard orders decisions, it does not latch one.
+        var gate = new SequencedExplorerPluginAccessGate();
+        var host = PluginTestHost.Create(new FakeExplorerPlugin("a", gate: gate));
+
+        var stale = host.Refresher.RefreshAsync();
+        var fresh = host.Refresher.RefreshAsync();
+        gate.Complete(1, ExplorerPluginAccess.Deny("revoked"));
+        gate.Complete(0, ExplorerPluginAccess.Allowed);
+        await Task.WhenAll(stale, fresh);
+
+        var later = host.Refresher.RefreshAsync();
+        gate.Complete(2, ExplorerPluginAccess.Allowed);
+        await later;
+
+        Assert.That(host.Store.Get("a"), Is.EqualTo(ExplorerPluginAccess.Allowed));
+    }
+
+    /// <summary>
+    /// A gate that hands every probe its own pending completion source, so a test
+    /// can answer overlapping probes in any order it likes without a clock.
+    /// </summary>
+    private sealed class SequencedExplorerPluginAccessGate : IExplorerPluginAccessGate
+    {
+        private readonly List<TaskCompletionSource<ExplorerPluginAccess>> _probes = [];
+
+        /// <summary>Completes the <paramref name="index"/>th probe with <paramref name="access"/>.</summary>
+        public void Complete(int index, ExplorerPluginAccess access)
+        {
+            TaskCompletionSource<ExplorerPluginAccess> probe;
+            lock (_probes)
+            {
+                probe = _probes[index];
+            }
+
+            probe.SetResult(access);
+        }
+
+        public ValueTask<ExplorerPluginAccess> ProbeAsync(
+            IExplorerPluginHostContext context,
+            CancellationToken cancellationToken = default)
+        {
+            var probe = new TaskCompletionSource<ExplorerPluginAccess>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_probes)
+            {
+                _probes.Add(probe);
+            }
+
+            return new ValueTask<ExplorerPluginAccess>(probe.Task);
+        }
+    }
+
     /// <summary>A catalog that reports exactly what it was handed, without validating it.</summary>
     private sealed class StubCatalog(IReadOnlyList<IExplorerPlugin> plugins) : IExplorerPluginCatalog
     {
