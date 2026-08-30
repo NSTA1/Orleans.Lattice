@@ -531,6 +531,14 @@ dotnet test test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.cspro
 - `publish.yml` resolves a package's test project from the package directory, so publishing never runs it either.
 - `.github/workflows/ui-tests.yml` is its only runner. It is **path-filtered to the Explorer UI**, so an unrelated PR never provisions a browser, and it caches both NuGet and the pinned browser build.
 
+**Coverage does run them.** `coverage.yml` (main only, post-merge) builds the solution and runs every test project, and the browser suite is included: it installs chromium and deliberately does **not** exclude the `UI` category. The suite hosts the Explorer in-process on Kestrel, so coverlet instruments the same process that serves the app and the server-side render path is genuinely counted - real production coverage, not just test code.
+
+Two traps there, both of which silently cost coverage rather than failing:
+
+- The discovery glob is `*Tests.csproj`, **not** `*.Tests.csproj`. A project named `Orleans.Lattice.Explorer.UiTests.csproj` has no literal dot before `Tests`, so the stricter glob skipped it entirely.
+- `--collect:"XPlat Code Coverage"` needs the test project to reference **`coverlet.collector`**. Without it the flag is accepted, the tests pass, and no report is emitted at all. Every test project must carry it.
+
+When you add a test project, verify it is actually discovered and actually emits a `coverage.cobertura.xml` - do not assume the naming convention matched.
 Like `Explorer CI`, it is **advisory rather than a required check** - it does not run on most PRs, and a required check that never reports leaves a PR pending forever. Treat a failure as blocking by convention.
 
 ### Keep the suite small

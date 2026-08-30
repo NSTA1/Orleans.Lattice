@@ -50,6 +50,33 @@ jobs:
       - name: Build
         run: dotnet build Orleans.Lattice.slnx --no-restore --configuration Release
 
+      # The browser UI suite runs in this job too, so its code paths are counted
+      # rather than self-skipping. It hosts the Explorer in-process on Kestrel,
+      # so coverlet instruments the same process that serves the app and the
+      # server-side render path is genuinely covered - not just the test code.
+      # Browsers are cached on the project file, which is where the pinned
+      # Microsoft.Playwright version lives.
+      - name: Cache Playwright browsers
+        id: pwcache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
+
+      - name: Install Playwright chromium
+        run: |
+          set -euo pipefail
+          script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit 2>/dev/null || true)"
+          if [ -z "$script" ]; then
+            echo "::error::playwright.ps1 not found - the UI test project did not build, so its coverage would be silently missing."
+            exit 1
+          fi
+          if [ "${{ steps.pwcache.outputs.cache-hit }}" = "true" ]; then
+            pwsh "$script" install-deps chromium
+          else
+            pwsh "$script" install chromium --with-deps
+          fi
+
       - name: Wait for Azurite
         run: |
           for port in 10000 10001 10002; do
@@ -74,7 +101,14 @@ jobs:
           # azure-throughput-silo is not part of Orleans.Lattice.slnx, so it is
           # not built by the step above. The standalone lattice.integration
           # project is intentionally included here.
-          mapfile -t testProjs < <(find test -type f -name '*.Tests.csproj' \
+          #
+          # The pattern is '*Tests.csproj', not '*.Tests.csproj'. The browser UI
+          # project is Orleans.Lattice.Explorer.UiTests.csproj, whose suffix is
+          # '.UiTests.csproj' - it has no literal dot before 'Tests', so the
+          # stricter glob silently skipped it and its coverage would have gone
+          # missing without anything failing. Widening costs nothing: every
+          # existing project matches either way.
+          mapfile -t testProjs < <(find test -type f -name '*Tests.csproj' \
             -not -path '*/microbench/*' \
             -not -path '*/azure-throughput-silo/*' | sort)
           for proj in "${testProjs[@]}"; do
@@ -85,7 +119,8 @@ jobs:
             # against the Azurite service above. Coyote systematic-concurrency
             # models run in their own opt-in CI tier and cover the same shared
             # cores the deterministic unit tests already exercise, so they are
-            # excluded here too.
+            # excluded here too. The UI category is deliberately NOT excluded -
+            # browsers are installed above precisely so those paths are counted.
             dotnet test "$proj" --no-build --configuration Release \
               --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
               --collect:"XPlat Code Coverage" \
