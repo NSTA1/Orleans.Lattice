@@ -1,0 +1,123 @@
+name: UI Tests
+
+# Advisory (non-required) lane that runs the browser-driven Playwright suite
+# against the Explorer web head.
+#
+# Why this is a separate workflow rather than a step in `CI`:
+#
+#   * It needs browser binaries. Installing chromium costs wall-clock and disk
+#     on every runner it touches, so it must not burden the core matrix.
+#   * It only tells us anything when the Explorer UI actually changed. The
+#     `paths` filter below keeps it off unrelated PRs entirely - a change to,
+#     say, `src/lattice.replication/` never pays for a browser.
+#   * `test/lattice.explorer.uitests/**` is deliberately excluded from the
+#     `code` and `nonSample` filters in `ci.yml` (the same carve-out
+#     `benchmark/**` and `apps/**` get), so the core matrix never tries to run
+#     these tests without a browser present. This workflow is their only
+#     runner.
+#
+# Why it is NOT a required status check: it does not run on most PRs, and a
+# required check that never reports leaves a PR pending forever. `Explorer CI`
+# is non-required for the same reason. Treat a failure here as blocking by
+# convention, not by branch protection.
+#
+# Markdown under the Explorer tree is excluded so a docs-only edit does not
+# provision a browser. Note the '**/*.md' spelling: picomatch only treats '**'
+# as a globstar when it stands alone as a path segment, so '**.md' would
+# silently degrade to '*.md' and fail to match nested files.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/lattice.explorer/**'
+      - '!src/lattice.explorer/**/*.md'
+      - 'test/lattice.explorer.uitests/**'
+      - '!test/lattice.explorer.uitests/**/*.md'
+      - '.github/workflows/ui-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UI_TEST_PROJECT: test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj
+
+jobs:
+  browser-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-uitests-${{ runner.os }}-${{ hashFiles('src/lattice.explorer/**/*.csproj', 'test/lattice.explorer.uitests/**/*.csproj') }}
+          restore-keys: nuget-uitests-${{ runner.os }}-
+
+      # Build before installing browsers: the Playwright install script is
+      # emitted into the build output, so it does not exist until this runs.
+      - name: Build UI test project
+        run: dotnet build "$UI_TEST_PROJECT" --configuration Release
+
+      # Cache the browser binaries. Keying on the project file hash invalidates
+      # the cache exactly when the pinned Microsoft.Playwright version changes,
+      # since that version lives in the csproj (this repo does not use central
+      # package management), and never otherwise.
+      - name: Cache Playwright browsers
+        id: pwcache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('test/lattice.explorer.uitests/**/*.csproj') }}
+      # Only chromium. The suite asserts layout, reflow and accessibility, none
+      # of which are engine-specific enough to justify tripling install time
+      # and runtime on every PR. Add firefox/webkit here only if a real
+      # cross-engine defect ever justifies it.
+      #
+      # --with-deps installs the OS packages chromium needs; it is skipped on a
+      # cache hit because only the browser payload is cached, not apt state, so
+      # we still run the deps-only install in that case.
+      - name: Install Playwright chromium
+        run: |
+          set -euo pipefail
+          script="$(find test/lattice.explorer.uitests/bin/Release -name playwright.ps1 -print -quit)"
+          if [ -z "$script" ]; then
+            echo "::error::playwright.ps1 not found under the build output - did the build succeed?"
+            exit 1
+          fi
+          if [ "${{ steps.pwcache.outputs.cache-hit }}" = "true" ]; then
+            pwsh "$script" install-deps chromium
+          else
+            pwsh "$script" install chromium --with-deps
+          fi
+
+      - name: Run browser UI tests
+        run: |
+          dotnet test "$UI_TEST_PROJECT" --no-build --configuration Release \
+            --filter "TestCategory=UI" \
+            --logger "trx;LogFileName=ui-tests.trx"
+
+      # Playwright traces and failure screenshots are the only practical way to
+      # diagnose a browser failure after the fact, so keep them even on success
+      # cancellation paths.
+      - name: Upload UI test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ui-test-results
+          path: |
+            **/*.trx
+            test/lattice.explorer.uitests/**/playwright-traces/**
+            test/lattice.explorer.uitests/**/screenshots/**
+          if-no-files-found: ignore

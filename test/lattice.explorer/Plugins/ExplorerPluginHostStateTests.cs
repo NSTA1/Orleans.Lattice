@@ -280,9 +280,14 @@ public sealed class ExplorerPluginHostStateTests
         var stale = state.RefreshTenantScopeAsync();
         var fresh = state.RefreshTenantScopeAsync();
 
+        // Await each resolution before releasing the next. Completing both and
+        // then awaiting together would leave the two continuations racing on the
+        // thread pool, so "the stale one lands second" would be a hope rather
+        // than a fact - see SequencedTenantView.
         tenants.Complete(1, ExplorerTenantVisibility.ActiveTenant);
+        await fresh;
         tenants.Complete(0, ExplorerTenantVisibility.AllTenants);
-        await Task.WhenAll(stale, fresh);
+        await stale;
 
         Assert.That(
             state.Tenant.Visibility,
@@ -307,8 +312,9 @@ public sealed class ExplorerPluginHostStateTests
         var stale = state.RefreshTenantScopeAsync();
         var fresh = state.RefreshTenantScopeAsync();
         tenants.Complete(1, ExplorerTenantVisibility.ActiveTenant);
+        await fresh;
         tenants.Complete(0, ExplorerTenantVisibility.AllTenants);
-        await Task.WhenAll(stale, fresh);
+        await stale;
 
         Assert.That(changes, Is.Empty, "the newer resolution matched the projected scope, so nothing changed");
     }
@@ -328,8 +334,9 @@ public sealed class ExplorerPluginHostStateTests
         var newer = state.RefreshTenantScopeAsync();
 
         tenants.Complete(0, ExplorerTenantVisibility.ActiveTenant);
+        await older;
         tenants.Complete(1, ExplorerTenantVisibility.AllTenants);
-        await Task.WhenAll(older, newer);
+        await newer;
 
         Assert.That(state.Tenant.Visibility, Is.EqualTo(ExplorerPluginTenantVisibility.AllTenants));
     }
@@ -348,8 +355,9 @@ public sealed class ExplorerPluginHostStateTests
         var stale = state.RefreshTenantScopeAsync();
         var fresh = state.RefreshTenantScopeAsync();
         tenants.Complete(1, ExplorerTenantVisibility.ActiveTenant);
+        await fresh;
         tenants.Complete(0, ExplorerTenantVisibility.AllTenants);
-        await Task.WhenAll(stale, fresh);
+        await stale;
 
         var later = state.RefreshTenantScopeAsync();
         tenants.Complete(2, ExplorerTenantVisibility.AllTenants);
@@ -395,6 +403,21 @@ public sealed class ExplorerPluginHostStateTests
     /// completion source, so a test can answer overlapping resolutions in any
     /// order it likes without a clock.
     /// </summary>
+    /// <summary>
+    /// A tenant view whose resolutions are completed explicitly by index, so a
+    /// test can drive two overlapping refreshes to resolve in a chosen order.
+    /// </summary>
+    /// <remarks>
+    /// Resolutions use <see cref="TaskCreationOptions.RunContinuationsAsynchronously"/>,
+    /// so completing one schedules the awaiting refresh's continuation on the
+    /// thread pool rather than running it inline. Completing two resolutions
+    /// back to back therefore leaves their continuations racing, and the order
+    /// they publish in is not the order they were completed in. A test that
+    /// depends on one landing before the other must complete a resolution and
+    /// <b>await that refresh</b> before completing the next; awaiting both
+    /// together with <see cref="Task.WhenAll(Task[])"/> does not order them and
+    /// flakes under load.
+    /// </remarks>
     private sealed class SequencedTenantView : IExplorerTenantView
     {
         private readonly List<TaskCompletionSource<ExplorerTenantVisibility>> _resolutions = [];
