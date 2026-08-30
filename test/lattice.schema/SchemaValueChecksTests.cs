@@ -84,4 +84,10 @@ public class SchemaValueChecksTests
     {
         Assert.That(SchemaValueChecks.TryProjectStringMember(new byte[] { 0xC3, 0x28 }, "name"), Is.Null);
     }
+
+    [Test]
+    public void TryProjectStringMember_empty_value_returns_null()
+    {
+        Assert.That(SchemaValueChecks.TryProjectStringMember(Array.Empty<byte>(), "name"), Is.Null);
+    }
 }

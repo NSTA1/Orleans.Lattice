@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Orleans.Lattice.Schema.Tests;
 
@@ -49,6 +51,25 @@ public sealed class CompositeLatticeWriteInterceptorTests
 
         Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.AcceptTransformed));
         Assert.That(decision.TransformedValue, Is.EqualTo(Utf8("stamped")));
+    }
+
+    [Test]
+    public async Task Public_constructor_uses_versioning_stage_when_enforcement_is_absent()
+    {
+        var provider = Substitute.For<ILatticeSchemaVersionProvider>();
+        provider.GetConfigAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<LatticeSchemaVersionConfig?>((LatticeSchemaVersionConfig?)null));
+        var versioning = new LatticeSchemaVersionWriteInterceptor(
+            provider,
+            Substitute.For<ILatticeSchemaRegistry>(),
+            Substitute.For<ILatticeSchemaDeadLetterStore>(),
+            Options.Create(new LatticeSchemaVersioningOptions()),
+            TimeProvider.System);
+        var composite = new CompositeLatticeWriteInterceptor(versioning);
+
+        var decision = await composite.OnWriteAsync(Request(Utf8("body")));
+
+        Assert.That(decision.Kind, Is.EqualTo(LatticeWriteDecisionKind.Accept));
     }
 
     [Test]

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Reflection;
 
 namespace Orleans.Lattice.Schema.Tests;
 
@@ -115,5 +116,66 @@ public class CompiledSchemaRuleTests
     {
         var compiled = CompiledSchemaRule.Compile(LatticeSchemaRule.Utf8());
         Assert.That(() => compiled.Validate(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Compile_structured_rule_without_predicate_throws()
+    {
+        var rule = new LatticeSchemaRule { Kind = LatticeSchemaRuleKind.Structured };
+
+        Assert.That(() => CompiledSchemaRule.Compile(rule), Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Compile_regex_rule_without_pattern_throws()
+    {
+        var rule = new LatticeSchemaRule { Kind = LatticeSchemaRuleKind.Regex };
+
+        Assert.That(() => CompiledSchemaRule.Compile(rule), Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Compile_max_byte_length_rule_without_limit_throws()
+    {
+        var rule = new LatticeSchemaRule
+        {
+            Kind = LatticeSchemaRuleKind.Encoding,
+            EncodingKind = LatticeSchemaEncodingKind.MaxByteLength,
+        };
+
+        Assert.That(() => CompiledSchemaRule.Compile(rule), Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Compile_unknown_rule_kind_throws()
+    {
+        var rule = new LatticeSchemaRule { Kind = (LatticeSchemaRuleKind)99 };
+
+        Assert.That(() => CompiledSchemaRule.Compile(rule), Throws.ArgumentException);
+    }
+
+    [Test]
+    public void Compiled_regex_exposes_the_compiled_pattern()
+    {
+        var compiled = CompiledSchemaRule.Compile(LatticeSchemaRule.Regex("^ok$"));
+
+        Assert.That(compiled.Regex, Is.Not.Null);
+        Assert.That(compiled.Regex!.IsMatch("ok"), Is.True);
+    }
+
+    [Test]
+    public void Encoding_unknown_kind_returns_default_reason()
+    {
+        var compiled = CompiledSchemaRule.Compile(new LatticeSchemaRule
+        {
+            Kind = LatticeSchemaRuleKind.Encoding,
+            EncodingKind = (LatticeSchemaEncodingKind)99,
+        });
+
+        Assert.That(compiled.Validate(Utf8("anything")), Is.EqualTo("The value failed the encoding rule."));
+        Assert.That(
+            compiled.Validate(Utf8("anything")),
+            Is.EqualTo("The value failed the encoding rule."),
+            "The reason is stable across repeated validations of the same compiled rule.");
     }
 }

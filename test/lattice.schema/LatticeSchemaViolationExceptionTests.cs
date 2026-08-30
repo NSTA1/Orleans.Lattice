@@ -41,6 +41,20 @@ public class LatticeSchemaViolationExceptionTests
     }
 
     [Test]
+    public void Message_and_inner_exception_constructor_preserves_inner_and_empty_context()
+    {
+        var inner = new InvalidOperationException("inner");
+
+        var ex = new LatticeSchemaViolationException("boom", inner);
+
+        Assert.That(ex.Message, Is.EqualTo("boom"));
+        Assert.That(ex.InnerException, Is.SameAs(inner));
+        Assert.That(ex.TreeId, Is.Empty);
+        Assert.That(ex.Key, Is.Empty);
+        Assert.That(ex.Reason, Is.Empty);
+    }
+
+    [Test]
     public void Context_constructor_null_arguments_throw()
     {
         Assert.That(() => new LatticeSchemaViolationException(null!, "k", "r"), Throws.ArgumentNullException);

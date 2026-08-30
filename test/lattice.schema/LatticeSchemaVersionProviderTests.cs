@@ -128,6 +128,21 @@ public sealed class LatticeSchemaVersionProviderTests
     }
 
     [Test]
+    public async Task OnMutationAsync_version_tree_write_with_empty_key_does_not_evict()
+    {
+        var store = Substitute.For<ILatticeSchemaVersionStore>();
+        store.GetConfigAsync("orders", Arg.Any<CancellationToken>()).Returns(Config());
+        var provider = CreateProvider(store);
+
+        _ = await provider.GetConfigAsync("orders");
+        await provider.OnMutationAsync(
+            new LatticeMutation { TreeId = "sys-schema-version", Key = string.Empty }, CancellationToken.None);
+        _ = await provider.GetConfigAsync("orders");
+
+        await store.Received(1).GetConfigAsync("orders", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task OnMutationAsync_unrelated_tree_write_does_not_evict()
     {
         var store = Substitute.For<ILatticeSchemaVersionStore>();

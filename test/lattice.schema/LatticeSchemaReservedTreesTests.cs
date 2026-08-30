@@ -14,6 +14,12 @@ public class LatticeSchemaReservedTreesTests
         Assert.That(LatticeSchemaReservedTrees.PolicyTreeId, Is.EqualTo("sys-schema-policy"));
         Assert.That(LatticeSchemaReservedTrees.DeadLetterTreeId, Is.EqualTo("sys-schema-dlq"));
         Assert.That(LatticeSchemaReservedTrees.VersionConfigTreeId, Is.EqualTo("sys-schema-version"));
+        Assert.That(SchemaConstants.AllTrees, Is.EquivalentTo(new[]
+        {
+            LatticeSchemaReservedTrees.PolicyTreeId,
+            LatticeSchemaReservedTrees.DeadLetterTreeId,
+            LatticeSchemaReservedTrees.VersionConfigTreeId,
+        }));
     }
 
     [Test]
@@ -41,6 +47,15 @@ public class LatticeSchemaReservedTreesTests
         Assert.That(() => LatticeSchemaReservedTrees.ThrowIfReserved("sys-schema-x"), Throws.ArgumentException);
         Assert.That(() => LatticeSchemaReservedTrees.ThrowIfReserved(string.Empty), Throws.ArgumentException);
         Assert.That(() => LatticeSchemaReservedTrees.ThrowIfReserved(null!), Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public void ThrowIfReserved_uses_supplied_parameter_name()
+    {
+        var ex = Assert.Throws<ArgumentException>(
+            () => LatticeSchemaReservedTrees.ThrowIfReserved("sys-schema-x", "tree"));
+
+        Assert.That(ex!.ParamName, Is.EqualTo("tree"));
     }
 
     [Test]
