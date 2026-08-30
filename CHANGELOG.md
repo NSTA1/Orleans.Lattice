@@ -12,6 +12,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 Outstanding work is tracked on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled per project. See [`docs/RELEASING.md`](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
+### Added
+
+- **The Explorer is now composed of plugins, and adapts from phone to desktop.** The console has been rewritten around a plugin contract: each area ships as its own package carrying its own view, the single domain contract that is the whole of its reach, and its own access gate, so a head surfaces an area by registering it and withholds it by not registering it - adding a tab needs no change to the shell, and there are no per-area option flags. The UI is fluent, reflowing between compact, medium and expanded from one named breakpoint set rather than a fixed desktop layout. Two tenancy surfaces arrive with it, split by privilege: platform operators manage tenant lifecycle, quota, region authorization and the initial admin grant, while tenant administrators manage their own membership, cross-tenant grants and region residency and see usage against a quota they cannot change. Tenant metrics are served by a new backend-neutral telemetry facade that derives every answer's tenant scope on the server and reports a narrowed request as narrowed. ([#1716](https://github.com/NSTA1/Orleans.Lattice/issues/1716))
+
 ### Fixed
 
 - **Per-tenant quota burst headroom is no longer silently lost for a capacity ceiling below 100.** `TenantQuotaEvaluator` computed the burst allowance as `ceiling / 100 * burstPercent`, dividing before multiplying, so any ceiling below 100 (a realistic `MaxTreeCount`, `MaxKeys`, or small `MaxMemoryBytes`) floored the allowance to zero and a non-multiple of 100 undercounted it: a 50% burst over a ceiling of 10 resolved to 10 instead of 15, wrongly refusing writes the burst should admit with a `LatticeQuotaExceededException`. The allowance is now computed through a 128-bit intermediate that multiplies first and saturates on overflow, matching the package's sibling rate-burst helpers. (`Orleans.Lattice.Tenancy`)
