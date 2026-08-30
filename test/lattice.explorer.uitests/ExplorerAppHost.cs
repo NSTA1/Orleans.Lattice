@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Web;
 
 namespace Orleans.Lattice.Explorer.UiTests;
@@ -28,15 +30,25 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// viewport width without a per-fixture restart. The host is disposed once, after the
 /// whole run, by <see cref="ExplorerAppHostSetup"/>.
 /// </para>
+/// <para>
+/// <b>Static web assets are served from a published content root</b> produced by
+/// <see cref="ExplorerPublishedAssets"/>. A plain <c>dotnet build</c> does not
+/// materialise the framework and RCL assets portably (see that type's remarks), so the
+/// fixture publishes them once and hosts from the result. On startup the framework
+/// bootstrap asset is verified to serve <c>200 OK</c>, turning a misconfigured content
+/// root into a clear fixture failure instead of an opaque locator timeout.
+/// </para>
 /// </summary>
 public sealed class ExplorerAppHost : IAsyncDisposable
 {
     private readonly WebApplication _app;
+    private readonly string _publishRoot;
 
-    private ExplorerAppHost(WebApplication app, Uri baseUri)
+    private ExplorerAppHost(WebApplication app, Uri baseUri, string publishRoot)
     {
         _app = app;
         BaseUri = baseUri;
+        _publishRoot = publishRoot;
     }
 
     /// <summary>The loopback base address Playwright should navigate to.</summary>
@@ -46,33 +58,46 @@ public sealed class ExplorerAppHost : IAsyncDisposable
     /// Builds and starts the Explorer web head on an ephemeral loopback port and
     /// returns a handle exposing the resolved <see cref="BaseUri"/>. The port is
     /// chosen by binding <c>http://127.0.0.1:0</c>, so concurrent runs never collide
-    /// on a fixed port.
+    /// on a fixed port. Before returning, the framework bootstrap asset
+    /// (<c>_framework/blazor.web.js</c>) is verified to serve <c>200 OK</c>, so a
+    /// broken static-asset content root fails here with a clear message rather than as
+    /// an opaque locator timeout deep inside a test.
     /// </summary>
     public static async Task<ExplorerAppHost> StartAsync()
     {
+        var publishRoot = await ExplorerPublishedAssets.EnsureAsync();
+
+        // Seed a first-run endpoint so the shell renders past its configuration gate
+        // deterministically, independent of any persisted browser localStorage. The
+        // Explorer's ConfigurationGate blocks the entire shell (tab strip, catalog,
+        // nav) behind a "Connect to the state API" dialog until Session.IsConfigured
+        // is true. On a developer machine an endpoint persisted to the browser's
+        // localStorage by an earlier run makes the gate pass; a fresh CI browser
+        // profile has empty storage, so the gate would sit on the dialog forever and
+        // no [role=tab] would ever attach. EnvironmentExplorerBootstrap reads this
+        // variable as an in-memory-only seed (never written back, never carrying a
+        // credential): a secure loopback endpoint validates, IsConfigured flips true,
+        // and the shell renders in its disconnected/signed-out state - exactly the
+        // baseline this suite needs. The endpoint is deliberately unreachable; the
+        // connection faults gracefully rather than throwing, which is the correct
+        // no-backend state to reflow and accessibility-scan.
+        Environment.SetEnvironmentVariable(
+            EnvironmentExplorerBootstrap.EndpointVariable, "https://localhost:65535");
+
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
-            // Pin the application name and content root to this test assembly and its
-            // output directory. MapStaticAssets locates its endpoint manifest as
-            // "{ApplicationName}.staticwebassets.endpoints.json" under the content
-            // root, and under `dotnet test` neither the app name nor the working
-            // directory default to those values - so without both the Explorer's
-            // stylesheets 404 and the shell renders unstyled, defeating any geometry
-            // assertion.
+            // Pin the application name so MapStaticAssets locates its endpoint manifest
+            // ("{ApplicationName}.staticwebassets.endpoints.json") under the content
+            // root - under `dotnet test` the app name does not default to this value.
+            // Point the content root (and thus wwwroot) at the published output, where
+            // the framework and RCL assets exist as real files with relative paths.
             ApplicationName = typeof(ExplorerAppHost).Assembly.GetName().Name,
-            ContentRootPath = AppContext.BaseDirectory,
+            ContentRootPath = publishRoot,
         });
 
         builder.Logging.ClearProviders();
 
-        // The Explorer's static web assets (its stylesheet, favicon, and interop
-        // scripts, shipped as RCLs under _content/...) are what give the shell its
-        // real geometry. WebApplication only auto-maps these in the Development
-        // environment, so opt static web assets in explicitly - otherwise the CSS
-        // never loads and boundingBox() would measure an unstyled document.
-        builder.WebHost.UseStaticWebAssets();
-
-        // Ephemeral loopback port: bind port 0 and read back what the OS assigned.
+        // Bind port 0 and read back what the OS assigned.
         builder.WebHost.UseUrls("http://127.0.0.1:0");
 
         builder.Services.AddLatticeExplorerWeb();
@@ -85,7 +110,42 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         await app.StartAsync();
 
         var address = ResolveAddress(app);
-        return new ExplorerAppHost(app, address);
+        await VerifyFrameworkAssetServedAsync(address);
+        return new ExplorerAppHost(app, address, publishRoot);
+    }
+
+    private static async Task VerifyFrameworkAssetServedAsync(Uri baseUri)
+    {
+        // The single most valuable pre-flight check: if the framework bootstrap script
+        // does not serve, the interactive circuit never connects and every layout
+        // assertion degrades to a bare locator timeout with no server-side signal. A
+        // 200 here proves the static-asset content root is wired correctly on this OS.
+        var assetUri = new Uri(baseUri, "_framework/blazor.web.js");
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.GetAsync(assetUri);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"The Explorer web head could not serve '{assetUri}'. Without the Blazor Web "
+                + "framework bootstrap script the interactive server circuit never connects and "
+                + "the shell never renders. See the inner exception.",
+                ex);
+        }
+
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            throw new InvalidOperationException(
+                $"The Explorer web head returned HTTP {(int)response.StatusCode} for '{assetUri}', "
+                + "not 200. The Blazor Web framework asset is not being served, so the interactive "
+                + "server circuit will never connect and the shell will not render. This usually "
+                + "means the static web assets were not materialised into the published content "
+                + "root.");
+        }
     }
 
     private static Uri ResolveAddress(WebApplication app)
@@ -119,5 +179,18 @@ public sealed class ExplorerAppHost : IAsyncDisposable
     {
         await _app.StopAsync();
         await _app.DisposeAsync();
+
+        try
+        {
+            Directory.Delete(_publishRoot, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup of the temp publish directory; a leftover temp folder
+            // must never fail the run.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
