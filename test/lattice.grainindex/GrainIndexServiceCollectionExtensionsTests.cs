@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using NSubstitute;
+using Orleans.Serialization;
 
 namespace Orleans.Lattice.GrainIndex.Tests;
 
@@ -268,6 +270,13 @@ public sealed class GrainIndexServiceCollectionExtensionsTests
                 static cfg => cfg.WithName("users").Include(x => x.Age))
             .AddGrainIndex<ITestGuidKeyedGrain, TestGrainState>(
                 static cfg => cfg.WithName("orders").Include(x => x.Country));
+
+        // Resolving the hosted-service enumerable constructs the whole
+        // registered graph, including the registry reconciler, which needs the
+        // silo services a real host always has.
+        builder.Services.AddLogging();
+        builder.Services.AddSerializer();
+        builder.Services.AddSingleton(Substitute.For<IGrainFactory>());
 
         using var provider = builder.BuildServiceProvider();
 

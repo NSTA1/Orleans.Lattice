@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
+using Orleans.Lattice.GrainIndex.Registry;
 
 namespace Orleans.Lattice.GrainIndex;
 
@@ -85,6 +86,15 @@ public static class GrainIndexServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<GrainIndexDeclarationOptions>, GrainIndexDeclarationOptionsValidator>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, GrainIndexStartupValidator>());
+
+        // The registry is one store and one reconciler for the whole silo
+        // regardless of how many indexes are declared, so every registration
+        // below is idempotent.
+        services.TryAddSingleton(typeof(OrleansGrainIndexSerializer<>));
+        services.TryAddSingleton<IGrainIndexRegistryStore, GrainIndexRegistryStore>();
+        services.TryAddSingleton<GrainIndexRegistryReconciler>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexRegistryHostedService>());
 
         return builder;
     }

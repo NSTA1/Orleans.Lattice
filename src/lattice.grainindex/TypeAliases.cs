@@ -56,4 +56,16 @@ internal static class TypeAliases
 
     /// <summary>Alias for <see cref="GrainIndexKeyEncodingException"/>.</summary>
     internal const string GrainIndexKeyEncodingException = "ol.gie";
+
+    /// <summary>Alias for <see cref="GrainIndexFingerprint"/>.</summary>
+    internal const string GrainIndexFingerprint = "ol.gif";
+
+    /// <summary>Alias for <c>GrainIndexRegistryRecord</c>.</summary>
+    internal const string GrainIndexRegistryRecord = "ol.gir";
+
+    /// <summary>Alias for <see cref="GrainIndexConfigurationDriftException"/>.</summary>
+    internal const string GrainIndexConfigurationDriftException = "ol.gid";
+
+    /// <summary>Alias for <see cref="GrainIndexReplicationNotAllowedException"/>.</summary>
+    internal const string GrainIndexReplicationNotAllowedException = "ol.gin";
 }
