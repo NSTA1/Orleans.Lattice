@@ -65,6 +65,20 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Walked through <see cref="LatticeExtensions.ScanEntriesAsync"/> rather than
+    /// the raw <see cref="ILattice.EntriesAsync"/> stream. This is the walk that
+    /// RELOADS a persisted index at open, so its range grows with the index and
+    /// therefore with the corpus - precisely the shape the raw stream warns about,
+    /// because it surfaces <c>EnumerationAbortedException</c> when the remote
+    /// enumerator is reclaimed mid-scan (silo failover, cold start, idle expiry,
+    /// scale-down). An abort here does not degrade the reload, it FAILS it, and the
+    /// index then rebuilds from scratch or refuses to serve - which is the opposite
+    /// of the "reload instead of recompute" property the persisted index exists to
+    /// provide. The resilient wrapper resumes deterministically with no duplicates
+    /// and no gaps. The same defect was measured firing for real on the repocontext
+    /// count path against a restored copy of a live deployment (#1844).
+    /// </remarks>
     public async IAsyncEnumerable<KeyValuePair<string, byte[]>> ScanAsync(
         string keyPrefix, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -77,7 +91,7 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
         // range has no finite upper bound, which the scan primitives take to mean
         // "run to the end of the keyspace".
         var upperBound = LatticeKeyRange.PrefixUpperBound(keyPrefix);
-        var entries = _tree.EntriesAsync(keyPrefix, upperBound, cancellationToken: cancellationToken);
+        var entries = _tree.ScanEntriesAsync(keyPrefix, upperBound, cancellationToken: cancellationToken);
         await foreach (var entry in entries.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             yield return entry;
@@ -99,9 +113,13 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
         // No finite upper bound exists, so the range runs to the end of the
         // keyspace and the range-delete primitive cannot express it. Enumerating
         // first is correct here because the keys are collected before any delete
-        // is issued, so the walk is not invalidated underneath itself.
+        // is issued, so the walk is not invalidated underneath itself. The walk
+        // uses the abort-resilient wrapper for the same reason ScanAsync does: an
+        // aborted enumerator would yield a SHORT key list, and a short list here
+        // means a partial delete that silently leaves a superseded generation
+        // behind rather than failing.
         var keys = new List<string>();
-        var enumerator = _tree.KeysAsync(keyPrefix, null, cancellationToken: cancellationToken);
+        var enumerator = _tree.ScanKeysAsync(keyPrefix, null, cancellationToken: cancellationToken);
         await foreach (var key in enumerator.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             keys.Add(key);

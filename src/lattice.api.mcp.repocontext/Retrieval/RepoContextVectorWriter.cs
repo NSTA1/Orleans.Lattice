@@ -292,6 +292,15 @@ internal sealed class RepoContextVectorWriter
     /// Lists the live vector identifiers of one source with a key-only walk of its
     /// presence-key prefix, so no metadata value crosses the grain boundary.
     /// </summary>
+    /// <remarks>
+    /// Uses the abort-resilient <see cref="LatticeExtensions.ScanKeysAsync"/> rather
+    /// than the raw <see cref="ILattice.KeysAsync"/> stream. This range is one
+    /// source's vectors and so is normally small, but the raw stream surfaces
+    /// <c>EnumerationAbortedException</c> when the remote enumerator is reclaimed
+    /// (silo failover, cold start, idle expiry), and here that would surface as a
+    /// retirement that silently listed FEWER identifiers than exist - leaving
+    /// orphaned vectors behind rather than failing loudly.
+    /// </remarks>
     private async Task<IReadOnlyList<string>> ListVectorIdsAsync(
         string repoId, string sourceId, CancellationToken cancellationToken)
     {
@@ -301,7 +310,7 @@ internal sealed class RepoContextVectorWriter
 
         var ids = new List<string>();
         await foreach (var key in tree
-            .KeysAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ScanKeysAsync(prefix, endExclusive, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
