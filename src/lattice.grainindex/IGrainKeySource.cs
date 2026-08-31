@@ -67,4 +67,37 @@ public interface IGrainKeySource
     IAsyncEnumerable<string> EnumerateKeysAsync(
         string? resumeAfterExclusive,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The approximate number of keys this source will yield in total, or
+    /// <c>null</c> when the source cannot say.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Optional, and deliberately so: the default implementation returns
+    /// <c>null</c>, so a source that only knows how to stream keys keeps working
+    /// unchanged and needs no edit. Implement it when the population's size is
+    /// something the application already knows cheaply - a row count, a roster
+    /// length, the width of an allocated key range.
+    /// </para>
+    /// <para>
+    /// What it buys is a denominator. Without one, a backfill's progress is a
+    /// count of keys processed; with one, it is also a percentage, and the
+    /// <c>backfill.total</c> and <c>backfill.percent_complete</c> gauges publish
+    /// a series for the index instead of staying silent.
+    /// </para>
+    /// <para>
+    /// The figure is explicitly approximate. It is never used to decide when a
+    /// crawl is finished - exhausting
+    /// <see cref="EnumerateKeysAsync(string, CancellationToken)"/> is what does
+    /// that - so an estimate that turns out low or high costs nothing beyond a
+    /// clamped percentage. It should be cheap: an administrative status call
+    /// invokes it, so a source that would have to enumerate its whole population
+    /// to answer should return <c>null</c> instead.
+    /// </para>
+    /// </remarks>
+    /// <param name="cancellationToken">Cancels the estimate.</param>
+    /// <returns>The approximate key count, or <c>null</c> when it is unknown.</returns>
+    ValueTask<long?> TryGetApproximateCountAsync(CancellationToken cancellationToken) =>
+        ValueTask.FromResult<long?>(null);
 }

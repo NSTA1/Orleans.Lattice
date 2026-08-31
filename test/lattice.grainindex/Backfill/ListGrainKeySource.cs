@@ -34,6 +34,17 @@ internal sealed class ListGrainKeySource : IGrainKeySource
     /// <summary>An exception the enumeration throws on its first move, or <c>null</c>.</summary>
     internal Exception? Fault { get; set; }
 
+    /// <summary>
+    /// The population size this source reports, or <c>null</c> for a source that
+    /// cannot bound itself - which is the default, and the shape every source
+    /// written before the bound existed has.
+    /// </summary>
+    internal long? ApproximateCount { get; set; }
+
+    /// <inheritdoc />
+    public ValueTask<long?> TryGetApproximateCountAsync(CancellationToken cancellationToken) =>
+        ValueTask.FromResult(ApproximateCount);
+
     /// <inheritdoc />
     public async IAsyncEnumerable<string> EnumerateKeysAsync(
         string? resumeAfterExclusive,
