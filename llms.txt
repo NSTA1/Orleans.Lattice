@@ -11,6 +11,7 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [Configuration](docs/lattice/configuration.md): Options reference, per-tree overrides, immutability constraints, storage-provider registration.
 - [Samples](docs/lattice/samples.md): Runnable sample projects exercising `ILattice`.
 - [Consistency](docs/lattice/consistency.md): The per-operation guarantee matrix (what is strongly consistent, what is eventually convergent).
+- [Troubleshooting](docs/lattice/troubleshooting.md): Symptom-driven diagnosis - how to read a `DiagnoseAsync` report, and what to do about storage-provider write failures, shard-split activity, slow scans, and stale reads.
 
 ## Core concepts
 
@@ -30,6 +31,7 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [Durable cursors](docs/lattice/durable-cursors.md): Server-checkpointed iterators that survive silo failover and client restart.
 - [Snapshots](docs/lattice/snapshots.md) and [snapshot cursors](docs/lattice/snapshot-cursors.md): Point-in-time copies and isolated iteration.
 - [Materialised views](docs/lattice/materialised-views.md) and [history views](docs/lattice/history-views.md): WAL-driven projections and per-key revision history.
+- [Bulk loading](docs/lattice/bulk-loading.md) and [migrating from an external store](docs/lattice/external-store-migration.md): Seeding a tree from a large dataset, and the Redis / relational / Cosmos DB import playbook with key-design, value-serialization, and verification guidance.
 - [TTL](docs/lattice/ttl.md), [tag indexes](docs/lattice/api.md#tag-indexes), [queues](docs/lattice/queues.md), [compression](docs/lattice/compression.md), [metrics](docs/lattice/metrics.md).
 
 ## Optional packages

@@ -88,10 +88,7 @@ internal sealed class ViewCrossTreeCoordinatorGrain(
         if (state.State.WaitSet.Count == 0)
         {
             // First registration: freeze the (canonicalised) wait set.
-            state.State.WaitSet = readiness.WaitSet
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(static v => v, StringComparer.Ordinal)
-                .ToList();
+            state.State.WaitSet = CanonicalStringSet.SortedDistinct(readiness.WaitSet);
             state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
         }
         else if (!WaitSetMatches(readiness.WaitSet))
