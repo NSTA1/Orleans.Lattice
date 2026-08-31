@@ -381,6 +381,34 @@ public sealed class GrainIndexServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void The_declaration_registers_the_operator_surface()
+    {
+        var builder = new StubSiloBuilder();
+        builder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+            static cfg => cfg.WithName("users").Include(x => x.Age));
+
+        Assert.That(
+            builder.Services.Any(d => d.ServiceType == typeof(IGrainIndexAdmin)),
+            Is.True,
+            "An operator has to be able to resolve IGrainIndexAdmin without wiring it by hand.");
+    }
+
+    [Test]
+    public void Declaring_several_indexes_registers_the_operator_surface_once()
+    {
+        var builder = new StubSiloBuilder();
+        builder
+            .AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("users").Include(x => x.Age))
+            .AddGrainIndex<ITestGuidKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("others").Include(x => x.Age));
+
+        Assert.That(
+            builder.Services.Count(d => d.ServiceType == typeof(IGrainIndexAdmin)),
+            Is.EqualTo(1));
+    }
+
+    [Test]
     public void Declaring_several_indexes_registers_the_enrolment_path_once()
     {
         var builder = new StubSiloBuilder();

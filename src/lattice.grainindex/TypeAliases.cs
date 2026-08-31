@@ -101,4 +101,16 @@ internal static class TypeAliases
 
     /// <summary>Alias for <c>IGrainIndexBackfillGrain</c>.</summary>
     internal const string IGrainIndexBackfillGrain = "ol.gbg";
+
+    /// <summary>Alias for <see cref="GrainIndexStatus"/>.</summary>
+    internal const string GrainIndexStatus = "ol.gas";
+
+    /// <summary>Alias for <see cref="GrainIndexProgress"/>.</summary>
+    internal const string GrainIndexProgress = "ol.gap";
+
+    /// <summary>Alias for <see cref="GrainIndexDriftStatus"/>.</summary>
+    internal const string GrainIndexDriftStatus = "ol.gds";
+
+    /// <summary>Alias for <see cref="GrainIndexNotDeclaredException"/>.</summary>
+    internal const string GrainIndexNotDeclaredException = "ol.gan";
 }

@@ -117,7 +117,12 @@ internal sealed class GrainIndexOutboxDrainer
         try
         {
             await GrainIndexPlanApplier
-                .ApplyAsync(tree, pending.Plan, pending.OperationId, cancellationToken)
+                .ApplyAsync(
+                    tree,
+                    pending.Plan,
+                    GrainIndexMetrics.IndexTag(pending.IndexName),
+                    pending.OperationId,
+                    cancellationToken)
                 .ConfigureAwait(true);
 
             await _store
@@ -134,6 +139,11 @@ internal sealed class GrainIndexOutboxDrainer
         {
             // One entry that will not apply must not stall the ones behind it,
             // so the failure is reported and the entry left for the next pass.
+            GrainIndexMetrics.RecordWriteFailures(
+                GrainIndexMetrics.IndexTag(pending.IndexName),
+                GrainIndexMetrics.OutboxPathTag,
+                1);
+
             _logger.LogWarning(
                 ex,
                 "Grain index '{IndexName}' could not apply the pending projection for grain '{GrainKey}'; it stays in the outbox and will be retried.",

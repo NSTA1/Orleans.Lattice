@@ -29,6 +29,12 @@ public sealed class GrainIndexMaintainer<TGrain, TState>
     where TGrain : IGrain
 {
     /// <summary>
+    /// The index's pre-built telemetry tag, resolved once at construction so no
+    /// measurement on the write path builds one.
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _indexTag;
+
+    /// <summary>
     /// Initialises a maintainer over an explicit tree, which is the form to use
     /// when the caller already holds the index's <see cref="ILattice"/>
     /// reference.
@@ -42,6 +48,7 @@ public sealed class GrainIndexMaintainer<TGrain, TState>
         ArgumentNullException.ThrowIfNull(tree);
         Projector = new GrainIndexProjector<TGrain, TState>(definition);
         Tree = tree;
+        _indexTag = GrainIndexMetrics.IndexTag(definition.Name);
     }
 
     /// <summary>
@@ -67,6 +74,7 @@ public sealed class GrainIndexMaintainer<TGrain, TState>
         ArgumentNullException.ThrowIfNull(options);
         Projector = new GrainIndexProjector<TGrain, TState>(definition);
         Tree = grainFactory.GetGrain<ILattice>(options.Get(definition.Name).TreeName);
+        _indexTag = GrainIndexMetrics.IndexTag(definition.Name);
     }
 
     /// <summary>The projector that computes this index's entries.</summary>
@@ -178,6 +186,7 @@ public sealed class GrainIndexMaintainer<TGrain, TState>
         return GrainIndexPlanApplier.ApplyAsync(
             Tree,
             plan,
+            _indexTag,
             operationId ?? Guid.NewGuid().ToString("N"),
             cancellationToken);
     }

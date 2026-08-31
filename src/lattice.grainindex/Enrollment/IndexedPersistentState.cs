@@ -355,13 +355,13 @@ internal sealed class IndexedPersistentState<TState> : IPersistentState<TState>,
                         // and write the seen marker. The confirmed baseline is
                         // deliberately not advanced: until the batch is known to
                         // have landed, the next plan has to subsume this one.
-                        _slots[i].Enrolled = true;
+                        MarkEnrolled(i);
                         continue;
                     }
 
                     await _enrollers[i].CommitAsync(pending, cancellationToken).ConfigureAwait(true);
                     _slots[i].Confirmed = pending.Plan.Projection;
-                    _slots[i].Enrolled = true;
+                    MarkEnrolled(i);
                     _slots[i].Pending = null;
                 }
                 else if (!_slots[i].Enrolled)
@@ -371,11 +371,22 @@ internal sealed class IndexedPersistentState<TState> : IPersistentState<TState>,
                     await _enrollers[i]
                         .MarkEnrolledAsync(_slots[i].GrainKey, _slots[i].Confirmed, cancellationToken)
                         .ConfigureAwait(true);
-                    _slots[i].Enrolled = true;
+                    MarkEnrolled(i);
                 }
             }
-            catch (Exception ex) when (!surfaceFailures)
+            catch (Exception ex)
             {
+                if (ex is not OperationCanceledException)
+                {
+                    GrainIndexMetrics.RecordWriteFailures(
+                        _enrollers[i].IndexTag,
+                        GrainIndexMetrics.ActivationPathTag,
+                        1);
+                }
+
+                if (surfaceFailures)
+                    throw;
+
                 _logger.LogWarning(
                     ex,
                     "Grain index '{IndexName}' could not publish entries for grain '{GrainKey}'; the recorded projection will be retried by the outbox drain.",
@@ -383,5 +394,23 @@ internal sealed class IndexedPersistentState<TState> : IPersistentState<TState>,
                     _slots[i].GrainKey);
             }
         }
+    }
+
+    /// <summary>
+    /// Records a slot as enrolled, counting the grain against the index's
+    /// enrolled-grains counter the first time - and only the first time - it
+    /// crosses into the index. A re-projection of an already-enrolled grain is a
+    /// write, not an enrolment, and must not inflate the count.
+    /// </summary>
+    private void MarkEnrolled(int slot)
+    {
+        if (_slots[slot].Enrolled)
+            return;
+
+        _slots[slot].Enrolled = true;
+        GrainIndexMetrics.RecordGrainsEnrolled(
+            _enrollers[slot].IndexTag,
+            GrainIndexMetrics.ActivationPathTag,
+            1);
     }
 }

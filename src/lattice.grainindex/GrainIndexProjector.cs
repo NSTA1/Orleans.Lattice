@@ -33,6 +33,12 @@ namespace Orleans.Lattice.GrainIndex;
 public sealed class GrainIndexProjector<TGrain, TState>
     where TGrain : IGrain
 {
+    /// <summary>
+    /// The index's pre-built telemetry tag, resolved once at construction so the
+    /// projection path never builds one.
+    /// </summary>
+    private readonly KeyValuePair<string, object?> _indexTag;
+
     /// <summary>Initialises a projector over <paramref name="definition"/>.</summary>
     /// <param name="definition">The index definition to project. Must not be <c>null</c>.</param>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <c>null</c>.</exception>
@@ -40,6 +46,7 @@ public sealed class GrainIndexProjector<TGrain, TState>
     {
         ArgumentNullException.ThrowIfNull(definition);
         Definition = definition;
+        _indexTag = GrainIndexMetrics.IndexTag(definition.Name);
     }
 
     /// <summary>The index definition this projector projects.</summary>
@@ -111,7 +118,17 @@ public sealed class GrainIndexProjector<TGrain, TState>
     public GrainIndexUpdatePlan Plan(GrainIndexProjection previous, string grainKey, TState state)
     {
         ArgumentNullException.ThrowIfNull(previous);
-        return GrainIndexUpdatePlan.Between(previous, Project(grainKey, state));
+
+        // The timestamp is only taken when something is listening, so an
+        // unsubscribed process pays one predictable branch per projection and
+        // nothing else.
+        if (!GrainIndexMetrics.ProjectionDuration.Enabled)
+            return GrainIndexUpdatePlan.Between(previous, Project(grainKey, state));
+
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var plan = GrainIndexUpdatePlan.Between(previous, Project(grainKey, state));
+        GrainIndexMetrics.RecordProjectionDuration(_indexTag, started);
+        return plan;
     }
 
     /// <summary>

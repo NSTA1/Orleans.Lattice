@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.GrainIndex.Backfill;
 using Orleans.Lattice.GrainIndex.Enrollment;
+using Orleans.Lattice.GrainIndex.Observability;
 using Orleans.Lattice.GrainIndex.Registry;
 using Orleans.Lattice.GrainIndex.Query;
 using Orleans.Runtime;
@@ -122,6 +123,11 @@ public static class GrainIndexServiceCollectionExtensions
         services.TryAddSingleton<IGrainKeySourceResolver, GrainKeySourceResolver>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, GrainIndexBackfillHostedService>());
+
+        // The operator surface. It reads the registry and drives the backfill
+        // activations, so it registers after both and, like them, exactly once
+        // however many indexes a silo declares.
+        services.TryAddSingleton<IGrainIndexAdmin, GrainIndexAdmin>();
 
         return builder;
     }

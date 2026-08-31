@@ -29,6 +29,12 @@ internal abstract class GrainIndexEnroller<TState>
     /// <summary>The logical name of the index this enrols into.</summary>
     public abstract string IndexName { get; }
 
+    /// <summary>
+    /// The index's pre-built telemetry tag, so a recording site on the write
+    /// path never has to build one.
+    /// </summary>
+    public abstract KeyValuePair<string, object?> IndexTag { get; }
+
     /// <summary>When this index publishes entries relative to the state write.</summary>
     public abstract GrainIndexProjectionMode Mode { get; }
 

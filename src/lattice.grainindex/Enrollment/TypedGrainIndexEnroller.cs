@@ -47,11 +47,15 @@ internal sealed class TypedGrainIndexEnroller<TGrain, TState> : GrainIndexEnroll
         _maintainer = new GrainIndexMaintainer<TGrain, TState>(definition, tree);
         _store = store;
         IndexName = definition.Name;
+        IndexTag = GrainIndexMetrics.IndexTag(definition.Name);
         Mode = mode;
     }
 
     /// <inheritdoc />
     public override string IndexName { get; }
+
+    /// <inheritdoc />
+    public override KeyValuePair<string, object?> IndexTag { get; }
 
     /// <inheritdoc />
     public override GrainIndexProjectionMode Mode { get; }

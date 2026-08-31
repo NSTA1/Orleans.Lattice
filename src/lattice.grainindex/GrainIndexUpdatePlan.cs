@@ -33,11 +33,20 @@ public sealed class GrainIndexUpdatePlan
     /// <param name="projection">The projection this plan brings the tree in line with. Must not be <c>null</c>.</param>
     /// <param name="upserts">The entries to write. Must not be <c>null</c>.</param>
     /// <param name="deletes">The stale keys to tombstone. Must not be <c>null</c>.</param>
+    /// <param name="entryDelta">
+    /// The net change this plan makes to the number of entries the index holds.
+    /// Defaults to the upsert-minus-tombstone count, which is exact unless an
+    /// upsert rewrites an entry whose key did not move; the
+    /// <see cref="Between"/> and <see cref="Removing"/> factories always supply
+    /// the exact value, so a plan built by the projection path never relies on
+    /// that approximation.
+    /// </param>
     /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
     public GrainIndexUpdatePlan(
         GrainIndexProjection projection,
         IReadOnlyList<KeyValuePair<string, byte[]>> upserts,
-        IReadOnlyList<string> deletes)
+        IReadOnlyList<string> deletes,
+        int? entryDelta = null)
     {
         ArgumentNullException.ThrowIfNull(projection);
         ArgumentNullException.ThrowIfNull(upserts);
@@ -45,6 +54,7 @@ public sealed class GrainIndexUpdatePlan
         Projection = projection;
         Upserts = upserts;
         Deletes = deletes;
+        EntryDelta = entryDelta ?? upserts.Count - deletes.Count;
     }
 
     /// <summary>
@@ -62,6 +72,21 @@ public sealed class GrainIndexUpdatePlan
     /// current projection.
     /// </summary>
     [Id(2)] public IReadOnlyList<string> Deletes { get; }
+
+    /// <summary>
+    /// The net change this plan makes to the number of entries the index holds:
+    /// positive when the grain contributes more entries than it did, negative
+    /// when it contributes fewer, and zero when a value merely moved.
+    /// </summary>
+    /// <remarks>
+    /// It cannot be derived from <see cref="Upserts"/> and
+    /// <see cref="Deletes"/> alone, because an unordered property's entry keeps
+    /// a stable key when its value changes: that is one upsert, no tombstone,
+    /// and no new entry. The diff knows both projections and so records the
+    /// exact figure here, which is what lets the entry-count instrument stay
+    /// accurate instead of drifting upwards on in-place rewrites.
+    /// </remarks>
+    [Id(3)] public int EntryDelta { get; }
 
     /// <summary>
     /// <c>true</c> when the projection is unchanged, so applying the plan is a
@@ -124,7 +149,8 @@ public sealed class GrainIndexUpdatePlan
         var plan = new GrainIndexUpdatePlan(
             current,
             (IReadOnlyList<KeyValuePair<string, byte[]>>?)upserts ?? NoUpserts,
-            (IReadOnlyList<string>?)deletes ?? NoDeletes);
+            (IReadOnlyList<string>?)deletes ?? NoDeletes,
+            after.Count - before.Count);
         plan._upsertList = upserts;
         return plan;
     }
@@ -143,13 +169,17 @@ public sealed class GrainIndexUpdatePlan
 
         var before = previous.Entries;
         if (before.Count == 0)
-            return new GrainIndexUpdatePlan(GrainIndexProjection.Empty(previous.GrainKey), NoUpserts, NoDeletes);
+            return new GrainIndexUpdatePlan(GrainIndexProjection.Empty(previous.GrainKey), NoUpserts, NoDeletes, 0);
 
         var deletes = new string[before.Count];
         for (var i = 0; i < before.Count; i++)
             deletes[i] = before[i].Key;
 
-        return new GrainIndexUpdatePlan(GrainIndexProjection.Empty(previous.GrainKey), NoUpserts, deletes);
+        return new GrainIndexUpdatePlan(
+            GrainIndexProjection.Empty(previous.GrainKey),
+            NoUpserts,
+            deletes,
+            -before.Count);
     }
 
     /// <summary>

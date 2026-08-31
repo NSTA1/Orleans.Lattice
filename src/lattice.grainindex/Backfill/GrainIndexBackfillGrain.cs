@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.GrainIndex.Enrollment;
+using Orleans.Lattice.GrainIndex.Observability;
 using Orleans.Lattice.GrainIndex.Registry;
 using Orleans.Runtime;
 using Orleans.Timers;
@@ -77,15 +78,25 @@ internal sealed class GrainIndexBackfillGrain(
     private IGrainIndexDefinition? _definition;
     private bool _definitionResolved;
     private string? _indexName;
+    private KeyValuePair<string, object?>? _indexTag;
     private IGrainKeySource? _keySource;
     private bool _keySourceResolved;
     private IGrainTimer? _timer;
+    private long? _total;
+    private bool _totalResolved;
 
     /// <summary>
     /// The index this crawl belongs to, which is the grain's key. Cached because
     /// rendering the key allocates a string, and a pass reads it several times.
     /// </summary>
     private string IndexName => _indexName ??= context.GrainId.Key.ToString()!;
+
+    /// <summary>
+    /// The index's pre-built telemetry tag, cached for the activation so a pass
+    /// records its counters without building one.
+    /// </summary>
+    private KeyValuePair<string, object?> IndexTag =>
+        _indexTag ??= GrainIndexMetrics.IndexTag(IndexName);
 
     IGrainContext IGrainBase.GrainContext => context;
 
@@ -146,7 +157,12 @@ internal sealed class GrainIndexBackfillGrain(
     public async Task<GrainIndexBackfillStatus> GetStatusAsync()
     {
         await LoadCheckpointAsync().ConfigureAwait(true);
-        return CurrentStatus();
+        var status = CurrentStatus();
+
+        // A status read is also the moment an operator or a scrape is asking, so
+        // it refreshes what this silo reports even when nothing has moved.
+        await PublishProgressAsync(status).ConfigureAwait(true);
+        return status;
     }
 
     /// <inheritdoc />
@@ -180,6 +196,10 @@ internal sealed class GrainIndexBackfillGrain(
     {
         var record = await registry.ReadAsync(IndexName, CancellationToken.None).ConfigureAwait(true);
         var checkpoint = await LoadCheckpointAsync().ConfigureAwait(true);
+
+        // A restart is when a population is most likely to have changed size, so
+        // the bound is re-resolved rather than carried over from the last run.
+        _totalResolved = false;
 
         // Prefer the registry's fingerprint: a restart is meant to crawl under
         // the declaration in force now, not the one the last run captured.
@@ -277,6 +297,13 @@ internal sealed class GrainIndexBackfillGrain(
         if (exhausted)
             advanced = advanced.WithState(GrainIndexBackfillState.Completed, now);
 
+        // The crawl drove these enrolments, so it counts them. Each grain also
+        // records its own enrolment when the activation the crawl triggered runs,
+        // under the activation path: the two series say who caused the work and
+        // who performed it, and are charted rather than summed.
+        GrainIndexMetrics.RecordGrainsEnrolled(IndexTag, GrainIndexMetrics.BackfillPathTag, enrolled);
+        GrainIndexMetrics.RecordWriteFailures(IndexTag, GrainIndexMetrics.BackfillPathTag, failed);
+
         await SaveCheckpointAsync(advanced).ConfigureAwait(true);
 
         if (exhausted)
@@ -335,6 +362,11 @@ internal sealed class GrainIndexBackfillGrain(
     public Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
         StopTimer();
+
+        // This silo no longer hosts the crawl, so it stops reporting for it
+        // rather than leaving a frozen sample behind that a scrape would read as
+        // live progress.
+        GrainIndexBackfillProgressRegistry.Remove(IndexName);
         return Task.CompletedTask;
     }
 
@@ -579,6 +611,62 @@ internal sealed class GrainIndexBackfillGrain(
         await checkpoints.WriteAsync(IndexName, checkpoint, CancellationToken.None).ConfigureAwait(true);
         _checkpoint = checkpoint;
         _checkpointLoaded = true;
+
+        // Every state change the crawl makes passes through here, so this is the
+        // one place the observable gauges have to be refreshed from.
+        await PublishProgressAsync(checkpoint.ToStatus(IndexName)).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Refreshes the progress this silo reports for the index through the
+    /// grain-index observable gauges.
+    /// </summary>
+    private async Task PublishProgressAsync(GrainIndexBackfillStatus status)
+    {
+        var total = await ApproximateTotalAsync().ConfigureAwait(true);
+        GrainIndexBackfillProgressRegistry.Publish(status, total);
+    }
+
+    /// <summary>
+    /// The population bound the index's key source offers, or <c>null</c> when
+    /// it has none.
+    /// </summary>
+    /// <remarks>
+    /// Resolved once per run rather than per pass: a bound is an estimate the
+    /// application computes, and asking for it on every pass would put
+    /// application code on the crawl's inner cadence for a figure that only
+    /// moves the denominator of a percentage. A restart re-resolves it, which is
+    /// when a population is most likely to have changed size.
+    /// </remarks>
+    private async ValueTask<long?> ApproximateTotalAsync()
+    {
+        if (_totalResolved)
+            return _total;
+
+        _totalResolved = true;
+        var keySource = ResolveKeySource();
+        if (keySource is null)
+            return _total = null;
+
+        try
+        {
+            _total = await keySource
+                .TryGetApproximateCountAsync(CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            // A bound is a convenience the application offers, not a contract
+            // the crawl depends on: one that throws costs a percentage, not a
+            // pass.
+            _total = null;
+            logger.LogDebug(
+                ex,
+                "The key source for grain index '{IndexName}' could not estimate its population size; the backfill reports a processed count instead of a percentage.",
+                IndexName);
+        }
+
+        return _total;
     }
 
     private GrainIndexBackfillStatus CurrentStatus() =>
