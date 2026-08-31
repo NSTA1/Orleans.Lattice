@@ -269,11 +269,33 @@ quarter of the corpus is a reasonable threshold.
 
 ### Allocation
 
-Asserted by `Persistence/DurableVectorIndexAllocationTests`, differentially: each
-path runs at two loop sizes after a warm-up and the assertion is on the growth,
-so a one-off tiered-JIT or pool-priming cost appears in both figures and cancels.
-A battery test in the same fixture proves the probe can detect a loop that does
-allocate.
+Asserted by `Persistence/DurableVectorIndexAllocationTests`, which follows the
+three-part probe rule this epic settled after three separate false negatives, all
+of which look exactly like a passing test:
+
+1. **Differential, never absolute.** Each path runs at two loop sizes after a
+   **full-size** warm-up - the largest window that will be measured - and the
+   assertion is on the growth, so a one-off tiered-JIT or pool-priming cost lands
+   in both samples and cancels.
+2. **The battery test's allocation provably escapes.** It stores `new object()`
+   into a **static field**. That escape is load-bearing: substituting the
+   non-escaping `new long[1].Length` form makes the JIT elide the allocation
+   entirely and the battery test then reports zero, becoming the false negative it
+   exists to prevent. Verified by doing exactly that and watching it fail.
+3. **No short circuit on one sample.** Every measurement is repeated and the
+   **minimum** is kept, clamped at zero. A single noisy attempt where the small
+   window absorbed more noise than the large one would otherwise report a
+   genuinely allocating loop as allocation-free.
+
+The per-thread counter is used only on paths that never await, where it excludes
+unrelated threads' noise and makes the differential tighter; everything
+asynchronous uses `GC.GetTotalAllocatedBytes(precise: true)`, because a
+continuation may resume on another thread and the per-thread figure is then not
+merely noisy but wrong.
+
+Every figure below was produced twice, under default tiering and under
+`DOTNET_TieredCompilation=0` (which forces full optimisation from the first call,
+where escape analysis is most aggressive), with identical results.
 
 | path | allocated |
 |---|---|
@@ -281,8 +303,8 @@ allocate.
 | Resolving a result identifier, 2,000 calls | **0 bytes** |
 | Looking up a key by identifier, 2,000 calls | **0 bytes** |
 | Re-embedding a known identifier, 1,000 updates | **0 bytes** |
-| A flush with nothing dirty | under 2 KB per flush |
-| A warm lazy search | under 512 bytes per query |
+| A flush with nothing dirty | 1,176 bytes per flush, 2 KB budget |
+| A warm lazy search | **0 bytes** measured, 64 byte budget |
 | Loading a 2,000 vector index | under 6x the cells it retains |
 
 The re-embed figure is the one that matters for a maintenance loop: an identifier

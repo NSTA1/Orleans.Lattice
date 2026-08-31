@@ -45,20 +45,63 @@ public sealed class DurableVectorIndexAllocationTests
         },
     };
 
-    private static long PerIterationDelta(Action action, int warmup, int iterations)
+    /// <summary>
+    /// The number of times each differential measurement is repeated. The
+    /// <b>minimum</b> across attempts is kept, never the first sample and never a
+    /// short circuit on the first non-positive one: on a loop that genuinely
+    /// allocates, a single noisy attempt where the small window absorbed more
+    /// noise than the large one reports allocation-free, which is the exact false
+    /// negative this fixture exists to prevent. A loop that truly allocates every
+    /// iteration cannot have a non-positive minimum, and a clean loop's minimum
+    /// picks the least noisy attempt.
+    /// </summary>
+    private const int Attempts = 5;
+
+    /// <summary>
+    /// The battery test's sink. <b>Load-bearing: do not simplify.</b> A reference
+    /// stored to a static field is a definite escape at every JIT tier and has no
+    /// constant-folding surface, so the allocation cannot be elided. A sink that
+    /// does not escape - a local, or <c>new long[1].Length</c>, whose length folds
+    /// to a constant - is removed outright by escape analysis, and the battery
+    /// test then truthfully reports zero and becomes the false negative it was
+    /// written to rule out. Verified by substituting the non-escaping form and
+    /// watching this fixture's battery test fail.
+    /// </summary>
+    private static object? _escapeSink;
+
+    private static long PerIterationDelta(Action action, int iterations)
     {
-        for (var i = 0; i < warmup; i++)
+        // Full-size warm-up: the largest window that will be measured, so tiering
+        // and on-stack replacement have already settled before either sample is
+        // taken rather than landing inside one of them.
+        RunLoop(action, iterations * 2);
+
+        var best = long.MaxValue;
+        for (var attempt = 0; attempt < Attempts; attempt++)
+        {
+            var single = AllocatedOverLoop(action, iterations);
+            var doubled = AllocatedOverLoop(action, iterations * 2);
+            best = Math.Min(best, doubled - single);
+        }
+
+        return Math.Max(0, best);
+    }
+
+    private static void RunLoop(Action action, int iterations)
+    {
+        for (var i = 0; i < iterations; i++)
         {
             action();
         }
-
-        var single = AllocatedOverLoop(action, iterations);
-        var doubled = AllocatedOverLoop(action, iterations * 2);
-        return doubled - single;
     }
 
     private static long AllocatedOverLoop(Action action, int iterations)
     {
+        // The per-thread counter, used only on paths that never await: it
+        // excludes unrelated threads' noise, which makes the differential
+        // tighter. It returns nonsense across an await, because continuations
+        // migrate threads, so anything asynchronous uses the process-wide
+        // counter below instead.
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < iterations; i++)
         {
@@ -68,17 +111,22 @@ public sealed class DurableVectorIndexAllocationTests
         return GC.GetAllocatedBytesForCurrentThread() - before;
     }
 
-    private static async Task<long> PerIterationDeltaAsync(
-        Func<ValueTask> action, int warmup, int iterations)
+    private static async Task<long> PerIterationDeltaAsync(Func<ValueTask> action, int iterations)
     {
-        for (var i = 0; i < warmup; i++)
+        for (var i = 0; i < iterations * 2; i++)
         {
             await action();
         }
 
-        var single = await AllocatedOverLoopAsync(action, iterations);
-        var doubled = await AllocatedOverLoopAsync(action, iterations * 2);
-        return doubled - single;
+        var best = long.MaxValue;
+        for (var attempt = 0; attempt < Attempts; attempt++)
+        {
+            var single = await AllocatedOverLoopAsync(action, iterations);
+            var doubled = await AllocatedOverLoopAsync(action, iterations * 2);
+            best = Math.Min(best, doubled - single);
+        }
+
+        return Math.Max(0, best);
     }
 
     private static async Task<long> AllocatedOverLoopAsync(Func<ValueTask> action, int iterations)
@@ -122,12 +170,13 @@ public sealed class DurableVectorIndexAllocationTests
     public void The_allocation_probe_detects_a_loop_that_does_allocate()
     {
         // The smoke detector's own battery. A probe that cannot see a deliberate
-        // allocation proves nothing about the paths that pass it.
-        var sink = new List<object>();
-        var delta = PerIterationDelta(() => sink.Add(new object()), warmup: 100, iterations: 1_000);
+        // allocation silently approves the regression it exists to catch, so the
+        // allocation here must PROVABLY escape - see the note on _escapeSink.
+        var delta = PerIterationDelta(() => _escapeSink = new object(), iterations: 1_000);
 
         Assert.That(delta, Is.GreaterThan(0),
-            "The differential probe failed to detect a loop that allocates on every iteration.");
+            "The differential probe failed to detect a loop that allocates on every iteration. "
+            + "Either the probe is broken, or the sink stopped escaping and the JIT elided the allocation.");
     }
 
     [Test]
@@ -146,7 +195,6 @@ public sealed class DurableVectorIndexAllocationTests
                 query[probe++ % query.Length] = probe * 0.001f;
                 index.Search(query, results, out _);
             },
-            warmup: 200,
             iterations: Iterations);
 
         AssertNoPerIterationAllocation(delta, Iterations, "The durable index query path");
@@ -164,7 +212,6 @@ public sealed class DurableVectorIndexAllocationTests
         var probe = 0;
         var delta = PerIterationDelta(
             () => index.TryGetId(results[probe++ % found].Key, out _),
-            warmup: 200,
             iterations: Iterations);
 
         AssertNoPerIterationAllocation(delta, Iterations, "Resolving a result identifier");
@@ -184,7 +231,6 @@ public sealed class DurableVectorIndexAllocationTests
         var probe = 0;
         var delta = PerIterationDelta(
             () => index.TryGetKey(ids[probe++ % ids.Length], out _),
-            warmup: 200,
             iterations: Iterations);
 
         AssertNoPerIterationAllocation(delta, Iterations, "Looking up a key by identifier");
@@ -237,7 +283,6 @@ public sealed class DurableVectorIndexAllocationTests
                 var slot = probe++ % ids.Length;
                 _ = index.UpsertAsync(ids[slot], vectors[slot]).GetAwaiter().GetResult();
             },
-            warmup: 200,
             iterations: Iterations);
 
         AssertNoPerIterationAllocation(delta, Iterations, "Re-embedding a known identifier");
@@ -252,7 +297,6 @@ public sealed class DurableVectorIndexAllocationTests
 
         var delta = await PerIterationDeltaAsync(
             async () => await index.FlushAsync(),
-            warmup: 20,
             iterations: Iterations);
 
         // A flush with nothing dirty writes one manifest record: a fixed handful
@@ -274,9 +318,18 @@ public sealed class DurableVectorIndexAllocationTests
 
         await DurableIndexHarness.OpenAsync(store, source, options);
 
-        var before = GC.GetTotalAllocatedBytes(precise: true);
+        // The minimum across attempts, for the same reason every differential
+        // measurement here takes one: a single sample can absorb unrelated
+        // noise, and the cheapest load is the one that reflects the path rather
+        // than the machine.
+        var allocated = long.MaxValue;
         var loaded = await DurableIndexHarness.OpenAsync(store, source, options);
-        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var before = GC.GetTotalAllocatedBytes(precise: true);
+            loaded = await DurableIndexHarness.OpenAsync(store, source, options);
+            allocated = Math.Min(allocated, GC.GetTotalAllocatedBytes(precise: true) - before);
+        }
 
         var retained = VectorIndexMemory.Bytes(
             loaded.Status.Capacity, loaded.Status.Dimensions, loaded.Status.PartitionCount);
@@ -308,11 +361,13 @@ public sealed class DurableVectorIndexAllocationTests
 
         var delta = await PerIterationDeltaAsync(
             async () => await lazy.SearchAsync(query, results),
-            warmup: 50,
             iterations: Iterations);
 
-        // The probe scratch is pooled, so what is left is the state machine of an
-        // asynchronous method that completes without ever suspending.
-        AssertBoundedPerIterationAllocation(delta, Iterations, budget: 512, "A warm lazy search");
+        // With a full-size warm-up and the minimum taken across attempts this
+        // measures zero: the probe scratch is pooled, and an asynchronous method
+        // that completes without ever suspending does not box its state machine.
+        // The budget is kept small rather than zero only because the
+        // process-wide counter this path must use can see unrelated threads.
+        AssertBoundedPerIterationAllocation(delta, Iterations, budget: 64, "A warm lazy search");
     }
 }
