@@ -1,0 +1,72 @@
+{
+  "tarball": "volume-backup-2026-08-29T1000.tar",
+  "note": "Known-answer validation for the offline state census. These are the figures epic #1830 quoted from a full diagnostic pass over this specific backup of the RepoContext deployment. inspect-state.ps1 recomputes each one from the same tarball and reports match or mismatch, so the instrument is validated against an answer that was arrived at independently. Point the rig at a different backup and pass -SkipExpectations, or replace this file with expectations for that backup.",
+  "checks": [
+    {
+      "id": "leaf-count/vector-payload",
+      "metric": "leafCount.repo-context-vector-payload",
+      "expected": 1110,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-count/vector-metadata",
+      "metric": "leafCount.repo-context-vector-metadata",
+      "expected": 1073,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-count/vector-membership",
+      "metric": "leafCount.repo-context-vector-membership",
+      "expected": 454,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-count/content (unsplit tree)",
+      "metric": "leafCount.repo-context-content",
+      "expected": 64,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-count/symbol (unsplit tree)",
+      "metric": "leafCount.repo-context-symbol",
+      "expected": 64,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-count/structural (unsplit tree)",
+      "metric": "leafCount.repo-context-structural",
+      "expected": 64,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-count/xref (unsplit tree)",
+      "metric": "leafCount.repo-context-xref",
+      "expected": 64,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-snapshot/rows",
+      "metric": "grainState.leaf-snapshot.rows",
+      "expected": 3573,
+      "tolerance": 0
+    },
+    {
+      "id": "leaf-snapshot/bytes (epic quoted ~941 MB)",
+      "metric": "grainState.leaf-snapshot.bytes",
+      "expected": 986710016,
+      "tolerance": 0.01
+    },
+    {
+      "id": "wal/data records",
+      "metric": "wal.dataRecords",
+      "expected": 559455,
+      "tolerance": 0
+    },
+    {
+      "id": "wal/trim records (one per shard, once ever)",
+      "metric": "wal.trimRecords",
+      "expected": 64,
+      "tolerance": 0
+    }
+  ]
+}

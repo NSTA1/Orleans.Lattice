@@ -1,0 +1,5 @@
+# Operator overrides for the cold-start rig (host paths, tarball location,
+# alternative source image tags). Mirrors the azure-throughput rig's policy for
+# parameters.local.ps1: the committed parameters.ps1 carries the isolation
+# contract, and anything machine-specific stays out of the repository.
+parameters.local.ps1

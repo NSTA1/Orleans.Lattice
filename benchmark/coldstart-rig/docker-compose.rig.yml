@@ -1,0 +1,88 @@
+# Isolated cold-start and scale rig for epic #1830 (sub-issue #1838).
+#
+# THIS FILE NEVER TOUCHES THE LIVE DEPLOYMENT, BY CONSTRUCTION:
+#
+#   * There is no `build:` section anywhere. The rig runs images that were
+#     already built elsewhere and carry an ADDITIONAL rig-only tag, so a rig
+#     run can never rebuild an image or move a live tag.
+#   * Every volume is `external: true` with an explicit rig-prefixed name, so
+#     compose neither creates nor adopts a live volume, and the pristine
+#     master volume is not bindable from here at all - only its per-run clone.
+#   * The published host port comes from RIG_HOST_PORT and is never 8080.
+#   * The compose project name comes from RIG_PROJECT and is never
+#     `repocontextcontainer`.
+#
+# None of that is taken on trust: scripts/_rig-helpers.ps1 re-derives the same
+# requirements from `docker compose config --format json` and REFUSES to start
+# the stack if the resolved document violates any of them.
+#
+# Always drive this file through scripts/run-cohort.ps1 (or scripts/rig.ps1),
+# never with a bare `docker compose -f`, because the guard runs in the scripts.
+
+services:
+  # The embedding companion. A separate container, exactly as the live sample
+  # arranges it, so the MCP host keeps its single-listener surface. Its baked
+  # HEALTHCHECK gates the host's startup.
+  embedder:
+    image: ${RIG_EMBEDDER_IMAGE:?RIG_EMBEDDER_IMAGE must be set by the rig scripts}
+    volumes:
+      - hf-cache:/app/.cache/huggingface
+    expose:
+      - "9000"
+    # `no` (not unless-stopped): a rig container must never come back on its
+    # own after a Docker daemon restart, because an unattended restart would
+    # write to the working volume outside a measured run.
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  repocontext:
+    image: ${RIG_MCP_IMAGE:?RIG_MCP_IMAGE must be set by the rig scripts}
+    depends_on:
+      embedder:
+        condition: service_healthy
+    environment:
+      LATTICE_DURABILITY: local
+      LATTICE_DATA_ROOT: /data
+      LATTICE_MCP_PORT: "8080"
+      LATTICE_WORKSPACE_ROOT: /workspace
+      LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000
+      # Background self-indexing is QUIESCED by default in the rig. The
+      # headline measurement is time to first successful semantic query on a
+      # restored corpus; a continuous background reconcile both competes for
+      # CPU with the measured path and writes to the working volume, which
+      # makes two runs from the same master less comparable. Set
+      # RIG_SELFINDEX_TICK_SECONDS=5 / RIG_RECONCILE_INTERVAL_SECONDS=5 to
+      # reproduce the live cadence when that is the thing under test.
+      LATTICE_SELFINDEX_TICK_SECONDS: "${RIG_SELFINDEX_TICK_SECONDS:-86400}"
+      LATTICE_RECONCILE_INTERVAL_SECONDS: "${RIG_RECONCILE_INTERVAL_SECONDS:-86400}"
+      LATTICE_RECONCILE_JITTER_SECONDS: "0"
+      LATTICE_FULL_WALK_INTERVAL_SECONDS: "${RIG_FULL_WALK_INTERVAL_SECONDS:-86400}"
+    ports:
+      # NEVER 8080 on the host. The container-side port stays 8080 because
+      # that is the application's own listener.
+      - "${RIG_HOST_PORT:?RIG_HOST_PORT must be set by the rig scripts}:8080"
+    volumes:
+      # The per-run WORKING CLONE of the master volume. The master itself is
+      # never mounted here.
+      - work:/data
+      # Read-only, exactly like the live sample. The guard refuses any
+      # writable bind mount.
+      - ${RIG_WORKSPACE:?RIG_WORKSPACE must be set by the rig scripts}:/workspace:ro
+    restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  work:
+    external: true
+    name: ${RIG_WORK_VOLUME:?RIG_WORK_VOLUME must be set by the rig scripts}
+  hf-cache:
+    external: true
+    name: ${RIG_HF_VOLUME:?RIG_HF_VOLUME must be set by the rig scripts}
