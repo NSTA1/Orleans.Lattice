@@ -946,4 +946,94 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.WalThrottledAdmissionPace)));
     }
+
+    [TestCase(1d)]
+    [TestCase(1.5d)]
+    [TestCase(10d)]
+    public void HotShardMinSkewRatio_non_negative_succeeds(double value)
+    {
+        // A ratio at or below 1.0 is the documented opt-out that restores pure
+        // rate-based split admission.
+        var result = Validate(o =>
+        {
+            o.HotShardMinSkewRatio = value;
+            o.HotShardConsolidationSkewRatio = 0.5d;
+        });
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void HotShardMinSkewRatio_negative_fails()
+    {
+        var result = Validate(o => o.HotShardMinSkewRatio = -0.1d);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardMinSkewRatio)));
+    }
+
+    [Test]
+    public void HotShardMinSkewRatio_nan_fails()
+    {
+        var result = Validate(o => o.HotShardMinSkewRatio = double.NaN);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardMinSkewRatio)));
+    }
+
+    [Test]
+    public void HotShardConsolidationSkewRatio_negative_fails()
+    {
+        var result = Validate(o => o.HotShardConsolidationSkewRatio = -1d);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardConsolidationSkewRatio)));
+    }
+
+    [Test]
+    public void HotShardConsolidationSkewRatio_nan_fails()
+    {
+        var result = Validate(o => o.HotShardConsolidationSkewRatio = double.NaN);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardConsolidationSkewRatio)));
+    }
+
+    [TestCase(1.5d)]
+    [TestCase(2d)]
+    public void HotShardConsolidationSkewRatio_at_or_above_the_split_ratio_fails(double value)
+    {
+        // Overlapping trigger regions let the split and consolidation control
+        // loops oscillate: split a tree, immediately consolidate it, repeat.
+        var result = Validate(o =>
+        {
+            o.HotShardMinSkewRatio = 1.5d;
+            o.HotShardConsolidationSkewRatio = value;
+        });
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardConsolidationSkewRatio)));
+    }
+
+    [Test]
+    public void HotShardConsolidationSkewRatio_ordering_is_not_enforced_when_the_skew_gate_is_disabled()
+    {
+        // With the split-skew gate off there is no skew region to overlap with.
+        var result = Validate(o =>
+        {
+            o.HotShardMinSkewRatio = 1d;
+            o.HotShardConsolidationSkewRatio = 5d;
+        });
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(0)]
+    [TestCase(1024)]
+    public void HotShardMinShardEntries_non_negative_succeeds(int value)
+    {
+        var result = Validate(o => o.HotShardMinShardEntries = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [Test]
+    public void HotShardMinShardEntries_negative_fails()
+    {
+        var result = Validate(o => o.HotShardMinShardEntries = -1);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.HotShardMinShardEntries)));
+    }
 }
