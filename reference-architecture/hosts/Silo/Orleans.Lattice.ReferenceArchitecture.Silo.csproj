@@ -38,13 +38,13 @@
     would be.
   -->
   <ItemGroup>
-    <PackageReference Include="Orleans.Lattice" Version="9.4.2" />
+    <PackageReference Include="Orleans.Lattice" Version="9.4.3" />
     <PackageReference Include="Orleans.Lattice.Storage.AzureTable" Version="9.4.0" />
     <PackageReference Include="Orleans.Lattice.Replication" Version="9.4.0" />
     <PackageReference Include="Orleans.Lattice.Replication.Grpc" Version="9.4.0" />
     <PackageReference Include="Orleans.Lattice.Api.Replication" Version="9.4.0" />
     <PackageReference Include="Orleans.Lattice.Api.Replication.Grpc" Version="9.4.0" />
-    <PackageReference Include="Orleans.Lattice.Backup" Version="9.4.0" />
+    <PackageReference Include="Orleans.Lattice.Backup" Version="9.4.1" />
     <PackageReference Include="Orleans.Lattice.Backup.AzureBlob" Version="9.4.0" />
     <PackageReference Include="Orleans.Lattice.Api.Backup" Version="9.4.0" />
     <PackageReference Include="Orleans.Lattice.Api.Backup.Grpc" Version="9.4.0" />
