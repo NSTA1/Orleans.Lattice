@@ -13,6 +13,24 @@ namespace Orleans.Lattice.GrainIndex.Tests.Registry;
 /// Orleans wire format.
 /// </para>
 /// </summary>
+/// <remarks>
+/// <para>
+/// The silo composes exactly as every other lattice cluster fixture in the
+/// repository does: <c>AddLattice</c> over in-memory grain storage, then
+/// <c>UseInMemoryReminderService</c>, then the package-specific registration.
+/// The reminder service is not optional - core lattice grains such as the
+/// tombstone-compaction grain take an <c>IReminderRegistry</c> dependency, so a
+/// silo that hosts the lattice without it fails to activate them.
+/// </para>
+/// <para>
+/// One silo, rather than the <see cref="TestClusterBuilder"/> default, because
+/// reconciliation runs once per silo start: a second silo would race a
+/// concurrent reconciliation of the same declaration set against the same
+/// registry keys. That converges (the branch is idempotent and the writes are
+/// last-writer-wins), but it is not a property these tests are asserting, and
+/// paying for it here would only make them less deterministic.
+/// </para>
+/// </remarks>
 public sealed class GrainIndexRegistryClusterFixture
 {
     /// <summary>The index the silo declares at start-up.</summary>
@@ -42,6 +60,7 @@ public sealed class GrainIndexRegistryClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
                 static cfg => cfg
                     .WithName(DeclaredIndexName)
