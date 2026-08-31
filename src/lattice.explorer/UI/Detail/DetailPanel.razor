@@ -1,5 +1,6 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
 @using Orleans.Lattice.Explorer.Core.Session
+@using Orleans.Lattice.Explorer.Core.Vocabulary
 @using Orleans.Lattice.Explorer.Plugins
 @using Orleans.Lattice.Explorer.UI.Authentication
 @using Orleans.Lattice.Explorer.UI.Plugins
@@ -62,7 +63,12 @@
                              Class="lx-shell-detail-tabs" />
         @if (_selected is not null)
         {
-            <span class="lx-shell-detail-title" title="@_selected.Id">@_selected.Label</span>
+            <span class="lx-shell-detail-title"
+                  id="@SelectionTitleElementId"
+                  aria-describedby="@(string.IsNullOrEmpty(_selectionExplanation) ? null : SelectionHelpExplanationId)">@_selected.Label</span>
+            <LatticeHelp Id="@SelectionHelpId"
+                         Term="@_selected.Label"
+                         Explanation="@_selectionExplanation" />
         }
     </header>
 
@@ -73,7 +79,8 @@
         @if (_selected is null)
         {
             <div class="lx-shell-detail-empty">
-                <p>Select a tree or view to inspect it.</p>
+                <p><strong>@ExplorerVocabulary.NoSelectionHeadline</strong></p>
+                <p>@ExplorerVocabulary.NoSelectionExplanation</p>
             </div>
         }
         else if (!_restored)
@@ -85,7 +92,12 @@
         else if (_activePlugin is null)
         {
             <div class="lx-shell-detail-empty">
-                <p>@_emptyBodyMessage</p>
+                <p><strong>@_emptyBodyMessage.Headline</strong></p>
+                <p>@_emptyBodyMessage.Explanation</p>
+                @if (!string.IsNullOrEmpty(_emptyBodyMessage.Remedy))
+                {
+                    <p><strong>@_emptyBodyMessage.RemedyLabel</strong> @_emptyBodyMessage.Remedy</p>
+                }
             </div>
         }
         else
@@ -100,8 +112,34 @@
     private static readonly LatticeTabItem[] NoTabs = [];
     private static readonly IExplorerPlugin[] NoPlugins = [];
 
-    private const string NoSurfaceRegistered = "No detail surface is registered for this selection.";
-    private const string NoSurfaceAvailable = "No detail surface for this selection is available for your account.";
+    // The two reasons the panel can resolve no surface, written once from the
+    // shared vocabulary rather than as prose here: no surface is registered for
+    // this kind of selection, or every registered surface is refused. The second
+    // is a refusal aimed at the caller, so it carries a remedy.
+    private static readonly ExplorerStateMessage NoSurfaceRegistered =
+        ExplorerStateCopy.Unavailable(ExplorerSubjects.DetailSurfaces) with
+        {
+            Headline = "No surface for this selection",
+            Explanation = "This Explorer registers no detail surface for this kind of selection, so there is nothing to show.",
+            Remedy = "Select a tree, view or tag index that has surfaces, or add the plugin that provides one.",
+            TermId = null,
+            DocsLink = ExplorerDocsLinks.WritingAPlugin,
+        };
+
+    private static readonly ExplorerStateMessage NoSurfaceAvailable =
+        ExplorerStateCopy.NotPermitted(ExplorerSubjects.DetailSurfaces);
+
+    /// <summary>The id of the element rendering the current selection's label.</summary>
+    private const string SelectionTitleElementId = "lx-shell-detail-title";
+
+    /// <summary>The element-id prefix of the disclosure explaining the current selection.</summary>
+    private const string SelectionHelpId = "lx-shell-detail-selection";
+
+    /// <summary>
+    /// The id of that disclosure's explanation element, resolved once so the
+    /// title's <c>aria-describedby</c> costs nothing per render.
+    /// </summary>
+    private static readonly string SelectionHelpExplanationId = LatticeHelp.ExplanationElementId(SelectionHelpId);
 
     /// <summary>The detail pane's heading, the level below the surface title.</summary>
     private const string DetailHeading = "Detail";
@@ -123,7 +161,14 @@
     // it. Recomputed with the active surface rather than per render.
     private string? _activeTabElementId;
     private string? _retainedPluginId;
-    private string _emptyBodyMessage = NoSurfaceRegistered;
+    private ExplorerStateMessage _emptyBodyMessage = NoSurfaceRegistered;
+
+    // What the selected item is, in the glossary's words, plus its underlying id
+    // when that differs from the label a view shows. Composed when the selection
+    // changes rather than per render, and rendered through the help disclosure so
+    // it is reachable by keyboard and touch - it used to be a bare title
+    // attribute, which is neither.
+    private string? _selectionExplanation;
 
     // The DynamicComponent's identity and its parameter set are both rebuilt only
     // when the selection or the active surface actually changes, never per
@@ -206,12 +251,15 @@
         {
             // Nothing is selected, so no plugin applies: the per-selection tier
             // has nothing to key, gate or activate until something is.
+            _selectionExplanation = null;
             _kindResolved = false;
             _plugins = NoPlugins;
             _tabSources = NoTabSources;
             _tabs = NoTabs;
             return;
         }
+
+        _selectionExplanation = DescribeSelection(selected);
 
         var kind = ExplorerSelectionKindProjection.ToPluginKind(selected.Kind);
         if (!_kindResolved || kind != _kind)
@@ -411,6 +459,26 @@
         AccessStore.Changed -= OnAccessChanged;
     }
 
+    /// <summary>
+    /// What the selected item is, in the shared glossary's words, plus its
+    /// underlying id when the label shown is not that id - which is the case for
+    /// a view, whose label is its bare name while its id carries the physical
+    /// <c>view-</c> prefix.
+    /// </summary>
+    /// <remarks>
+    /// Called when the selection changes, never on the render path, so the one
+    /// composed string it produces for a view is not a per-render cost.
+    /// </remarks>
+    private static string DescribeSelection(CatalogItem selected)
+    {
+        var subject = ExplorerSubjects.ForCatalogKind(selected.Kind);
+        var explanation = ExplorerGlossary.ExplanationFor(subject.TermId) ?? string.Empty;
+
+        return string.Equals(selected.Label, selected.Id, StringComparison.Ordinal)
+            ? explanation
+            : explanation + " The underlying id of this " + subject.Singular + " is '" + selected.Id + "'.";
+    }
+
     private static SelectionTab[] BuildTabSources(IReadOnlyList<IExplorerPlugin> plugins)
     {
         if (plugins.Count == 0)
@@ -447,11 +515,11 @@
             _denied = new LatticeTabItem(PluginId, descriptor.Label)
             {
                 IsEnabled = false,
-                Description = $"{descriptor.Label} is not available for your account.",
+                Description = ExplorerAccessCopy.Describe(ExplorerAccessCopy.Denied(descriptor.Label)),
             };
             _signInRequired = new LatticeTabItem(PluginId, descriptor.Label)
             {
-                Description = $"{descriptor.Label} requires you to sign in.",
+                Description = ExplorerAccessCopy.Describe(ExplorerAccessCopy.SignInRequired(descriptor.Label)),
             };
         }
 

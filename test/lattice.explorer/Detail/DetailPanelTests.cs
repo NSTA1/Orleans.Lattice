@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Selection;
 using Orleans.Lattice.Explorer.Tests.Plugins;
@@ -123,7 +124,11 @@ public sealed class DetailPanelTests
         Assert.Multiple(() =>
         {
             Assert.That(tab.Disabled, Is.True, "a denial greys out rather than hides");
-            Assert.That(tab.Title, Is.EqualTo("Alpha is not available for your account."));
+            Assert.That(
+                tab.Title,
+                Is.EqualTo(ExplorerAccessCopy.Describe(ExplorerAccessCopy.Denied("Alpha"))),
+                "the refusal comes from the shared vocabulary, not from prose written here");
+            Assert.That(tab.Title, Does.Contain("Ask an operator"), "and it states its remedy");
             Assert.That(harness.ActiveView, Is.Null, "a denied surface renders no content");
             Assert.That(harness.Views.Mounted, Is.Empty, "and its view is never even mounted");
         });
@@ -164,7 +169,10 @@ public sealed class DetailPanelTests
         Assert.Multiple(() =>
         {
             Assert.That(tab.Disabled, Is.False, "a recoverable state must offer its remedy");
-            Assert.That(tab.Title, Is.EqualTo("Alpha requires you to sign in."));
+            Assert.That(
+                tab.Title,
+                Is.EqualTo(ExplorerAccessCopy.Describe(ExplorerAccessCopy.SignInRequired("Alpha"))));
+            Assert.That(tab.Title, Does.Contain("Sign in"), "and it names the action that recovers it");
             Assert.That(login.IsVisible, Is.True, "clicking it prompts a sign-in");
             Assert.That(harness.ActiveView, Is.Null, "and does not render the surface");
         });
