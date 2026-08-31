@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -11,19 +12,6 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class HotShardMonitorGrainTests
 {
-    /// <summary>
-    /// Manually advanced <see cref="TimeProvider"/> so the per-shard split
-    /// cooldown can be driven without wall-clock waits.
-    /// </summary>
-    private sealed class ManualClock(DateTimeOffset start) : TimeProvider
-    {
-        private DateTimeOffset _now = start;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
-    }
-
     /// <summary>
     /// Drives every shard at the same high rate, which is what a bulk ingest
     /// streaming writes through the whole key space looks like.
@@ -269,7 +257,7 @@ public partial class HotShardMonitorGrainTests
             HotShardSplitCooldown = cooldown,
         };
         var (grain, _, _, splitGrain, _, shardOf, _) = CreateGrain(physicalShardCount: Shards, options: opts);
-        var clock = new ManualClock(DateTimeOffset.UnixEpoch);
+        var clock = new VirtualTimeProvider(DateTimeOffset.UnixEpoch);
         grain.TimeProvider = clock;
         ApplySkewedLoad(shardOf, Shards, HotShard, backgroundOps: 0, hotOps: 30_000);
 
