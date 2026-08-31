@@ -66,6 +66,7 @@ on:
       #   lattice.explorer.plugins.tenants-v9.4.0
       #   lattice.explorer.plugins.mytenant-v9.4.0
       #   lattice.caching.azureblob-v8.0.0
+      #   lattice.grainindex-v0.1.0
       # The tag prefix is the literal folder name under src/, dots and all.
       # Packages that live in a shared app folder's sub-directory (the
       # explorer's Core/UI/Web/... hosting libraries) have no folder of their
@@ -132,6 +133,7 @@ on:
       - 'lattice.explorer.plugins.tenants-v*'
       - 'lattice.explorer.plugins.mytenant-v*'
       - 'lattice.caching.azureblob-v*'
+      - 'lattice.grainindex-v*'
 
 jobs:
   publish:

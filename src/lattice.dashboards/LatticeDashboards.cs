@@ -72,6 +72,7 @@ public static class LatticeDashboards
         LatticeDashboardKind.Scaling => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeScaling.json",
         LatticeDashboardKind.ReplicationGrpc => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeReplicationGrpc.json",
         LatticeDashboardKind.Tenancy => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeTenancy.json",
+        LatticeDashboardKind.GrainIndex => "Orleans.Lattice.Dashboards.Grafana.OrleansLatticeGrainIndex.json",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown dashboard kind."),
     };
 }

@@ -38,6 +38,7 @@ internal static class CoreHygieneScope
         "test/lattice.integration",
         "src/lattice.backup.azureblob", "test/lattice.backup.azureblob",
         "src/lattice.caching.azureblob", "test/lattice.caching.azureblob",
+        "src/lattice.grainindex", "test/lattice.grainindex",
         "src/lattice.scaling", "test/lattice.scaling",
         "test/microbench",
     };

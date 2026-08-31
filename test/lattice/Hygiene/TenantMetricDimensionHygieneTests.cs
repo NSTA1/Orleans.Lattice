@@ -61,6 +61,10 @@ public sealed class TenantMetricDimensionHygieneTests
         // aggregate and carries the platform sentinel.
         ("src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs", "indexTags", true),
         ("src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs", "outcomeTags", true),
+        // A grain index's backfill gauges are a cluster-local, multi-grain
+        // aggregate in the reserved __grainindex/ namespace, so the pre-built
+        // measurement tag array carries the platform sentinel.
+        ("src/lattice.grainindex/Observability/GrainIndexBackfillProgressRegistry.cs", "sample.Tags", true),
         // Per-tenant snapshot measurements: the tenancy meter's own tenant tag.
         ("src/lattice.tenancy/TenantObservabilityGaugeSnapshot.cs", "tags", false),
     ];
@@ -82,6 +86,12 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   auth snapshot gauges, autoscaler signals, compression-dictionary
     ///   training, and the tenant-count aggregate are properties of the cluster,
     ///   not of any tenant's traffic.</item>
+    ///   <item><b>Grain-index infrastructure</b> - a grain index is declared per
+    ///   grain type and materialises into its own cluster-local tree in the
+    ///   reserved <c>__grainindex/</c> namespace, spanning every grain of that
+    ///   type, so its enrolment, entry, write-failure, projection, and backfill
+    ///   series are a property of a grain type's cluster-wide index rather than
+    ///   of any one tenant's traffic.</item>
     ///   <item><b>Named-lock and transport</b> - a distributed lock is keyed by a
     ///   caller-chosen name, and an insecure-channel warning is keyed by peer and
     ///   transport; neither carries a tree.</item>
@@ -112,6 +122,8 @@ public sealed class TenantMetricDimensionHygieneTests
         "DirectorySearchDuration",
         "DirectorySearchHits",
         "DirectorySearchMisses",
+        "Entries",
+        "GrainsEnrolled",
         "IncrementalLagAge",
         "IncrementalLagEntries",
         "InsecureChannel",
@@ -121,6 +133,7 @@ public sealed class TenantMetricDimensionHygieneTests
         "LockReleased",
         "MerkleWalkAborted",
         "OrphanRowsRemovedCounter",
+        "ProjectionDuration",
         "ProviderRetryAttempts",
         "ProviderRetryShortCircuited",
         "ResolutionCacheHits",
@@ -142,6 +155,7 @@ public sealed class TenantMetricDimensionHygieneTests
         "SweepsCounter",
         "TreesMismatchedCounter",
         "TreesProbedCounter",
+        "WriteFailures",
         "_callsCounter",
         "_replacedCounter",
         "_responseCounter",

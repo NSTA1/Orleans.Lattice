@@ -1,0 +1,345 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the orleans.lattice meter.",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "11.3.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "orleans",
+    "lattice",
+    "grainindex"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "index",
+        "label": "Index",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(orleans_lattice_grainindex_backfill_state, index)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {},
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "Orleans.Lattice - Grain Index",
+  "uid": "orleans-lattice-grainindex",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Backfill state",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Lifecycle state of each index's background backfill: 0 not started, 1 running, 2 paused, 3 completed, 4 failed.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "not started",
+                  "color": "text",
+                  "index": 0
+                },
+                "1": {
+                  "text": "running",
+                  "color": "blue",
+                  "index": 1
+                },
+                "2": {
+                  "text": "paused",
+                  "color": "orange",
+                  "index": 2
+                },
+                "3": {
+                  "text": "completed",
+                  "color": "green",
+                  "index": 3
+                },
+                "4": {
+                  "text": "failed",
+                  "color": "red",
+                  "index": 4
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (index) (orleans_lattice_grainindex_backfill_state{index=~\"$index\"})",
+          "legendFormat": "{{index}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Backfill percent complete",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "How far through its population each backfill has reached. Reported only for an index whose key source can bound its population, and for a completed crawl.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (index) (orleans_lattice_grainindex_backfill_percent_complete{index=~\"$index\"})",
+          "legendFormat": "{{index}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Index entries held",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Live entry count per index, as the running sum of the net entry-count changes every index write records. One grain contributes one entry per projected property.",
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (index) (orleans_lattice_grainindex_entries{index=~\"$index\"})",
+          "legendFormat": "{{index}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Backfill progress (processed vs total)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Keys each backfill has taken from its key source, against the best-effort population size its key source reports. An index whose key source cannot bound itself charts the processed count alone.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (index) (orleans_lattice_grainindex_backfill_processed{index=~\"$index\"})",
+          "legendFormat": "{{index}} processed"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (index) (orleans_lattice_grainindex_backfill_total{index=~\"$index\"})",
+          "legendFormat": "{{index}} total"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Grains enrolled per second, by route",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Onboarding throughput split by the route responsible. The activation series counts every enrolment as it is performed; the backfill series counts the ones the crawl caused. A crawl-driven grain appears on both, so read them side by side rather than summed.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (index, path) (rate(orleans_lattice_grainindex_grains_enrolled_total{index=~\"$index\"}[5m]))",
+          "legendFormat": "{{index}} {{path}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Projection latency percentiles",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Time to project one grain's state into index entries and diff it against the projection the index already holds. This is pure work on the grain's write path, so a rise here is felt by every tracked write.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (index, le) (rate(orleans_lattice_grainindex_projection_duration_milliseconds_bucket{index=~\"$index\"}[5m])))",
+          "legendFormat": "{{index}} p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (index, le) (rate(orleans_lattice_grainindex_projection_duration_milliseconds_bucket{index=~\"$index\"}[5m])))",
+          "legendFormat": "{{index}} p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (index, le) (rate(orleans_lattice_grainindex_projection_duration_milliseconds_bucket{index=~\"$index\"}[5m])))",
+          "legendFormat": "{{index}} p99"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Index write failures per second, by route",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Failures to publish a grain's index entries. A sustained activation-path rate means tracked writes are surfacing index errors to callers; a sustained outbox rate means the retry drain is not converging.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (index, path) (rate(orleans_lattice_grainindex_write_failures_total{index=~\"$index\"}[5m]))",
+          "legendFormat": "{{index}} {{path}}"
+        }
+      ]
+    }
+  ]
+}
