@@ -201,6 +201,39 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// Resolves the leaf-access tracking and leaf-cache pre-warm settings for a
+    /// tree, synchronously and without touching the registry.
+    /// <para>
+    /// These two knobs are deliberately silo-local rather than registry-backed:
+    /// they are read on the shard root's read path, which cannot await a
+    /// registry round trip, and they are operational tuning rather than
+    /// tree-shape configuration, so a per-silo value is the right granularity.
+    /// The pre-warm count is clamped to
+    /// <see cref="LatticeOptions.MaxLeafCachePreWarmCount"/> defensively so a
+    /// caller that bypassed <see cref="LatticeOptionsValidator"/> still cannot
+    /// ask for more leaves than the shard root persists.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose effective leaf-access settings to resolve.</param>
+    /// <returns>The effective settings, or <see cref="LeafAccessTrackingSettings.Disabled"/> when the feature is off.</returns>
+    public LeafAccessTrackingSettings GetLeafAccessTrackingSettings(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var options = optionsMonitor.Get(treeId);
+        var count = options.LeafCachePreWarmCount;
+        if (count <= 0)
+        {
+            return LeafAccessTrackingSettings.Disabled;
+        }
+        if (count > LatticeOptions.MaxLeafCachePreWarmCount)
+        {
+            count = LatticeOptions.MaxLeafCachePreWarmCount;
+        }
+        var flushMs = options.LeafAccessModelFlushIntervalMs;
+        return new LeafAccessTrackingSettings(count, flushMs < 0 ? 0 : flushMs);
+    }
+
+    /// <summary>
     /// Test-only seam to drop a tree's cached
     /// <see cref="LatticeOptions.WalPartitions"/> pin so a subsequent
     /// <see cref="GetWalPartitionsAsync"/> or <see cref="ResolveAsync"/>

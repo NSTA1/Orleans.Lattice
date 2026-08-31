@@ -182,6 +182,16 @@ internal sealed class LeafCacheGrain(
         }
     }
 
+    /// <summary>
+    /// Activates this cache and populates it from the primary leaf without
+    /// returning a payload. Deliberately skips the moved-away and pending-tx
+    /// gates that <see cref="GetAsync"/> applies: pre-warm answers no read, so
+    /// it has no result to invalidate. A stale-routing failure here is the
+    /// caller's cue to skip this leaf, and the caller treats every pre-warm
+    /// failure as a no-op.
+    /// </summary>
+    public Task PreWarmAsync() => RefreshAsync();
+
     public async Task<byte[]?> GetAsync(string key)
     {
         // Always pull a delta from the primary. The VersionVector comparison

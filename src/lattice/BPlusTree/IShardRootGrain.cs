@@ -1146,4 +1146,19 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// write fence is engaged and its deadline has not yet passed.
     /// </summary>
     Task<bool> IsWriteFencedAsync();
+
+    /// <summary>
+    /// Test-only seam: requests that the grain runtime collect this
+    /// activation by calling <c>DeactivateOnIdle</c> from inside the
+    /// grain. Integration tests use this to exercise the post-restart
+    /// leaf-cache pre-warm end-to-end: drive reads to build the
+    /// leaf-access model, force the activation to deactivate (which
+    /// flushes the model to durable storage), then re-acquire the grain
+    /// and observe that <see cref="WarmUpAsync"/> primes the leaf caches
+    /// the restored model ranks highest. Production callers must not
+    /// invoke this; the silo's idle-collection scheduler is the
+    /// canonical driver of activation lifetime. Mirrors
+    /// <see cref="IBPlusLeafGrain.ForceDeactivateAsync"/>.
+    /// </summary>
+    Task ForceDeactivateAsync();
 }

@@ -528,6 +528,21 @@
       ]
     },
     {
+      "id": 126,
+      "title": "Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size",
+      "description": "Post-restart LeafCacheGrain pre-warm, driven by each shard root's persisted leaf-access frequency histogram (LatticeOptions.LeafCachePreWarmCount, default 0 = disabled). warmup.leaf_cache.prewarmed is leaves successfully primed; a rate materially below shards x LeafCachePreWarmCount per warm-up means individual priming calls are failing (they are swallowed by design, so this counter is the only signal). warmup.leaf_cache.duration is the per-shard fan-out cost, read against warmup.duration to attribute how much of warm-up is leaf priming. leaf_access.model.leaves is the resident model size at persist time; a distribution pinned at the model's tracked-leaf cap means the shard's read set is wider than the model represents and the ranking is drawn from a pruned view. All three stay flat at zero while the feature is disabled.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_warmup_leaf_cache_prewarmed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) or vector(0)", "legendFormat": "{{tree}} leaves primed / s" },
+        { "refId": "D", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_warmup_leaf_cache_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))) or vector(0)", "legendFormat": "p95 pre-warm fan-out (ms)" },
+        { "refId": "S", "expr": "histogram_quantile(0.95, sum by (le) (rate(orleans_lattice_leaf_access_model_leaves_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m]))) or vector(0)", "legendFormat": "p95 model leaves" }
+      ]
+    },
+    {
       "id": 114,
       "title": "WAL writer admission & dispatch (rate)",
       "description": "Outbound WAL writer admission outcomes and dispatch rate: admission_saturation_refusals (writer refused an append because the per-partition admission cap was saturated), admission_timeouts (waiter timed out before admission), dispatched (appends handed to the provider) and drain.releases (admission slots released on drain). A rising refusal/timeout rate is the writer-tier view of WAL back-pressure.",

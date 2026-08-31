@@ -172,6 +172,19 @@ public class LatticeOptionsResolverPropagationGuardTests
             // sampling trees, and that roll-up is driven by the same admin
             // singleton, so there is no tree whose override could sensibly win.
             "StorageUsageRollupBudget",
+
+            // Leaf-cache pre-warm knobs (issue #332): ShardRootGrain resolves
+            // these through the dedicated synchronous
+            // LatticeOptionsResolver.GetLeafAccessTrackingSettings(treeId) seam,
+            // which reads IOptionsMonitor.Get(treeId) directly. They are
+            // deliberately kept off the ResolvedLatticeOptions path because the
+            // first consumer is the read hot path, which cannot await the
+            // registry round trip ResolveAsync performs; and because they are
+            // silo-local operational tuning (how much startup work this silo
+            // does) rather than tree-shape configuration that every replica of
+            // the tree must agree on.
+            "LeafCachePreWarmCount",
+            "LeafAccessModelFlushIntervalMs",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

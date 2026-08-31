@@ -472,6 +472,41 @@ public static class LatticeMetrics
         Meter.CreateHistogram<double>("orleans.lattice.warmup.duration", unit: "ms",
             description: "Wall-clock duration of ILattice.WarmUpAsync including all per-shard probes.");
 
+    /// <summary>
+    /// Counter of leaf caches successfully primed by a shard root's opt-in
+    /// post-restart pre-warm (<c>LatticeOptions.LeafCachePreWarmCount</c>).
+    /// Tagged with <see cref="TagTree"/>, <c>shard</c>, and the tenant label.
+    /// Stays at zero while the feature is disabled, which is the default. A
+    /// value materially below the configured pre-warm count means individual
+    /// priming calls are failing - each failure is swallowed by design, so this
+    /// counter is the only signal that they happened.
+    /// </summary>
+    public static readonly Counter<long> LeafCachePreWarmed =
+        Meter.CreateCounter<long>("orleans.lattice.warmup.leaf_cache.prewarmed", unit: "{leaf}",
+            description: "Leaf caches successfully primed by a shard root's post-restart pre-warm.");
+
+    /// <summary>
+    /// Histogram of the wall-clock duration, in milliseconds, of a shard root's
+    /// leaf-cache pre-warm fan-out. One observation per shard per warm-up when
+    /// the feature is enabled and the access model ranked at least one leaf.
+    /// Read alongside <see cref="WarmUpDurationMs"/> to attribute how much of a
+    /// tree's warm-up cost is leaf priming.
+    /// </summary>
+    public static readonly Histogram<double> LeafCachePreWarmDurationMs =
+        Meter.CreateHistogram<double>("orleans.lattice.warmup.leaf_cache.duration", unit: "ms",
+            description: "Wall-clock duration of a shard root's leaf-cache pre-warm fan-out.");
+
+    /// <summary>
+    /// Histogram of the number of leaves resident in a shard root's leaf-access
+    /// histogram, observed each time the model is persisted. Bounded above by
+    /// the model's own tracked-leaf cap, so a distribution pinned at that cap
+    /// means the shard's read set is wider than the model can represent and the
+    /// ranking is being drawn from a pruned view.
+    /// </summary>
+    public static readonly Histogram<int> LeafAccessModelLeaves =
+        Meter.CreateHistogram<int>("orleans.lattice.leaf_access.model.leaves", unit: "{leaf}",
+            description: "Leaves resident in a shard root's leaf-access histogram at persist time.");
+
     // --- Cache instruments (LeafCacheGrain) --------------------------------------
 
     /// <summary>

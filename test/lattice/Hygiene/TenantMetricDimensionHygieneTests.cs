@@ -42,6 +42,12 @@ public sealed class TenantMetricDimensionHygieneTests
         // (tree, shard, tenant) built once per activation.
         ("src/lattice/BPlusTree/Grains/ShardRootGrain.Hotness.cs", "GetMetricTags()", false),
         ("src/lattice/BPlusTree/Grains/ShardRootGrain.Hotness.cs", "tags", false),
+        // (tree, shard, tenant) built per emission. Both sites are cold - the
+        // throttled leaf-access model flush and the once-per-activation
+        // leaf-cache pre-warm - so they build their own array rather than
+        // sharing the hot path's activation cache.
+        ("src/lattice/BPlusTree/Grains/ShardRootGrain.LeafAccessTracking.cs", "LeafAccessMetricTags()", false),
+        ("src/lattice/BPlusTree/Grains/ShardRootGrain.LeafAccessTracking.cs", "tags", false),
         // (tree, shard, tenant) built once per replay.
         ("src/lattice/BPlusTree/Grains/SnapshotLeafGrain.cs", "tags", false),
         // (tree, state, previous_state, tenant [, partition][, shard]) built per transition.

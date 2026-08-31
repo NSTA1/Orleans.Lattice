@@ -412,6 +412,7 @@ internal sealed partial class ShardRootGrain
         DiagSink.Write($"[DIAG read-routing] gid={context.GrainId} key={key} leafId={leafId} rootIsLeaf={state.State.RootIsLeaf} movedSlots=[{string.Join(',', state.State.MovedAwaySlots.Keys)}] phase={state.State.SplitInProgress?.Phase.ToString() ?? "(none)"}");
 #endif
         var cache = ResolveLeafCacheGrain(leafId);
+        RecordLeafAccess(leafId);
         return await cache.GetAsync(key);
     }
 
@@ -459,6 +460,7 @@ internal sealed partial class ShardRootGrain
         }
 
         var cache = ResolveLeafCacheGrain(leafId);
+        RecordLeafAccess(leafId);
         return await cache.ExistsAsync(key);
     }
 
@@ -481,6 +483,7 @@ internal sealed partial class ShardRootGrain
             }
 #endif
             var rootCache = ResolveLeafCacheGrain(rootLeafId);
+            RecordLeafAccess(rootLeafId);
             return await rootCache.GetManyAsync(keys);
         }
 
@@ -533,6 +536,7 @@ internal sealed partial class ShardRootGrain
         foreach (var (leafId, bucket) in leafBuckets)
         {
             var cache = ResolveLeafCacheGrain(leafId);
+            RecordLeafAccess(leafId);
             var values = await cache.GetManyAsync(bucket);
             foreach (var (k, v) in values)
             {

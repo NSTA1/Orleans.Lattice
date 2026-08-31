@@ -147,6 +147,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard_root.set_many.shadow_forward.duration` | histogram (ms) | `tree` | CommitPath | ShardRoot.SetMany sub-attribution p95 (ms) |
 | `orleans.lattice.warmup.invocations` | counter (`{call}`) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
 | `orleans.lattice.warmup.duration` | histogram (ms) | `tree` | CommitPath | WarmUpAsync - invocations and duration |
+| `orleans.lattice.warmup.leaf_cache.prewarmed` | counter (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.warmup.leaf_cache.duration` | histogram (ms) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
+| `orleans.lattice.leaf_access.model.leaves` | histogram (`{leaf}`) | `tree`, `shard`, tenant | CommitPath | Leaf-cache pre-warm (opt-in) - leaves primed, fan-out cost, model size |
 | `orleans.lattice.leaf.commit.in_flight` | histogram (`{commit}`) | `tree` | CommitPath | Leaf commit concurrency (in-flight) p95 |
 | `orleans.lattice.leaf.digest.publishes` | counter (`{publish}`) | `tree`, `path` | CommitPath | Digest publish path attribution (ops/s) - coalescing efficacy |
 | `orleans.lattice.provider.commit.duration` | histogram (ms) | `tree`, `shard`, `phase`, `pipeline_phase2` | CommitPath | Storage-provider phase-2 commit p95 (ms) + batch size |
