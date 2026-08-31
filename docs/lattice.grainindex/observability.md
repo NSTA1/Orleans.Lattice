@@ -14,11 +14,22 @@ up with no configuration change.
 | Tag | Values | Applies to |
 |---|---|---|
 | `index` | the logical index name | every instrument |
+| `tenant` | always `_platform_` | every instrument |
 | `path` | `activation`, `backfill`, `outbox` | `grains_enrolled`, `write_failures` |
 
 The `path` tag names the route that did the work: `activation` is the activation
 and mutation path that physically writes a grain's entries, `backfill` is the
 background crawl, and `outbox` is a deferred or retried index write.
+
+Every series also carries the repository-wide derived `tenant` dimension, which
+is emitted on tenancy-on and tenancy-off clusters alike so an index telemetry
+query is byte-identical in both deployment modes. For grain-index series it is
+always the constant platform sentinel `_platform_`: an index is declared per
+grain *type* and materialises into its own cluster-local tree under the reserved
+`__grainindex/` namespace, spanning every grain of that type, so a measurement is
+a property of a grain type's cluster-wide index rather than of any one tenant's
+traffic. That means grain-index series are, by design, invisible to a
+tenant-scoped telemetry query.
 
 ### Instruments
 

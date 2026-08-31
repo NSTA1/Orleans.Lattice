@@ -259,6 +259,91 @@ public sealed class GrainIndexMetricsTests
         });
     }
 
+    [Test]
+    public void Recording_enrolled_grains_carries_the_platform_tenant_dimension()
+    {
+        using var recorder = new InstrumentRecorder();
+
+        GrainIndexMetrics.RecordGrainsEnrolled(
+            GrainIndexMetrics.IndexTag(Index),
+            GrainIndexMetrics.ActivationPathTag,
+            1);
+
+        var recorded = recorder.For(GrainIndexMetrics.GrainsEnrolledName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded, Has.Count.EqualTo(1));
+            // The index tag is still present, so the tenant dimension is additive.
+            Assert.That(recorded[0].HasTag(GrainIndexMetrics.TagIndex, Index), Is.True);
+            Assert.That(
+                recorded[0].HasTag(LatticeTenantLabel.TagTenant, LatticeTenantLabel.PlatformTenant),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void Recording_an_entry_delta_carries_the_platform_tenant_dimension()
+    {
+        using var recorder = new InstrumentRecorder();
+
+        GrainIndexMetrics.RecordEntryDelta(GrainIndexMetrics.IndexTag(Index), 1);
+
+        var recorded = recorder.For(GrainIndexMetrics.EntriesName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded, Has.Count.EqualTo(1));
+            Assert.That(recorded[0].HasTag(GrainIndexMetrics.TagIndex, Index), Is.True);
+            Assert.That(
+                recorded[0].HasTag(LatticeTenantLabel.TagTenant, LatticeTenantLabel.PlatformTenant),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void Recording_write_failures_carries_the_platform_tenant_dimension()
+    {
+        using var recorder = new InstrumentRecorder();
+
+        GrainIndexMetrics.RecordWriteFailures(
+            GrainIndexMetrics.IndexTag(Index),
+            GrainIndexMetrics.OutboxPathTag,
+            1);
+
+        var recorded = recorder.For(GrainIndexMetrics.WriteFailuresName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded, Has.Count.EqualTo(1));
+            Assert.That(recorded[0].HasTag(GrainIndexMetrics.TagIndex, Index), Is.True);
+            Assert.That(
+                recorded[0].HasTag(LatticeTenantLabel.TagTenant, LatticeTenantLabel.PlatformTenant),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void Recording_a_projection_carries_the_platform_tenant_dimension()
+    {
+        using var recorder = new InstrumentRecorder();
+
+        GrainIndexMetrics.RecordProjectionDuration(
+            GrainIndexMetrics.IndexTag(Index),
+            System.Diagnostics.Stopwatch.GetTimestamp());
+
+        var recorded = recorder.For(GrainIndexMetrics.ProjectionDurationName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded, Has.Count.EqualTo(1));
+            Assert.That(recorded[0].HasTag(GrainIndexMetrics.TagIndex, Index), Is.True);
+            Assert.That(
+                recorded[0].HasTag(LatticeTenantLabel.TagTenant, LatticeTenantLabel.PlatformTenant),
+                Is.True);
+        });
+    }
+
     private static void AssertInstrument(Instrument instrument, string name, string unit)
     {
         Assert.That(instrument.Name, Is.EqualTo(name));

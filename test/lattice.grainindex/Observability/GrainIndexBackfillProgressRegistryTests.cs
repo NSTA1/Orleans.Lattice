@@ -211,6 +211,58 @@ public sealed class GrainIndexBackfillProgressRegistryTests
                 total: 100),
             Is.EqualTo(0d));
 
+    [Test]
+    public void Every_published_gauge_carries_the_platform_tenant_dimension()
+    {
+        using var recorder = new InstrumentRecorder();
+
+        // A bounded, running crawl makes all four gauges emit (processed, total,
+        // percent, and state), so one publication exercises every observable
+        // instrument the registry backs.
+        GrainIndexBackfillProgressRegistry.Publish(
+            Status(GrainIndexBackfillState.Running, visited: 25),
+            total: 100);
+
+        recorder.Collect();
+
+        Assert.Multiple(() =>
+        {
+            AssertPlatformTenant(recorder.Latest(GrainIndexMetrics.BackfillProcessedName, Index));
+            AssertPlatformTenant(recorder.Latest(GrainIndexMetrics.BackfillTotalName, Index));
+            AssertPlatformTenant(recorder.Latest(GrainIndexMetrics.BackfillPercentCompleteName, Index));
+            AssertPlatformTenant(recorder.Latest(GrainIndexMetrics.BackfillStateName, Index));
+        });
+    }
+
+    [Test]
+    public void A_crawl_with_no_bound_still_carries_the_platform_tenant_dimension()
+    {
+        using var recorder = new InstrumentRecorder();
+
+        GrainIndexBackfillProgressRegistry.Publish(
+            Status(GrainIndexBackfillState.Running, visited: 7),
+            total: null);
+
+        recorder.Collect();
+
+        Assert.Multiple(() =>
+        {
+            AssertPlatformTenant(recorder.Latest(GrainIndexMetrics.BackfillProcessedName, Index));
+            AssertPlatformTenant(recorder.Latest(GrainIndexMetrics.BackfillStateName, Index));
+        });
+    }
+
+    private static void AssertPlatformTenant(InstrumentRecorder.Recorded? recorded)
+    {
+        // Null-safe so a missing measurement fails cleanly inside Assert.Multiple
+        // rather than throwing and aborting the block.
+        Assert.That(recorded, Is.Not.Null);
+        Assert.That(recorded?.HasTag(GrainIndexMetrics.TagIndex, Index) ?? false, Is.True);
+        Assert.That(
+            recorded?.HasTag(LatticeTenantLabel.TagTenant, LatticeTenantLabel.PlatformTenant) ?? false,
+            Is.True);
+    }
+
     private static GrainIndexBackfillStatus Status(
         GrainIndexBackfillState state,
         long visited,

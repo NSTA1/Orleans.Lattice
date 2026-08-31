@@ -182,11 +182,16 @@ internal static class GrainIndexBackfillProgressRegistry
         int state)
     {
         /// <summary>
-        /// The measurement's tags, held as the single-element array a
+        /// The measurement's tags, held as the array a
         /// <see cref="Measurement{T}"/> stores, so building a measurement copies
-        /// no tags.
+        /// no tags. It carries the index tag and the constant platform-sentinel
+        /// <see cref="LatticeTenantLabel.TagTenant"/> dimension
+        /// (<see cref="LatticeTenantLabel.Platform"/>): a grain index is a
+        /// cluster-local, multi-grain aggregate that no single tenant owns. The
+        /// array is built once per publication, so the far more frequent scrape
+        /// path stays allocation-free.
         /// </summary>
-        internal KeyValuePair<string, object?>[] Tags { get; } = [indexTag];
+        internal KeyValuePair<string, object?>[] Tags { get; } = [indexTag, LatticeTenantLabel.Platform];
 
         internal long Processed { get; } = processed;
 

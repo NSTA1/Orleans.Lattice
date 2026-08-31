@@ -31,6 +31,18 @@ namespace Orleans.Lattice.GrainIndex;
 /// value, and never builds a string.
 /// </para>
 /// <para>
+/// Every grain-index series also carries the repository-wide derived
+/// <see cref="LatticeTenantLabel.TagTenant"/> dimension. A grain index is a
+/// cluster-local construct in the reserved
+/// <see cref="GrainIndexTreeNames.ReservedPrefix"/> namespace that spans every
+/// grain of its type, so a measurement is not attributable to any one tenant and
+/// always names the constant platform sentinel
+/// (<see cref="LatticeTenantLabel.Platform"/>). The dimension is present on
+/// tenancy-on and tenancy-off clusters alike, so an index telemetry query is
+/// byte-identical in both deployment modes. Because the sentinel is a single
+/// frozen singleton, adding it costs no per-measurement allocation.
+/// </para>
+/// <para>
 /// The observable gauges read a frozen snapshot published by the backfill grain
 /// (see <c>GrainIndexBackfillProgressRegistry</c>), so a scrape recomputes
 /// nothing and touches no durable store. They report for the silo hosting a
@@ -289,7 +301,7 @@ public static class GrainIndexMetrics
         long count)
     {
         if (count > 0 && GrainsEnrolled.Enabled)
-            GrainsEnrolled.Add(count, indexTag, pathTag);
+            GrainsEnrolled.Add(count, indexTag, pathTag, LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records an index's net entry-count change.</summary>
@@ -298,7 +310,7 @@ public static class GrainIndexMetrics
     internal static void RecordEntryDelta(in KeyValuePair<string, object?> indexTag, int delta)
     {
         if (delta != 0 && Entries.Enabled)
-            Entries.Add(delta, indexTag);
+            Entries.Add(delta, indexTag, LatticeTenantLabel.Platform);
     }
 
     /// <summary>Records failures to publish a grain's index entries.</summary>
@@ -311,7 +323,7 @@ public static class GrainIndexMetrics
         long count)
     {
         if (count > 0 && WriteFailures.Enabled)
-            WriteFailures.Add(count, indexTag, pathTag);
+            WriteFailures.Add(count, indexTag, pathTag, LatticeTenantLabel.Platform);
     }
 
     /// <summary>
@@ -329,7 +341,8 @@ public static class GrainIndexMetrics
         {
             ProjectionDuration.Record(
                 System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                indexTag);
+                indexTag,
+                LatticeTenantLabel.Platform);
         }
     }
 }
