@@ -6,7 +6,7 @@
   radius, density, and touch-target sizing. A plugin stylesheet references a
   token; it never restates a literal.
 
-  Two rules keep the layer honest:
+  Three rules keep the layer honest:
 
   1. Nothing here declares a width media query. Breakpoints live in exactly one
      file, `lattice-breakpoints.css`, and a hygiene guard fails the build if a
@@ -14,13 +14,44 @@
   2. Every value below is declared here outright. The layer used to derive each
      colour from a theme variable in the `app.css` monolith, with the literal as
      a fallback; issue #1770 deleted that monolith, which left the indirection
-     resolving to its own fallback on every head. The fallbacks - the values now
-     inlined below - are byte-for-byte what the monolith declared, so nothing
-     changed visually when it went.
+     resolving to its own fallback on every head.
+  3. Every colour pair is measured, not judged by eye. `TextContrastTokenHygiene
+     Tests` and `NonTextContrastTokenHygieneTests` re-derive every ratio in this
+     file on each build, without a browser, so both run in the required
+     build-and-test check rather than the advisory browser lane.
 
-  Theming works exactly as it did before: `data-theme="light"` on <html> selects
-  the light palette, the dark palette is the default, and a future high-contrast
-  palette slots in the same way.
+  Theming. `data-theme="light"` on <html> selects the light palette and the dark
+  palette is the default. Orthogonally, `data-contrast="more"` selects the
+  high-contrast overlay of whichever palette is active, and `data-contrast=
+  "standard"` opts back out of the operating system's own `prefers-contrast`
+  hint. The two axes compose, so there is no combinatorial "high contrast light"
+  theme to keep in step. Issue #1852 owns the control that sets these
+  attributes; this file owns what they mean.
+
+  Issue #1846 retuned both palettes. What changed and why:
+
+  - Non-text contrast. `--lx-color-border` measured 1.21:1 on the dark surface
+    and 1.28:1 on the light one, against the 3:1 that WCAG 2.1 SC 1.4.11
+    requires of any boundary a reader needs to see; `--lx-color-border-strong`
+    measured 1.50:1 and 1.62:1. Both now clear 3:1 on every surface they can be
+    drawn on, in both palettes. A 3:1 border is a visible outline rather than a
+    hairline - that is what the criterion asks for.
+  - The light palette declared `--lx-color-surface`, `-raised` and `-sunken` all
+    as `#ffffff`, which collapsed the elevation system into featureless white.
+    It now has four ordered levels, and the guard asserts that ordering with a
+    minimum step in both palettes so the collapse cannot recur.
+  - The accent was `#4cc2ff`, a high-saturation cyan on a near-black canvas. It
+    is now a desaturated steel blue. Depth is carried by elevation and border,
+    not by glow.
+  - State. An active tab was distinguished from an inactive one by hue alone at
+    1.54:1. Colour cannot carry that on its own: the contrast ratio is a pure
+    function of relative luminance, so any pair below 3:1 is a pair that a
+    greyscale reader cannot separate. Note also that an accent bright enough to
+    sit 3:1 above a 4.5:1-legal muted foreground would have to be within a
+    fraction of white - `#ffffff` on `#8a93a3` is only 3.09:1 - so an accent can
+    never be the thing that carries state. The state tokens below therefore pair
+    a luminance step (3.22:1 dark, 3.14:1 light) with a weight step and an
+    indicator, and the guard measures all three.
 */
 
 :root {
@@ -74,6 +105,28 @@
     --lx-radius-pill: 999px;
 
     /* --------------------------------------------------------------------
+       State cues that are not colour.
+
+       WCAG 2.1 SC 1.4.1 asks that colour never be the only way a state is
+       conveyed. These tokens are the other ways: extra weight, and an
+       indicator with a real thickness. A primitive that renders a selected
+       state spends all three - `--lx-color-state-selected-fg`,
+       `--lx-weight-state-selected` and an indicator of
+       `--lx-state-indicator-thickness` in
+       `--lx-color-state-selected-indicator` - so the state survives both a
+       greyscale rendering and a palette the reader has replaced.
+
+       The focus outline metrics exist because forced-colors mode drops
+       `box-shadow` outright. A ring drawn only as a box-shadow disappears
+       there, so a primitive pairs it with an `outline` built from these.
+       -------------------------------------------------------------------- */
+    --lx-state-indicator-thickness: 2px;
+    --lx-focus-outline-width: 2px;
+    --lx-focus-outline-offset: 2px;
+    --lx-weight-state-rest: var(--lx-weight-regular);
+    --lx-weight-state-selected: var(--lx-weight-semibold);
+
+    /* --------------------------------------------------------------------
        Motion. Durations and easings, so a component never invents a timing.
        The `prefers-reduced-motion` rule in the breakpoint layer neutralises
        all of them at once.
@@ -125,99 +178,397 @@
 
 /*
   Colour, dark palette (the default).
+
+  Every other palette in this file is an override layered on top of this one, so
+  a token declared here and not restated below keeps this value. That is what
+  lets the light and high-contrast blocks restate only what actually differs,
+  and it is why the two state aliases at the end are declared once: overriding
+  `--lx-color-text-dim` or `--lx-color-accent` in a later block carries them
+  along automatically.
 */
 :root,
 :root[data-theme="dark"] {
     color-scheme: dark;
 
+    /*
+      Elevation. Four ordered levels, each a measurable step from the last
+      (1.06:1 between adjacent surfaces here), so a raised menu, a plain panel
+      and a sunken well are never the same colour. `surface-selected` is the
+      tinted fill behind a selected row or tab; it is the lightest background in
+      this palette and therefore the worst case every foreground below is
+      measured against.
+    */
     --lx-color-canvas: #0b0e14;
     --lx-color-surface: #0f131c;
     --lx-color-surface-raised: #131927;
-    --lx-color-surface-sunken: #0c1019;
+    --lx-color-surface-sunken: #080b10;
+    --lx-color-surface-selected: #151b28;
 
-    --lx-color-border: #1e2532;
-    --lx-color-border-strong: #2b3545;
-    --lx-color-focus-ring: rgba(76, 194, 255, 0.35);
+    /*
+      Borders and the focus ring, at WCAG 2.1 SC 1.4.11's 3:1. Border measures
+      3.23:1 and border-strong 4.71:1 against the lightest surface above; both
+      were under 1.6:1 before issue #1846.
+
+      The focus ring is a pair, and it is opaque. It used to be a translucent
+      `rgba()`, which composites differently over every surface and so cannot be
+      measured at all. A single ring also cannot clear 3:1 against both a
+      near-black surface and a mid-tone accent fill, so the ring carries a
+      contrasting companion: a primitive draws the two as concentric rings, and
+      whichever one the underlying colour swallows, the other stays visible. The
+      pair is 11.26:1 apart here.
+    */
+    --lx-color-border: #5f6c7e;
+    --lx-color-border-strong: #7a8798;
+    --lx-color-focus-ring: #a9c9ea;
+    --lx-color-focus-ring-contrast: #0a0e14;
 
     /*
       Text. Each of these clears the WCAG 2.1 AA 4.5:1 minimum for normal-size
       text against every background token in this palette, not just the canvas:
-      the tightest pairing is dim on the lightest one, --lx-color-surface-raised,
-      at 4.82:1. Measured against that same worst case the three read as a
-      descending emphasis ladder - 13.0:1, 5.7:1, 4.8:1 - so raising dim to clear
-      the bar did not collapse it into muted.
+      the tightest pairing is dim on the lightest one, --lx-color-surface-
+      selected, at 4.73:1. On the canvas the three read as a descending emphasis
+      ladder - 14.30:1, 6.24:1, 5.31:1.
 
       `text-dim` was #5a6373 until issue #1801, which measured it at 3.19:1 on
       the canvas. `TextContrastTokenHygieneTests` re-measures every pair on every
-      build, so this cannot regress silently.
+      build, and pins each of those three canvas ratios as a floor, so a later
+      retune cannot buy non-text contrast by quietly spending text contrast.
     */
     --lx-color-text: #d8dee9;
     --lx-color-text-muted: #8a93a3;
     --lx-color-text-dim: #7c8797;
 
-    --lx-color-accent: #4cc2ff;
-    --lx-color-accent-hover: #74d1ff;
-    --lx-color-accent-contrast: #04111c;
+    /*
+      Accent. #4cc2ff until issue #1846: a high-saturation cyan that read as a
+      hobbyist tool rather than an operations console. This is the same hue
+      family at roughly a third of the saturation. It stays a legal foreground
+      (6.68:1 on the lightest surface) and a legal boundary, and
+      `accent-contrast` is the only thing ever drawn on top of it, at 7.50:1.
+    */
+    --lx-color-accent: #85a4c8;
+    --lx-color-accent-hover: #9fb9d8;
+    --lx-color-accent-contrast: #0a0e14;
 
-    --lx-color-success: #3ad29f;
-    --lx-color-warning: #ffc857;
-    --lx-color-danger: #ff6b6b;
+    /*
+      Status. Desaturated in the same pass and for the same reason; each is
+      still a legal foreground on every surface (6.45:1 at worst).
+    */
+    --lx-color-success: #6cc9a6;
+    --lx-color-warning: #e0b563;
+    --lx-color-danger: #e08585;
 
+    /*
+      The scrim is the one colour here that is deliberately translucent, because
+      dimming what is behind it is the whole job. It is excluded from the
+      contrast guard for that reason, and nothing is ever drawn on it.
+
+      The danger callout's fill and border are not: they were `rgba()` and are
+      now opaque, so the guard can hold the border to 3:1 (3.93:1) and the
+      danger foreground to 4.5:1 on the fill it sits on.
+    */
     --lx-color-scrim: rgba(4, 7, 12, 0.72);
-    --lx-color-danger-surface: rgba(255, 107, 107, 0.08);
-    --lx-color-danger-border: rgba(255, 107, 107, 0.3);
+    --lx-color-danger-surface: #1d1418;
+    --lx-color-danger-border: #a06a70;
 
-    /* Elevation. Dark surfaces read depth from shadow spread, not lightness. */
+    /*
+      Selected state. The luminance step is 3.22:1 - enough that a greyscale
+      reader separates the two - and a primitive pairs it with
+      `--lx-weight-state-selected` and the indicator, so no single channel is
+      load-bearing. Both aliases resolve through the palette in force, so the
+      light and high-contrast blocks inherit them.
+    */
+    --lx-color-state-selected-fg: #eef1f7;
+    --lx-color-state-rest-fg: var(--lx-color-text-dim);
+    --lx-color-state-selected-indicator: var(--lx-color-accent);
+
+    /* Elevation shadow. On a dark palette this reinforces the surface ladder
+       above rather than replacing it. */
     --lx-elevation-0: none;
     --lx-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --lx-elevation-2: 0 4px 12px rgba(0, 0, 0, 0.45);
     --lx-elevation-3: 0 8px 30px rgba(0, 0, 0, 0.55);
 }
 
-/* Colour, light palette. Applied only when a caller opts in with data-theme="light". */
+/*
+  Colour, light palette. Selected with data-theme="light".
+
+  Before issue #1846 this palette declared surface, surface-raised and
+  surface-sunken all as #ffffff, so every elevation level rendered identically
+  and the only thing separating a raised menu from the page behind it was a
+  border measuring 1.28:1. It is now a first-class palette with the same four
+  ordered levels as the dark one, and the same measured guarantees.
+*/
 :root[data-theme="light"] {
     color-scheme: light;
 
-    --lx-color-canvas: #f6f8fb;
-    --lx-color-surface: #ffffff;
+    /* Ordered the same way as the dark palette - sunken darkest, raised
+       lightest - with the canvas sitting between sunken and surface because it
+       is the page the surfaces are laid on, not a surface itself. */
+    --lx-color-canvas: #f2f5f9;
+    --lx-color-surface: #f9fbfd;
     --lx-color-surface-raised: #ffffff;
-    --lx-color-surface-sunken: #ffffff;
+    --lx-color-surface-sunken: #e9edf4;
+    --lx-color-surface-selected: #e5ebf5;
 
-    --lx-color-border: #dfe4ec;
-    --lx-color-border-strong: #c4ccd8;
-    --lx-color-focus-ring: rgba(20, 110, 180, 0.3);
+    /* 3.13:1 and 4.28:1 against the darkest surface above; 1.28:1 and 1.62:1
+       before issue #1846. */
+    --lx-color-border: #76859c;
+    --lx-color-border-strong: #5e6f87;
+    --lx-color-focus-ring: #1d5490;
+    --lx-color-focus-ring-contrast: #ffffff;
 
     /*
-      Text. The same AA guarantee as the dark palette. Here the light canvas is
-      the tightest background rather than the surfaces, because it is the only
-      one that is not pure white: dim reads 4.79:1 on it and 5.09:1 on white.
+      Text. The same AA guarantee as the dark palette, and darkened a little in
+      issue #1846 so that giving the palette real elevation - which necessarily
+      means backgrounds that are no longer pure white - did not cost any of the
+      three its recorded canvas ratio. They now read 15.32:1, 6.20:1 and 5.31:1
+      on the canvas, against recorded floors of 14.84, 5.63 and 4.79.
 
-      `text-dim` was #8a93a3 until issue #1801. That is 2.91:1 on this canvas -
-      a worse instance of the very defect the issue reported against the dark
-      palette, and one the axe sweep could never have found, because the sweep
-      runs the default (dark) theme. Fixing both is what lets the contrast guard
-      cover the whole token layer without carrying an exclusion of its own.
+      `text-dim` was #8a93a3 until issue #1801. That was 2.91:1 on the old
+      canvas - a worse instance of the very defect the issue reported against
+      the dark palette, and one the axe sweep could never have found, because
+      the sweep runs the default (dark) theme.
     */
-    --lx-color-text: #1b2330;
-    --lx-color-text-muted: #5a6473;
-    --lx-color-text-dim: #656f7d;
+    --lx-color-text: #141e2d;
+    --lx-color-text-muted: #525c6a;
+    --lx-color-text-dim: #5d6673;
 
-    --lx-color-accent: #1b73c4;
-    --lx-color-accent-hover: #155a9b;
+    --lx-color-accent: #2f64a2;
+    --lx-color-accent-hover: #234e80;
     --lx-color-accent-contrast: #ffffff;
 
-    --lx-color-success: #1a9c6e;
-    --lx-color-warning: #b07a16;
-    --lx-color-danger: #c92a2a;
+    --lx-color-success: #137451;
+    --lx-color-warning: #8a560b;
+    --lx-color-danger: #b52b30;
 
     --lx-color-scrim: rgba(20, 28, 40, 0.4);
-    --lx-color-danger-surface: rgba(201, 42, 42, 0.07);
-    --lx-color-danger-border: rgba(201, 42, 42, 0.3);
+    --lx-color-danger-surface: #fbeef0;
+    --lx-color-danger-border: #a3555a;
+
+    /* 3.14:1 above the rest foreground. The rest foreground and the indicator
+       are inherited aliases; overriding dim and accent above moved them. */
+    --lx-color-state-selected-fg: #0e1725;
 
     --lx-elevation-0: none;
     --lx-elevation-1: 0 1px 2px rgba(20, 28, 40, 0.08);
     --lx-elevation-2: 0 4px 12px rgba(20, 28, 40, 0.12);
     --lx-elevation-3: 0 8px 30px rgba(20, 28, 40, 0.18);
+}
+
+/*
+  High contrast, an overlay on whichever palette is active.
+
+  The bar here is AAA for text (7:1) and 4.5:1 for every boundary, focus ring
+  and state indicator - one full step above what the standard palettes promise.
+  The emphasis ladder deliberately compresses: a reader who asked for more
+  contrast did not ask for a subtler hierarchy.
+
+  One thing does not carry over. The selected and rest foregrounds cannot be
+  3:1 apart once both are held to 7:1, because the two constraints pull the same
+  way; with the rest foreground at 7:1 the brightest possible partner is only
+  2.6:1 above it. So in high contrast the selected state is carried by the
+  indicator (4.5:1 or better) and the weight step instead, which is the more
+  robust cue anyway.
+
+  Each block below is stated twice - once for the explicit `data-contrast`
+  choice and once inside the `prefers-contrast` query for readers who set it at
+  the operating system. CSS gives no way to share one declaration list between a
+  selector and a media query, so `NonTextContrastTokenHygieneTests` asserts the
+  two copies stay identical rather than trusting them to.
+
+  The dark overlay excludes `data-theme="light"` explicitly rather than relying
+  on the light overlay to out-specify it. `:root[data-contrast="more"]` and
+  `:root[data-theme="light"]` carry the same specificity, so a token the dark
+  overlay sets and the light one forgets would win on document order and paint a
+  dark high-contrast value into a light palette - white text on a white surface,
+  in the one mode whose entire purpose is legibility. Making the two overlays
+  mutually exclusive removes that failure mode by construction instead of
+  leaving it to a convention someone has to remember.
+*/
+:root:not([data-theme="light"])[data-contrast="more"] {
+    --lx-color-canvas: #04060a;
+    --lx-color-surface: #0d1119;
+    --lx-color-surface-raised: #181e2b;
+    --lx-color-surface-sunken: #000000;
+    --lx-color-surface-selected: #1c2434;
+
+    --lx-color-border: #95a1b2;
+    --lx-color-border-strong: #c3ccd8;
+    --lx-color-focus-ring: #ffffff;
+    --lx-color-focus-ring-contrast: #000000;
+
+    --lx-color-text: #ffffff;
+    --lx-color-text-muted: #e3e8f0;
+    --lx-color-text-dim: #ccd4e0;
+
+    --lx-color-accent: #a9c9ea;
+    --lx-color-accent-hover: #c4dcf5;
+    --lx-color-accent-contrast: #000000;
+
+    --lx-color-success: #67e5bb;
+    --lx-color-warning: #ffd97d;
+    --lx-color-danger: #ffa3a3;
+
+    --lx-color-danger-surface: #2a1418;
+    --lx-color-danger-border: #e08b91;
+
+    --lx-color-state-selected-fg: #ffffff;
+}
+
+:root[data-theme="light"][data-contrast="more"] {
+    --lx-color-canvas: #f0f3f8;
+    --lx-color-surface: #fafbfd;
+    --lx-color-surface-raised: #ffffff;
+    --lx-color-surface-sunken: #e0e6ef;
+    --lx-color-surface-selected: #dbe3ee;
+
+    --lx-color-border: #454f5f;
+    --lx-color-border-strong: #222b38;
+    --lx-color-focus-ring: #0a2f5c;
+    --lx-color-focus-ring-contrast: #ffffff;
+
+    --lx-color-text: #000000;
+    --lx-color-text-muted: #232c3a;
+    --lx-color-text-dim: #333d4c;
+
+    --lx-color-accent: #124272;
+    --lx-color-accent-hover: #0c3054;
+    --lx-color-accent-contrast: #ffffff;
+
+    --lx-color-success: #0b5138;
+    --lx-color-warning: #5f3c07;
+    --lx-color-danger: #8a1f23;
+
+    --lx-color-danger-surface: #f9ecee;
+    --lx-color-danger-border: #7c3f43;
+
+    --lx-color-state-selected-fg: #000000;
+}
+
+/*
+  The same overlay, driven by the operating system rather than by a control.
+  `data-contrast="standard"` opts out, so a reader who has explicitly chosen the
+  standard palette in the Explorer keeps it even when the platform hint is set.
+*/
+@media (prefers-contrast: more) {
+    :root:not([data-theme="light"]):not([data-contrast="standard"]) {
+        --lx-color-canvas: #04060a;
+        --lx-color-surface: #0d1119;
+        --lx-color-surface-raised: #181e2b;
+        --lx-color-surface-sunken: #000000;
+        --lx-color-surface-selected: #1c2434;
+
+        --lx-color-border: #95a1b2;
+        --lx-color-border-strong: #c3ccd8;
+        --lx-color-focus-ring: #ffffff;
+        --lx-color-focus-ring-contrast: #000000;
+
+        --lx-color-text: #ffffff;
+        --lx-color-text-muted: #e3e8f0;
+        --lx-color-text-dim: #ccd4e0;
+
+        --lx-color-accent: #a9c9ea;
+        --lx-color-accent-hover: #c4dcf5;
+        --lx-color-accent-contrast: #000000;
+
+        --lx-color-success: #67e5bb;
+        --lx-color-warning: #ffd97d;
+        --lx-color-danger: #ffa3a3;
+
+        --lx-color-danger-surface: #2a1418;
+        --lx-color-danger-border: #e08b91;
+
+        --lx-color-state-selected-fg: #ffffff;
+    }
+
+    :root[data-theme="light"]:not([data-contrast="standard"]) {
+        --lx-color-canvas: #f0f3f8;
+        --lx-color-surface: #fafbfd;
+        --lx-color-surface-raised: #ffffff;
+        --lx-color-surface-sunken: #e0e6ef;
+        --lx-color-surface-selected: #dbe3ee;
+
+        --lx-color-border: #454f5f;
+        --lx-color-border-strong: #222b38;
+        --lx-color-focus-ring: #0a2f5c;
+        --lx-color-focus-ring-contrast: #ffffff;
+
+        --lx-color-text: #000000;
+        --lx-color-text-muted: #232c3a;
+        --lx-color-text-dim: #333d4c;
+
+        --lx-color-accent: #124272;
+        --lx-color-accent-hover: #0c3054;
+        --lx-color-accent-contrast: #ffffff;
+
+        --lx-color-success: #0b5138;
+        --lx-color-warning: #5f3c07;
+        --lx-color-danger: #8a1f23;
+
+        --lx-color-danger-surface: #f9ecee;
+        --lx-color-danger-border: #7c3f43;
+
+        --lx-color-state-selected-fg: #000000;
+    }
+}
+
+/*
+  Forced colours (Windows High Contrast and anything else that replaces the
+  palette wholesale). Here the reader has told the platform to pick the colours,
+  so the only correct thing to do is hand every token over to a system colour
+  keyword and get out of the way. Measuring these is neither possible nor the
+  point: the platform guarantees the contrast, and a hard-coded hex would defeat
+  the mode rather than honour it.
+
+  Two consequences worth naming, because a primitive has to cope with them:
+
+  - `box-shadow` is dropped in forced colours, so a focus ring drawn only as a
+    shadow vanishes. Every elevation token is set to `none` here to make that
+    explicit, and `--lx-focus-outline-width` / `--lx-focus-outline-offset` exist
+    so the ring can also be drawn as an `outline`, which survives.
+  - The selected state cannot lean on a tinted fill, because `Highlight` and
+    `HighlightText` are only safe as a pair. Selected and rest therefore share
+    `CanvasText`, and the state is carried entirely by the indicator in
+    `Highlight` plus the weight step.
+*/
+@media (forced-colors: active) {
+    :root {
+        --lx-color-canvas: Canvas;
+        --lx-color-surface: Canvas;
+        --lx-color-surface-raised: Canvas;
+        --lx-color-surface-sunken: Canvas;
+        --lx-color-surface-selected: Canvas;
+
+        --lx-color-border: CanvasText;
+        --lx-color-border-strong: CanvasText;
+        --lx-color-focus-ring: Highlight;
+        --lx-color-focus-ring-contrast: Canvas;
+
+        --lx-color-text: CanvasText;
+        --lx-color-text-muted: CanvasText;
+        --lx-color-text-dim: CanvasText;
+
+        --lx-color-accent: LinkText;
+        --lx-color-accent-hover: LinkText;
+        --lx-color-accent-contrast: Canvas;
+
+        --lx-color-success: CanvasText;
+        --lx-color-warning: CanvasText;
+        --lx-color-danger: CanvasText;
+
+        --lx-color-scrim: Canvas;
+        --lx-color-danger-surface: Canvas;
+        --lx-color-danger-border: CanvasText;
+
+        --lx-color-state-selected-fg: CanvasText;
+        --lx-color-state-rest-fg: CanvasText;
+        --lx-color-state-selected-indicator: Highlight;
+
+        --lx-elevation-0: none;
+        --lx-elevation-1: none;
+        --lx-elevation-2: none;
+        --lx-elevation-3: none;
+    }
 }
 
 /*
