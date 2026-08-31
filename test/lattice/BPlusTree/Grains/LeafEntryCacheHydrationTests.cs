@@ -2,6 +2,7 @@ using System.Text;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -580,35 +581,29 @@ public sealed class LeafEntryCacheHydrationTests
     [Test]
     public void Hydration_allocates_no_more_per_row_than_the_rows_themselves()
     {
-        // Differential, never absolute: a one-off runtime cost (tiered JIT, a
-        // pool's first rent) lands in both measurements and cancels, whereas an
-        // absolute zero-allocation assertion flips depending on what the shared
-        // test host has already compiled.
-        var small = Corpus(128, payloadBytes: 64);
-        var large = Corpus(256, payloadBytes: 64);
+        // Differential, never absolute, and sampled repeatedly with the minimum
+        // kept: see AllocationProbe for why each of those is load-bearing. The
+        // corpus and the frame are built in `prepare`, outside the measured
+        // window, so only the hydration itself is charged.
+        var growth = AllocationProbe.Growth(
+            static rowCount =>
+            {
+                var cache = NewCache();
+                cache.TryAttachSnapshot(LeafSnapshotCodec.Encode(Corpus(rowCount, payloadBytes: 64)), 0L);
+                return cache;
+            },
+            static (cache, _) => cache.HydrateAll(),
+            smallSize: 128,
+            largeSize: 256);
 
-        // Warm every path that is measured below.
-        Measure(small);
-        Measure(large);
-
-        var smallBytes = Measure(small);
-        var largeBytes = Measure(large);
-        var perRow = (largeBytes - smallBytes) / 128.0;
+        var perRow = growth / 128.0;
         var rowFootprint = 64 + (2 * IntPtr.Size);
 
         Assert.That(perRow, Is.LessThan(rowFootprint * 3),
             "the marginal cost of hydrating a row must be the row itself (key string, value array, node) "
             + "and not a per-row scratch buffer");
-
-        static long Measure(LeafSnapshotRow[] rows)
-        {
-            var frame = LeafSnapshotCodec.Encode(rows);
-            var cache = NewCache();
-            cache.TryAttachSnapshot(frame, 0L);
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            cache.HydrateAll();
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
+        Assert.That(perRow, Is.GreaterThan(0),
+            "a hydrated row must cost something; a zero here would mean the probe is not measuring the work");
     }
 
     [Test]
@@ -616,36 +611,28 @@ public sealed class LeafEntryCacheHydrationTests
     {
         var cache = Attached(Corpus(1024, payloadBytes: 32));
 
-        // Warm the measured method itself, so tiered JIT has settled before
-        // either sample is taken and a one-off compilation cannot land inside
-        // only one of them.
-        for (var i = 0; i < 20; i++)
-        {
-            _ = MeasureMisses(cache, 100);
-        }
+        var growth = AllocationProbe.Growth(
+            _ => cache,
+            static (probe, iterations) =>
+            {
+                var hits = 0;
+                for (var i = 0; i < iterations; i++)
+                {
+                    if (probe.ContainsKey("absent-key"))
+                    {
+                        hits++;
+                    }
+                }
 
-        var few = MeasureMisses(cache, 1_000);
-        var many = MeasureMisses(cache, 2_000);
+                AllocationProbe.ScalarSink = hits;
+            },
+            smallSize: 1_000,
+            largeSize: 2_000);
 
-        Assert.That(many - few, Is.Zero,
+        Assert.That(growth, Is.Zero,
             "a seek encodes its key into a stack buffer and probes the index table, so doubling the number "
             + "of seeks must not allocate a byte more");
-
-        static long MeasureMisses(LeafEntryCache cache, int iterations)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var hits = 0;
-            for (var i = 0; i < iterations; i++)
-            {
-                if (cache.ContainsKey("absent-key"))
-                {
-                    hits++;
-                }
-            }
-
-            GC.KeepAlive(hits);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
+        Assert.That(cache.SnapshotRowsMaterialised, Is.Zero, "and a miss must never materialise a row");
     }
 
     [Test]
@@ -684,54 +671,52 @@ public sealed class LeafEntryCacheHydrationTests
         var cache = Attached(Corpus(512, payloadBytes: 32));
         var dictionary = cache.UnderlyingRows;
 
-        for (var i = 0; i < 50; i++)
-        {
-            _ = WalkRange(cache, 1);
-            _ = WalkDictionary(dictionary, 1);
-        }
-
-        var rangeMarginal = WalkRange(cache, 1_000) - WalkRange(cache, 500);
-        var dictionaryMarginal = WalkDictionary(dictionary, 1_000) - WalkDictionary(dictionary, 500);
-
-        Assert.That(rangeMarginal, Is.LessThanOrEqualTo(dictionaryMarginal),
-            "RangeRows and its enumerator are structs resolved by pattern, so bounding a walk must cost "
-            + "nothing beyond walking the dictionary at all");
-
-        static long WalkRange(LeafEntryCache cache, int iterations)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var count = 0;
-            for (var i = 0; i < iterations; i++)
+        var rangeGrowth = AllocationProbe.Growth(
+            _ => cache,
+            static (probe, iterations) =>
             {
-                foreach (var kv in cache.EnumerateRange(Key(0), Key(8)))
+                var count = 0;
+                for (var i = 0; i < iterations; i++)
                 {
-                    count += kv.Key.Length;
-                }
-            }
-
-            GC.KeepAlive(count);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
-
-        static long WalkDictionary(SortedDictionary<string, LwwValue<byte[]>> rows, int iterations)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var count = 0;
-            for (var i = 0; i < iterations; i++)
-            {
-                foreach (var kv in rows)
-                {
-                    count += kv.Key.Length;
-                    if (string.CompareOrdinal(kv.Key, Key(8)) >= 0)
+                    foreach (var kv in probe.EnumerateRange(Key(0), Key(8)))
                     {
-                        break;
+                        count += kv.Key.Length;
                     }
                 }
-            }
 
-            GC.KeepAlive(count);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
+                AllocationProbe.ScalarSink = count;
+            },
+            smallSize: 500,
+            largeSize: 1_000);
+
+        var dictionaryGrowth = AllocationProbe.Growth(
+            _ => dictionary,
+            static (rows, iterations) =>
+            {
+                var count = 0;
+                for (var i = 0; i < iterations; i++)
+                {
+                    foreach (var kv in rows)
+                    {
+                        count += kv.Key.Length;
+                        if (string.CompareOrdinal(kv.Key, Key(8)) >= 0)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                AllocationProbe.ScalarSink = count;
+            },
+            smallSize: 500,
+            largeSize: 1_000);
+
+        Assert.That(dictionaryGrowth, Is.GreaterThan(0L),
+            "the comparison is only meaningful if the bare walk really does allocate a node stack per foreach; "
+            + "a zero here would make the assertion below vacuous");
+        Assert.That(rangeGrowth, Is.LessThanOrEqualTo(dictionaryGrowth),
+            "RangeRows and its enumerator are structs resolved by pattern, so bounding a walk must cost "
+            + "nothing beyond walking the dictionary at all");
     }
 
     [Test]
@@ -739,33 +724,31 @@ public sealed class LeafEntryCacheHydrationTests
     {
         var cache = Attached(Corpus(256, payloadBytes: 32));
         cache.HydrateRange(Key(0), Key(64));
+        var bytesReadBeforeWalks = cache.SnapshotBytesRead;
 
-        for (var i = 0; i < 20; i++)
-        {
-            _ = Walk(cache, 1);
-        }
+        var growth = AllocationProbe.Growth(
+            _ => cache,
+            static (probe, iterations) =>
+            {
+                var count = 0;
+                for (var i = 0; i < iterations; i++)
+                {
+                    foreach (var key in probe.EnumerateKeysUnordered())
+                    {
+                        count += key.Length;
+                    }
+                }
 
-        var few = Walk(cache, 20);
-        var many = Walk(cache, 40);
-        var perWalk = (many - few) / 20.0;
+                AllocationProbe.ScalarSink = count;
+            },
+            smallSize: 20,
+            largeSize: 40);
+
+        var perWalk = growth / 20.0;
 
         Assert.That(perWalk, Is.LessThan(256 * 64),
             "an unhydrated row contributes its key string and nothing else - no value array, no boxing");
-
-        static long Walk(LeafEntryCache cache, int iterations)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var count = 0;
-            for (var i = 0; i < iterations; i++)
-            {
-                foreach (var key in cache.EnumerateKeysUnordered())
-                {
-                    count += key.Length;
-                }
-            }
-
-            GC.KeepAlive(count);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        }
+        Assert.That(cache.SnapshotBytesRead, Is.EqualTo(bytesReadBeforeWalks),
+            "and the walks themselves must not have decoded a payload; only the range hydration above reads bytes");
     }
 }
