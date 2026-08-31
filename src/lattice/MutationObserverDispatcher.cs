@@ -17,7 +17,10 @@ namespace Orleans.Lattice;
 /// <see cref="LatticeMetrics.ObserverDuration"/> so an operator can see how
 /// much write latency a specific observer contributes. The measurement is
 /// taken on the faulting path too - an observer that throws slowly is
-/// exactly the misbehaviour the instrument exists to surface.
+/// exactly the misbehaviour the instrument exists to surface - and spans
+/// only the callback itself: the warning this class logs for a faulting
+/// observer is emitted after the measurement is recorded, so a slow log
+/// sink is never billed to the observer.
 /// </para>
 /// </summary>
 internal sealed class MutationObserverDispatcher
@@ -80,15 +83,17 @@ internal sealed class MutationObserverDispatcher
         {
             var observer = _observers[i];
             var startTimestamp = timed ? Stopwatch.GetTimestamp() : 0L;
+            Exception? failure = null;
             try
             {
                 await observer.OnMutationAsync(mutation, cancellationToken);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
-                    "IMutationObserver {ObserverType} threw for tree {TreeId} key {Key} ({Kind}); continuing.",
-                    observer.GetType().FullName, mutation.TreeId, mutation.Key, mutation.Kind);
+                // Captured rather than logged here so the dispatcher's own
+                // logging cost stays outside the measured window below - the
+                // instrument attributes the observer's latency, not ours.
+                failure = ex;
             }
             finally
             {
@@ -103,6 +108,13 @@ internal sealed class MutationObserverDispatcher
                         new KeyValuePair<string, object?>(LatticeMetrics.TagTree, mutation.TreeId),
                         LatticeTenantLabel.ForTree(mutation.TreeId));
                 }
+            }
+
+            if (failure is not null)
+            {
+                _logger.LogWarning(failure,
+                    "IMutationObserver {ObserverType} threw for tree {TreeId} key {Key} ({Kind}); continuing.",
+                    observer.GetType().FullName, mutation.TreeId, mutation.Key, mutation.Kind);
             }
         }
     }

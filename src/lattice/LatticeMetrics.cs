@@ -770,7 +770,9 @@ public static class LatticeMetrics
     /// <see cref="TagTree"/> (the mutated tree). Recorded on the faulting path
     /// too: an observer that throws slowly is exactly the misbehaviour this
     /// instrument exists to surface, and the dispatcher still suppresses the
-    /// exception.
+    /// exception. The sample spans only the callback - the dispatcher's own
+    /// swallow-and-log work is excluded, so a slow log sink cannot be
+    /// mistaken for a slow observer.
     /// </para>
     /// <para>
     /// Zero-cost when unused. The dispatcher's no-observer fast path returns

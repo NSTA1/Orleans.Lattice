@@ -364,7 +364,7 @@ chatty downstream) is identified rather than merely suspected.
 
 | Name | Kind | Unit | Description |
 |---|---|---|---|
-| `orleans.lattice.observer.duration` | `Histogram<double>` | `ms` | Wall-clock time one registered `IMutationObserver` spent inside a single `OnMutationAsync` callback. Tagged `observer` = the observer's CLR type name and `tree` = the mutated tree. Recorded on the faulting path too, so an observer that throws slowly is still visible; the dispatcher continues to suppress the exception. Zero-cost when no observer is registered (the dispatcher returns before any timing work) and elided when no metrics listener is attached. |
+| `orleans.lattice.observer.duration` | `Histogram<double>` | `ms` | Wall-clock time one registered `IMutationObserver` spent inside a single `OnMutationAsync` callback. Tagged `observer` = the observer's CLR type name and `tree` = the mutated tree. Recorded on the faulting path too, so an observer that throws slowly is still visible; the dispatcher continues to suppress the exception. The sample spans only the callback - the dispatcher's own swallow-and-log work is excluded, so a slow log sink is never billed to the observer. Zero-cost when no observer is registered (the dispatcher returns before any timing work) and elided when no metrics listener is attached. |
 
 The instrument takes one sample per observer per published mutation, so N
 registered observers contribute N samples per mutation. `sum by (observer)` over

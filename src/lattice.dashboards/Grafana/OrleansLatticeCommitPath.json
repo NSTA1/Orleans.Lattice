@@ -709,7 +709,7 @@
       ]
     },
     {
-      "id": 126,
+      "id": 127,
       "title": "Mutation-observer inline latency p95 (ms) by observer",
       "description": "Per-observer breakdown of the inline IMutationObserver callback cost (orleans.lattice.observer.duration), split by the observer CLR type. Observers run inline on the write path, so this is latency the caller pays: it is the by-observer decomposition of the aggregate observer step on the Commit-step latency panel above. A single series climbing away from its peers names the misbehaving observer (synchronous I/O, a blocking call, a chatty downstream). The measurement is taken on the faulting path too, so an observer that throws slowly still shows up here.",
       "type": "timeseries",

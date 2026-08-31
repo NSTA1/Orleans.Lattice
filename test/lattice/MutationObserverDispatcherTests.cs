@@ -226,6 +226,50 @@ public class MutationObserverDispatcherTests
         }), "One measurement per observer, in registration order, faulting observers included.");
     }
 
+    [Test]
+    public async Task PublishAsync_excludes_the_dispatchers_own_logging_from_the_observer_measurement()
+    {
+        // The instrument attributes latency to the observer, so the dispatcher's
+        // swallow-and-log work must sit outside the measured window. Recording
+        // in a finally that runs after the catch would fold the logger's cost
+        // into the observer's series - and a warning carrying an exception is
+        // exactly where a synchronous sink is slow, so a fast-failing observer
+        // would be libelled as a slow one.
+        const string TreeId = "observer-duration-excludes-logging";
+        var logDelay = TimeSpan.FromMilliseconds(300);
+
+        using var recorder = new HistogramMeasurementRecorder(LatticeMetrics.ObserverDuration, TreeId);
+        var dispatcher = new MutationObserverDispatcher(
+            [new ThrowingMutationObserver(new InvalidOperationException("boom"))],
+            new BlockingLogger(logDelay));
+
+        await dispatcher.PublishAsync(SampleSet(treeId: TreeId));
+
+        Assert.That(recorder.Measurements, Has.Count.EqualTo(1));
+        Assert.That(recorder.Measurements[0].Value, Is.LessThan(logDelay.TotalMilliseconds / 2),
+            "The recorded duration must cover only OnMutationAsync, not the warning the dispatcher "
+            + "logs afterwards.");
+    }
+
+    /// <summary>
+    /// A logger whose <see cref="ILogger.Log{TState}"/> blocks for a fixed
+    /// delay, standing in for a slow synchronous sink so a test can assert
+    /// that logging is not billed to the observer being measured.
+    /// </summary>
+    private sealed class BlockingLogger(TimeSpan delay) : ILogger<MutationObserverDispatcher>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) => Thread.Sleep(delay);
+    }
+
     private sealed class CallbackObserver(Func<LatticeMutation, Task> callback) : IMutationObserver
     {
         public Task OnMutationAsync(LatticeMutation mutation, CancellationToken cancellationToken) =>

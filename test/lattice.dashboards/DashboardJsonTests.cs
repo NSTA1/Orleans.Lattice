@@ -280,6 +280,90 @@ public sealed class DashboardJsonTests
             $"comment:{Environment.NewLine}  - " + string.Join(Environment.NewLine + "  - ", unpaneled));
     }
 
+    [Test]
+    public void Every_panel_id_in_a_dashboard_is_unique()
+    {
+        // Grafana's panel-id namespace is dashboard-wide, and an id is a
+        // functional identity, not decoration: it is what "view panel" and
+        // "edit panel" links (?viewPanel=<id>), panel-level permalinks, and
+        // dashboard-JSON patches address a panel by. Two panels sharing an id
+        // make every such reference ambiguous, and Grafana resolves it to
+        // whichever it finds first - so the second panel becomes unreachable
+        // by link even though it renders.
+        //
+        // Nothing about authoring a panel prevents this: the convention is to
+        // take max(id) + 1, so two branches adding a panel concurrently both
+        // pick the same number and a textual merge keeps both without
+        // conflicting. That has happened twice in this repository, which is
+        // why it is guarded here rather than left to review.
+        foreach (var kind in LatticeDashboards.All)
+        {
+            using var doc = JsonDocument.Parse(LatticeDashboards.GetGrafanaDashboardJson(kind));
+
+            var titlesById = new Dictionary<int, List<string>>();
+            CollectPanelIds(doc.RootElement, titlesById);
+
+            Assert.That(titlesById, Is.Not.Empty, $"Dashboard '{kind}' yielded no panel ids.");
+
+            var duplicates = titlesById
+                .Where(pair => pair.Value.Count > 1)
+                .OrderBy(pair => pair.Key)
+                .Select(pair => $"id {pair.Key} is used by {pair.Value.Count} panels: {string.Join(" | ", pair.Value)}")
+                .ToList();
+
+            Assert.That(duplicates, Is.Empty,
+                $"Dashboard '{kind}' reuses panel ids. Give each panel a unique id (the next free " +
+                $"integer above the current maximum):{Environment.NewLine}  - " +
+                string.Join(Environment.NewLine + "  - ", duplicates));
+        }
+    }
+
+    /// <summary>
+    /// Collects every panel id in a dashboard, keyed by id and carrying the
+    /// titles that claimed it. Recurses into nested <c>panels</c> arrays,
+    /// because a panel nested inside a collapsed row shares the same
+    /// dashboard-wide id namespace as a top-level one.
+    /// </summary>
+    private static void CollectPanelIds(JsonElement element, Dictionary<int, List<string>> titlesById)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                if (element.TryGetProperty("panels", out var panels)
+                    && panels.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var panel in panels.EnumerateArray())
+                    {
+                        if (panel.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        if (panel.TryGetProperty("id", out var id)
+                            && id.ValueKind == JsonValueKind.Number
+                            && id.TryGetInt32(out var panelId))
+                        {
+                            var title = panel.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String
+                                ? t.GetString() ?? "(untitled)"
+                                : "(untitled)";
+
+                            if (!titlesById.TryGetValue(panelId, out var titles))
+                            {
+                                titles = [];
+                                titlesById[panelId] = titles;
+                            }
+
+                            titles.Add(title);
+                        }
+
+                        CollectPanelIds(panel, titlesById);
+                    }
+                }
+
+                break;
+        }
+    }
+
     private static HashSet<string> ExtractInstrumentTokens(string json)
     {
         using var doc = JsonDocument.Parse(json);

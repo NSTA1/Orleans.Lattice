@@ -710,7 +710,8 @@ histogram, tagged `observer` (the observer's CLR type name) and `tree`.
 That turns "one of our observers is slow" into a named series on the same
 OpenTelemetry pipeline as the traffic it slows down. The measurement is
 taken on the faulting path too, so an observer that throws slowly is just
-as visible as one that returns slowly. The instrument costs nothing when no
+as visible as one that returns slowly, and spans only your callback - the
+warning Lattice logs for a faulting observer is not billed to it. The instrument costs nothing when no
 observer is registered, and nothing beyond a boolean read when no metrics
 listener is attached.
 
