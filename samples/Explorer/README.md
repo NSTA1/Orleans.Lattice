@@ -47,13 +47,51 @@ disabling authorization.
 
 ## The admin areas
 
-The console's top-level areas are capability-gated and fail closed. This sample
-co-hosts the auth and schema gRPC admin APIs and auto-signs-in as a bootstrap
+The console's top-level areas live in a stable vertical rail down the left of
+the shell, and each is capability-gated and fails closed. This sample co-hosts
+the auth and schema gRPC admin APIs and auto-signs-in as a bootstrap
 administrator (`explorer-admin`), so the **Explore** and **Access** areas are
-enabled out of the box. The **Schema** area ships hidden and stays hidden here;
-set `LATTICE_EXPLORER_ENABLE_SCHEMA=true` before running to surface it. The
-**Backups** area stays disabled because this sample does not co-host the backup
-gRPC API.
+live out of the box. The **Schema** area ships hidden and stays hidden here; set
+`LATTICE_EXPLORER_ENABLE_SCHEMA=true` before running to surface it. The
+**Backups** area resolves as denied, because this sample does not co-host the
+backup gRPC API.
+
+A denied area is not hidden and is not merely greyed. It stays visible, grouped
+below a divider at lower visual weight, and states the permission it needs and
+who to ask - so Backups here reads as a capability the product has and this
+deployment has not wired up, rather than as something broken or absent. An area
+the cluster does not serve at all renders no entry, and the rail's "why can I
+not see everything?" affordance names it. Signing out changes Access from denied
+to an invitation to sign in, because an anonymous caller is never told a surface
+is unavailable for their account.
+
+The gating is advisory throughout: the server is the sole enforcement point, so
+showing a denied entry costs nothing and hiding it would buy nothing. See
+[Navigation visibility policy](../../docs/lattice.explorer/navigation-visibility-policy.md).
+
+## Things worth trying in this sample
+
+- **Deep link and share.** Select a tree and a surface, then copy the URL. It
+  looks like `/explore/trees/<tree>/data`, all lower case. Open it in a fresh
+  tab and you land on that exact view; browser back and forward behave.
+- **Land where you left off.** Switch area, select a tree, then reload. The
+  console restores the area as well as the selection. `/reset-view` lists what
+  is remembered and clears it.
+- **Choose a theme.** The appearance control sits in the banner, in its own
+  region beside the identity. Theme follows your system by default; light is a
+  first-class palette, and high contrast is a separate axis that layers over
+  whichever theme is active. The choice is applied at first paint, so reloading
+  in light mode never flashes dark.
+- **Tenancy adapts.** This sample is single-tenant, so no tenant chrome appears
+  at all. On a cluster where the caller can reach more than one tenant, a
+  drop-down appears instead.
+- **Keyboard only.** Tab once from the top: the first stop is a skip link into
+  the main region. Arrow keys move within the rail and within every tab strip,
+  and every tab is bound to a real panel.
+
+See [the navigation model](../../docs/lattice.explorer/navigation-model.md),
+[what the Explorer remembers](../../docs/lattice.explorer/what-the-explorer-remembers.md)
+and [theming and density](../../docs/lattice.explorer/theming-and-density.md).
 
 How the admin sign-in works, so you can adapt it:
 

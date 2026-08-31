@@ -59,21 +59,23 @@ showing an error.
 - **Dead letters** - list the writes that strict-mode validation diverted (the
   schema-rejected entries), and show their count.
 
-## Capability-aware, grey-out not hide
+## Capability-aware, demote not hide
 
 The area is gated in two layers. The coarse **SchemaAllowed** gate is endpoint
 **reachability**: the capability probe RPC returns an all-false set on an
 authorization denial rather than throwing, so the gate reports available whenever
 that probe completes without a transport fault; if the endpoint is unreachable the
-area entry stays visible but **disabled (greyed out)**. Inside the area, each
-mutating action - setting or clearing a policy, changing or advancing the version
-config, running remediation, scanning compliance - greys out from the **per-tree
-capability snapshot** the panel requests when a tree is loaded (and also whenever
-no tree is loaded or an action is already in flight), not from the coarse gate.
+area resolves `Unavailable` and renders no entry, with the absence explained in
+the rail's capabilities affordance rather than left as a silent gap. Inside the
+area, each mutating action - setting or clearing a policy, changing or advancing
+the version config, running remediation, scanning compliance - disables from the
+**per-tree capability snapshot** the panel requests when a tree is loaded (and
+also whenever no tree is loaded or an action is already in flight), not from the
+coarse gate.
 
 ## Advisory, not a security boundary
 
-The grey-out is a usability affordance only. The **server remains the
+The gating is a usability affordance only. The **server remains the
 fail-closed enforcement point**: every real read or mutation authorizes the
 tree's scope on the server when it runs - Read authority for the inspect verbs
 and the compliance audit, SchemaAdmin authority for the mutations - regardless of
