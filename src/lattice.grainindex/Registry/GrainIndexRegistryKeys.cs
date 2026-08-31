@@ -36,6 +36,14 @@ namespace Orleans.Lattice.GrainIndex.Registry;
 /// Reserved on the same terms.
 /// </description>
 /// </item>
+/// <item>
+/// <description>
+/// <c>pend/{indexName}/{encodedGrainKey}</c> - the durable pending-projection
+/// outbox entry recording that a grain's index write was intended but is not
+/// yet known to have landed. Written before the index write and removed with
+/// the seen marker in the same atomic batch once it has.
+/// </description>
+/// </item>
 /// </list>
 /// <para>
 /// The per-kind prefixes are distinct strings rather than a shared separator
@@ -57,6 +65,9 @@ internal static class GrainIndexRegistryKeys
 
     /// <summary>The leading segment of every backfill-checkpoint key.</summary>
     internal const string CheckpointSegment = "ckpt/";
+
+    /// <summary>The leading segment of every pending-projection outbox key.</summary>
+    internal const string PendingSegment = "pend/";
 
     /// <summary>
     /// The registry key holding the persisted definition and fingerprint of the
@@ -131,6 +142,61 @@ internal static class GrainIndexRegistryKeys
         ArgumentNullException.ThrowIfNull(indexName);
         return CheckpointSegment + indexName;
     }
+
+    /// <summary>
+    /// The registry key holding the pending-projection outbox entry for the
+    /// grain whose encoded key is <paramref name="encodedGrainKey"/> in the
+    /// index called <paramref name="indexName"/>.
+    /// </summary>
+    /// <remarks>
+    /// The outbox mirrors the seen marker's shape, one entry per grain per
+    /// index, so a grain that writes again before its previous index write
+    /// landed replaces its own outstanding entry rather than queueing a second
+    /// one. That is what keeps the outbox bounded by the number of grains with
+    /// an unfinished write rather than by the write rate.
+    /// </remarks>
+    /// <param name="indexName">The logical index name. Must not be <c>null</c>.</param>
+    /// <param name="encodedGrainKey">The indexed grain's encoded key. Must not be <c>null</c>.</param>
+    /// <returns>The pending-projection key.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    internal static string Pending(string indexName, string encodedGrainKey)
+    {
+        ArgumentNullException.ThrowIfNull(indexName);
+        ArgumentNullException.ThrowIfNull(encodedGrainKey);
+        return string.Concat(PendingSegment, indexName, "/", encodedGrainKey);
+    }
+
+    /// <summary>
+    /// The inclusive lower bound of a range scan over every index's pending
+    /// projections, which is how the outbox drain finds its work in one pass.
+    /// </summary>
+    internal static string PendingPrefix() => PendingSegment;
+
+    /// <summary>
+    /// The exclusive upper bound matching <see cref="PendingPrefix()"/>.
+    /// </summary>
+    internal static string PendingPrefixEnd() => ExclusiveEnd(PendingSegment);
+
+    /// <summary>
+    /// The inclusive lower bound of a range scan over one index's pending
+    /// projections.
+    /// </summary>
+    /// <param name="indexName">The logical index name. Must not be <c>null</c>.</param>
+    /// <returns>The scan's start key.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="indexName"/> is <c>null</c>.</exception>
+    internal static string PendingPrefix(string indexName)
+    {
+        ArgumentNullException.ThrowIfNull(indexName);
+        return string.Concat(PendingSegment, indexName, "/");
+    }
+
+    /// <summary>
+    /// The exclusive upper bound matching <see cref="PendingPrefix(string)"/>.
+    /// </summary>
+    /// <param name="indexName">The logical index name. Must not be <c>null</c>.</param>
+    /// <returns>The scan's end key.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="indexName"/> is <c>null</c>.</exception>
+    internal static string PendingPrefixEnd(string indexName) => ExclusiveEnd(PendingPrefix(indexName));
 
     /// <summary>
     /// The exclusive upper bound of the half-open range that covers every key

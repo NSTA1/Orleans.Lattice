@@ -4,8 +4,9 @@ namespace Orleans.Lattice.GrainIndex.Tests.Registry;
 
 /// <summary>
 /// Covers <see cref="GrainIndexRegistryKeys"/>: the key layout that lets one
-/// tree hold the persisted definitions, the activation-path seen markers, and
-/// the backfill checkpoints without any of the three colliding.
+/// tree hold the persisted definitions, the activation-path seen markers, the
+/// pending-projection outbox, and the backfill checkpoints without any of them
+/// colliding.
 /// </summary>
 [TestFixture]
 public sealed class GrainIndexRegistryKeysTests
@@ -35,13 +36,56 @@ public sealed class GrainIndexRegistryKeysTests
     }
 
     [Test]
-    public void The_three_segments_are_distinct_so_no_kind_can_prefix_match_another()
+    public void A_pending_key_nests_the_encoded_grain_key_under_the_index()
     {
+        Assert.That(
+            GrainIndexRegistryKeys.Pending("users", "alice"),
+            Is.EqualTo(GrainIndexRegistryKeys.PendingSegment + "users/alice"));
+    }
+
+    [Test]
+    public void A_grains_seen_marker_and_its_outbox_entry_never_collide()
+    {
+        Assert.That(
+            GrainIndexRegistryKeys.Pending("users", "alice"),
+            Is.Not.EqualTo(GrainIndexRegistryKeys.Seen("users", "alice")),
+            "Confirming a write upserts one and deletes the other in a single batch, which the "
+            + "atomic seam rejects outright if they are the same key.");
+    }
+
+    [Test]
+    public void The_outbox_scan_covers_every_index_in_one_range()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(InPendingRange(GrainIndexRegistryKeys.Pending("users", "alice")), Is.True);
+            Assert.That(InPendingRange(GrainIndexRegistryKeys.Pending("orders", "42")), Is.True);
+            Assert.That(InPendingRange(GrainIndexRegistryKeys.Seen("users", "alice")), Is.False,
+                "A drain that swept up seen markers would try to apply them as batches.");
+            Assert.That(InPendingRange(GrainIndexRegistryKeys.Definition("users")), Is.False);
+            Assert.That(InPendingRange(GrainIndexRegistryKeys.Checkpoint("users")), Is.False);
+        });
+    }
+
+    [Test]
+    public void A_per_index_outbox_scan_excludes_a_sibling_whose_name_is_a_prefix()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(InPendingRange("users", GrainIndexRegistryKeys.Pending("users", "alice")), Is.True);
+            Assert.That(InPendingRange("user", GrainIndexRegistryKeys.Pending("users", "alice")), Is.False,
+                "The trailing separator is what stops one index's scan returning another's entries.");
+        });
+    }
+
+    [Test]
+    public void Every_segment_is_distinct_so_no_kind_can_prefix_match_another()    {
         var segments = new[]
         {
             GrainIndexRegistryKeys.DefinitionSegment,
             GrainIndexRegistryKeys.SeenSegment,
             GrainIndexRegistryKeys.CheckpointSegment,
+            GrainIndexRegistryKeys.PendingSegment,
         };
 
         Assert.Multiple(() =>
@@ -142,6 +186,35 @@ public sealed class GrainIndexRegistryKeysTests
             Assert.That(() => GrainIndexRegistryKeys.SeenPrefix(null!), Throws.ArgumentNullException);
             Assert.That(() => GrainIndexRegistryKeys.SeenPrefixEnd(null!), Throws.ArgumentNullException);
             Assert.That(() => GrainIndexRegistryKeys.Checkpoint(null!), Throws.ArgumentNullException);
+            Assert.That(() => GrainIndexRegistryKeys.Pending(null!, "alice"), Throws.ArgumentNullException);
+            Assert.That(() => GrainIndexRegistryKeys.PendingPrefix(null!), Throws.ArgumentNullException);
+            Assert.That(() => GrainIndexRegistryKeys.PendingPrefixEnd(null!), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public void A_pending_key_rejects_a_null_encoded_grain_key()
+    {
+        Assert.That(
+            () => GrainIndexRegistryKeys.Pending("users", null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void The_outbox_scan_bounds_are_ordered_low_to_high()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                string.CompareOrdinal(
+                    GrainIndexRegistryKeys.PendingPrefix(),
+                    GrainIndexRegistryKeys.PendingPrefixEnd()),
+                Is.LessThan(0));
+            Assert.That(
+                string.CompareOrdinal(
+                    GrainIndexRegistryKeys.PendingPrefix("users"),
+                    GrainIndexRegistryKeys.PendingPrefixEnd("users")),
+                Is.LessThan(0));
         });
     }
 
@@ -173,4 +246,12 @@ public sealed class GrainIndexRegistryKeysTests
     private static bool InSeenRange(string indexName, string key) =>
         string.CompareOrdinal(key, GrainIndexRegistryKeys.SeenPrefix(indexName)) >= 0
         && string.CompareOrdinal(key, GrainIndexRegistryKeys.SeenPrefixEnd(indexName)) < 0;
+
+    private static bool InPendingRange(string key) =>
+        string.CompareOrdinal(key, GrainIndexRegistryKeys.PendingPrefix()) >= 0
+        && string.CompareOrdinal(key, GrainIndexRegistryKeys.PendingPrefixEnd()) < 0;
+
+    private static bool InPendingRange(string indexName, string key) =>
+        string.CompareOrdinal(key, GrainIndexRegistryKeys.PendingPrefix(indexName)) >= 0
+        && string.CompareOrdinal(key, GrainIndexRegistryKeys.PendingPrefixEnd(indexName)) < 0;
 }

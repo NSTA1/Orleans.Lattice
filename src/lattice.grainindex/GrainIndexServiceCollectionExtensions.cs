@@ -3,8 +3,10 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
+using Orleans.Lattice.GrainIndex.Enrollment;
 using Orleans.Lattice.GrainIndex.Registry;
 using Orleans.Lattice.GrainIndex.Query;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.GrainIndex;
 
@@ -98,6 +100,35 @@ public static class GrainIndexServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, GrainIndexRegistryHostedService>());
 
+        // The enrolment path. The attribute mapper is what makes [Indexed] bind
+        // to the index-aware state object; the enrolment set is resolved per
+        // state type, so it is registered open and closed on demand.
+        services.TryAddSingleton<IGrainIndexEnrollmentStore, GrainIndexEnrollmentStore>();
+        services.TryAddSingleton(typeof(GrainIndexEnrollmentSet<>));
+        services.TryAddSingleton<IAttributeToFactoryMapper<IndexedAttribute>, IndexedAttributeMapper>();
+        services.TryAddSingleton<GrainIndexOutboxDrainer>();
+        services.AddOptions<GrainIndexOutboxOptions>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexOutboxHostedService>());
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the silo-wide pending-projection outbox: whether this host
+    /// runs the background drain, how often, and how much it does per pass.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="configure">Mutates the outbox settings. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureGrainIndexOutbox(
+        this ISiloBuilder builder,
+        Action<GrainIndexOutboxOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(configure);
         return builder;
     }
 

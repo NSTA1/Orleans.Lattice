@@ -83,4 +83,10 @@ internal static class TypeAliases
 
     /// <summary>Alias for <see cref="GrainIndexPropertyNotIndexedException"/>.</summary>
     internal const string GrainIndexPropertyNotIndexedException = "ol.gqn";
+
+    /// <summary>Alias for <c>GrainIndexEnrollmentRecord</c>.</summary>
+    internal const string GrainIndexEnrollmentRecord = "ol.gxs";
+
+    /// <summary>Alias for <c>GrainIndexPendingProjection</c>.</summary>
+    internal const string GrainIndexPendingProjection = "ol.gxo";
 }

@@ -175,9 +175,10 @@ public sealed class GrainIndexMaintainer<TGrain, TState>
         if (plan.IsEmpty)
             return Task.CompletedTask;
 
-        var id = operationId ?? Guid.NewGuid().ToString("N");
-        return plan.Deletes.Count == 0
-            ? Tree.SetManyAtomicAsync(plan.UpsertList, id, cancellationToken)
-            : Tree.SetManyAtomicAsync(plan.UpsertList, plan.Deletes, id, cancellationToken);
+        return GrainIndexPlanApplier.ApplyAsync(
+            Tree,
+            plan,
+            operationId ?? Guid.NewGuid().ToString("N"),
+            cancellationToken);
     }
 }
