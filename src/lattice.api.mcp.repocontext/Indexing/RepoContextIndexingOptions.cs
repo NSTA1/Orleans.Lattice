@@ -42,6 +42,15 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="Role"/>.</summary>
     public const string IndexingRoleKey = "LATTICE_REPOCONTEXT_INDEXING_ROLE";
 
+    /// <summary>Environment variable overriding <see cref="SemanticRetrieval"/>.</summary>
+    public const string SemanticRetrievalKey = "LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL";
+
+    /// <summary>The <see cref="SemanticRetrieval"/> value selecting the persisted approximate index (the default).</summary>
+    public const string SemanticRetrievalApproximate = "approximate";
+
+    /// <summary>The <see cref="SemanticRetrieval"/> value selecting the brute-force exact scan.</summary>
+    public const string SemanticRetrievalExact = "exact";
+
     /// <summary>The <see cref="TokenizerProfile"/> value selecting the OpenAI o200k_base BPE encoding (the default).</summary>
     public const string TokenizerProfileO200k = "o200k";
 
@@ -111,6 +120,20 @@ internal sealed class RepoContextIndexingOptions
     public bool IndexingEnabled => Role == RepoContextIndexingRole.Hub;
 
     /// <summary>
+    /// Which semantic retrieval path is bound:
+    /// <see cref="RepoContextSemanticRetrievalMode.Approximate"/> (the default) routes
+    /// semantic search through the persisted approximate nearest-neighbour index, and
+    /// <see cref="RepoContextSemanticRetrievalMode.Exact"/> routes it through the
+    /// brute-force exact scan instead. Resolved from
+    /// <see cref="SemanticRetrievalKey"/>; an absent or unrecognised value falls back
+    /// to the default (fail-closed to the configured default rather than to a path
+    /// nobody chose). The answer reports which guarantee it carries through
+    /// <see cref="RepoContextSearchResult.RetrievalPath"/> either way.
+    /// </summary>
+    public RepoContextSemanticRetrievalMode SemanticRetrieval { get; init; } =
+        RepoContextSemanticRetrievalMode.Approximate;
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -127,6 +150,27 @@ internal sealed class RepoContextIndexingOptions
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
             Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),
+            SemanticRetrieval = ReadSemanticRetrieval(SemanticRetrievalKey, defaults.SemanticRetrieval),
+        };
+    }
+
+    private static RepoContextSemanticRetrievalMode ReadSemanticRetrieval(
+        string key, RepoContextSemanticRetrievalMode fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        // Fail closed on any unrecognised value: only the two supported modes are
+        // honoured and anything else falls back to the default, so a typo can never
+        // silently leave the box on a retrieval path nobody chose.
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            SemanticRetrievalApproximate => RepoContextSemanticRetrievalMode.Approximate,
+            SemanticRetrievalExact => RepoContextSemanticRetrievalMode.Exact,
+            _ => fallback,
         };
     }
 

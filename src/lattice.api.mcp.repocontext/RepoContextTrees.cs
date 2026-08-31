@@ -76,6 +76,26 @@ internal static class RepoContextTrees
     internal const string VectorMetadata = "repo-context-vector-metadata";
 
     /// <summary>
+    /// Tree holding the persisted approximate nearest-neighbour index the semantic
+    /// retrieval path queries instead of re-scanning the whole
+    /// <see cref="VectorMetadata"/> prefix. It is a purely local, wholly derived
+    /// accelerator over the other three vector trees: every record in it can be
+    /// recomputed from them, and discarding the tree costs a rebuild and nothing
+    /// else.
+    /// <para>
+    /// It is deliberately <b>absent from <see cref="All"/></b>, and that absence is
+    /// the point rather than an oversight. <see cref="All"/> is the enrolment list
+    /// the replication companion mirrors cross-cluster, and an index is the one
+    /// thing that must not be mirrored: it is derived, each cluster builds its own
+    /// far more cheaply than it could ship one, and a replicated index would
+    /// interleave two clusters' generations under a layout whose recovery path
+    /// deletes whole key ranges. It also holds no store-of-record data, so no
+    /// backup or portability sweep needs to carry it.
+    /// </para>
+    /// </summary>
+    internal const string VectorIndex = "repo-context-vector-index";
+
+    /// <summary>
     /// Tree holding per-session context-bundle reuse bookkeeping: one
     /// <see cref="RepoContextSessionRecord"/> per <c>(repoId, sessionId)</c>, keyed
     /// by <c>repo/{repoId}/session/{sessionId}</c>, recording the opaque receipts of
