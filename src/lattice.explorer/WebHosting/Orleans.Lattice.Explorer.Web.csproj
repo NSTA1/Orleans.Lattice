@@ -7,7 +7,7 @@
     <RootNamespace>Orleans.Lattice.Explorer.Web</RootNamespace>
     <AssemblyName>Orleans.Lattice.Explorer.Web</AssemblyName>
     <PackageId>Orleans.Lattice.Explorer.Web</PackageId>
-    <Version>9.4.0</Version>
+    <Version>9.4.1</Version>
     <Description>Opt-in embeddable hosting library for the Orleans.Lattice Explorer Blazor Server web head. AddLatticeExplorerWeb(...) registers the Razor components, shared explorer UI, state-API connection seam, configuration and capability stores, the Backups, Access, and Schema areas, and the cookie / data-protection auth plumbing; MapLatticeExplorer(...) maps the interactive server components, static assets, and server-side sign-in / sign-out endpoints under a configurable base path so a consumer can co-host the read-only explorer inside their own ASP.NET app.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
