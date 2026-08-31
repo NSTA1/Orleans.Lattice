@@ -2520,6 +2520,15 @@ public class LatticeOptions
     /// has measured headroom can raise it. Consolidations of overlapping
     /// donor/survivor pairs are refused regardless of this value.
     /// </para>
+    /// <para>
+    /// <b>Set to <c>0</c> to admit no consolidation at all.</b> That is the
+    /// supported way to switch automated shard healing off without removing
+    /// the driver, and it is a legal value rather than a rejected one. A
+    /// negative value is rejected at startup by
+    /// <c>LatticeOptionsValidator</c>. This cap is enforced by the healing
+    /// driver that schedules folds, not by the consolidation coordinator
+    /// itself, which owns only the correctness of a single fold.
+    /// </para>
     /// </summary>
     public int MaxConcurrentShardConsolidations { get; set; } = DefaultMaxConcurrentShardConsolidations;
 

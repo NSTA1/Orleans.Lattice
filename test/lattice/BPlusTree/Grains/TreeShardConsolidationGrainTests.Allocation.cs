@@ -14,12 +14,23 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// pressure on exactly the loaded deployment consolidation exists to heal.
 /// </para>
 /// <para>
-/// The measurement is comparative rather than absolute, so it does not depend
-/// on the allocation profile of the surrounding test harness or on GC timing:
-/// two drains that differ only in how many entries the donor hands over -
-/// with the batch large enough that both flush exactly once - must cost
-/// essentially the same. A per-entry allocation would make the wide drain cost
-/// hundreds of times more.
+/// <b>The measurement is differential, never absolute.</b> An
+/// <c>Assert.That(allocated, Is.Zero)</c> against a single window passes in
+/// isolation and fails in a larger batch, because tiered JIT and on-stack
+/// replacement can land inside the measured window and whether they do depends
+/// on what the shared test host already compiled - so an unrelated sibling's
+/// tests flip the result. Instead, two drains that differ only in how many
+/// entries the donor hands over must cost essentially the same: a one-off
+/// runtime cost appears in both windows and cancels, while a genuine per-entry
+/// allocation would make the wide drain cost hundreds of times more.
+/// </para>
+/// <para>
+/// <b>The counter is process-wide, not per-thread.</b> The drain awaits, and
+/// <see cref="GC.GetAllocatedBytesForCurrentThread"/> is meaningless across an
+/// await because the continuation can resume on a different thread - it can
+/// even report a large negative delta. <see cref="GC.GetTotalAllocatedBytes"/>
+/// with <c>precise: true</c> is stable across thread migration, which is what
+/// this path requires.
 /// </para>
 /// </summary>
 public partial class TreeShardConsolidationGrainTests
@@ -27,9 +38,12 @@ public partial class TreeShardConsolidationGrainTests
     /// <summary>
     /// Slack allowed between the narrow and wide drains. A genuine per-entry
     /// allocation of even a single small object would add roughly two orders of
-    /// magnitude more than this across the extra entries.
+    /// magnitude more than this across the extra entries. The allowance exists
+    /// only to absorb process-wide noise, because
+    /// <see cref="GC.GetTotalAllocatedBytes"/> observes the whole process
+    /// rather than this test's thread.
     /// </summary>
-    private const long DrainAllocationSlackBytes = 8 * 1024;
+    private const long DrainAllocationSlackBytes = 64 * 1024;
 
     private static Dictionary<string, LwwValue<byte[]>> WideEntries(int count)
     {
@@ -73,9 +87,9 @@ public partial class TreeShardConsolidationGrainTests
             leafEntries: [entries],
             options: options);
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetTotalAllocatedBytes(precise: true);
         await measured.Grain.DrainAsync();
-        var after = GC.GetAllocatedBytesForCurrentThread();
+        var after = GC.GetTotalAllocatedBytes(precise: true);
 
         Assert.That(measured.State.State.EntriesDrained, Is.EqualTo(entryCount),
             "The measured drain must actually have forwarded every entry.");
@@ -126,9 +140,9 @@ public partial class TreeShardConsolidationGrainTests
                 existingState: InFlightState(ShardConsolidationPhase.Drain),
                 leafEntries: [entries], options: options);
 
-            var before = GC.GetAllocatedBytesForCurrentThread();
+            var before = GC.GetTotalAllocatedBytes(precise: true);
             await measured.Grain.DrainAsync();
-            return GC.GetAllocatedBytesForCurrentThread() - before;
+            return GC.GetTotalAllocatedBytes(precise: true) - before;
         }
 
         // A single flush at capacity 2048 versus 32 flushes at capacity 64.
