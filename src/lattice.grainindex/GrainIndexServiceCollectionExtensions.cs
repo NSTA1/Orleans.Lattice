@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
+using Orleans.Lattice.GrainIndex.Backfill;
 using Orleans.Lattice.GrainIndex.Enrollment;
 using Orleans.Lattice.GrainIndex.Registry;
 using Orleans.Lattice.GrainIndex.Query;
@@ -111,6 +112,94 @@ public static class GrainIndexServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, GrainIndexOutboxHostedService>());
 
+        // The background backfill. Registered after the registry reconciler so
+        // its start-up pass sees the needs-backfill flag that reconciliation
+        // raises, and idempotently so a silo declaring several indexes wires it
+        // once.
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IGrainIndexBackfillStore, GrainIndexBackfillStore>();
+        services.TryAddSingleton<IGrainIndexBackfillActivator, GrainIndexBackfillActivator>();
+        services.TryAddSingleton<IGrainKeySourceResolver, GrainKeySourceResolver>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexBackfillHostedService>());
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="IGrainKeySource"/> that describes the grain
+    /// population the index named <paramref name="indexName"/> backfills, as a
+    /// singleton resolved from the container.
+    /// <para>Example:</para>
+    /// <code>
+    /// silo.AddGrainIndexKeySource&lt;UserKeySource&gt;("users");
+    /// </code>
+    /// </summary>
+    /// <remarks>
+    /// Without a key source an index is still perfectly usable: every grain that
+    /// activates indexes itself. What the source adds is the crawl that onboards
+    /// grains which existed before the index did and never activate on their own.
+    /// </remarks>
+    /// <typeparam name="TSource">The key source implementation.</typeparam>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index the source describes. Must not be <c>null</c>, empty, or white space.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder AddGrainIndexKeySource<TSource>(this ISiloBuilder builder, string indexName)
+        where TSource : class, IGrainKeySource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+
+        builder.Services.AddKeyedSingleton<IGrainKeySource, TSource>(indexName);
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers an already-constructed <see cref="IGrainKeySource"/> for the
+    /// index named <paramref name="indexName"/>.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index the source describes. Must not be <c>null</c>, empty, or white space.</param>
+    /// <param name="source">The key source. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder AddGrainIndexKeySource(
+        this ISiloBuilder builder,
+        string indexName,
+        IGrainKeySource source)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        ArgumentNullException.ThrowIfNull(source);
+
+        builder.Services.AddKeyedSingleton(indexName, source);
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IGrainKeySource"/> for the index named
+    /// <paramref name="indexName"/>, built from the container when it is first
+    /// needed.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index the source describes. Must not be <c>null</c>, empty, or white space.</param>
+    /// <param name="factory">Builds the key source. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder AddGrainIndexKeySource(
+        this ISiloBuilder builder,
+        string indexName,
+        Func<IServiceProvider, IGrainKeySource> factory)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        ArgumentNullException.ThrowIfNull(factory);
+
+        builder.Services.AddKeyedSingleton<IGrainKeySource>(indexName, (services, _) => factory(services));
         return builder;
     }
 
