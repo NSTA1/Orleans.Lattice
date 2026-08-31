@@ -3,7 +3,10 @@
 Allocation-lean **approximate nearest-neighbour** index over dense `float`
 vectors, for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
 
-The package has no Orleans dependency and can be used standalone.
+The algorithmic core in the `Orleans.Lattice.Vector` namespace has no Orleans
+dependency and can be used standalone. The `Orleans.Lattice.Vector.Persistence`
+namespace adds `DurableVectorIndex`, which persists that index on a Lattice tree;
+it is the only part of the package bound to Orleans.
 
 ## Why
 
@@ -63,7 +66,57 @@ correct and exact.
   `System.Numerics.Tensors.TensorPrimitives`, which dispatches to the widest SIMD
   width the hardware offers.
 
-## Persistence seam
+## Persisting it: `DurableVectorIndex`
+
+An index that has to be rebuilt on every activation just relocates the cost it
+exists to remove. `DurableVectorIndex` persists the index on a Lattice tree,
+maintains it in place as vectors are written and retired, builds it in the
+background when it does not yet exist, and rebuilds it rather than trusting it
+when what was persisted cannot be verified.
+
+```csharp
+var index = await DurableVectorIndex.OpenAsync(
+    new LatticeVectorIndexStore(tree), source, options);
+
+await index.BuildStepAsync();                 // one bounded, resumable slice
+await index.UpsertAsync("doc-1", vector);     // in place, no rebuild
+await index.RemoveAsync("doc-2");             // journalled, survives a crash
+await index.FlushAsync();                     // only the cells that moved
+```
+
+At 250,000 vectors a restart costs **1.1 s to reload** against **24.8 s to
+rebuild**. Opening lazily reads only the centroids - 0.52 s - and fetches a cell
+the first time a query probes it, so the box answers in 75 ms while holding 12%
+of the corpus, and warms as it serves. The answer is identical to the fully
+resident index, because a query is scored against exactly the cells it selects.
+
+**The coherence contract.** The index is a derived projection of the store of
+record, which is authoritative.
+
+- A retired vector never appears in a result, before or after a restart: a
+  removal writes a durable tombstone before it is applied and drops it only once
+  the removal is durable, so a crash mid-deletion completes the deletion rather
+  than resurrecting the vector.
+- The index may lag the source only in the *missing* direction, which costs
+  recall and never correctness. Outstanding work is reported by `Progress`.
+- Every inconsistency is resolved by discarding index state and recomputing.
+  Nothing here ever writes to a store of record - that asymmetry is what makes
+  throwing the index away always safe.
+- Persisted state is admitted only if its manifest, every record checksum, every
+  partition's chunk set, and its declared vector count all agree. A truncated,
+  corrupt, incomplete, or version-incompatible index is rebuilt, never partly
+  served.
+- Every search reports its mode. Before the partitioning exists the index answers
+  by exhaustive scan, which is *exact* - slower, not worse - and must be surfaced
+  as warming up, never as an error.
+
+**Drift.** Incremental maintenance keeps the index correct indefinitely, but it
+cannot keep the cells descriptive once the corpus moves away from the
+distribution they were trained on. `UpdatesSinceTraining` is the signal;
+`RetrainAsync` is the repair, and it re-reads nothing because the corpus is
+already resident.
+
+## The chunking seam underneath
 
 `CreateSnapshot(maxItemsPerChunk)` produces a bounded, version-stamped chunk plan
 - never a single unbounded record. Centroid chunks come first, so a reader that
@@ -110,6 +163,6 @@ answering by full scan before it was trained, so the comparison is like for like
 The speedup **grows with the corpus**, which is the whole point: exhaustive
 latency is proportional to the corpus and approximate latency is not.
 
-Full tables - the probe dial against recall, the churn cycle, and the
-per-operation allocation audit - are in `test/lattice.vector/MEASUREMENTS.md` in
-the repository.
+Full tables - the probe dial against recall, the churn cycle, the restart and
+lazy-load sweep, and the per-operation allocation audit - are in
+`test/lattice.vector/MEASUREMENTS.md` in the repository.

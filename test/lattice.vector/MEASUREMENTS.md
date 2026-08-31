@@ -175,3 +175,116 @@ the steady state rather than JIT and array-pool priming.
 The training figure is the meaningful one: at 1.01x the retained cell blocks,
 essentially every scratch buffer the k-means pass uses came from
 `ArrayPool<T>.Shared` rather than the heap.
+
+## The durable index
+
+Everything below is about `DurableVectorIndex`, which persists the index of the
+sections above on a Lattice tree, maintains it in place, and rebuilds it rather
+than trusting it when what was persisted cannot be verified.
+
+`Benchmarks/DurableVectorIndexLoadBenchmarkTests` produces the timing figures,
+gated on the same `LATTICE_VECTOR_BENCH` variable. The recall and allocation
+figures are asserted in the ordinary unit lane, so they cannot drift away from
+the code.
+
+### Restart cost
+
+384 dimensions, clustered corpus, chunks of at most 1,024 vectors, measured over
+an in-memory store so the figures isolate the index's own work from a particular
+backing store's latency.
+
+| vectors | partitions | build s | full load s | lazy open s | first lazy query ms | resident after one query | resident MB | persisted MB | records | persisted bytes/vector |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 10,000 | 100 | 0.92 | 0.10 | 0.045 | 14.3 | 31.9% | 15 | 15 | 10,203 | 1,592 |
+| 50,000 | 224 | 2.74 | 0.17 | 0.117 | 20.7 | 25.9% | 74 | 75 | 50,451 | 1,583 |
+| 100,000 | 316 | 9.90 | 0.62 | 0.205 | 48.6 | 21.4% | 148 | 151 | 100,635 | 1,581 |
+| 250,000 | 500 | 24.79 | 1.10 | 0.524 | 74.7 | 12.0% | 370 | 377 | 251,017 | 1,579 |
+
+The point of the whole exercise is the gap between the second and third columns:
+at 250,000 vectors a restart costs **1.1 seconds to reload** against **24.8
+seconds to rebuild**, a factor of 23, and the gap widens with the corpus because
+building is dominated by a training pass that loading does not repeat.
+
+Persisted size tracks resident size almost exactly - 1,579 bytes per vector at
+384 dimensions against 1,549 in memory - because a chunk stores the vector and
+its key and nothing else. The record count is the corpus divided by the chunk
+size, plus one commit record per partition, so no single record grows with the
+corpus.
+
+### Lazy load
+
+A lazy open reads only the centroids, then fetches a cell the first time a query
+actually probes it. At 250,000 vectors that is **0.52 s to open** and **75 ms for
+the first query**, after which the box holds **12% of the corpus** and every
+subsequent query over the same cells needs no store access at all. The resident
+fraction falls as the corpus grows because the probe count grows with the square
+root of the partition count rather than in proportion to it.
+
+The answer is identical to the fully resident index, not merely close to it:
+a query is scored against exactly the cells it selects, so fetching only those
+cannot change the ranking. `DurableVectorIndexLazyLoadTests` asserts equality
+across a sweep of queries.
+
+### Incremental maintenance
+
+Recall is measured against brute force over the corpus **as it stands after the
+churn**, so a partitioning that had stopped describing its own data would show up
+rather than being masked by the corpus it was trained on.
+
+| workload | recall@10 floor | measured |
+|---|---|---|
+| Clustered, after 20% re-embedded, 10% retired, 10% added | 0.95 | **0.9975** |
+| Unclustered, same workload | 0.55 | **0.7875** |
+
+The cost of a flush is proportional to what moved, not to the corpus. Across 45
+partitions a flush with nothing dirty costs **1 write** (the manifest alone) and
+a flush after a single update costs **7**.
+
+### Distribution drift, and why it needs a signal rather than an error
+
+Incremental maintenance keeps the index *correct* indefinitely: every vector sits
+in the cell nearest to it among the trained centroids, and nothing stale is ever
+returned. What it cannot do is keep the cells *descriptive* once the corpus moves
+away from the distribution they were trained on. Replacing a fifth of a 3,000
+vector corpus with vectors drawn around an entirely different set of cluster
+centres drops recall@10 from 1.000 to **0.875** - with every individual record
+still perfectly valid, which is exactly why the loss is quiet.
+
+`RetrainAsync` is the repair, and it restores recall to **1.000**. It re-reads
+nothing, because the corpus is already resident, so it costs a training pass and
+one rewrite rather than a pass over the store of record:
+
+| vectors | partitions | retrain s | flush after 100 scattered updates ms | writes |
+|---|---|---|---|---|
+| 50,000 | 224 | 2.50 | 510 | 214 |
+| 250,000 | 500 | 25.34 | 4,259 | 238 |
+
+The second column of that table is the honest cost of scattered updates: the unit
+of persistence is one cell, so 100 updates landing in 100 different cells rewrite
+100 cells. A maintenance loop that batches its updates before flushing pays for
+the distinct cells it touched, not for the updates it applied.
+
+`UpdatesSinceTraining` is the signal a host watches to decide when to retrain; a
+quarter of the corpus is a reasonable threshold.
+
+### Allocation
+
+Asserted by `Persistence/DurableVectorIndexAllocationTests`, differentially: each
+path runs at two loop sizes after a warm-up and the assertion is on the growth,
+so a one-off tiered-JIT or pool-priming cost appears in both figures and cancels.
+A battery test in the same fixture proves the probe can detect a loop that does
+allocate.
+
+| path | allocated |
+|---|---|
+| Search, 2,000 queries | **0 bytes** |
+| Resolving a result identifier, 2,000 calls | **0 bytes** |
+| Looking up a key by identifier, 2,000 calls | **0 bytes** |
+| Re-embedding a known identifier, 1,000 updates | **0 bytes** |
+| A flush with nothing dirty | under 2 KB per flush |
+| A warm lazy search | under 512 bytes per query |
+| Loading a 2,000 vector index | under 6x the cells it retains |
+
+The re-embed figure is the one that matters for a maintenance loop: an identifier
+that is already mapped needs neither a store round trip nor a dictionary
+insertion, so the update is a synchronous span copy and costs nothing at all.
