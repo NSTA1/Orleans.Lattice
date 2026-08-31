@@ -69,7 +69,11 @@ public sealed class LatticeAtomicWriteBuilder
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         var slice = Current();
-        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, value));
+        // Defensively copy the caller-owned buffer on ingress: the builder holds
+        // staged entries until CommitAsync, so aliasing the caller's array would
+        // let a mutation made after staging but before commit corrupt the
+        // committed payload.
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, (byte[])value.Clone()));
         slice.EntryDeltas.Add(null);
         slice.EntryDeletes.Add(false);
         return this;
@@ -107,8 +111,11 @@ public sealed class LatticeAtomicWriteBuilder
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(delta);
         var slice = Current();
-        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, value));
-        slice.EntryDeltas.Add(delta);
+        // Defensively copy both caller-owned buffers on ingress (see Set): the
+        // staged value and delta outlive this call, so aliasing them would let a
+        // post-stage mutation reach the committed batch.
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(key, (byte[])value.Clone()));
+        slice.EntryDeltas.Add((byte[])delta.Clone());
         slice.EntryDeletes.Add(false);
         return this;
     }
@@ -132,8 +139,11 @@ public sealed class LatticeAtomicWriteBuilder
         ArgumentNullException.ThrowIfNull(staged.Value);
         ArgumentNullException.ThrowIfNull(staged.Delta);
         var slice = Current();
-        slice.Entries.Add(new KeyValuePair<string, byte[]>(staged.Key, staged.Value));
-        slice.EntryDeltas.Add(staged.Delta);
+        // Defensively copy both staged buffers on ingress (see Set): the token's
+        // arrays are caller-reachable, so aliasing them would let a post-stage
+        // mutation reach the committed batch.
+        slice.Entries.Add(new KeyValuePair<string, byte[]>(staged.Key, (byte[])staged.Value.Clone()));
+        slice.EntryDeltas.Add((byte[])staged.Delta.Clone());
         slice.EntryDeletes.Add(false);
         return this;
     }
