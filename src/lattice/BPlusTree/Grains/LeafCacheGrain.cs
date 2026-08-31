@@ -632,6 +632,24 @@ internal sealed class LeafCacheGrain(
                 }
             }
         }
+        else if (delta.MovedAwayVsc is int liftedVsc && liftedVsc > 0
+                 && _movedAwaySlots is { Length: > 0 })
+        {
+            // Seal lift. The primary leaf still reports a slot-space stamp but
+            // no sealed slot at all - the one shape only
+            // BPlusLeafGrain.UnmarkSlotsMovedAwayAsync produces, when an online
+            // consolidation folds virtual slots back onto this shard. A leaf
+            // that never sealed anything carries no stamp either, so an
+            // ordinary refresh can never trip this branch.
+            //
+            // Without it the cache would keep throwing
+            // StaleShardRoutingException at keys the shard has legitimately
+            // reclaimed, and every reader would ping-pong between a routing
+            // map that says "this shard" and a cache that says "the retired
+            // one" - the reclaimed keys would be permanently unreachable.
+            _movedAwaySlots = null;
+            _movedAwayVsc = 0;
+        }
 
         // Stamp the pre-fetch cookie so subsequent same-silo reads can
         // short-circuit when no further state has accumulated. If the
