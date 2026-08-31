@@ -257,18 +257,42 @@ first successful answer it keeps re-asking for up to `SemanticRetryBudgetSec`
 so "never became semantic" is a recorded fact rather than an artefact of having
 stopped asking.
 
-### Run it on a quiet box
+### Run it on a quiet box - but do not quieten it by hand
 
 Cold start here is CPU-bound and the measured window is tens of seconds, so
 other containers competing for cores widen the run-to-run spread and can be
 enough on their own to push the cold semantic path past its internal timeout.
-Stop unrelated stacks before a cohort you intend to attribute a change to, and
-always read `firstQueryRelativeSpreadPct` before believing a delta.
+Always read `firstQueryRelativeSpreadPct` before believing a delta.
 
-The rig does not merely warn about this - it **records** it. Every cohort
-carries a `hostContext` block naming the unrelated containers that were running,
-so a spread taken under contention is visibly the host's floor rather than the
-rig's, and `run-cohort.ps1` prints a note when it detects any.
+The rig does not merely warn about this - it **records** it. Every cohort carries
+a `hostContext` block naming the unrelated containers that were running, so a
+spread taken under contention is visibly the host's floor rather than the rig's,
+and `run-cohort.ps1` prints a note when it detects any.
+
+**A contended cohort is reported, not fixed.** If unrelated containers are
+running, record the cohort as contended and attribute nothing smaller than its
+spread. In particular:
+
+> **Never stop the live RepoContext deployment to quiet the host.** It is the
+> single biggest CPU competitor on a developer box, because it self-indexes
+> continuously, which makes it exactly the thing an operator is tempted to stop
+> after reading a wide spread. Do not. It is out of scope for every measurement
+> this rig takes (decision D11 puts the live deployment beyond reach), stopping
+> it is an unguarded action the rig cannot supervise, and a number bought that
+> way is not reproducible by anyone who did not also stop it.
+
+This is a real gap that bit during S14 (#1844), and it is worth naming precisely
+so the wrong lesson is not drawn from it. The isolation guard governs what the
+**rig** does: `Invoke-RigCompose` scopes every invocation to `-p lattice-coldstart`
+against the rig's own compose file and runs `Assert-RigIsolation` first, there is
+no prune anywhere, and `rig.ps1 clean` routes every removal through the volume
+name guard. None of that was bypassed. What happened instead is that the rig's
+own contention advice - "stop them before attributing a delta" - pointed at an
+action outside the rig, and the operator took it manually. So the guard was
+intact and the **advice** was the hazard. It now says the opposite.
+
+If a genuinely quiet host is required, take the cohort when the box is otherwise
+idle, rather than making it idle.
 
 ## Offline state census
 
