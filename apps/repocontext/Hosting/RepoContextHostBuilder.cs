@@ -189,12 +189,25 @@ public static class RepoContextHostBuilder
         // Warmup + graceful-drain coordinator (flips readiness).
         builder.Services.AddHostedService<RepoContextStartupService>();
 
+        // Vector-plane warmup driver: issues the first semantic query itself so the
+        // retrieval readiness component reports demonstrated capability instead of
+        // waiting for traffic an orchestrator will not route to a not-ready box.
+        builder.Services.AddHostedService<RepoContextRetrievalWarmupService>();
+
         var healthChecks = builder.Services.AddHealthChecks();
         healthChecks.AddCheck<RepoContextLivenessHealthCheck>(
             RepoContextLivenessHealthCheck.Name,
             tags: new[] { LivenessTag });
         healthChecks.AddCheck<RepoContextReadinessHealthCheck>(
             RepoContextReadinessHealthCheck.Name,
+            tags: new[] { ReadinessTag });
+
+        // The vector-plane component of readiness. Tagged 'ready' so /health/ready is
+        // the conjunction of lifecycle phase and retrieval capability: a box that
+        // cannot serve a semantic query does not report ready. Liveness is untagged by
+        // it on purpose - a replaying box is alive and must not be restarted.
+        healthChecks.AddCheck<RepoContextRetrievalReadinessHealthCheck>(
+            RepoContextRetrievalReadinessHealthCheck.Name,
             tags: new[] { ReadinessTag });
         if (isAzure)
         {
