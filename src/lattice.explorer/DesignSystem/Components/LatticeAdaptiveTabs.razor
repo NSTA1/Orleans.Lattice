@@ -26,7 +26,7 @@
     <div class="lx-tabstrip"
          role="tablist"
          aria-label="@Label"
-         aria-orientation="horizontal"
+         aria-orientation="@_ariaOrientation"
          @onkeydown="OnKeyDownAsync">
         @for (var i = 0; i < _tabs.Count; i++)
         {
@@ -132,6 +132,13 @@
     private const string SegmentedHostClass = "lx-tabstrip-host lx-tabstrip-segmented";
     private const string SubordinateHostClass =
         "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-subordinate";
+    private const string VerticalUnderlinedHostClass = "lx-tabstrip-host lx-tabstrip-vertical";
+    private const string VerticalSegmentedHostClass =
+        "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-vertical";
+    private const string VerticalSubordinateHostClass =
+        "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-subordinate lx-tabstrip-vertical";
+    private const string HorizontalOrientation = "horizontal";
+    private const string VerticalOrientation = "vertical";
 
     private static readonly IReadOnlyList<LatticeTabItem> NoTabs = Array.Empty<LatticeTabItem>();
 
@@ -151,7 +158,9 @@
     private string _overflowMenuElementId = string.Empty;
     private string _overflowToggleElementId = string.Empty;
     private string _hostClass = UnderlinedHostClass;
+    private string _ariaOrientation = HorizontalOrientation;
     private LatticeTabsVariant? _hostClassVariant;
+    private LatticeTabsOrientation? _hostClassOrientation;
     private string? _hostClassSuffix;
     private LatticeStripMetrics _metrics = LatticeStripMetrics.Default;
     private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
@@ -191,6 +200,20 @@
     [Parameter] public LatticeTabsVariant Variant { get; set; }
 
     /// <summary>
+    /// The axis the strip runs along. Defaults to
+    /// <see cref="LatticeTabsOrientation.Horizontal"/>; choose
+    /// <see cref="LatticeTabsOrientation.Vertical"/> for a rail beside its
+    /// panel.
+    /// </summary>
+    /// <remarks>
+    /// The axis is published as <c>aria-orientation</c> and decides which arrow
+    /// keys move between tabs, per the WAI-ARIA tabs pattern. A vertical strip
+    /// also renders every tab inline and scrolls rather than overflowing, which
+    /// is what a rail does; pin <see cref="InlineCapacity"/> to override that.
+    /// </remarks>
+    [Parameter] public LatticeTabsOrientation Orientation { get; set; }
+
+    /// <summary>
     /// Pins the breakpoint this strip renders for, overriding the cascaded
     /// shell context. Leave <see langword="null"/> - the intended path - to
     /// follow <see cref="LatticeAdaptiveRoot"/>; set it when a surface knows it
@@ -223,6 +246,8 @@
     /// cascaded viewport width, or the breakpoint's nominal width when the head
     /// reports a band rather than a width. Set it when the strip occupies a
     /// pane whose width the caller knows and the viewport's does not describe.
+    /// Ignored by a <see cref="LatticeTabsOrientation.Vertical"/> strip, which
+    /// scrolls rather than overflowing.
     /// </summary>
     [Parameter] public double? AvailableWidth { get; set; }
 
@@ -291,12 +316,20 @@
 
     private string TabElementId(string tabId) => ElementIdPrefix + "-tab-" + tabId;
 
-    private static string VariantHostClass(LatticeTabsVariant variant) => variant switch
-    {
-        LatticeTabsVariant.Segmented => SegmentedHostClass,
-        LatticeTabsVariant.Subordinate => SubordinateHostClass,
-        _ => UnderlinedHostClass,
-    };
+    private static string VariantHostClass(LatticeTabsVariant variant, LatticeTabsOrientation orientation) =>
+        orientation == LatticeTabsOrientation.Vertical
+            ? variant switch
+            {
+                LatticeTabsVariant.Segmented => VerticalSegmentedHostClass,
+                LatticeTabsVariant.Subordinate => VerticalSubordinateHostClass,
+                _ => VerticalUnderlinedHostClass,
+            }
+            : variant switch
+            {
+                LatticeTabsVariant.Segmented => SegmentedHostClass,
+                LatticeTabsVariant.Subordinate => SubordinateHostClass,
+                _ => UnderlinedHostClass,
+            };
 
     private static LatticeStripMetrics VariantMetrics(LatticeTabsVariant variant) =>
         variant == LatticeTabsVariant.Underlined
@@ -307,15 +340,18 @@
     // re-render caused by a selection costs no string concatenation.
     private void RebuildHostClass()
     {
-        if (_hostClassVariant == Variant && string.Equals(_hostClassSuffix, Class, StringComparison.Ordinal))
+        if (_hostClassVariant == Variant
+            && _hostClassOrientation == Orientation
+            && string.Equals(_hostClassSuffix, Class, StringComparison.Ordinal))
         {
             return;
         }
 
         _hostClassVariant = Variant;
+        _hostClassOrientation = Orientation;
         _hostClassSuffix = Class;
 
-        var variantClass = VariantHostClass(Variant);
+        var variantClass = VariantHostClass(Variant, Orientation);
         _hostClass = string.IsNullOrEmpty(Class) ? variantClass : variantClass + " " + Class;
     }
 
@@ -381,6 +417,10 @@
         RebuildHostClass();
         RebuildElementIds();
 
+        _ariaOrientation = Orientation == LatticeTabsOrientation.Vertical
+            ? VerticalOrientation
+            : HorizontalOrientation;
+
         _activeIndex = IndexOfActive();
         _layout = LatticeOverflowLayout.Resolve(_tabs.Count, _activeIndex, ResolveInlineCapacity());
         _rovingIndex = ResolveRovingIndex();
@@ -438,6 +478,16 @@
         if (InlineCapacity is int pinned)
         {
             return pinned;
+        }
+
+        // A rail scrolls rather than collapsing into a menu, so a vertical
+        // strip renders every tab. This is the same reasoning that gives the
+        // navigation primitive's vertical shapes an unbounded capacity: the
+        // constraint on a column is height, and a column that runs past its
+        // container is scrolled to, not hidden behind a "More".
+        if (Orientation == LatticeTabsOrientation.Vertical)
+        {
+            return _tabs.Count;
         }
 
         return LatticeTabCapacity.Measure(_tabs, ResolveAvailableWidth(), _metrics);
@@ -538,11 +588,9 @@
     {
         var target = args.Key switch
         {
-            "ArrowRight" or "Right" => NextEnabled(1),
-            "ArrowLeft" or "Left" => NextEnabled(-1),
             "Home" => FirstEnabled(),
             "End" => LastEnabled(),
-            _ => -1,
+            _ => ArrowTarget(args.Key),
         };
 
         if (target < 0 || target == _activeIndex)
@@ -553,6 +601,25 @@
         _restoreFocusToActiveTab = true;
         return SelectAsync(_tabs[target]);
     }
+
+    // The tabs pattern binds the arrow pair to the strip's axis: a horizontal
+    // strip moves on Left and Right, a vertical one on Up and Down. Binding
+    // both pairs in both axes would swallow the keys the surrounding page uses
+    // to scroll.
+    private int ArrowTarget(string? key) =>
+        Orientation == LatticeTabsOrientation.Vertical
+            ? key switch
+            {
+                "ArrowDown" or "Down" => NextEnabled(1),
+                "ArrowUp" or "Up" => NextEnabled(-1),
+                _ => -1,
+            }
+            : key switch
+            {
+                "ArrowRight" or "Right" => NextEnabled(1),
+                "ArrowLeft" or "Left" => NextEnabled(-1),
+                _ => -1,
+            };
 
     // Walks outward from the current tab in `step` direction, wrapping once, and
     // returns the first enabled tab. Bounded by the tab count, so a strip of
