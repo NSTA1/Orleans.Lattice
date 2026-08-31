@@ -550,3 +550,57 @@
     gap: var(--lx-space-4);
     margin-top: var(--lx-space-6);
 }
+
+/* ==========================================================================
+   Sub-surface strip and its panel
+
+   The strip itself is the design system's tab primitive in its subordinate
+   variant, so it needs no colour or border here: this only places it and the
+   panel it controls in the area's column flow.
+   ========================================================================== */
+
+.lx-schema-surfaces {
+    flex: 0 0 auto;
+}
+
+.lx-schema-surface {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--lx-space-4);
+    min-width: 0;
+}
+
+
+/* ==========================================================================
+   "Nothing to show" block
+
+   One shape for every state the shared vocabulary produces: what happened,
+   then what to do about it. Named apart from `.lx-schema-state`, which the
+   tree selector already owns for its own inline notices. The remedy is set
+   apart by weight and spacing rather than by hue, so it survives a
+   forced-colours palette.
+   ========================================================================== */
+
+.lx-schema-notice {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    padding: var(--lx-space-4);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+    color: var(--lx-color-text);
+}
+
+.lx-schema-notice-headline {
+    margin: 0;
+    font-size: var(--lx-text-body);
+}
+
+.lx-schema-notice-explanation,
+.lx-schema-notice-remedy {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}

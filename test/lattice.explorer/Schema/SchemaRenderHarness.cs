@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Session;
 using NSubstitute;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
@@ -93,6 +94,12 @@ internal static class SchemaRenderHarness
 
         var services = new ServiceCollection();
         services.AddLogging();
+        
+        // The shell-state contract the panel remembers and addresses its open
+        // surface on. Registered as the real thing: the route model is a pure
+        // in-memory type and the preference store falls back to an in-memory
+        // backing store, so nothing here reaches a browser.
+        services.AddExplorerSession();
         services.AddSingleton(factory);
         services.AddSingleton<IExplorerPluginAccessStore>(store);
 
@@ -139,6 +146,12 @@ internal static class SchemaRenderHarness
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        
+        // The shell-state contract the panel remembers and addresses its open
+        // surface on. Registered as the real thing: the route model is a pure
+        // in-memory type and the preference store falls back to an in-memory
+        // backing store, so nothing here reaches a browser.
+        services.AddExplorerSession();
 
         await using var provider = services.BuildServiceProvider();
         var loggerFactory = provider.GetRequiredService<ILoggerFactory>();

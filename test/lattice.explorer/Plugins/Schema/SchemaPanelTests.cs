@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.DesignSystem.Components;
+using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema.Components;
 using Orleans.Lattice.Explorer.Schema.Domain;
@@ -11,31 +13,65 @@ using Orleans.Lattice.Explorer.Schema;
 namespace Orleans.Lattice.Explorer.Tests.Plugins.Schema;
 
 /// <summary>
-/// The Schema area's shell component: the sub-tab strip, the plugin-level gate,
-/// and the delegation of each concern to its own component.
+/// The Schema area's shell component: the sub-surface strip, the plugin-level
+/// gate, and the delegation of each concern to its own component.
 /// <para>
 /// Every transition is driven explicitly on the renderer's dispatcher and every
 /// domain call answers synchronously, so nothing here depends on timing,
 /// ordering, or a wall clock.
 /// </para>
 /// </summary>
+/// <remarks>
+/// The strip is the design system's shared tab primitive rather than markup
+/// this panel owns (issue #1857), so a surface transition is driven through the
+/// panel's own <see cref="SchemaPanel.SelectSurfaceAsync"/> - which is what the
+/// strip invokes - instead of by clicking a button in the panel's own render
+/// tree. Asserting on the primitive's internals here would be testing the
+/// primitive, which has its own tests.
+/// </remarks>
 [TestFixture]
 public sealed class SchemaPanelTests
 {
     [Test]
-    public async Task The_panel_renders_three_sub_tabs_with_policy_active()
+    public async Task The_panel_renders_three_sub_surfaces_with_policy_active()
+    {
+        using var harness = SchemaComponentHarness.Create();
+        harness.Allow();
+
+        var (id, panel) = await harness.RenderWithInstanceAsync<SchemaPanel>();
+        var strip = harness.Renderer.FindComponent<LatticeAdaptiveTabs>(id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(strip, Is.Not.Null, "the area offers its surfaces through the shared primitive");
+            Assert.That(
+                strip!.Value.Component.Tabs?.Select(t => t.Label),
+                Is.EqualTo(new[] { "Policy", "Versions", "Dead letters" }));
+            Assert.That(strip.Value.Component.ActiveId, Is.EqualTo(SchemaSurfaces.Policy));
+            Assert.That(panel.ActiveSurfaceId, Is.EqualTo(SchemaSurfaces.Policy));
+        });
+    }
+
+    [Test]
+    public async Task The_sub_surface_strip_is_the_subordinate_variant_the_shell_reserves_for_a_plugin()
     {
         using var harness = SchemaComponentHarness.Create();
         harness.Allow();
 
         var id = await harness.RenderAsync<SchemaPanel>();
-        var tabs = harness.Renderer.Buttons(id);
+        var strip = harness.Renderer.FindComponent<LatticeAdaptiveTabs>(id);
 
         Assert.Multiple(() =>
         {
-            Assert.That(tabs.Select(t => t.Text), Is.EqualTo(new[] { "Policy", "Versions", "Dead letters" }));
-            Assert.That(tabs[0].IsActive, Is.True);
-            Assert.That(tabs[1].IsActive, Is.False);
+            Assert.That(strip, Is.Not.Null);
+            Assert.That(
+                strip!.Value.Component.Variant,
+                Is.EqualTo(LatticeTabsVariant.Subordinate),
+                "a plugin's own surfaces must not read as a fourth peer strip");
+            Assert.That(
+                strip.Value.Component.PanelId,
+                Is.EqualTo(SchemaSurfaces.PanelElementId),
+                "a tab that controls nothing leaves a screen-reader caller nowhere to move into");
         });
     }
 
@@ -119,53 +155,76 @@ public sealed class SchemaPanelTests
 
         Assert.That(
             harness.Renderer.ChildComponents(id).Select(c => c.GetType()),
-            Is.EqualTo(new[] { typeof(SchemaTreeSelector), typeof(SchemaPolicyTab) }));
+            Does.Contain(typeof(SchemaTreeSelector)).And.Contain(typeof(SchemaPolicyTab)));
     }
 
     [Test]
-    public async Task Activating_a_sub_tab_swaps_the_concern_component()
+    public async Task Activating_a_sub_surface_swaps_the_concern_component()
     {
         using var harness = SchemaComponentHarness.Create();
         harness.Allow();
-        var id = await harness.RenderAsync<SchemaPanel>();
+        var (id, panel) = await harness.RenderWithInstanceAsync<SchemaPanel>();
 
-        await harness.Renderer.ClickAsync(harness.Renderer.Buttons(id)[1].ClickHandlerId);
+        await harness.Renderer.Dispatcher.InvokeAsync(
+            () => panel.SelectSurfaceAsync(SchemaSurfaces.Versions));
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Renderer.Buttons(id)[1].IsActive, Is.True);
+            Assert.That(panel.ActiveSurfaceId, Is.EqualTo(SchemaSurfaces.Versions));
             Assert.That(
                 harness.Renderer.ChildComponents(id).Select(c => c.GetType()),
-                Is.EqualTo(new[] { typeof(SchemaTreeSelector), typeof(SchemaVersionsTab) }));
+                Does.Contain(typeof(SchemaVersionsTab)).And.Not.Contain(typeof(SchemaPolicyTab)));
         });
     }
 
     [Test]
-    public async Task Activating_the_dead_letters_tab_renders_the_dead_letter_concern()
+    public async Task Activating_the_dead_letters_surface_renders_the_dead_letter_concern()
     {
         using var harness = SchemaComponentHarness.Create();
         harness.Allow();
-        var id = await harness.RenderAsync<SchemaPanel>();
+        var (id, panel) = await harness.RenderWithInstanceAsync<SchemaPanel>();
 
-        await harness.Renderer.ClickAsync(harness.Renderer.Buttons(id)[2].ClickHandlerId);
+        await harness.Renderer.Dispatcher.InvokeAsync(
+            () => panel.SelectSurfaceAsync(SchemaSurfaces.DeadLetters));
 
         Assert.That(
             harness.Renderer.ChildComponents(id).Select(c => c.GetType()),
-            Is.EqualTo(new[] { typeof(SchemaTreeSelector), typeof(SchemaDeadLettersTab) }));
+            Does.Contain(typeof(SchemaDeadLettersTab)));
     }
 
     [Test]
-    public async Task Re_activating_the_open_sub_tab_is_a_no_op()
+    public async Task Re_activating_the_open_sub_surface_is_a_no_op()
     {
         using var harness = SchemaComponentHarness.Create();
         harness.Allow();
-        var id = await harness.RenderAsync<SchemaPanel>();
+        var (_, panel) = await harness.RenderWithInstanceAsync<SchemaPanel>();
 
-        await harness.Renderer.ClickAsync(harness.Renderer.Buttons(id)[0].ClickHandlerId);
+        await harness.Renderer.Dispatcher.InvokeAsync(
+            () => panel.SelectSurfaceAsync(SchemaSurfaces.Policy));
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Renderer.Buttons(id)[0].IsActive, Is.True);
+            Assert.That(panel.ActiveSurfaceId, Is.EqualTo(SchemaSurfaces.Policy));
+            Assert.That(harness.Renderer.Exceptions, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task A_surface_slug_this_area_does_not_offer_is_ignored()
+    {
+        using var harness = SchemaComponentHarness.Create();
+        harness.Allow();
+        var (_, panel) = await harness.RenderWithInstanceAsync<SchemaPanel>();
+
+        await harness.Renderer.Dispatcher.InvokeAsync(
+            () => panel.SelectSurfaceAsync("not-a-surface"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                panel.ActiveSurfaceId,
+                Is.EqualTo(SchemaSurfaces.Policy),
+                "a value that was never rendered must not open a surface");
             Assert.That(harness.Renderer.Exceptions, Is.Empty);
         });
     }
@@ -176,11 +235,13 @@ public sealed class SchemaPanelTests
         using var harness = SchemaComponentHarness.Create();
 
         var id = await harness.RenderAsync<SchemaPanel>();
+        var strip = harness.Renderer.FindComponent<LatticeAdaptiveTabs>(id);
 
         Assert.Multiple(() =>
         {
             Assert.That(harness.Renderer.Exceptions, Is.Empty);
-            Assert.That(harness.Renderer.Buttons(id), Has.Count.EqualTo(3), "the tab strip stays navigable");
+            Assert.That(strip, Is.Not.Null, "the surface strip stays navigable");
+            Assert.That(strip!.Value.Component.Tabs, Has.Count.EqualTo(3));
         });
     }
 }

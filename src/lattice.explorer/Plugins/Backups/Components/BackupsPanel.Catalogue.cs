@@ -1,5 +1,6 @@
 using System.Globalization;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Backup.Components;
 
@@ -19,10 +20,23 @@ public partial class BackupsPanel
     /// <summary>The UTC format the created column and its filter agree on.</summary>
     internal const string CreatedFormat = "yyyy-MM-dd HH:mm:ss";
 
+    /// <summary>
+    /// The grant a refused caller is missing, named as the cluster names it, so
+    /// the refusal points at the permission rather than at the area label the
+    /// caller can already see.
+    /// </summary>
+    private const string MissingBackupGrant = "Backup";
+
     private static readonly IReadOnlyList<BackupCatalogueRow> NoRows = Array.Empty<BackupCatalogueRow>();
 
     private BackupCatalogPager _pager = default!;
     private BackupCatalogSummary _summary = BackupCatalogSummary.Empty;
+
+    // The composed "nothing to show" message and the page it was composed from,
+    // so the catalogue's status prose is built when the page changes rather
+    // than on every filter keystroke.
+    private BackupListView? _stateComposedFrom;
+    private ExplorerStateMessage? _catalogueState;
 
     // The current page's backups collapsed into display rows, folding each backup
     // set's per-tree members (sharing a stamped SetId) into a single row and
@@ -115,9 +129,57 @@ public partial class BackupsPanel
     internal string FilterScope => _filterScope;
 
     /// <summary>The message shown when the current page holds no rows.</summary>
+    /// <remarks>
+    /// A filtered list and an empty one are different facts, so they are worded
+    /// differently rather than both reported as "nothing here": a caller who
+    /// narrowed the list needs to know their own filter is why, not to be told
+    /// the cluster holds no backups.
+    /// </remarks>
     internal string EmptyMessage => HasActiveFilter
         ? "No backups match the filters."
         : "No backups are visible.";
+
+    /// <summary>
+    /// What the catalogue says when it has no list to show: refused, or failed,
+    /// or <see langword="null"/> when there is a list to render.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The kind is <em>picked</em>, never defaulted. A refusal says the list is
+    /// not empty and names the grant that would open it; a failure says the read
+    /// did not complete and offers the retry. Rendering either as a bare empty
+    /// panel would tell a caller the cluster holds no backups, which in both
+    /// cases is a statement nobody has established.
+    /// </para>
+    /// <para>
+    /// Composed only when the page's status changes, not per render: the
+    /// catalogue re-renders on every filter keystroke and every page turn, and
+    /// the unparameterised copy is a frozen singleton anyway.
+    /// </para>
+    /// </remarks>
+    internal ExplorerStateMessage? CatalogueState
+    {
+        get
+        {
+            var page = _pager.Current;
+            if (ReferenceEquals(page, _stateComposedFrom))
+            {
+                return _catalogueState;
+            }
+
+            _stateComposedFrom = page;
+            _catalogueState = page.Status switch
+            {
+                BackupOperationStatus.Denied =>
+                    ExplorerStateCopy.NotPermitted(ExplorerSubjects.Backups, MissingBackupGrant),
+                BackupOperationStatus.Failed =>
+                    ExplorerStateCopy.Failed(ExplorerSubjects.Backups, page.Message),
+                _ => null,
+            };
+
+            return _catalogueState;
+        }
+    }
 
     /// <summary>Whether <paramref name="displayId"/> was created by the most recent capture.</summary>
     /// <param name="displayId">The display row id to test.</param>
@@ -286,8 +348,11 @@ public partial class BackupsPanel
             break;
         }
 
-        _activeSubTab = BackupsSubTab.Existing;
-        await _preferences.SetAsync(SubTabStateKey, _activeSubTab);
+        // Routed through the same setter the strip uses, so a capture that
+        // switches the caller to the catalogue also updates the address and the
+        // remembered surface rather than leaving both naming the form they just
+        // left.
+        await SetSubTabAsync(BackupsSubTab.Existing);
     }
 
     private HashSet<string> SnapshotRowIds()

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 
@@ -34,6 +35,12 @@ public static class ExplorerAccessServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerPluginHost();
+
+        // The shell-state contract the panel remembers its open surface on and
+        // addresses it through. Idempotent (every registration inside it is a
+        // TryAdd), so a head that already composed the session stack is not
+        // disturbed.
+        services.AddExplorerSession();
         // Scoped per Blazor circuit: the auth-admin client reads the calling
         // scope's session and sign-in, so it must not be shared across circuits.
         // GrpcAuthAdminClient owns its own Orleans serializer provider; it must not

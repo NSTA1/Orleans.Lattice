@@ -1,29 +1,49 @@
 @using System.Globalization
 
 @*
-    One catalogue row's health indicator: a dot for the verified states, and a
+    One catalogue row's health indicator: a glyph for the verified states, and a
     button that opens the diagnostics dialog when the backup needs attention.
     Rendered only when the server reports health monitoring available.
+
+    State is never carried by colour alone. Each state renders its own glyph and
+    its meaning as text a screen reader announces; the title attribute these
+    used to carry announced to neither a keyboard nor a touch caller, which is
+    exactly the defect the epic's vocabulary work removes.
 *@
 
 @if (_health is null || _health.Status == BackupHealthStatus.Unknown)
 {
-    <span class="lx-backups-health lx-backups-health-unknown" title="Not yet verified">-</span>
+    <span class="lx-backups-health lx-backups-health-unknown">
+        <span aria-hidden="true">-</span>
+        <span class="lx-visually-hidden">@NotVerified</span>
+    </span>
 }
 else if (_health.Status == BackupHealthStatus.Healthy)
 {
-    <span class="lx-backups-health lx-backups-health-ok"
-          title="@($"Healthy (verified {_health.CheckedAtUtc.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)})")">OK</span>
+    <span class="lx-backups-health lx-backups-health-ok">
+        <span aria-hidden="true">OK</span>
+        <span class="lx-visually-hidden">@_healthyLabel</span>
+    </span>
 }
 else
 {
     <button type="button" class="lx-backups-health lx-backups-health-warn"
-            title="@(_health.Status == BackupHealthStatus.Missing ? "Manifest missing - click for details" : "Unresolvable - click for details")"
+            aria-label="@_attentionLabel"
             @onclick="Open">!</button>
 }
 
 @code {
+    private const string NotVerified = "Not yet verified.";
+
+    private const string ManifestMissing =
+        "Manifest missing. Open the health details for this backup.";
+
+    private const string Unresolvable =
+        "Unresolvable. Open the health details for this backup.";
+
     private BackupHealthReport? _health;
+    private string _healthyLabel = string.Empty;
+    private string _attentionLabel = Unresolvable;
 
     /// <summary>The Backups panel this indicator reads its health reports from.</summary>
     [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
@@ -32,7 +52,21 @@ else
     [Parameter, EditorRequired] public BackupRow Row { get; set; } = default!;
 
     /// <inheritdoc />
-    protected override void OnParametersSet() => _health = Owner.RowHealth(Row);
+    protected override void OnParametersSet()
+    {
+        _health = Owner.RowHealth(Row);
+
+        // Composed when the report changes rather than on every render: the
+        // catalogue re-renders on every filter keystroke and every page turn,
+        // and this indicator sits on every row of the page.
+        _healthyLabel = _health is { Status: BackupHealthStatus.Healthy }
+            ? "Healthy, verified "
+                + _health.CheckedAtUtc.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)
+                + "."
+            : string.Empty;
+
+        _attentionLabel = _health?.Status == BackupHealthStatus.Missing ? ManifestMissing : Unresolvable;
+    }
 
     private void Open()
     {
@@ -42,4 +76,3 @@ else
         }
     }
 }
-

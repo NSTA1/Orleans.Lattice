@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Session;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Connection;
@@ -64,6 +65,12 @@ internal sealed class SchemaComponentHarness : IDisposable
 
         var services = new ServiceCollection();
         services.AddLogging();
+
+        // The shell-state contract the panel remembers and addresses its open
+        // surface on. Registered as the real thing: the route model is a pure
+        // in-memory type and the preference store falls back to an in-memory
+        // backing store, so nothing here reaches a browser.
+        services.AddExplorerSession();
         services.AddSingleton<ISchemaPluginDomain>(domain);
         services.AddSingleton<IExplorerPluginCatalog>(catalog);
         services.AddSingleton<IExplorerPluginAccessStore>(store);
@@ -89,14 +96,28 @@ internal sealed class SchemaComponentHarness : IDisposable
     public async Task<int> RenderAsync<TComponent>(params (string Name, object? Value)[] parameters)
         where TComponent : IComponent
     {
+        var (id, _) = await RenderWithInstanceAsync<TComponent>(parameters);
+        return id;
+    }
+
+    /// <summary>
+    /// Renders <typeparamref name="TComponent"/> as a root and returns both its
+    /// component id and the instance, so a test can drive a public method on the
+    /// component rather than reaching for the markup a child component owns.
+    /// </summary>
+    /// <typeparam name="TComponent">The component to render.</typeparam>
+    /// <param name="parameters">The parameters to render it with.</param>
+    public Task<(int Id, TComponent Component)> RenderWithInstanceAsync<TComponent>(
+        params (string Name, object? Value)[] parameters)
+        where TComponent : IComponent
+    {
         var bag = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var (name, value) in parameters)
         {
             bag[name] = value;
         }
 
-        var (id, _) = await Renderer.RenderAsync<TComponent>(ParameterView.FromDictionary(bag));
-        return id;
+        return Renderer.RenderAsync<TComponent>(ParameterView.FromDictionary(bag));
     }
 
     /// <summary>Builds a session over the harness's domain, optionally probed for a tree.</summary>

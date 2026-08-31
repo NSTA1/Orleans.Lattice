@@ -3,6 +3,8 @@ using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 
+using Orleans.Lattice.Explorer.Core.Vocabulary;
+
 namespace Orleans.Lattice.Explorer.Tests.Access;
 
 /// <summary>
@@ -235,7 +237,14 @@ public sealed class AccessPanelRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("Access administration is not permitted for your account"));
+            Assert.That(
+                html,
+                Does.Contain(ExplorerStateCopy.NotPermitted(ExplorerSubjects.Grants, "Admin").Explanation),
+                "the refusal comes from the shared vocabulary, not a second wording");
+            Assert.That(
+                html,
+                Does.Contain("Admin"),
+                "a denial names the missing permission, not the label the caller can already see");
             Assert.That(html, Does.Contain("role=\"status\""));
             Assert.That(
                 html,
@@ -254,12 +263,17 @@ public sealed class AccessPanelRenderTests
         // The one behaviour the issue's acceptance criteria call out by name.
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("sign in to administer access"));
+            Assert.That(
+                html,
+                Does.Contain(ExplorerStateCopy.SignInRequired(ExplorerSubjects.Grants).Explanation));
             Assert.That(
                 html,
                 Does.Contain("role=\"alert\""),
                 "a recoverable state is announced, not silently greyed out");
-            Assert.That(html, Does.Not.Contain("Access administration is not permitted for your account"));
+            Assert.That(
+                html,
+                Does.Not.Contain(ExplorerStateCopy.NotPermitted(ExplorerSubjects.Grants, "Admin").Explanation),
+                "a caller who is merely signed out is not accused of lacking a grant");
         });
     }
 

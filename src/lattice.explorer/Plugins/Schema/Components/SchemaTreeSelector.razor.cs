@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Schema.Domain;
 
 namespace Orleans.Lattice.Explorer.Schema.Components;
@@ -12,6 +13,13 @@ public partial class SchemaTreeSelector : ComponentBase
 {
     private const string ItemClass = "lx-schema-treeitem";
     private const string SelectedItemClass = "lx-schema-treeitem is-selected";
+
+    /// <summary>
+    /// What the shard badge's number means, taken from the shared glossary
+    /// rather than reworded, and read once rather than per row.
+    /// </summary>
+    private static readonly string ShardCountLabel =
+        ExplorerGlossary.Get(ExplorerTermIds.ShardCount).Label;
 
     private static readonly TreeRow[] NoRows = [];
 

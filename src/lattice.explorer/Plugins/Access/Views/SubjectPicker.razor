@@ -42,7 +42,7 @@
             <p class="lxa-subject-selected">
                 @if (!string.IsNullOrEmpty(_model.SelectedDisplayName))
                 {
-                    <text>Selected: </text><span class="lxa-principal" title="@_model.SelectedId">@_model.SelectedDisplayName</span>
+                    <text>Selected: </text><span class="lxa-principal">@_model.SelectedDisplayName<span class="lx-visually-hidden">, id @_model.SelectedId</span></span>
                 }
                 else
                 {
@@ -60,9 +60,8 @@
                         <button type="button"
                                 class="@(string.Equals(principal.Id, _model.SelectedId, StringComparison.Ordinal) ? SelectedResultClass : ResultClass)"
                                 disabled="@Disabled"
-                                title="@principal.Id"
                                 @onclick="SelectResult(principal.Id)">
-                            @PrincipalLabel(principal)
+                            @PrincipalLabel(principal)<span class="lx-visually-hidden">, id @principal.Id</span>
                         </button>
                     </li>
                 }

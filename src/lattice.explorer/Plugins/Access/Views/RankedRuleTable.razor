@@ -121,7 +121,7 @@
     private RenderFragment<RankedRule> RuleIdCell => ranked => @<text>@ranked.Rule.RuleId</text>;
 
     private RenderFragment<RankedRule> SubjectCell => ranked =>
-        @<span title="@AccessRuleFormat.SubjectLabel(ranked.Rule.Subject)">@AccessRuleFormat.SubjectDisplayLabel(ranked.Rule.Subject, Labels)</span>;
+        @<span>@AccessRuleFormat.SubjectDisplayLabel(ranked.Rule.Subject, Labels)<span class="lx-visually-hidden">, selector @AccessRuleFormat.SubjectLabel(ranked.Rule.Subject)</span></span>;
 
     private RenderFragment<RankedRule> ScopeCell => ranked => @<text>@AccessRuleFormat.ScopeLabel(ranked.Rule.Scope)</text>;
 
@@ -129,6 +129,13 @@
         @<text>@AccessRuleFormat.OperationsLabel(ranked.Rule.Operations)</text>;
 
     private RenderFragment<RankedRule> EffectCell => ranked =>
-        @<span class="@(ranked.DenyOverrides ? DenyEffectClass : EffectClass)"
-               title="@(ranked.DenyOverrides ? DenyOverrideTitle : null)">@ranked.Rule.Effect</span>;
+        @<span class="@(ranked.DenyOverrides ? DenyEffectClass : EffectClass)">@ranked.Rule.Effect@if (ranked.DenyOverrides)
+            {
+                @*
+                    The override is why this row won, so it is announced rather
+                    than left in a title attribute no keyboard or touch caller
+                    can reach. State is not carried by colour alone.
+                *@
+                <span class="lx-visually-hidden">, @DenyOverrideTitle</span>
+            }</span>;
 }

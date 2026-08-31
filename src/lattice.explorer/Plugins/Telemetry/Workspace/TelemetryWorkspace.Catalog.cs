@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.Core.Session;
+
 namespace Orleans.Lattice.Explorer.Plugins.Telemetry.Workspace;
 
 /// <summary>
@@ -71,7 +73,21 @@ public sealed partial class TelemetryWorkspace
         }
 
         _initialized = true;
+
+        // Hydrated before the catalogue arrives, so the remembered panel is
+        // available at the moment it can first be validated.
+        if (_preferences is not null)
+        {
+            await _preferences.EnsureLoadedAsync().ConfigureAwait(false);
+        }
+
         var discovery = await LoadCatalogAsync(refresh: false).ConfigureAwait(false);
+
+        // Applied after the catalogue and before the evaluation, so the first
+        // request is made for the panel the caller will actually be looking at
+        // rather than for the catalogue's first entry.
+        await ApplyRememberedSelectionAsync().ConfigureAwait(false);
+
         await EvaluateAsync().ConfigureAwait(false);
         Restore(discovery);
         RaiseChanged();
@@ -116,8 +132,8 @@ public sealed partial class TelemetryWorkspace
     /// <summary>
     /// Selects the catalogue entry with id <paramref name="queryId"/> and
     /// evaluates it. An id the catalogue does not offer is ignored, so a value
-    /// that was never rendered - including one edited into the DOM - cannot
-    /// change the selection.
+    /// that was never rendered - including one edited into the DOM or the
+    /// address - cannot change the selection.
     /// </summary>
     /// <param name="queryId">The catalogue id to select.</param>
     /// <returns>A task that completes when the new entry's result has been rendered.</returns>
@@ -131,8 +147,46 @@ public sealed partial class TelemetryWorkspace
         }
 
         Select(query);
+        await RememberSelectionAsync().ConfigureAwait(false);
         await EvaluateAsync().ConfigureAwait(false);
         RaiseChanged();
+    }
+
+    /// <summary>
+    /// Puts the selected panel in the address and remembers it, when this mount
+    /// owns either. A no-op for a mount that owns neither, which is what keeps
+    /// two mounts of this workspace from overwriting one another's answer.
+    /// </summary>
+    private async Task RememberSelectionAsync()
+    {
+        if (Selected is not { } selected)
+        {
+            return;
+        }
+
+        if (_router is not null)
+        {
+            // Replaced rather than pushed: the browser's Back button should
+            // leave the area, not walk back through every panel the caller
+            // glanced at. WithParameter returns the same instance when nothing
+            // changed, so a re-selection of the panel already addressed emits no
+            // navigation at all.
+            var route = _router.Current.WithParameter(
+                TelemetryPluginKeys.SelectedQueryParameter,
+                selected.QueryId);
+
+            if (!ReferenceEquals(route, _router.Current))
+            {
+                _router.NavigateTo(route, replace: true);
+            }
+        }
+
+        if (_preferences is not null)
+        {
+            await _preferences
+                .SetAsync(TelemetryPluginKeys.SelectedQueryPreference, selected.QueryId)
+                .ConfigureAwait(false);
+        }
     }
 
     private async Task<TelemetryNotice?> LoadCatalogAsync(bool refresh)
@@ -187,9 +241,17 @@ public sealed partial class TelemetryWorkspace
     /// <summary>
     /// Keeps the selection valid across a catalogue change: an entry the
     /// cluster still offers is kept - so a refresh does not throw a caller back
-    /// to the first panel - and anything else falls back to the first entry, or
-    /// to nothing when the catalogue is empty.
+    /// to the first panel - and anything else falls back to what the address
+    /// names, then to the first entry, then to nothing when the catalogue is
+    /// empty.
     /// </summary>
+    /// <remarks>
+    /// The <em>remembered</em> panel is deliberately not consulted here. This
+    /// runs on every catalogue read, including a refresh the caller asked for
+    /// after moving panels, and restoring here would drag them back. It is
+    /// applied once, on the mount path, by
+    /// <see cref="ApplyRememberedSelectionAsync"/>.
+    /// </remarks>
     private void ReconcileSelection()
     {
         if (Selected is { } current && Catalog.TryGetQuery(current.QueryId, out var stillOffered))
@@ -209,7 +271,58 @@ public sealed partial class TelemetryWorkspace
             return;
         }
 
-        Select(Catalog.Queries[0]);
+        Select(AddressedEntry() ?? Catalog.Queries[0]);
+    }
+
+    /// <summary>
+    /// The entry the address names, or <see langword="null"/> when it names none
+    /// this catalogue offers.
+    /// </summary>
+    /// <remarks>
+    /// The address wins over the remembered panel, because a link somebody sent
+    /// must show what they saw rather than what the recipient left open. It is
+    /// validated against the live catalogue first, so an id typed into the
+    /// address bar cannot point the surface at something that is not there.
+    /// </remarks>
+    private ExplorerTelemetryQuery? AddressedEntry() =>
+        _router is not null
+        && _router.Current.Parameters.TryGetValue(
+            TelemetryPluginKeys.SelectedQueryParameter,
+            out var addressed)
+        && Catalog.TryGetQuery(addressed, out var fromAddress)
+            ? fromAddress
+            : null;
+
+    /// <summary>
+    /// Opens the panel this caller was last on, once, when the address named
+    /// none.
+    /// </summary>
+    /// <remarks>
+    /// Restored through the contract's <em>forgetting</em> read: a value the
+    /// cluster no longer offers is dropped as well as ignored, so the caller is
+    /// not silently corrected for the same stale choice on every later visit.
+    /// The predicate is a cached static over the catalogue passed as state
+    /// rather than a closure, because this runs on the mount path.
+    /// </remarks>
+    private async Task ApplyRememberedSelectionAsync()
+    {
+        if (_preferences is null || AddressedEntry() is not null)
+        {
+            return;
+        }
+
+        var resolution = await _preferences.RestoreAsync(
+            TelemetryPluginKeys.SelectedQueryPreference,
+            string.Empty,
+            Catalog,
+            static (remembered, catalog) =>
+                !string.IsNullOrEmpty(remembered) && catalog.TryGetQuery(remembered, out _))
+            .ConfigureAwait(false);
+
+        if (Catalog.TryGetQuery(resolution.Value, out var remembered))
+        {
+            Select(remembered);
+        }
     }
 
     private void Select(ExplorerTelemetryQuery query)

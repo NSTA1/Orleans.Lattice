@@ -29,55 +29,77 @@
         <div class="lx-schema-content">
             <p class="lx-schema-note">
                 Schema governance is opt-in per tree: control how values are validated (Policy) and how their shape evolves over time (Versions).
+                <LatticeHelp Id="@SchemaVocabulary.SchemaPolicyId"
+                             Term="@SchemaVocabulary.SchemaPolicy.Label"
+                             Explanation="@SchemaVocabulary.SchemaPolicy.Explanation" />
+                <LatticeHelp Id="@SchemaVocabulary.VersionConfigId"
+                             Term="@SchemaVocabulary.VersionConfig.Label"
+                             Explanation="@SchemaVocabulary.VersionConfig.Explanation" />
             </p>
             <header class="lx-schema-header">
-                <div class="lx-tabstrip" role="tablist" aria-label="Schema tabs">
-                    @*
-                        aria-selected takes the literal string "true" or "false":
-                        it is an enumerated ARIA attribute, not an HTML boolean
-                        one, so a bool emits aria-selected="" on the active tab
-                        and omits the attribute on the others.
-                    *@
-                    @for (var i = 0; i < _tabs.Length; i++)
-                    {
-                        var tab = _tabs[i];
-                        var isActive = tab.Tab == _tab;
-                        <button type="button" role="tab"
-                                class="@(isActive ? ActiveTabClass : TabClass)"
-                                aria-selected="@(isActive ? "true" : "false")"
-                                @onclick="tab.Activate">@tab.Label</button>
-                    }
-                </div>
+                @*
+                    The area's own sub-surfaces, rendered through the design
+                    system's single tab primitive in its subordinate variant.
+                    That is the presentation the shell reserves for a plugin's
+                    own surfaces, and the primitive supplies the roving
+                    tabindex, the arrow keys, the enumerated aria-selected and
+                    the aria-controls relationship the hand-rolled strip it
+                    replaces had to restate for itself.
+                *@
+                <LatticeAdaptiveTabs Tabs="SchemaSurfaces.Tabs"
+                                     ActiveId="@ActiveSurfaceId"
+                                     OnSelect="SelectSurface"
+                                     Label="@SchemaSurfaces.StripLabel"
+                                     Variant="LatticeTabsVariant.Subordinate"
+                                     Id="@SchemaSurfaces.StripElementId"
+                                     PanelId="@SchemaSurfaces.PanelElementId"
+                                     Class="lx-schema-surfaces" />
             </header>
 
-            @if (!_session.IsAllowed)
-            {
-                <p class="lx-schema-result is-denied" role="status">
-                    Schema management is not available: the cluster has no schema control endpoint configured, or it is unreachable.
-                </p>
-            }
-            else if (!_session.HasProbedTree)
-            {
-                <p class="lx-schema-empty">Select a tree from the list to manage its schema.</p>
-            }
+            <div class="lx-schema-surface" role="tabpanel" id="@SchemaSurfaces.PanelElementId">
+                @if (!_session.IsAllowed)
+                {
+                    @*
+                        The distinctive Schema failure: the cluster serves no
+                        schema control endpoint, so nothing here can be
+                        governed. Reported as unavailable rather than as a
+                        refusal, because nothing is being withheld from the
+                        caller - the capability is simply not installed.
+                    *@
+                    <div role="status">
+                        <SchemaStateBlock Message="UnavailableMessage" Class="lx-schema-result is-denied" />
+                    </div>
+                }
+                else if (!_session.HasProbedTree)
+                {
+                    @*
+                        Nothing is wrong: no tree has been chosen yet. Said as
+                        its own state rather than as an empty policy panel,
+                        which would read as "this tree has no policy".
+                    *@
+                    <div role="status">
+                        <SchemaStateBlock Message="NoTreeSelectedMessage" Class="lx-schema-empty" />
+                    </div>
+                }
 
-            @if (_session.LastResult is { } result)
-            {
-                <p class="lx-schema-result @SchemaStatusStyles.For(result.Status)" role="status">@result.Message</p>
-            }
+                @if (_session.LastResult is { } result)
+                {
+                    <p class="lx-schema-result @SchemaStatusStyles.For(result.Status)" role="status">@result.Message</p>
+                }
 
-            @if (_tab == SchemaTab.Policy)
-            {
-                <SchemaPolicyTab Session="_session" />
-            }
-            else if (_tab == SchemaTab.Versions)
-            {
-                <SchemaVersionsTab Session="_session" />
-            }
-            else
-            {
-                <SchemaDeadLettersTab Session="_session" />
-            }
+                @if (_tab == SchemaTab.Policy)
+                {
+                    <SchemaPolicyTab Session="_session" />
+                }
+                else if (_tab == SchemaTab.Versions)
+                {
+                    <SchemaVersionsTab Session="_session" />
+                }
+                else
+                {
+                    <SchemaDeadLettersTab Session="_session" />
+                }
+            </div>
         </div>
     </div>
 </section>

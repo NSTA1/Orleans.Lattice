@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Plugins.Telemetry.Workspace;
@@ -42,6 +44,8 @@ public sealed partial class TelemetryWorkspace : IDisposable
     private readonly IExplorerPluginAccessStore _store;
     private readonly TimeProvider _clock;
     private readonly bool _pinnedToOwnTenant;
+    private readonly IExplorerShellPreferences? _preferences;
+    private readonly IExplorerShellRouter? _router;
 
     /// <summary>
     /// Creates the workspace over the plugin's domain contract and the keyed
@@ -62,6 +66,17 @@ public sealed partial class TelemetryWorkspace : IDisposable
     /// the shell's switcher is asking for, so a platform operator's cross-tenant
     /// intent cannot leak into a surface that says "your tenant" on it.
     /// </param>
+    /// <param name="preferences">
+    /// The shell's declared preference contract, when this mount should remember
+    /// which panel the caller was on. Omitted by a mount that is a section of
+    /// somebody else's surface: two mounts writing one key would each keep
+    /// overwriting the other's answer.
+    /// </param>
+    /// <param name="router">
+    /// The shell's route model, when this mount should make the selected panel
+    /// addressable. Omitted for the same reason as
+    /// <paramref name="preferences"/>: a section has no claim on the address.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="domain"/> or <paramref name="store"/> is <see langword="null"/>.
     /// </exception>
@@ -69,7 +84,9 @@ public sealed partial class TelemetryWorkspace : IDisposable
         ITelemetryDomain domain,
         IExplorerPluginAccessStore store,
         TimeProvider? clock = null,
-        bool pinnedToOwnTenant = false)
+        bool pinnedToOwnTenant = false,
+        IExplorerShellPreferences? preferences = null,
+        IExplorerShellRouter? router = null)
     {
         ArgumentNullException.ThrowIfNull(domain);
         ArgumentNullException.ThrowIfNull(store);
@@ -78,6 +95,8 @@ public sealed partial class TelemetryWorkspace : IDisposable
         _store = store;
         _clock = clock ?? TimeProvider.System;
         _pinnedToOwnTenant = pinnedToOwnTenant;
+        _preferences = preferences;
+        _router = router;
 
         // Composed up front rather than left at its default, so a view rendered
         // before the first evaluation shows the fail-closed scope in words

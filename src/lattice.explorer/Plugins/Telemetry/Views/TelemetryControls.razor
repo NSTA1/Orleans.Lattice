@@ -33,6 +33,7 @@
         <span class="lxt-control-label">Panel</span>
         <select class="lxt-select"
                 disabled="@Disabled"
+                aria-describedby="@CatalogExplanationId"
                 value="@State.Selected?.QueryId"
                 @onchange="OnQueryChanged">
             @for (var i = 0; i < State.Catalog.Queries.Count; i++)
@@ -42,6 +43,9 @@
             }
         </select>
     </label>
+    <LatticeHelp Id="@TelemetryVocabulary.MetricCatalogId"
+                 Term="@TelemetryVocabulary.MetricCatalog.Label"
+                 Explanation="@TelemetryVocabulary.MetricCatalog.Explanation" />
 
     @if (ShowRange)
     {
@@ -49,6 +53,7 @@
             <span class="lxt-control-label">Range</span>
             <select class="lxt-select"
                     disabled="@Disabled"
+                    aria-describedby="@RangeExplanationId"
                     value="@RangeLabel"
                     @onchange="OnRangeChanged">
                 <option value="@TelemetryDurationChoices.ServerDefaultLabel">
@@ -61,6 +66,9 @@
                 }
             </select>
         </label>
+        <LatticeHelp Id="@TelemetryVocabulary.QueryRangeId"
+                     Term="@TelemetryVocabulary.QueryRange.Label"
+                     Explanation="@TelemetryVocabulary.QueryRange.Explanation" />
     }
 
     @if (ShowStep)
@@ -69,6 +77,7 @@
             <span class="lxt-control-label">Step</span>
             <select class="lxt-select"
                     disabled="@Disabled"
+                    aria-describedby="@StepExplanationId"
                     value="@StepLabel"
                     @onchange="OnStepChanged">
                 <option value="@TelemetryDurationChoices.ServerDefaultLabel">
@@ -81,6 +90,9 @@
                 }
             </select>
         </label>
+        <LatticeHelp Id="@TelemetryVocabulary.QueryStepId"
+                     Term="@TelemetryVocabulary.QueryStep.Label"
+                     Explanation="@TelemetryVocabulary.QueryStep.Explanation" />
     }
 
     @if (ShowTrees)
@@ -109,6 +121,17 @@
 
 @code {
     private const string StackedClass = "is-stacked";
+
+    // Hoisted to statics: each call concatenates, and this row re-renders on
+    // every refresh, every gate change and every breakpoint change.
+    private static readonly string CatalogExplanationId =
+        LatticeHelp.ExplanationElementId(TelemetryVocabulary.MetricCatalogId);
+
+    private static readonly string RangeExplanationId =
+        LatticeHelp.ExplanationElementId(TelemetryVocabulary.QueryRangeId);
+
+    private static readonly string StepExplanationId =
+        LatticeHelp.ExplanationElementId(TelemetryVocabulary.QueryStepId);
 
     /// <summary>The workspace these controls read and drive.</summary>
     [Parameter, EditorRequired] public TelemetryWorkspace State { get; set; } = default!;

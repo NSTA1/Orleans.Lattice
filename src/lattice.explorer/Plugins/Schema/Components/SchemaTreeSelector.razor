@@ -13,7 +13,6 @@
         <span class="lx-schema-treepanel-title">Trees</span>
         <button type="button"
                 class="lx-schema-refresh"
-                title="Refresh trees"
                 aria-label="Refresh trees"
                 disabled="@(IsLoading || !Session.IsAllowed)"
                 @onclick="OnRefresh">
@@ -68,7 +67,16 @@
                                     }
                                     @if (row.ShardBadge is { } shards)
                                     {
-                                        <span class="lx-schema-badge" title="Shard count">@shards</span>
+                                        @*
+                                            The expansion is a visually-hidden
+                                            companion rather than a title
+                                            attribute, which neither a keyboard
+                                            nor a touch caller can reach.
+                                        *@
+                                        <span class="lx-schema-badge">
+                                            <span aria-hidden="true">@shards</span>
+                                            <span class="lx-visually-hidden">@ShardCountLabel</span>
+                                        </span>
                                     }
                                 </span>
                             }

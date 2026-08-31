@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Schema.Domain;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Plugins;
@@ -49,6 +50,12 @@ public static class ExplorerSchemaPluginServiceCollectionExtensions
         // an unwritten precondition on the head.
         services.AddExplorerSchema();
         services.AddExplorerCatalog();
+
+        // The shell-state contract the panel remembers its open surface on and
+        // addresses it through. Idempotent (every registration inside it is a
+        // TryAdd), so a head that already composed the session stack is not
+        // disturbed.
+        services.AddExplorerSession();
 
         // Scoped per Blazor circuit, exactly like the feature services and the
         // keyed access store it publishes into: one operator's probed per-tree
