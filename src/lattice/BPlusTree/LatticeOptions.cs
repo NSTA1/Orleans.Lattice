@@ -2788,6 +2788,103 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentShardConsolidations = 1;
 
     /// <summary>
+    /// Whether the per-tree automatic over-split healing orchestrator runs.
+    /// <b>This is the kill switch for automatic shard healing</b>, on by
+    /// default so an existing deployment whose trees were shattered by an
+    /// over-eager splitter repairs itself with no operator action.
+    /// <para>
+    /// Set to <c>false</c> to stop healing specifically, without disabling
+    /// adaptive splitting and without reverting the image. Turning it off
+    /// leaves any in-flight fold to finish on its own coordinator - a fold is
+    /// resumable and idempotent, so nothing is stranded - and simply stops new
+    /// folds being admitted. Turning it back on resumes healing from whatever
+    /// shape the tree is in.
+    /// </para>
+    /// <para>
+    /// The related <see cref="MaxConcurrentShardConsolidations"/> set to
+    /// <c>0</c> also admits nothing, but keeps the observer running so the
+    /// tree's healing backlog is still published. Use this switch to stop the
+    /// mechanism, and that one to pause admission while still watching.
+    /// </para>
+    /// </summary>
+    public bool ShardHealingEnabled { get; set; } = DefaultShardHealingEnabled;
+
+    /// <summary>Default value for <see cref="ShardHealingEnabled"/> (<c>true</c>).</summary>
+    public const bool DefaultShardHealingEnabled = true;
+
+    /// <summary>
+    /// How often the healing orchestrator observes a tree's shape and decides
+    /// whether to consolidate.
+    /// <para>
+    /// This is the cadence that spreads healing out: at most one fold is
+    /// admitted per sweep, so the interval - not a burst - sets the pace at
+    /// which an over-split tree comes back down. A tree damaged into a
+    /// thousand physical shards heals as a steady background trickle rather
+    /// than a stampede of concurrent drains. Shorten it to heal faster on a
+    /// quiet box; raise <see cref="MaxConcurrentShardConsolidations"/> instead
+    /// when the box has measured headroom for parallel folds.
+    /// </para>
+    /// <para>
+    /// Must be strictly positive; use <see cref="ShardHealingEnabled"/> to
+    /// switch healing off.
+    /// </para>
+    /// </summary>
+    public TimeSpan ShardHealingInterval { get; set; } = DefaultShardHealingInterval;
+
+    /// <summary>Default value for <see cref="ShardHealingInterval"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultShardHealingInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long the healing orchestrator waits after observing an adaptive
+    /// split on a tree before it will consolidate that tree again.
+    /// <para>
+    /// This is the <em>time-domain</em> half of the hysteresis between the two
+    /// control loops. Their skew triggers are already disjoint - splitting at
+    /// or above <see cref="HotShardMinSkewRatio"/>, healing at or below
+    /// <see cref="HotShardConsolidationSkewRatio"/> - so they cannot both fire
+    /// on one sample. This window additionally stops a tree whose skew wanders
+    /// across the dead band from alternating between the two over successive
+    /// samples: after a split, healing stands off until the tree's shape has
+    /// had time to settle at its new shard count.
+    /// </para>
+    /// <para>
+    /// <c>TimeSpan.Zero</c> is legal and disables the window, leaving only the
+    /// skew dead band. A negative value is rejected at startup.
+    /// </para>
+    /// </summary>
+    public TimeSpan ShardHealingCooldown { get; set; } = DefaultShardHealingCooldown;
+
+    /// <summary>Default value for <see cref="ShardHealingCooldown"/> (5 minutes).</summary>
+    public static readonly TimeSpan DefaultShardHealingCooldown = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The tree's <em>median</em> shard rate, in operations per second, at or
+    /// above which automatic healing yields to foreground traffic and admits
+    /// no new fold. This is the backpressure signal that keeps healing a
+    /// thousand-leaf tree invisible to a user issuing queries.
+    /// <para>
+    /// The median rather than the sum, deliberately: a summed tree rate scales
+    /// with the shard count, so a tree shattered into a thousand near-idle
+    /// shards would look like the busiest tree on the box and would never
+    /// heal - precisely inverting the intent. The median measures whether the
+    /// <em>typical</em> shard is busy, which is what "the tree is serving
+    /// foreground traffic" actually means, and it is the same robust statistic
+    /// the skew ratio is built from.
+    /// </para>
+    /// <para>
+    /// The default matches <see cref="DefaultHotShardOpsPerSecondThreshold"/>,
+    /// so healing yields at exactly the load at which a shard would be
+    /// considered hot. <c>0</c> is legal and disables backpressure entirely,
+    /// healing regardless of load; a negative or <c>NaN</c> value is rejected
+    /// at startup.
+    /// </para>
+    /// </summary>
+    public double ShardHealingBackpressureOpsPerSecond { get; set; } = DefaultShardHealingBackpressureOpsPerSecond;
+
+    /// <summary>Default value for <see cref="ShardHealingBackpressureOpsPerSecond"/> (200 ops/s, matching <see cref="DefaultHotShardOpsPerSecondThreshold"/>).</summary>
+    public const double DefaultShardHealingBackpressureOpsPerSecond = DefaultHotShardOpsPerSecondThreshold;
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.
