@@ -32,6 +32,22 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.MaxCacheValueBytes)} must be greater than or equal to 1 when set "
                 + "(null leaves the read-through cache mirror unbounded; a positive value caps the resident value-payload bytes per cache activation with LRU payload eviction).");
         }
+        if (options.LeafCachePreWarmCount < 0
+            || options.LeafCachePreWarmCount > LatticeOptions.MaxLeafCachePreWarmCount)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafCachePreWarmCount)} must be between 0 and "
+                + $"{LatticeOptions.MaxLeafCachePreWarmCount} inclusive "
+                + "(0 disables leaf-access tracking and post-restart leaf-cache pre-warm; the upper bound matches the "
+                + "number of leaves the shard root persists, so a larger request could not be satisfied).");
+        }
+        if (options.LeafAccessModelFlushIntervalMs < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafAccessModelFlushIntervalMs)} must be greater than or equal to 0 "
+                + "(0 persists the leaf-access model only on clean deactivation; a positive value is the coalescing "
+                + "window in milliseconds for the shard-root flush timer).");
+        }
         if (options.MaxClusterConcurrentAutoSplits is { } maxClusterConcurrentAutoSplits && maxClusterConcurrentAutoSplits < 1)
         {
             return ValidateOptionsResult.Fail(

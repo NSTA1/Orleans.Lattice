@@ -28,4 +28,17 @@ internal interface ILeafCacheGrain : IGrainWithStringKey
     /// Keys that do not exist or are tombstoned are omitted from the result.
     /// </summary>
     Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys);
+
+    /// <summary>
+    /// Activates this cache on the calling silo and populates it from the
+    /// primary leaf, without returning any payload to the caller.
+    /// <para>
+    /// Used by <see cref="IShardRootGrain.WarmUpAsync"/> to pay a cold leaf's
+    /// activation and first-refresh cost up front, off the critical path of the
+    /// first real read. Because the shard root is the only caller of this
+    /// stateless-worker cache, the activation it creates is local to the silo
+    /// that will serve the subsequent reads.
+    /// </para>
+    /// </summary>
+    Task PreWarmAsync();
 }

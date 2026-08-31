@@ -252,6 +252,46 @@ public class LatticeOptions
     public int DirtyLeafFlushIntervalMs { get; set; } = DefaultDirtyLeafFlushIntervalMs;
 
     /// <summary>
+    /// Number of leaf caches each shard root pre-warms when
+    /// <see cref="ILattice.WarmUpAsync"/> runs, ranked by a persisted histogram
+    /// of the leaves this shard's reads have visited.
+    /// <c>0</c> (the default) disables the whole feature: no access is tracked,
+    /// nothing is persisted, and warm-up behaves exactly as before.
+    /// <para>
+    /// When positive, every routed cache read increments the target leaf's visit
+    /// count in a bounded in-memory histogram. A coalescing timer
+    /// (<see cref="LeafAccessModelFlushIntervalMs"/>) persists a compact
+    /// snapshot of the histogram into the shard root's own state, and a clean
+    /// deactivation flushes it once more, so the ranking survives a silo
+    /// restart. On the next warm-up the shard root ranks its leaves by observed
+    /// read frequency - what fraction of reads land on each leaf, rather than
+    /// mere recency - and primes that many
+    /// <c>LeafCacheGrain</c> activations with a bounded, best-effort fan-out.
+    /// Because the shard root is the only caller of the stateless-worker leaf
+    /// cache, the primed activations land on the silo that will serve the
+    /// subsequent reads.
+    /// </para>
+    /// <para>
+    /// Capped at <see cref="MaxLeafCachePreWarmCount"/>. A failure to prime any
+    /// individual leaf is swallowed - pre-warm can never fail warm-up.
+    /// </para>
+    /// </summary>
+    public int LeafCachePreWarmCount { get; set; } = DefaultLeafCachePreWarmCount;
+
+    /// <summary>
+    /// Coalescing window (in milliseconds) for persisting the shard root's
+    /// leaf-access histogram. A grain timer drains the model at most once
+    /// per interval and only when it has changed, so read traffic never pays a
+    /// storage write. Clean deactivation always performs a final flush.
+    /// <para>
+    /// Set to <c>0</c> to persist only on deactivation, which is free under
+    /// read load but loses the model entirely on an ungraceful silo kill.
+    /// Ignored when <see cref="LeafCachePreWarmCount"/> is <c>0</c>.
+    /// </para>
+    /// </summary>
+    public int LeafAccessModelFlushIntervalMs { get; set; } = DefaultLeafAccessModelFlushIntervalMs;
+
+    /// <summary>
     /// How long a soft-deleted tree is retained before its grains are permanently
     /// purged. During this window the tree is inaccessible (reads and writes throw
     /// <see cref="InvalidOperationException"/>), but its data still exists in storage
@@ -338,6 +378,29 @@ public class LatticeOptions
     /// per window, removing the per-Delete storage write from the hot path.
     /// </summary>
     public const int DefaultDirtyLeafFlushIntervalMs = 50;
+
+    /// <summary>
+    /// Default value for <see cref="LeafCachePreWarmCount"/> (<c>0</c>).
+    /// Leaf-cache pre-warm is opt-in: zero disables leaf-access tracking and
+    /// the post-restart pre-warm fan-out entirely, so an unconfigured cluster
+    /// behaves exactly as it did before the feature existed.
+    /// </summary>
+    public const int DefaultLeafCachePreWarmCount = 0;
+
+    /// <summary>
+    /// Hard upper bound on <see cref="LeafCachePreWarmCount"/> (<c>64</c>).
+    /// Matches the number of leaves the shard root persists, so a larger
+    /// request could never be satisfied from the durable model anyway.
+    /// </summary>
+    public const int MaxLeafCachePreWarmCount = 64;
+
+    /// <summary>
+    /// Default value for <see cref="LeafAccessModelFlushIntervalMs"/>
+    /// (<c>30000 ms</c>). One small shard-root state write per 30 seconds of
+    /// read activity is negligible next to the read traffic that produced it,
+    /// and bounds the model loss from an ungraceful silo kill to one window.
+    /// </summary>
+    public const int DefaultLeafAccessModelFlushIntervalMs = 30_000;
 
     /// <summary>
     /// Minimum effective value for <see cref="CompactionLeafBatchSize"/>

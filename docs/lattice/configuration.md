@@ -76,6 +76,8 @@ Per-tree overrides are layered on top of the global defaults. Only the propertie
 | [`HotShardSampleInterval`](#hotshardsampleinterval) | `TimeSpan` | 30 seconds | Yes |
 | [`HotShardSplitCooldown`](#hotshardsplitcooldown) | `TimeSpan` | 2 minutes | Yes |
 | [`KeysPageSize`](#keyspagesize) | `int` | 512 | Yes |
+| [`LeafAccessModelFlushIntervalMs`](#leafcacheprewarmcount) | `int` | 30000 (ms) | Yes (on next activation) |
+| [`LeafCachePreWarmCount`](#leafcacheprewarmcount) | `int` | 0 (disabled) | Yes (on next activation) |
 | [`LeafProjectionRetention`](#leafprojectionretention) | `TimeSpan` | 7 days | Yes |
 | [`LeafSnapshotMargin`](projection-rebuild.md) | `double` | 0.30 | Yes |
 | [`LeafSnapshotReClassifyEveryNCheckpoints`](projection-rebuild.md) | `int` | 64 | Yes |
@@ -308,6 +310,77 @@ This option can be changed freely at any time.
 The number of keys returned per page during ordered key scans (`ScanKeysAsync`). Larger pages reduce the number of grain calls at the cost of larger messages. This is a performance tuning knob and does not affect tree structure.
 
 This option can be changed freely at any time. It takes effect on the next `ScanKeysAsync` call.
+
+### `LeafCachePreWarmCount`
+
+Number of `LeafCacheGrain` activations each shard root primes when
+[`ILattice.WarmUpAsync`](api.md) runs (default: `0`, which disables the feature
+entirely). Paired with `LeafAccessModelFlushIntervalMs`, which is the coalescing
+window (in milliseconds, default `30000`) for persisting the ranking model.
+
+`LeafCacheGrain` is a `[StatelessWorker]` read-through cache. After a silo
+restart every activation is cold, so the first read of each leaf pays activation
+plus a full delta pull from its primary leaf - a latency spike concentrated on
+exactly the leaves a skewed workload reads most. Setting a positive count asks
+each shard root to pay that cost up front, at warm-up, off the critical path of
+the first real read.
+
+The ranking is not a recency list. Each shard root keeps a bounded **histogram**
+of the leaves its reads route to: every routed cache read increments the target
+leaf's visit count. At warm-up the histogram is ranked by observed read
+frequency - "what fraction of reads land here", rather than "what happened to be
+touched last". Under a skewed or cyclic key distribution the two disagree
+sharply: a leaf touched once just before shutdown outranks a genuinely hot leaf
+under recency, but not under frequency. Measured on held-out synthetic traces
+(train on the first half, score against the hot set of the second), frequency
+recovered 96% of the true hot set on a Zipf-skewed trace and 98% on a
+cyclic/sequential one, against 56% and 53% for a recency list of the same size.
+
+A first-order Markov chain over leaf identities, ranked by personalised
+PageRank, was implemented and measured first. It never beat the plain histogram
+on any trace - it lost by 12.5 points on the skewed trace and 3.1 on the cyclic
+one - because for a chain fitted to a single observed trajectory the empirical
+visit vector is already stationary for the fitted matrix, so the ranking pass
+reproduced its own input. The transition rows were removed rather than carried
+at roughly 100 KB resident per shard-root activation for no ranking benefit.
+
+Bounds, all fixed and independent of the tree's key space:
+
+| Bound | Value | Effect |
+|-------|-------|--------|
+| Resident tracked leaves | 256 leaves | Coldest 25% pruned when exceeded. |
+| Persisted leaves | 64 leaves | Upper bound on `LeafCachePreWarmCount`. |
+| Persisted snapshot size | roughly 3 KB | Rides inside the shard root's own state. |
+| Pre-warm fan-out concurrency | 8 in flight per shard | Bounded like the shard fan-out it nests inside. |
+
+Operational characteristics:
+
+- **Opt-in and default-off.** At `0` no access is tracked, nothing is persisted,
+  and warm-up behaves exactly as it did before the option existed. Valid values
+  are `0` to `64` inclusive; a value outside that range fails options validation
+  at startup.
+- **Zero read-path cost when disabled**, and an O(1) allocation-free record when
+  enabled. The read path never awaits a storage write: a grain timer persists the
+  model at most once per `LeafAccessModelFlushIntervalMs`, and only when it has
+  changed. Clean deactivation flushes once more.
+- **Best-effort.** A failure to prime any individual leaf is swallowed and
+  counted in `orleans.lattice.warmup.leaf_cache.prewarmed`; pre-warm can never
+  fail `WarmUpAsync`.
+- **Correct silo locality.** The shard root is the only caller of the leaf cache,
+  so the stateless-worker activations warm-up creates land on the silo that will
+  serve the subsequent reads.
+- **Loss bound.** An ungraceful silo kill loses at most one flush window of
+  observations. A missing or stale model simply pre-warms fewer (or less useful)
+  leaves - it can never produce an incorrect read.
+
+Set `LeafAccessModelFlushIntervalMs` to `0` to persist the model only on clean
+deactivation: free under read load, but the model is lost entirely on an
+ungraceful kill.
+
+See [Metrics](metrics.md) for the three instruments this feature publishes.
+
+Both options can be changed freely at any time; they take effect on each shard
+root's next activation.
 
 ### `LeafProjectionRetention`
 
