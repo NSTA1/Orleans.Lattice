@@ -57,6 +57,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.events.published` | counter | `tree`, `kind` | Overview | Events published |
 | `orleans.lattice.events.dropped` | counter | `tree`, `reason` | Overview | Events dropped |
 | `orleans.lattice.config.changed` | counter | `tree`, `config` | Overview | Runtime config changes |
+| `orleans.lattice.observer.duration` | histogram (ms, **per-observer per-mutation sample**) | `tree`, `observer` | CommitPath | Mutation-observer inline latency p95 (ms) by observer |
 | `orleans.lattice.storage.wal_bytes` | observable gauge (`By`) | `tree` | Overview | Storage footprint by tree |
 | `orleans.lattice.storage.snapshot_bytes` | observable gauge (`By`) | `tree` | Overview | Storage footprint by tree |
 | `orleans.lattice.storage.leaf_state_bytes` | observable gauge (`By`) | `tree` | Overview | Storage footprint by tree |

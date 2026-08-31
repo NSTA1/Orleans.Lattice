@@ -1283,7 +1283,7 @@
       ]
     },
     {
-      "id": 48,
+      "id": 60,
       "title": "Admission - live keys by tree",
       "description": "Current live (non-tombstone) key count per tree (orleans_lattice_admission_live_keys observable gauge). This is the figure per-tree admission control compares against LatticeOptions.MaxLiveKeys. Best-effort and eventually-consistent: it is the same cached, TTL-coalesced per-tree aggregate that backs the storage-footprint panels, published by a single per-tree aggregator, so it lands on one silo per tree; this panel deliberately ignores the $silo selector and evaluates across all silos in the selected cluster. Step 1 of the adoption workflow: watch this to learn a tree's steady-state live-key count before setting any ceiling.",
       "type": "timeseries",

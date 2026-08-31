@@ -703,6 +703,18 @@ Register one or more observers in the silo DI container. They are
 resolved as `IEnumerable<IMutationObserver>`, so multiple can
 coexist. When none is registered the hook is zero-cost.
 
+Because the callback is on the write path, its cost is measured and
+attributed: every invocation is timed onto the
+[`orleans.lattice.observer.duration`](metrics.md#mutation-observers)
+histogram, tagged `observer` (the observer's CLR type name) and `tree`.
+That turns "one of our observers is slow" into a named series on the same
+OpenTelemetry pipeline as the traffic it slows down. The measurement is
+taken on the faulting path too, so an observer that throws slowly is just
+as visible as one that returns slowly, and spans only your callback - the
+warning Lattice logs for a faulting observer is not billed to it. The instrument costs nothing when no
+observer is registered, and nothing beyond a boolean read when no metrics
+listener is attached.
+
 ```csharp verify
 public sealed class MyReplicationObserver : IMutationObserver
 {

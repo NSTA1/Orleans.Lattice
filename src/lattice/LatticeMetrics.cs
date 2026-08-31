@@ -112,6 +112,18 @@ public static class LatticeMetrics
     public const string TagStep = "step";
 
     /// <summary>
+    /// Tag key for the concrete <see cref="IMutationObserver"/> implementation
+    /// a measurement is attributed to on <see cref="ObserverDuration"/>. The
+    /// value is the observer's CLR type name (<see cref="Type.FullName"/>,
+    /// falling back to the short <c>Type.Name</c> for a type that reports
+    /// none), matching the identifier the dispatcher already writes into its
+    /// swallow-and-log warning. Cardinality is bounded by the number of
+    /// observers registered in the silo's DI container, which is a
+    /// deployment-time constant.
+    /// </summary>
+    public const string TagObserver = "observer";
+
+    /// <summary>
     /// Tag key for the trigger that initiated a tombstone-compaction pass
     /// (e.g. <c>reminder</c>, <c>ratio</c>, <c>size</c>, <c>operator</c>
     /// on <see cref="CompactionPassDuration"/>). The tag is also emitted on
@@ -742,6 +754,37 @@ public static class LatticeMetrics
     public static readonly Counter<long> ConfigChanged =
         Meter.CreateCounter<long>("orleans.lattice.config.changed", unit: "{change}",
             description: "Per-tree configuration changes applied at runtime via ILattice overrides.");
+
+    // --- Mutation-observer instruments (MutationObserverDispatcher) ----------
+
+    /// <summary>
+    /// Histogram of the wall-clock time one registered
+    /// <see cref="IMutationObserver"/> spent inside a single
+    /// <c>OnMutationAsync</c> callback. Observers run <em>inline</em> on the
+    /// grain write path, so every millisecond recorded here is a millisecond
+    /// added to the caller's write latency - this instrument attributes that
+    /// cost to the specific observer that incurred it, on the same pipeline as
+    /// the traffic it slows down.
+    /// <para>
+    /// Tagged with <see cref="TagObserver"/> (the observer's CLR type name) and
+    /// <see cref="TagTree"/> (the mutated tree). Recorded on the faulting path
+    /// too: an observer that throws slowly is exactly the misbehaviour this
+    /// instrument exists to surface, and the dispatcher still suppresses the
+    /// exception. The sample spans only the callback - the dispatcher's own
+    /// swallow-and-log work is excluded, so a slow log sink cannot be
+    /// mistaken for a slow observer.
+    /// </para>
+    /// <para>
+    /// Zero-cost when unused. The dispatcher's no-observer fast path returns
+    /// before any timing work, and the remaining timestamp capture is elided
+    /// when <see cref="Instrument.Enabled"/> is <c>false</c> - so a caller who
+    /// registers an observer but attaches no metrics listener pays one boolean
+    /// read per publish.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> ObserverDuration =
+        Meter.CreateHistogram<double>("orleans.lattice.observer.duration", unit: "ms",
+            description: "Inline duration of one IMutationObserver callback on the write path, tagged by observer type and tree.");
 
     // --- Leaf-projection replay instruments ----------------------------------
 
