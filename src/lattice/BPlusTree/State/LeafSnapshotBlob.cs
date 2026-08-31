@@ -34,11 +34,21 @@ internal sealed class LeafSnapshotBlob
     [Id(0)] public long SnapshotOffset { get; set; } = -1;
 
     /// <summary>
-    /// Canonical byte-row contents of the leaf's entry cache at
+    /// Legacy canonical byte-row contents of the leaf's entry cache at
     /// <see cref="SnapshotOffset"/>. May be empty when the leaf had
     /// no live keys at capture time (a freshly created leaf whose
     /// projection is empty still has a meaningful checkpoint
     /// offset). Never <see langword="null"/>.
+    /// <para>
+    /// This slot is the <em>legacy</em> row carrier. A blob captured by a
+    /// build that encodes rows into <see cref="EncodedRows"/> leaves this
+    /// empty, and every reader should go through
+    /// <see cref="EnumerateRows"/> / <see cref="GetRowCount"/> rather than
+    /// reading it directly, so it sees the rows whichever encoding they
+    /// arrived in. The slot itself is retained forever: blobs persisted
+    /// before the binary encoding existed carry their rows here and must
+    /// stay readable indefinitely.
+    /// </para>
     /// </summary>
     [Id(1)] public IReadOnlyList<LeafSnapshotRow> Rows { get; set; } = Array.Empty<LeafSnapshotRow>();
 
@@ -85,4 +95,111 @@ internal sealed class LeafSnapshotBlob
     /// </para>
     /// </summary>
     [Id(4)] public long[]? SnapshotOffsetsByPartition { get; set; }
+
+    /// <summary>
+    /// Compact binary encoding of the leaf's entry cache produced by
+    /// <see cref="LeafSnapshotCodec.Encode"/>, or <see langword="null"/> for a
+    /// legacy blob whose rows live in <see cref="Rows"/>.
+    /// <para>
+    /// The legacy shape persists <see cref="Rows"/> as an object graph, which
+    /// under the default JSON grain-storage serializer costs a property-name
+    /// envelope and a base64 string for every single row. The frame collapses
+    /// that to one length-prefixed buffer of raw value bytes, and lets the
+    /// decode path run without materialising a key string, a base64 buffer, or
+    /// a scratch array per row.
+    /// </para>
+    /// <para>
+    /// Adoption is by dual-read with lazy rewrite, never by migration.
+    /// <see cref="LeafSnapshotCodec.HasFrameMagic"/> sniffs the encoding on
+    /// load, so a legacy blob is decoded from <see cref="Rows"/> exactly as it
+    /// always was, and is only re-encoded into this slot when the leaf next
+    /// captures naturally. Nothing rewrites a blob eagerly and nothing
+    /// discards one: the coverage-gated WAL GC trims a checkpointed prefix
+    /// because a snapshot covers it, so a snapshot that became unreadable over
+    /// a trimmed prefix would be data loss rather than a slow start.
+    /// </para>
+    /// <para>
+    /// Wire-compatible: legacy persisted blobs decode this slot to
+    /// <see langword="null"/>, and a blob carrying a frame leaves
+    /// <see cref="Rows"/> empty, so exactly one of the two ever holds rows.
+    /// </para>
+    /// </summary>
+    [Id(5)] public byte[]? EncodedRows { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> when this blob claims to carry its rows as a
+    /// <see cref="LeafSnapshotCodec"/> binary frame. Claiming is not the same
+    /// as being valid - see <see cref="ValidateRowPayload"/>.
+    /// <para>
+    /// Declared as a method rather than a property on purpose: the blob is
+    /// persisted through grain-storage serializers that serialise public
+    /// properties reflectively, and a computed property would be written into
+    /// every persisted row.
+    /// </para>
+    /// </summary>
+    internal bool HasBinaryRowPayload()
+        => EncodedRows is { Length: > 0 } frame && LeafSnapshotCodec.HasFrameMagic(frame);
+
+    /// <summary>
+    /// Verifies that this blob's row payload can be read in full, in whichever
+    /// encoding it arrived in: a binary frame must pass the codec's header,
+    /// checksum, and structural checks, and a legacy row list must not carry a
+    /// <see langword="null"/> key. A non-empty <see cref="EncodedRows"/> that
+    /// is not a frame at all is rejected outright rather than silently falling
+    /// back to <see cref="Rows"/>, since that shape can only mean corruption.
+    /// <para>
+    /// A <see langword="false"/> result must be treated by the caller as "no
+    /// snapshot" - not as a snapshot with fewer rows, and never as coverage.
+    /// Reporting coverage for a prefix this blob cannot actually reproduce is
+    /// what would let the WAL GC trim the last durable copy of it.
+    /// </para>
+    /// </summary>
+    internal bool ValidateRowPayload()
+    {
+        if (EncodedRows is { Length: > 0 } frame)
+        {
+            return LeafSnapshotCodec.Validate(frame);
+        }
+
+        var rows = Rows;
+        if (rows is null)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (rows[i].Key is null)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Number of rows this blob carries, in whichever encoding it uses. Reads
+    /// the frame header rather than decoding any row.
+    /// </summary>
+    internal int GetRowCount()
+    {
+        if (EncodedRows is { Length: > 0 } frame)
+        {
+            return LeafSnapshotCodec.TryGetRowCount(frame, out var count) ? count : 0;
+        }
+
+        return Rows?.Count ?? 0;
+    }
+
+    /// <summary>
+    /// Returns an allocation-free, encoding-agnostic view over this blob's
+    /// rows. Callers that have not already validated the payload should call
+    /// <see cref="ValidateRowPayload"/> first; enumerating an unvalidated
+    /// malformed frame throws rather than yielding a silently short row set.
+    /// </summary>
+    internal LeafSnapshotRowSequence EnumerateRows()
+        => EncodedRows is { Length: > 0 } frame
+            ? LeafSnapshotRowSequence.FromFrame(frame)
+            : LeafSnapshotRowSequence.FromLegacyRows(Rows);
 }

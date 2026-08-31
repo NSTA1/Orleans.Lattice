@@ -50,6 +50,19 @@
     <Using Include="NUnit.Framework" />
   </ItemGroup>
 
+  <!--
+    Byte-for-byte legacy leaf-snapshot blob, serialised by the same Newtonsoft
+    path the grain-storage serializer uses, committed so the codec's dual-read
+    guarantee is proved against a real pre-codec persisted shape rather than a
+    reconstruction. Embedded (not copied) so the bytes the test reads are
+    exactly the bytes in source control.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="BPlusTree\State\Fixtures\leaf-snapshot-legacy.json">
+      <LogicalName>Orleans.Lattice.Tests.BPlusTree.State.Fixtures.leaf-snapshot-legacy.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />

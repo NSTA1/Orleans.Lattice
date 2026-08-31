@@ -510,6 +510,105 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultHotShardSplitCooldown = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// How disproportionately loaded the hottest shard must be, relative to the
+    /// tree's own median shard load, before any autonomic split is admitted.
+    /// <para>
+    /// <see cref="HotShardOpsPerSecondThreshold"/> measures how <em>fast</em> a
+    /// shard is; this measures the <em>shape</em> of the load. A bulk ingest
+    /// streams writes uniformly across the whole key space, so every shard sits
+    /// far above the rate threshold while none is disproportionately loaded:
+    /// splitting cannot relieve it (each half is equally hot) and the only
+    /// durable effect is a permanent multiplication of grain activations. The
+    /// monitor therefore computes <c>maxShardRate / medianShardRate</c> across
+    /// the tree's physical shards each pass and admits splits only when that
+    /// ratio reaches this value. A uniformly loaded tree sits at approximately
+    /// <c>1.0</c> and is never a split candidate; a genuinely skewed read
+    /// workload sits well above it and still splits exactly as before.
+    /// </para>
+    /// <para>
+    /// The median (rather than the mean) is used because it is robust: one hot
+    /// shard among many barely moves it, so the ratio reflects true
+    /// concentration rather than being diluted by the shard count.
+    /// </para>
+    /// <para>
+    /// Must be strictly greater than
+    /// <see cref="HotShardConsolidationSkewRatio"/>: the gap between the two is
+    /// the hysteresis dead band in which neither the split trigger nor the
+    /// consolidation trigger fires, which is what stops the two control loops
+    /// oscillating against each other. A value at or below <c>1.0</c> disables
+    /// the skew gate entirely and restores pure rate-based admission.
+    /// </para>
+    /// </summary>
+    public double HotShardMinSkewRatio { get; set; } = DefaultHotShardMinSkewRatio;
+
+    /// <summary>Default value for <see cref="HotShardMinSkewRatio"/> (1.5).</summary>
+    public const double DefaultHotShardMinSkewRatio = 1.5;
+
+    /// <summary>
+    /// The load-skew ratio at or below which a tree counts as uniformly loaded,
+    /// and is therefore a candidate for shard <em>consolidation</em> rather than
+    /// splitting. Measured on exactly the same statistic as
+    /// <see cref="HotShardMinSkewRatio"/> (<c>maxShardRate / medianShardRate</c>).
+    /// <para>
+    /// The split trigger fires at or above <see cref="HotShardMinSkewRatio"/>;
+    /// the consolidation trigger fires at or below this value. The interval
+    /// between them is a dead band in which neither acts, so a tree that has
+    /// just been split cannot immediately qualify for consolidation and a tree
+    /// that has just been consolidated cannot immediately qualify for a split.
+    /// This value must therefore be strictly less than
+    /// <see cref="HotShardMinSkewRatio"/>.
+    /// </para>
+    /// </summary>
+    public double HotShardConsolidationSkewRatio { get; set; } = DefaultHotShardConsolidationSkewRatio;
+
+    /// <summary>Default value for <see cref="HotShardConsolidationSkewRatio"/> (1.15).</summary>
+    public const double DefaultHotShardConsolidationSkewRatio = 1.15;
+
+    /// <summary>
+    /// Minimum number of live entries a physical shard must hold before it is
+    /// eligible for an autonomic split, whatever its operation rate.
+    /// <para>
+    /// A split relieves a hot shard by moving half of its virtual slots to a
+    /// newly allocated physical shard. That can only help when there is enough
+    /// data to redistribute: splitting a shard holding a few dozen records
+    /// relieves nothing and permanently doubles the tree's activation
+    /// footprint. This floor makes an under-occupied shard structurally
+    /// ineligible so a pathological hotness signal cannot shatter a small tree.
+    /// </para>
+    /// <para>
+    /// Occupancy is sampled with a single
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountAsync()"/> per
+    /// candidate, and only for shards that already cleared every cheaper gate,
+    /// so a tree under uniform load pays nothing for it. Set to <c>0</c> to
+    /// disable the occupancy floor (and its probe) entirely.
+    /// </para>
+    /// </summary>
+    public int HotShardMinShardEntries { get; set; } = DefaultHotShardMinShardEntries;
+
+    /// <summary>Default value for <see cref="HotShardMinShardEntries"/> (1024).</summary>
+    public const int DefaultHotShardMinShardEntries = 1024;
+
+    /// <summary>
+    /// Absolute ceiling on the number of physical shards a tree may reach
+    /// through autonomic splitting. Once the tree's physical shard count
+    /// reaches this value the monitor admits no further splits, whatever the
+    /// observed load, so a pathological or mis-calibrated hotness signal cannot
+    /// run a tree away into thousands of shards.
+    /// <para>
+    /// The ceiling bounds <em>autonomic</em> growth only: an explicit
+    /// <see cref="ILattice.ReshardAsync"/> is an operator decision and is not
+    /// gated by it. A tree deliberately configured with more physical shards
+    /// than this ceiling simply never splits autonomically; raise the ceiling
+    /// to re-enable growth for such a tree. Set to <c>0</c> (or less) for no
+    /// ceiling.
+    /// </para>
+    /// </summary>
+    public int MaxPhysicalShardsPerTree { get; set; } = DefaultMaxPhysicalShardsPerTree;
+
+    /// <summary>Default value for <see cref="MaxPhysicalShardsPerTree"/> (256).</summary>
+    public const int DefaultMaxPhysicalShardsPerTree = 256;
+
+    /// <summary>
     /// Maximum number of autonomic splits that can be in flight concurrently
     /// for a single tree. The monitor refuses to start a new split while this
     /// many are already active. Defaults to 2 - splits are I/O-bounded by the
@@ -1150,6 +1249,35 @@ public class LatticeOptions
     public const int DefaultLeafSnapshotReClassifyEveryNCheckpoints = 64;
 
     /// <summary>
+    /// When <c>true</c> (the default), a leaf snapshot capture encodes its
+    /// rows into the compact binary frame
+    /// (<c>LeafSnapshotBlob.EncodedRows</c>) instead of persisting them as the
+    /// legacy row object graph. The legacy shape costs a serializer property
+    /// envelope plus a base64 string for every row under the default JSON
+    /// grain-storage serializer, and its decode path allocates a string, a
+    /// scratch buffer, and a fresh array per row; the frame carries raw value
+    /// bytes and decodes straight into the entry cache.
+    /// <para>
+    /// This switch controls the <b>write</b> side only. Reading is always
+    /// dual: a blob is decoded from whichever encoding it carries, so turning
+    /// the switch off does not orphan blobs already written as frames, and
+    /// turning it on does not require any migration of blobs already written
+    /// as row lists - each is simply re-encoded on its next natural capture.
+    /// Both directions are therefore safe to flip on a running deployment.
+    /// </para>
+    /// <para>
+    /// Set to <c>false</c> only to pin the persisted shape to the legacy
+    /// encoding, for example while a rollback to a build that predates the
+    /// frame is still possible: such a build has no dual-read and would see a
+    /// frame-carrying blob as an empty row set.
+    /// </para>
+    /// </summary>
+    public bool LeafSnapshotBinaryEncodingEnabled { get; set; } = DefaultLeafSnapshotBinaryEncodingEnabled;
+
+    /// <summary>Default value for <see cref="LeafSnapshotBinaryEncodingEnabled"/> (<c>true</c>).</summary>
+    public const bool DefaultLeafSnapshotBinaryEncodingEnabled = true;
+
+    /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of
     /// the fall-off-log triggers fires at activation time
     /// (WAL trimmed past checkpoint, replay budget exceeded, projection
@@ -1502,9 +1630,9 @@ public class LatticeOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
-    /// Cadence at which the per-silo core WAL garbage-collection
-    /// scheduler (<see cref="ILatticeWalGc"/>) runs a pass over every
-    /// registered tree, so a durable-WAL host gets bounded WAL retention
+    /// Upper bound on the cadence at which the per-silo core WAL
+    /// garbage-collection scheduler (<see cref="ILatticeWalGc"/>) runs a pass
+    /// over a registered tree, so a durable-WAL host gets bounded WAL retention
     /// without the replication package and without any caller invoking
     /// <see cref="ILatticeWalGc.RunOnceAsync"/>.
     /// <para>
@@ -1512,11 +1640,13 @@ public class LatticeOptions
     /// <b>enabled</b>: the core library trims the WAL of every registered
     /// tree (replicated or not) at least once an hour, so the WAL can no
     /// longer grow without bound and <see cref="WalRetention"/> is
-    /// effective out of the box. A pass is retention housekeeping, not a
-    /// latency-sensitive operation, so the coarse default keeps the
-    /// storage cost low (one fan-out per silo per hour); a host that
-    /// needs a tighter disk bound - a high write rate paired with a small
-    /// <see cref="WalRetention"/> - can lower it, and
+    /// effective out of the box. This is the <i>quiet-path</i> tick: a tree
+    /// whose passes are reclaiming entries is collected far more often, down to
+    /// <see cref="WalGcMinInterval"/>, and relaxes back to this interval once it
+    /// has nothing left to reclaim. A pass is retention housekeeping, not a
+    /// latency-sensitive operation, so the coarse ceiling keeps the idle
+    /// storage cost low; a host that needs a tighter disk bound - a high write
+    /// rate paired with a small <see cref="WalRetention"/> - can lower it, and
     /// <see cref="TimeSpan.Zero"/> (or any non-positive value) disables
     /// the scheduler entirely to restore the historical caller-driven
     /// behaviour.
@@ -1537,6 +1667,70 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalGcInterval"/> (1 hour, enabled).</summary>
     public static readonly TimeSpan DefaultWalGcInterval = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Upper bound on the randomized delay before the per-silo WAL
+    /// garbage-collection scheduler runs its <b>first</b> pass. The scheduler
+    /// draws a uniform offset in <c>[WalGcStartupDelay / 2, WalGcStartupDelay)</c>
+    /// so the first pass stays clear of the silo's activation window and no two
+    /// silos in a rolling restart align their first fan-out.
+    /// <para>
+    /// Defaults to <see cref="DefaultWalGcStartupDelay"/> (30 seconds), so the
+    /// first pass lands 15 to 30 seconds after start. Before this knob existed
+    /// the first pass was staggered across <c>[WalGcInterval / 2,
+    /// WalGcInterval)</c> - 30 to 60 minutes at the default cadence - so a host
+    /// recreated more often than that never trimmed its WAL at all. Decoupling
+    /// the startup stagger from the steady-state cadence keeps both properties
+    /// (post-activation, de-correlated) while making reclamation reachable on a
+    /// short-lived box.
+    /// </para>
+    /// <para>
+    /// The effective window is capped at <see cref="WalGcInterval"/>, so a host
+    /// that configures a cadence shorter than this knob is not made to wait
+    /// longer than one interval for its first pass. Set
+    /// <see cref="TimeSpan.Zero"/> (or any non-positive value) to run the first
+    /// pass immediately, which forfeits both the activation-window guard and
+    /// cross-silo de-correlation and is intended for single-silo hosts and
+    /// tests. This is a global knob read from the default (unnamed) options;
+    /// per-tree overrides do not apply, and the value is read once at start.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalGcStartupDelay { get; set; } = DefaultWalGcStartupDelay;
+
+    /// <summary>Default value for <see cref="WalGcStartupDelay"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultWalGcStartupDelay = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Lower bound on the adaptive per-tree WAL garbage-collection cadence: the
+    /// interval the scheduler falls back to for a tree whose last pass actually
+    /// reclaimed entries, so a fast-growing log is collected promptly instead of
+    /// waiting out a fixed <see cref="WalGcInterval"/> tick.
+    /// <para>
+    /// The scheduler keeps an independent cadence per tree inside the closed band
+    /// <c>[WalGcMinInterval, WalGcInterval]</c>. A pass that trims at least one
+    /// entry - the observation that the tree had backlog above the trim floor -
+    /// snaps that tree back to this floor; a pass that trims nothing (or fails)
+    /// doubles the tree's interval, up to <see cref="WalGcInterval"/> as the
+    /// quiet-path ceiling. So a busy tree is collected at this cadence, an idle
+    /// tree geometrically relaxes to the configured interval and costs nothing,
+    /// and neither one can affect the other's schedule.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalGcMinInterval"/> (30 seconds). Set
+    /// <see cref="TimeSpan.Zero"/> (or any non-positive value) to disable the
+    /// adaptive cadence and restore a fixed <see cref="WalGcInterval"/> tick for
+    /// every tree; a value above <see cref="WalGcInterval"/> is likewise clamped
+    /// to the interval, which has the same effect. This knob does not change what
+    /// a pass may reclaim - trim eligibility and the coverage-gated trim floor are
+    /// untouched - only how often a pass runs. This is a global knob read from
+    /// the default (unnamed) options; per-tree overrides do not apply, and the
+    /// value is read once at start.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalGcMinInterval { get; set; } = DefaultWalGcMinInterval;
+
+    /// <summary>Default value for <see cref="WalGcMinInterval"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultWalGcMinInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Optional advisory per-tree ceiling, in bytes, on retained WAL size.

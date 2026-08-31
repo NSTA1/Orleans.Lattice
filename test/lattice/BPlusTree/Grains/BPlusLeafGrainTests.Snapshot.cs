@@ -95,8 +95,12 @@ public partial class BPlusLeafGrainTests
 
         Assert.That(captured, Is.Not.Null);
         Assert.That(captured!.SnapshotOffset, Is.EqualTo(7L));
-        Assert.That(captured.Rows.Count, Is.EqualTo(2));
-        var keys = captured.Rows.Select(r => r.Key).ToArray();
+        Assert.That(captured.GetRowCount(), Is.EqualTo(2));
+        var keys = new List<string>();
+        foreach (var row in captured.EnumerateRows())
+        {
+            keys.Add(row.Key);
+        }
         Assert.That(keys, Is.EquivalentTo(new[] { "alpha", "beta" }));
         Assert.That(captured.CapturedAtTicks, Is.GreaterThan(0L));
     }

@@ -55,6 +55,37 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "(null disables the cluster-wide split gate so each tree enforces only its own MaxConcurrentAutoSplits; "
                 + "a positive value caps the aggregate number of concurrently in-flight autonomic splits across all trees).");
         }
+        if (double.IsNaN(options.HotShardMinSkewRatio) || options.HotShardMinSkewRatio < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardMinSkewRatio)} must be a non-negative number "
+                + "(it is the ratio of the hottest shard's rate to the tree's median shard rate at which an "
+                + "autonomic split is admitted; a value at or below 1.0 disables the skew gate).");
+        }
+        if (double.IsNaN(options.HotShardConsolidationSkewRatio) || options.HotShardConsolidationSkewRatio < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardConsolidationSkewRatio)} must be a non-negative number "
+                + "(it is the load-skew ratio at or below which a tree counts as uniformly loaded and therefore "
+                + "eligible for shard consolidation).");
+        }
+        if (options.HotShardMinSkewRatio > 1d
+            && options.HotShardConsolidationSkewRatio >= options.HotShardMinSkewRatio)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardConsolidationSkewRatio)} must be strictly less than "
+                + $"{nameof(LatticeOptions.HotShardMinSkewRatio)} "
+                + "(the interval between them is the hysteresis dead band separating the split trigger from the "
+                + "consolidation trigger; overlapping trigger regions let the two control loops oscillate, "
+                + "splitting a tree and immediately consolidating it again).");
+        }
+        if (options.HotShardMinShardEntries < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardMinShardEntries)} must be greater than or equal to 0 "
+                + "(0 disables the occupancy floor and its per-candidate probe; a positive value is the minimum "
+                + "number of live entries a shard must hold before an autonomic split can relieve anything).");
+        }
         if (options.ConsolidationDrainBatchSize < 1)
         {
             return ValidateOptionsResult.Fail(

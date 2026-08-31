@@ -66,6 +66,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.policy.over_threshold` | observable gauge (0/1) | `tree` | Overview | Trees over advisory threshold |
 | `orleans.lattice.storage.policy.trim_triggered` | counter | `tree`, `reason` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.storage.policy.bytes_reclaimed` | counter (`By`) | `tree` | Overview | Byte-pressure trim activity |
+| `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome |
+| `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
+| `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
 | `orleans.lattice.admission.live_keys` | observable gauge (`{key}`) | `tree` | Overview | Admission - live keys by tree |
 | `orleans.lattice.admission.estimated_bytes` | observable gauge (`By`) | `tree` | Overview | Admission - estimated bytes by tree |
 | `orleans.lattice.admission.over_advisory` | observable gauge (0/1) | `tree` | Overview | Admission - trees over advisory ceiling |

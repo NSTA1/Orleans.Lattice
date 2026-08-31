@@ -27,6 +27,18 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal interface IRepoContextSemanticIndex
 {
     /// <summary>
+    /// The <see cref="RepoContextRetrievalPath"/> value this implementation serves when
+    /// it answers a query: <see cref="RepoContextRetrievalPath.SemanticExact"/> for a
+    /// complete-recall search, or
+    /// <see cref="RepoContextRetrievalPath.SemanticApproximate"/> for a bounded-recall
+    /// one. The declaration is re-validated locally through
+    /// <see cref="RepoContextRetrievalPath.NormalizeSemantic(string?)"/> before it
+    /// reaches a response, so an unrecognised value reports the weaker (approximate)
+    /// claim rather than over-promising recall.
+    /// </summary>
+    string RetrievalPath { get; }
+
+    /// <summary>
     /// Ranks the stored vectors of <paramref name="repoId"/> against
     /// <paramref name="query"/> and returns up to <paramref name="k"/> closest
     /// matches in descending score order. Candidates whose embedding space does

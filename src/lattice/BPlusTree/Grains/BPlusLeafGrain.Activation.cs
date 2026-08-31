@@ -419,8 +419,23 @@ internal sealed partial class BPlusLeafGrain
         // the actual highest offset observed during replay, not the
         // pass-1 clamped value.
         var deferredTerminals = new List<DeferredTerminal>();
+        var deferredOffsets = new DeferredOffsetLedger(partitionCount);
         var perPartitionMaxApplied = new long[partitionCount];
         for (var p = 0; p < partitionCount; p++) perPartitionMaxApplied[p] = -1L;
+
+        // Pass-1 absorb frontier. A deferred terminal is only safe to apply in
+        // place while pass 1 is still running once every OTHER partition has
+        // been fully absorbed, because that is exactly when the terminal's
+        // cross-partition dependencies are all present: every saga prepare has
+        // landed in _pendingTx and every range-delete target is in the Cache.
+        // Within the terminal's own partition the entries below its offset are
+        // already applied (the WAL is read in offset order) and the entries
+        // above it were appended after it, so they are not dependencies.
+        // Partitions are absorbed in index order, so the condition holds for a
+        // single-partition tree throughout, and for the last partition of a
+        // multi-partition tree; every other terminal stays deferred to pass 2
+        // exactly as before.
+        var partitionsAbsorbed = 0;
 
         for (var partition = 0; partition < partitionCount; partition++)
         {
@@ -589,7 +604,8 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, cancellationToken);
+            partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
             if (maxApplied > perPartitionMaxApplied[partition])
@@ -607,11 +623,33 @@ internal sealed partial class BPlusLeafGrain
         // terminal's id keys directly into the pending-bucket map;
         // within a single partition's deferred list the arrival order
         // is preserved by the append order.
+        //
+        // Each drained terminal is struck off the deferred ledger and its
+        // partition's now-recovered ceiling is flushed immediately (issue
+        // #1831). The drain is cheap per terminal but the list can be long, so
+        // banking the recovered prefix as it shrinks means a teardown during
+        // pass 2 keeps the progress the drain has already earned instead of
+        // discarding all of it. Both safety clamps still bound every flush:
+        // the ceiling stays below the next unresolved deferred offset in that
+        // partition and below any unresolved prepare in it.
         foreach (var terminal in deferredTerminals)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             using (LatticeApplyOffsetContext.BeginScope(terminal.Partition, terminal.Offset))
             {
                 projection.Apply(terminal.Mutation);
+            }
+
+            deferredOffsets.Resolve(terminal.Partition, terminal.Offset);
+            if (await TryFlushRecoveredCeilingAsync(
+                terminal.Partition,
+                perPartitionMaxApplied[terminal.Partition],
+                deferredOffsets,
+                projection,
+                cancellationToken))
+            {
+                anyAdvanced = true;
             }
         }
 
@@ -676,11 +714,207 @@ internal sealed partial class BPlusLeafGrain
     ///     the Sets in <c>P_s</c> become visible. Deferring to pass 2
     ///     restores the tombstone-after-its-targets ordering invariant.
     /// </para>
+    /// <para>
+    ///     Both rationales are about entries in OTHER partitions that pass 1
+    ///     has not absorbed yet, so both lapse once every other partition has
+    ///     been fully absorbed: every prepare is then in <c>_pendingTx</c> and
+    ///     every range-delete target is in the Cache, and the entries above the
+    ///     terminal in its own partition were appended after it, so they are
+    ///     not dependencies. Pass 1 therefore applies such a mutation in place
+    ///     rather than deferring it (issue #1831), which keeps the incremental
+    ///     flush ceiling moving for the remainder of the scan. The atomicity
+    ///     contract above is unchanged: a terminal is only ever applied when
+    ///     its complete prepared-mutation set is already reconstructed.
+    /// </para>
     /// </summary>
     private readonly record struct DeferredTerminal(
         int Partition,
         long Offset,
         LatticeMutation Mutation);
+
+    /// <summary>
+    /// Replay-scoped ledger of the WAL offsets whose mutations were deferred
+    /// out of pass 1, kept per partition and <b>resolvable</b>: an offset is
+    /// struck off the moment its mutation is actually applied, so the
+    /// incremental-flush ceiling recovers instead of staying pinned behind the
+    /// first deferred mutation for the whole replay (issue #1831).
+    /// <para>
+    /// Replaces the monotonically non-increasing <c>lowestDeferredOffset</c>
+    /// scalar the incremental flush used to clamp against. That scalar was
+    /// only ever lowered, so the first <see cref="MutationKind.DeleteRange"/> /
+    /// <see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>
+    /// a partition emitted pinned its ceiling for the entire remainder of the
+    /// replay, leaving all durable progress to the post-pass-2 reconciliation -
+    /// which only runs when the whole replay fits inside the activation window.
+    /// </para>
+    /// <para>
+    /// <b>Hot-path shape.</b> Offsets arrive in strictly increasing order
+    /// within a partition (the WAL is read in offset order), so each
+    /// partition's buffer is sorted and the lowest unresolved offset is the
+    /// entry at a head cursor - an O(1) array read, allocation-free, evaluated
+    /// once per slice. Buffers are allocated lazily per partition and grown by
+    /// doubling, so the ledger's cost tracks the number of DEFERRED offsets and
+    /// never the number of replayed records.
+    /// </para>
+    /// </summary>
+    internal sealed class DeferredOffsetLedger
+    {
+        /// <summary>
+        /// Marks a struck-off slot. WAL offsets are non-negative, so <c>-1</c>
+        /// cannot collide with a real offset - including offset <c>0</c>, which
+        /// a cold replay under the checkpoint override genuinely reads.
+        /// </summary>
+        private const long ResolvedSlot = -1L;
+
+        private const int InitialCapacity = 4;
+
+        private readonly long[]?[] _offsets;
+        private readonly int[] _counts;
+        private readonly int[] _heads;
+
+        /// <summary>
+        /// Creates a ledger covering <paramref name="partitionCount"/> WAL
+        /// partitions. No per-partition buffer is allocated until that
+        /// partition actually defers something.
+        /// </summary>
+        internal DeferredOffsetLedger(int partitionCount)
+        {
+            _offsets = new long[partitionCount][];
+            _counts = new int[partitionCount];
+            _heads = new int[partitionCount];
+        }
+
+        /// <summary>
+        /// Records <paramref name="offset"/> as deferred (and therefore
+        /// unapplied) under <paramref name="partition"/>. Callers append in
+        /// increasing offset order within a partition.
+        /// </summary>
+        internal void Add(int partition, long offset)
+        {
+            var buffer = _offsets[partition];
+            var count = _counts[partition];
+            if (buffer is null)
+            {
+                buffer = new long[InitialCapacity];
+                _offsets[partition] = buffer;
+            }
+            else if (count == buffer.Length)
+            {
+                var grown = new long[buffer.Length * 2];
+                Array.Copy(buffer, grown, count);
+                _offsets[partition] = grown;
+                buffer = grown;
+            }
+
+            buffer[count] = offset;
+            _counts[partition] = count + 1;
+        }
+
+        /// <summary>
+        /// Strikes <paramref name="offset"/> off <paramref name="partition"/>'s
+        /// unresolved set once its mutation has been applied. Resolution
+        /// normally arrives in the same order the offsets were added, which is
+        /// the O(1) head-advance path; an out-of-order resolution marks its
+        /// slot and the head skips it when it gets there. An offset that was
+        /// never added, or that was already resolved, is ignored.
+        /// </summary>
+        internal void Resolve(int partition, long offset)
+        {
+            var buffer = _offsets[partition];
+            if (buffer is null)
+                return;
+
+            var count = _counts[partition];
+            var head = _heads[partition];
+            for (var i = head; i < count; i++)
+            {
+                if (buffer[i] != offset)
+                    continue;
+                buffer[i] = ResolvedSlot;
+                break;
+            }
+
+            while (head < count && buffer[head] == ResolvedSlot)
+                head++;
+            _heads[partition] = head;
+        }
+
+        /// <summary>
+        /// The lowest still-unresolved deferred offset in
+        /// <paramref name="partition"/>, or <see cref="long.MaxValue"/> when
+        /// the partition holds none. The incremental flush clamps strictly
+        /// below this value, so a partition with nothing outstanding is free to
+        /// advance to its applied frontier.
+        /// </summary>
+        internal long MinUnresolved(int partition)
+        {
+            var head = _heads[partition];
+            return head < _counts[partition] ? _offsets[partition]![head] : long.MaxValue;
+        }
+    }
+
+    /// <summary>
+    /// Flushes <paramref name="partition"/>'s projection checkpoint up to the
+    /// highest offset below which every entry is fully applied, and returns
+    /// <c>true</c> when the durable position actually advanced. Shared by the
+    /// per-slice flush in pass 1 and the per-terminal flush in pass 2 so both
+    /// compute the ceiling from one place and can never drift apart.
+    /// <para>
+    /// The ceiling is the minimum of three bounds, so it can never license a
+    /// checkpoint (or the durable materialiser pin it drives) past an offset
+    /// that is not yet applied:
+    /// </para>
+    /// <list type="number">
+    /// <item><paramref name="maxApplied"/> - the highest offset this replay has
+    /// reached in the partition.</item>
+    /// <item>One below the partition's lowest still-unresolved deferred offset
+    /// (<see cref="DeferredOffsetLedger.MinUnresolved"/>), because a deferred
+    /// mutation is applied only when it drains.</item>
+    /// <item>One below any unresolved saga prepare in the partition
+    /// (<see cref="MinUnresolvedPrepareOffsetForPartition"/>), because a
+    /// resumed replay must re-read the prepare to rebuild <c>_pendingTx</c>.
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> applies this
+    /// clamp internally too; applying it here as well keeps the cadence from
+    /// issuing redundant force-flushes while a prepare sits open below
+    /// <paramref name="maxApplied"/>.</item>
+    /// </list>
+    /// <para>
+    /// The flush is skipped unless it strictly advances the partition's current
+    /// position, which also keeps
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/>'s monotonic guard
+    /// and its idempotent-re-assert force-flush out of the loop. Persisting is
+    /// coalesced per <c>MaterialiserCheckpointInterval</c> /
+    /// <c>MaterialiserCheckpointEntries</c> inside that seam and drives the
+    /// periodic snapshot capture.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TryFlushRecoveredCeilingAsync(
+        int partition,
+        long maxApplied,
+        DeferredOffsetLedger deferredOffsets,
+        ILeafProjection projection,
+        CancellationToken cancellationToken)
+    {
+        if (maxApplied < 0)
+            return false;
+
+        var ceiling = maxApplied;
+        var minDeferred = deferredOffsets.MinUnresolved(partition);
+        if (minDeferred != long.MaxValue && minDeferred - 1 < ceiling)
+            ceiling = minDeferred - 1;
+        if (MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare && minPrepare - 1 < ceiling)
+            ceiling = minPrepare - 1;
+
+        if (ceiling <= GetCurrentCheckpointForPartition(partition))
+            return false;
+
+        using (LatticeApplyOffsetContext.BeginScope(partition, ceiling))
+        {
+            await projection.SetCheckpointOffsetAsync(ceiling, cancellationToken);
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Per-partition replay inner loop extracted from
@@ -695,17 +929,19 @@ internal sealed partial class BPlusLeafGrain
     /// <para>
     /// <b>Pass 1 of two-pass replay.</b> Saga terminals
     /// (<see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>)
-    /// are appended to <paramref name="deferredTerminals"/> instead of
-    /// being applied inline - see the <see cref="DeferredTerminal"/>
-    /// docstring for the saga atomicity rationale. Per-partition
-    /// checkpoint advance is also deferred to pass 2: a partition that
-    /// emitted a terminal would otherwise advance its checkpoint past
-    /// the still-pending prepare offsets in the OTHER partitions'
-    /// pending-tx clamp range (the per-partition clamp is scoped to
-    /// the partition the prepare landed in, so the terminal's
-    /// partition can advance unclamped) - but the terminal itself
-    /// hasn't been applied yet, so the visible-state contract requires
-    /// us to wait.
+    /// and range deletes are appended to <paramref name="deferredTerminals"/>
+    /// instead of being applied inline - see the <see cref="DeferredTerminal"/>
+    /// docstring for the saga atomicity rationale - unless
+    /// <paramref name="drainDeferredInline"/> says every other partition has
+    /// already been absorbed, in which case the mutation's cross-partition
+    /// dependencies are all present and it is applied in place. Per-partition
+    /// checkpoint advance beyond the safe contiguous prefix is deferred to
+    /// pass 2: a partition that emitted a terminal would otherwise advance its
+    /// checkpoint past the still-pending prepare offsets in the OTHER
+    /// partitions' pending-tx clamp range (the per-partition clamp is scoped to
+    /// the partition the prepare landed in, so the terminal's partition can
+    /// advance unclamped) - but the terminal itself hasn't been applied yet, so
+    /// the visible-state contract requires us to wait.
     /// </para>
     /// </summary>
     private async Task<(bool Advanced, long MaxApplied)> ReplayPartitionAsync(
@@ -714,6 +950,8 @@ internal sealed partial class BPlusLeafGrain
         long checkpoint,
         ILeafProjection projection,
         List<DeferredTerminal> deferredTerminals,
+        DeferredOffsetLedger deferredOffsets,
+        bool drainDeferredInline,
         ShardMap? replayShardMap,
         int maxRecordsPerTurn,
         CancellationToken cancellationToken)
@@ -757,24 +995,28 @@ internal sealed partial class BPlusLeafGrain
         // clamps that together hold the checkpoint at the highest offset
         // below which every entry - inline, deferred, and cross-partition
         // saga - is applied:
-        //   (a) below the lowest DEFERRED terminal / DeleteRange offset seen
-        //       in this partition, since those mutations are applied only in
-        //       pass 2 (see the DeferredTerminal docstring); and
+        //   (a) below the lowest still-UNRESOLVED deferred terminal /
+        //       DeleteRange offset in this partition, since those mutations
+        //       are applied only when they drain (see the DeferredTerminal
+        //       docstring); and
         //   (b) below any unresolved saga prepare in this partition
         //       (MinUnresolvedPrepareOffsetForPartition), because the
         //       matching terminal - even one routed to this same partition -
-        //       is itself deferred to pass 2, so _pendingTx must be
-        //       reconstructed by a resumed replay that re-reads the prepare.
-        // SetCheckpointOffsetAsync applies clamp (b) internally too; applying
-        // it here as well keeps the per-slice cadence from issuing redundant
-        // force-flushes while a prepare sits open below maxApplied.
+        //       may itself be deferred, so _pendingTx must be reconstructed
+        //       by a resumed replay that re-reads the prepare.
+        // TryFlushRecoveredCeilingAsync owns both clamps.
         //
-        // lastFlushedCeiling starts at the partition's current durable
-        // position so a resumed cold replay that re-applies an
-        // already-checkpointed prefix (rehydrate declined, cache empty) never
-        // re-persists it or trips SetCheckpointOffsetAsync's monotonic guard.
-        long lowestDeferredOffset = long.MaxValue;
-        var lastFlushedCeiling = GetCurrentCheckpointForPartition(partition);
+        // Clamp (a) reads a RESOLVABLE ledger rather than a monotonically
+        // non-increasing scalar (issue #1831). The old scalar was only ever
+        // lowered, so the first deferred mutation a partition emitted pinned
+        // its ceiling for the whole remainder of the replay and left every
+        // further advance to the post-pass-2 reconciliation - which only runs
+        // when the entire replay fits inside the activation window. A backlog
+        // large enough to outrun that window therefore banked nothing, the
+        // activation was torn down, and the next one replayed the identical
+        // range: the #1513 livelock, reopened for any tree that uses range
+        // deletes or atomic multi-key writes. With the ledger the ceiling
+        // recovers the moment a deferred offset drains, here or in pass 2.
 
         while (fromExclusive < head)
         {
@@ -815,12 +1057,19 @@ internal sealed partial class BPlusLeafGrain
                     //   visible. Deferring DeleteRange to pass 2 (after
                     //   every Set has populated the Cache) restores the
                     //   tombstone-after-its-targets ordering invariant.
+                    //
+                    // Both rationales are about entries in OTHER partitions
+                    // that pass 1 has not absorbed yet, so both evaporate once
+                    // every other partition is absorbed - which is exactly what
+                    // drainDeferredInline reports. Applying in place then costs
+                    // nothing in safety and keeps the flush ceiling moving for
+                    // the rest of the scan (issue #1831).
                     if (entry.Mutation.Kind is MutationKind.TxCommit or MutationKind.TxAbort
-                        or MutationKind.DeleteRange)
+                        or MutationKind.DeleteRange
+                        && !drainDeferredInline)
                     {
                         deferredTerminals.Add(new DeferredTerminal(partition, entry.Offset, entry.Mutation));
-                        if (entry.Offset < lowestDeferredOffset)
-                            lowestDeferredOffset = entry.Offset;
+                        deferredOffsets.Add(partition, entry.Offset);
                     }
                     else
                     {
@@ -856,52 +1105,35 @@ internal sealed partial class BPlusLeafGrain
             fromExclusive = lastOffset;
 
             // Incremental checkpoint flush over the safe contiguous prefix
-            // (issue #1513). deferredCeiling holds the advance below the
-            // lowest deferred terminal / DeleteRange in this partition;
-            // prepareCeiling holds it below any unresolved saga prepare.
-            // safeCeiling is the min of both and the highest applied offset,
-            // so it can never license a checkpoint (or the materialiser pin)
-            // past a not-yet-durably-applied offset. Only issue the flush
-            // when it strictly advances the partition's durable position,
-            // which coalesces per MaterialiserCheckpointInterval /
-            // MaterialiserCheckpointEntries inside SetCheckpointOffsetAsync
-            // and drives the periodic snapshot capture on persist.
-            var deferredCeiling = lowestDeferredOffset == long.MaxValue
-                ? maxApplied
-                : Math.Min(maxApplied, lowestDeferredOffset - 1);
-            var prepareCeiling = MinUnresolvedPrepareOffsetForPartition(partition) is long minPrepare
-                ? minPrepare - 1
-                : long.MaxValue;
-            var safeCeiling = Math.Min(deferredCeiling, prepareCeiling);
-            if (safeCeiling > lastFlushedCeiling)
-            {
-                using (LatticeApplyOffsetContext.BeginScope(partition, safeCeiling))
-                {
-                    await projection.SetCheckpointOffsetAsync(safeCeiling, cancellationToken);
-                }
-                lastFlushedCeiling = safeCeiling;
-            }
+            // (issue #1513), clamped by TryFlushRecoveredCeilingAsync so it can
+            // never license a checkpoint (or the materialiser pin) past a
+            // not-yet-durably-applied offset.
+            await TryFlushRecoveredCeilingAsync(
+                partition,
+                maxApplied,
+                deferredOffsets,
+                projection,
+                cancellationToken);
         }
 
-        // Pass 1 now flushes the checkpoint incrementally over the strictly
-        // contiguous, fully-applied prefix (the safeCeiling clamp above), so
-        // partial replay progress is durable across a mid-replay teardown
-        // (issue #1513). What it deliberately does NOT do here is advance the
-        // checkpoint to the FULL maxApplied: a partition may still hold a
-        // deferred terminal or an unresolved prepare below maxApplied, so the
-        // remaining advance up to maxApplied is left to the post-pass-2
-        // reconciliation step in ReplayWalSinceCheckpointAsync, which waits
-        // until every deferred terminal has applied (lifting the pending-tx
-        // clamps) before advancing each partition's persisted checkpoint to
-        // its maxApplied. The incremental flush is bounded strictly below
-        // those pending offsets by construction, so it never over-advances:
-        // (a) a partition that observed a prepare in pass 1 is held behind the
-        // prepare's offset, and (b) a partition that emitted a deferred
-        // terminal is held behind that terminal's offset - the full advance
-        // past both only happens once pass 2 has applied them. Returning the
-        // per-partition maxApplied here gives the caller the data it needs to
-        // do the post-pass-2 advance with full knowledge of every partition's
-        // outcome.
+        // Pass 1 flushes the checkpoint incrementally over the strictly
+        // contiguous, fully-applied prefix (the TryFlushRecoveredCeilingAsync
+        // clamps above), so partial replay progress is durable across a
+        // mid-replay teardown (issue #1513). What it deliberately does NOT do
+        // here is advance the checkpoint to the FULL maxApplied: a partition
+        // may still hold an undrained deferred terminal or an unresolved
+        // prepare below maxApplied, so the remaining advance up to maxApplied
+        // is left to the post-pass-2 reconciliation step in
+        // ReplayWalSinceCheckpointAsync, which waits until every deferred
+        // terminal has applied (lifting the pending-tx clamps) before advancing
+        // each partition's persisted checkpoint to its maxApplied. The
+        // incremental flush is bounded strictly below those pending offsets by
+        // construction, so it never over-advances: (a) a partition that
+        // observed a prepare in pass 1 is held behind the prepare's offset, and
+        // (b) a partition that deferred a terminal is held behind that
+        // terminal's offset until it drains. Returning the per-partition
+        // maxApplied here gives the caller the data it needs to do the
+        // post-pass-2 advance with full knowledge of every partition's outcome.
         return (Advanced: maxApplied > checkpoint, MaxApplied: maxApplied);
     }
 
