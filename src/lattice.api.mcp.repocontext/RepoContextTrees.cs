@@ -83,14 +83,15 @@ internal static class RepoContextTrees
     /// recomputed from them, and discarding the tree costs a rebuild and nothing
     /// else.
     /// <para>
-    /// It is deliberately <b>absent from <see cref="All"/></b>, and that absence is
-    /// the point rather than an oversight. <see cref="All"/> is the enrolment list
-    /// the replication companion mirrors cross-cluster, and an index is the one
-    /// thing that must not be mirrored: it is derived, each cluster builds its own
-    /// far more cheaply than it could ship one, and a replicated index would
-    /// interleave two clusters' generations under a layout whose recovery path
-    /// deletes whole key ranges. It also holds no store-of-record data, so no
-    /// backup or portability sweep needs to carry it.
+    /// It is listed in <see cref="LocalDerived"/> rather than <see cref="All"/>,
+    /// and the distinction is the point rather than an oversight.
+    /// <see cref="All"/> is the <b>replication enrolment</b> list, and an index is
+    /// the one thing that must not be mirrored: each cluster builds its own far
+    /// more cheaply than it could ship one, and a replicated index would interleave
+    /// two clusters' generations under a layout whose recovery deletes whole key
+    /// ranges. Being local does <b>not</b> make it exempt from anything else - see
+    /// <see cref="AllIncludingLocalDerived"/>, which repository teardown and the
+    /// host's local-agent grant both use.
     /// </para>
     /// </summary>
     internal const string VectorIndex = "repo-context-vector-index";
@@ -110,8 +111,17 @@ internal static class RepoContextTrees
     internal const string Session = "repo-context-session";
 
     /// <summary>
-    /// Every named tree in the layout contract, in a stable order. Includes the
-    /// reserved vector trees so host wiring can enumerate the full set.
+    /// Every named tree that participates in cross-cluster replication, in a stable
+    /// order. This is the <b>replication enrolment</b> contract: the companion
+    /// package asserts its per-tree merge-mode map has exactly these keys, so a tree
+    /// added here must be given a merge mode there.
+    /// <para>
+    /// It is deliberately <b>not</b> the same as "every tree that holds a
+    /// repository's data". A tree that is wholly derived and local - see
+    /// <see cref="LocalDerived"/> - is excluded from replication but must still be
+    /// swept when a repository is removed and must still be granted to the local
+    /// agent. Use <see cref="AllIncludingLocalDerived"/> for those.
+    /// </para>
     /// </summary>
     internal static IReadOnlyList<string> All { get; } = new[]
     {
@@ -125,6 +135,34 @@ internal static class RepoContextTrees
         VectorPayload,
         VectorMetadata,
     };
+
+    /// <summary>
+    /// The trees that hold a repository's data but are wholly derived and local:
+    /// every record in them can be recomputed from the replicated trees, and each
+    /// cluster builds its own far more cheaply than it could ship one.
+    /// <para>
+    /// They are excluded from <see cref="All"/> because replicating them would be
+    /// waste at best and unsafe at worst - the approximate index interleaves
+    /// generations under a layout whose recovery deletes whole key ranges - but they
+    /// are <b>not</b> excluded from anything else. A repository removal must sweep
+    /// them or its index outlives it, and the host must grant the local agent access
+    /// to them or every read and write they make is denied by the default-deny gate.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string> LocalDerived { get; } = new[]
+    {
+        VectorIndex,
+    };
+
+    /// <summary>
+    /// Every named tree that holds a repository's data, replicated or not:
+    /// <see cref="All"/> followed by <see cref="LocalDerived"/>. This is the list a
+    /// consumer wants whenever the question is "which trees hold this repository's
+    /// data" rather than "which trees replicate" - repository teardown and the
+    /// host's local-agent grant are both of the former kind.
+    /// </summary>
+    internal static IReadOnlyList<string> AllIncludingLocalDerived { get; } =
+        [.. All, .. LocalDerived];
 
     /// <summary>
     /// The fail-closed allow-list of derived vector-plane trees the self-healing
