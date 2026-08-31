@@ -9,6 +9,7 @@ using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Tests.Bunit;
+using Orleans.Lattice.Explorer.UI.Appearance;
 using Orleans.Lattice.Explorer.UI.Layout;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -90,9 +91,10 @@ public sealed class MainLayoutSkipLinkBunitTests : LatticeComponentTestContext
     [Test]
     public void The_banner_offers_a_region_for_each_contributed_control()
     {
-        // The two regions the epic's in-flight sibling features register into.
-        // They are empty here because nothing has been contributed, which is the
-        // point: the layout names a region and never a component.
+        // The two regions the chrome declares. Each holds the first-party
+        // control its own issue shipped, and an extension point that renders
+        // nothing until a downstream head contributes to it - so the layout
+        // names a region, and a feature names itself.
         ConfigureLayoutServices();
 
         var cut = Render<MainLayout>();
@@ -102,9 +104,39 @@ public sealed class MainLayoutSkipLinkBunitTests : LatticeComponentTestContext
             Assert.That(cut.FindAll(".lx-shell-brand-scope"), Has.Count.EqualTo(1));
             Assert.That(cut.FindAll(".lx-shell-brand-settings"), Has.Count.EqualTo(1));
             Assert.That(
-                cut.Find(".lx-shell-brand-settings").TextContent.Trim(),
-                Is.Empty,
-                "and renders nothing until a feature registers against the placement");
+                cut.Find(".lx-shell-brand-settings").ChildElementCount,
+                Is.EqualTo(1),
+                "the settings control, and nothing contributed on top of it here");
+        });
+    }
+
+    [Test]
+    public void The_banner_places_the_scope_and_settings_controls_outside_the_identity()
+    {
+        // Both are self-contained controls their own issues own; the chrome only
+        // says where they go. The settings control in particular must be its own
+        // discoverable region rather than an item in a sign-out menu.
+        ConfigureLayoutServices();
+
+        var cut = Render<MainLayout>();
+
+        var scope = cut.Find(".lx-shell-brand-scope");
+        var settings = cut.Find(".lx-shell-brand-settings");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                settings.QuerySelector(".lx-appearance, [class*=appearance]"),
+                Is.Not.Null,
+                "the appearance control renders in the banner's own settings region");
+            Assert.That(
+                cut.Find(".lx-shell-brand-auth").QuerySelector("[class*=appearance]"),
+                Is.Null,
+                "and not inside the identity control beside 'Sign out'");
+            Assert.That(
+                scope.QuerySelector("[class*=appearance]"),
+                Is.Null,
+                "the two regions stay distinct");
         });
     }
 
@@ -137,5 +169,10 @@ public sealed class MainLayoutSkipLinkBunitTests : LatticeComponentTestContext
         Services.AddSingleton(selection);
         Services.AddSingleton(session);
         Services.AddSingleton(preferences);
+
+        // The appearance feature is opt-in, and the banner places its control.
+        // Registering it here is what makes the placement assertions measure the
+        // real thing rather than the banner's fallback.
+        Services.AddExplorerAppearance();
     }
 }

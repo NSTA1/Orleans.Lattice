@@ -67,8 +67,16 @@ public sealed class NavigationPanelTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("title=\"Runtime projection provider\">app.region.v1</span>"));
-            Assert.That(html, Does.Contain("title=\"Projection version\">v3</span>"));
+            // The badges now spell themselves out instead of hiding the
+            // expansion in a title attribute, which is invisible on touch and
+            // unreachable by keyboard.
+            Assert.That(html, Does.Contain("app.region.v1"));
+            Assert.That(html, Does.Contain("v3"));
+            Assert.That(
+                html,
+                Does.Not.Contain("title=\"Runtime projection provider\""),
+                "the expansion is the visible text, not a tooltip");
+            Assert.That(html, Does.Not.Contain("title=\"Projection version\""));
         });
     }
 }

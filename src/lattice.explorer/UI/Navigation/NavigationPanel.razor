@@ -3,6 +3,7 @@
 @using Orleans.Lattice.Explorer.Core.DeadLetter
 @using Orleans.Lattice.Explorer.Core.Navigation
 @using Orleans.Lattice.Explorer.Core.Session
+@using Orleans.Lattice.Explorer.Core.Vocabulary
 @implements IDisposable
 @inject ICatalogReader CatalogReader
 @inject IDeadLetterReader DeadLetterReader
@@ -81,68 +82,50 @@
         else if (_items.Count == 0)
         {
             <div class="lx-shell-nav-state">
-                @EmptyMessage
+                <p class="lx-shell-nav-state-headline">@_state.Headline</p>
+                <p>@_state.Explanation</p>
+                @if (!string.IsNullOrEmpty(_state.Remedy))
+                {
+                    <p><strong>@_state.RemedyLabel</strong> @_state.Remedy</p>
+                }
             </div>
         }
         else
         {
             <ul class="lx-shell-nav-list" role="listbox" aria-label="@KindLabel">
-                @foreach (var item in _items)
+                @for (var row = 0; row < _items.Count; row++)
                 {
+                    var item = _items[row];
                     var isSelected = string.Equals(Selection.Selected?.Id, item.Id, StringComparison.Ordinal)
                         && Selection.Selected?.Kind == item.Kind;
+                    var badgeStart = row * ExplorerBadges.MaxCatalogBadges;
+                    var badgeCount = _rowBadgeCounts[row];
                     <li role="option" aria-selected="@(isSelected ? "true" : "false")">
                         <button type="button"
                                 class="lx-shell-nav-item @(isSelected ? "is-selected" : null)"
                                 @onclick="@(() => SelectAsync(item))">
                             <span class="lx-shell-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Label)</span>
+                            @*
+                                Badges come from the shared vocabulary, which
+                                spells them out: "64 shards" rather than "64 sh",
+                                "Aggregation" rather than "agg". The expansion is
+                                the visible text, so it is not hidden behind a
+                                title attribute - which is invisible on touch and
+                                unreachable by keyboard, and was the defect here.
+
+                                Deliberately no per-badge help disclosure: a
+                                focusable trigger on every badge of every row
+                                would put hundreds of stops in the tab order
+                                between the catalog and the surface below it. The
+                                readable text is what a caller needs at this
+                                density; the glossary explains the terms where
+                                they head a surface.
+                            *@
                             <span class="lx-shell-nav-item-meta">
-                                @if (item.Kind == CatalogKind.Trees)
+                                @for (var i = 0; i < badgeCount; i++)
                                 {
-                                    @if (item.Lifecycle is not null)
-                                    {
-                                        <span class="lx-badge">@item.Lifecycle</span>
-                                    }
-                                    @if (item.ShardCount is int shards)
-                                    {
-                                        <span class="lx-badge" title="Shard count">@shards sh</span>
-                                    }
-                                    @if (_deadLetterCounts.TryGetValue(item.Id, out var dlq) && dlq > 0)
-                                    {
-                                        <span class="lx-badge"
-                                              title="Dead-lettered items (strict-mode schema rejects)">@dlq DLQ</span>
-                                    }
-                                }
-                                else if (item.Kind == CatalogKind.TagIndexes)
-                                {
-                                    <span class="lx-badge" title="Tag index">tag</span>
-                                    @if (item.ShardCount is int tagShards)
-                                    {
-                                        <span class="lx-badge" title="Shard count">@tagShards sh</span>
-                                    }
-                                }
-                                else
-                                {
-                                    @if (item.IsAggregation)
-                                    {
-                                        <span class="lx-badge" title="Aggregation view">agg</span>
-                                    }
-                                    @if (item.IsHistory)
-                                    {
-                                        <span class="lx-badge" title="Change-history view">history</span>
-                                    }
-                                    @if (item.SourceTreeId is not null)
-                                    {
-                                        <span class="lx-badge lx-badge-muted" title="Source tree">@item.SourceTreeId</span>
-                                    }
-                                    @if (item.ProjectionProviderKey is not null)
-                                    {
-                                        <span class="lx-badge lx-badge-muted" title="Runtime projection provider">@item.ProjectionProviderKey</span>
-                                    }
-                                    @if (item.ProjectionVersion is not null)
-                                    {
-                                        <span class="lx-badge lx-badge-muted" title="Projection version">@item.ProjectionVersion</span>
-                                    }
+                                    var badge = _rowBadges[badgeStart + i];
+                                    <span class="@(badge.IsMuted ? MutedBadgeClass : BadgeClass)">@badge.Text</span>
                                 }
                             </span>
                         </button>
@@ -234,13 +217,27 @@
         CatalogKind.TagIndexes => "Tag indexes",
         _ => "Catalog",
     };
-    private string EmptyMessage => _kind switch
-    {
-        CatalogKind.Trees => "No trees found.",
-        CatalogKind.Views => "No views found.",
-        CatalogKind.TagIndexes => "No tag indexes found.",
-        _ => "No items found.",
-    };
+    private string EmptyMessage => _state.Explanation;
+
+    /// <summary>
+    /// The state the catalog is in, as the shared vocabulary words it. Never
+    /// defaulted to "empty": a list that is empty because the read failed says
+    /// so, and says what to try.
+    /// </summary>
+    private ExplorerStateMessage _state = ExplorerStateCopy.Loading(ExplorerSubjects.Trees);
+
+    // The rows' badges, composed on the LOAD path and indexed on the render
+    // path. A row's badges depend only on its catalog item and its dead-letter
+    // count, and neither changes between loads - so building them here means a
+    // re-render caused by a selection notification reads a struct out of an
+    // array instead of re-deriving every row. Flat, one row's slots at
+    // row * MaxCatalogBadges, so there is one array rather than one per row.
+    private ExplorerBadge[] _rowBadges = [];
+    private int[] _rowBadgeCounts = [];
+
+    private const string BadgeClass = "lx-badge";
+    private const string MutedBadgeClass = "lx-badge lx-badge-muted";
+
     private string? _nextToken;
     private bool _hasMore;
     private bool _loading = true;
@@ -284,6 +281,35 @@
         _kindId = SlugFor(_kind);
         _kindTabElementId =
             ExplorerShellRegions.TabElementId(ExplorerShellRegions.CatalogKindStrip, _kindId);
+    }
+
+    /// <summary>
+    /// Composes every loaded row's badges into the flat buffer, growing it only
+    /// when the catalog has become longer than it has ever been.
+    /// </summary>
+    private void RebuildBadges()
+    {
+        var rows = _items.Count;
+        if (_rowBadgeCounts.Length < rows)
+        {
+            _rowBadgeCounts = new int[rows];
+            _rowBadges = new ExplorerBadge[rows * ExplorerBadges.MaxCatalogBadges];
+        }
+
+        for (var row = 0; row < rows; row++)
+        {
+            var item = _items[row];
+            var deadLetters = item.Kind == CatalogKind.Trees
+                && _deadLetterCounts.TryGetValue(item.Id, out var count)
+                    ? count
+                    : 0;
+
+            var slots = _rowBadges.AsSpan(
+                row * ExplorerBadges.MaxCatalogBadges,
+                ExplorerBadges.MaxCatalogBadges);
+
+            _rowBadgeCounts[row] = ExplorerBadges.ForCatalogItem(item, deadLetters, slots);
+        }
     }
 
     protected override async Task OnInitializedAsync()
@@ -406,6 +432,7 @@
         finally
         {
             _loading = false;
+            RebuildBadges();
             Announce();
             StateHasChanged();
         }
@@ -416,18 +443,26 @@
     // change, where a render runs on every selection notification.
     private void Announce()
     {
+        // Pick the kind rather than defaulting to Empty: a list that is empty
+        // because the read failed is a different thing from one that is empty
+        // because there is nothing there, and only one of them has a remedy.
+        var subject = ExplorerSubjects.ForCatalogKind(_kind);
+        _state = _error is not null
+            ? ExplorerStateCopy.Failed(subject, _error)
+            : ExplorerStateCopy.Empty(subject);
+
         if (_error is not null)
         {
-            _announcement = KindLabel + " could not be loaded. " + _error;
+            _announcement = _state.Headline + " " + _state.Explanation;
             return;
         }
 
         _announcement = _items.Count == 0
-            ? KindLabel + ": " + EmptyMessage
+            ? KindLabel + ": " + _state.Headline
             : _items.Count == 1
-                ? KindLabel + ": 1 item."
+                ? KindLabel + ": 1 " + subject.Singular + "."
                 : KindLabel + ": " + _items.Count.ToString(System.Globalization.CultureInfo.CurrentCulture)
-                    + " items.";
+                    + " " + subject.Plural + ".";
     }
 
     // Fetches the dead-letter count for each of the given trees and records the

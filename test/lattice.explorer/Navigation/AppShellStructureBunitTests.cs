@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using NUnit.Framework.Internal;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.DesignSystem.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
@@ -220,7 +221,7 @@ public sealed class AppShellStructureBunitTests : LatticeComponentTestContext
 
         var cut = RenderShell();
 
-        var label = cut.Find("." + "lx-shell-rail-demoted-label");
+        var label = cut.Find(".lx-shell-rail-demoted-label");
         var explanationId = label.GetAttribute("aria-describedby");
 
         Assert.That(explanationId, Is.Not.Null.And.Not.Empty);
@@ -229,10 +230,13 @@ public sealed class AppShellStructureBunitTests : LatticeComponentTestContext
         Assert.Multiple(() =>
         {
             Assert.That(label.HasAttribute("title"), Is.False, "a title is invisible on touch and to a keyboard");
-            Assert.That(explanation.TextContent, Does.Contain("Alpha"));
             Assert.That(
                 explanation.TextContent,
-                Does.Contain("Ask a platform administrator"),
+                Does.Contain(ExplorerAccessCopy.Denied("Alpha").Explanation),
+                "the refusal is the shared vocabulary's, not a second wording");
+            Assert.That(
+                explanation.TextContent,
+                Does.Contain(ExplorerAccessCopy.Denied("Alpha").Remedy!),
                 "an aria-describedby target contributes its text even while hidden, "
                 + "so the remedy holds whether or not the disclosure is open");
         });

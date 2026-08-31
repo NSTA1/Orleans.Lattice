@@ -1,3 +1,4 @@
+@using Orleans.Lattice.Explorer.Core.Vocabulary
 @using Orleans.Lattice.Explorer.DesignSystem.Layout
 @using Orleans.Lattice.Explorer.DesignSystem.Tokens
 @using Orleans.Lattice.Explorer.Plugins
@@ -66,9 +67,9 @@
             <div class="lx-shell-rail-divider" role="separator" aria-orientation="horizontal"></div>
             <div class="lx-shell-rail-demoted"
                  role="group"
-                 aria-label="@ExplorerAreaDenialCopy.DemotedGroupLabel">
+                 aria-label="@ExplorerRailCopy.DemotedGroupLabel">
                 <span class="lx-shell-rail-group-label" aria-hidden="true">
-                    @ExplorerAreaDenialCopy.DemotedGroupLabel
+                    @ExplorerRailCopy.DemotedGroupLabel
                 </span>
                 @for (var slot = 0; slot < _demotedCount; slot++)
                 {
@@ -77,12 +78,18 @@
                         <span class="lx-shell-rail-demoted-label"
                               id="@entry.LabelElementId"
                               aria-describedby="@entry.ExplanationElementId">@entry.Label</span>
+                        @*
+                            The refusal is the shared vocabulary's; the remedy is
+                            the GATE's, so it names the permission that is
+                            missing and who issues it rather than repeating the
+                            area name the caller just clicked.
+                        *@
                         <LatticeHelp Id="@entry.HelpId"
                                      Term="@entry.Label"
                                      Tone="LatticeHelpTone.Denial"
-                                     Explanation="@entry.DeniedExplanation"
+                                     Explanation="@entry.DeniedMessage.Explanation"
                                      Remedy="@entry.DeniedRemedy"
-                                     RemedyLabel="@ExplorerAreaDenialCopy.RemedyLabel" />
+                                     RemedyLabel="@entry.DeniedMessage.RemedyLabel" />
                     </div>
                 }
             </div>
@@ -90,18 +97,18 @@
 
         <div class="lx-shell-rail-footer">
             <LatticeHelp Id="@ExplorerShellRegions.CapabilitiesHelp"
-                         Term="@ExplorerAreaDenialCopy.CapabilitiesTerm"
-                         TriggerText="@ExplorerAreaDenialCopy.CapabilitiesTriggerText"
-                         Explanation="@_capabilitiesExplanation"
-                         Remedy="@ExplorerAreaDenialCopy.CapabilitiesRemedy"
-                         RemedyLabel="@ExplorerAreaDenialCopy.RemedyLabel" />
+                         Term="@ExplorerRailCopy.MissingAreasTerm"
+                         TriggerText="@ExplorerRailCopy.MissingAreasTriggerText"
+                         Explanation="@_missingAreas.Explanation"
+                         Remedy="@_missingAreas.Remedy"
+                         RemedyLabel="@_missingAreas.RemedyLabel" />
 
             <label class="lx-shell-rail-preference" for="@ExplorerShellRegions.HideInaccessibleControl">
                 <input type="checkbox"
                        id="@ExplorerShellRegions.HideInaccessibleControl"
                        checked="@_hideInaccessible"
                        @onchange="_toggleHideInaccessible" />
-                <span>@ExplorerAreaDenialCopy.HideInaccessibleLabel</span>
+                <span>@ExplorerRailCopy.HideInaccessibleLabel</span>
             </label>
         </div>
     </nav>
@@ -232,11 +239,10 @@
     private bool _preferencesApplied;
 
     // Recomposed only when the set of cluster-unavailable areas actually
-    // changes, never per render: the sentence concatenates every missing area's
-    // label and the rail re-renders on every gate report.
-    private string _capabilitiesExplanation =
-        ExplorerAreaDenialCopy.CapabilitiesExplanation(NoLabels);
-    private int _capabilitiesSignature = -1;
+    // changes, never per render: the sentence names every missing area and the
+    // rail re-renders on every gate report.
+    private ExplorerStateMessage _missingAreas = ExplorerRailCopy.MissingAreas(NoLabels);
+    private int _missingAreasSignature = -1;
     private List<string>? _unavailableLabels;
 
     private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
@@ -483,7 +489,8 @@
         for (var i = 0; i < _entries.Length; i++)
         {
             var entry = _entries[i];
-            var state = AccessStore.Get(entry.PluginId).State;
+            var access = AccessStore.Get(entry.PluginId);
+            var state = access.State;
 
             switch (ExplorerAreaVisibilityPolicy.Decide(state, _hideInaccessible))
             {
@@ -494,6 +501,11 @@
                     break;
 
                 case ExplorerAreaEntryPresentation.Demoted:
+                    // The gate's remedy travels with the decision, so a refusal
+                    // names the permission that is missing rather than repeating
+                    // the area name. Applied here because it can change between
+                    // probes; the sentence is composed only when it does.
+                    entry.ApplyRemedy(access.Remedy);
                     _demoted[_demotedCount++] = i;
                     break;
             }
@@ -504,7 +516,7 @@
             }
         }
 
-        RebuildCapabilitiesExplanation();
+        RebuildMissingAreas();
     }
 
     // The sentence names every area the cluster does not have, so recomposing it
@@ -512,7 +524,7 @@
     // count with each label's content hash, which changes exactly when the set
     // does - a length-only fold would confuse two same-length names and leave a
     // stale sentence behind.
-    private void RebuildCapabilitiesExplanation()
+    private void RebuildMissingAreas()
     {
         var labels = (IReadOnlyList<string>?)_unavailableLabels ?? NoLabels;
 
@@ -522,13 +534,13 @@
             signature = (signature * 31) + StringComparer.Ordinal.GetHashCode(labels[i]);
         }
 
-        if (signature == _capabilitiesSignature)
+        if (signature == _missingAreasSignature)
         {
             return;
         }
 
-        _capabilitiesSignature = signature;
-        _capabilitiesExplanation = ExplorerAreaDenialCopy.CapabilitiesExplanation(labels);
+        _missingAreasSignature = signature;
+        _missingAreas = ExplorerRailCopy.MissingAreas(labels);
     }
 
     /// <summary>
@@ -727,19 +739,29 @@
 
     /// <summary>
     /// One area's pre-computed render state: the plugin it opens, its route
-    /// slug, its label, the two tab items it can be offered as, and the
-    /// sentences it says when it refuses. Built once at mount so a render reads
-    /// fields instead of allocating.
+    /// slug, its label, the two tab items it can be offered as, and the shared
+    /// vocabulary's copy for each way it can refuse. Built once at mount so a
+    /// render reads fields instead of allocating.
     /// </summary>
+    /// <remarks>
+    /// The one thing that is <em>not</em> fixed at mount is the remedy. A
+    /// refusal must name the permission the caller is missing and who issues it,
+    /// and only the gate knows those; they travel on the decision and can change
+    /// between probes. <see cref="ApplyRemedy"/> therefore composes the sentence
+    /// when the gate's answer changes, and a render that finds it unchanged
+    /// costs one struct comparison.
+    /// </remarks>
     private sealed class AreaEntry
     {
+        private ExplorerAccessRemedy _remedy = ExplorerAccessRemedy.None;
+        private bool _remedyApplied;
+
         private AreaEntry(
             IExplorerPlugin? plugin,
             string pluginId,
             string slug,
             string label,
-            string? deniedExplanation,
-            string? deniedRemedy,
+            ExplorerStateMessage deniedMessage,
             string? unreachableNotice,
             LatticeTabItem allowedTab,
             LatticeTabItem signInTab,
@@ -749,8 +771,8 @@
             PluginId = pluginId;
             Slug = slug;
             Label = label;
-            DeniedExplanation = deniedExplanation;
-            DeniedRemedy = deniedRemedy;
+            DeniedMessage = deniedMessage;
+            DeniedRemedy = deniedMessage.Remedy;
             UnreachableNotice = unreachableNotice;
             AllowedTab = allowedTab;
             SignInTab = signInTab;
@@ -768,15 +790,18 @@
                 pluginId: string.Empty,
                 slug: ExplorerRouteSegments.Explore,
                 label: label,
-                deniedExplanation: null,
-                deniedRemedy: null,
+
+                // Never rendered - the home surface has no gate - but composed
+                // from the same source as every other entry so there is exactly
+                // one shape of refusal in the shell.
+                deniedMessage: ExplorerAccessCopy.Denied(label),
                 unreachableNotice: null,
                 allowedTab: tab,
                 signInTab: tab,
                 helpId: ExplorerShellRegions.AreaHelpPrefix + ExplorerRouteSegments.Explore);
         }
 
-        /// <summary>A contributed area, with every sentence its gate can need.</summary>
+        /// <summary>A contributed area, with the copy for every way its gate can refuse.</summary>
         public static AreaEntry ForPlugin(IExplorerPlugin plugin)
         {
             var pluginId = plugin.Descriptor.PluginId;
@@ -797,12 +822,13 @@
 
             // Both presentations are composed once. An entry is offered as
             // exactly one of them per render, chosen by the gate, so a render
-            // never builds a tab item.
+            // never builds a tab item. The sign-in tab's description is the
+            // shared module's single-string form, because a tab has room for a
+            // description and not for a panel.
             var allowedTab = new LatticeTabItem(slug, label);
             var signInTab = new LatticeTabItem(slug, label)
             {
-                Description = ExplorerAreaDenialCopy.SignInExplanation(label)
-                    + " " + ExplorerAreaDenialCopy.SignInRemedy(label),
+                Description = ExplorerAccessCopy.Describe(ExplorerAccessCopy.SignInRequired(label)),
             };
 
             return new AreaEntry(
@@ -810,9 +836,8 @@
                 pluginId,
                 slug,
                 label,
-                ExplorerAreaDenialCopy.DeniedExplanation(label),
-                ExplorerAreaDenialCopy.DeniedRemedy(label),
-                ExplorerAreaDenialCopy.UnreachableAddressNotice(label),
+                ExplorerAccessCopy.Denied(label),
+                ExplorerRailCopy.UnreachableAddressNotice(label),
                 allowedTab,
                 signInTab,
                 ExplorerShellRegions.AreaHelpPrefix + slug);
@@ -836,11 +861,18 @@
         /// <summary>The tab item offered when the area is one sign-in away.</summary>
         public LatticeTabItem SignInTab { get; }
 
-        /// <summary>Why an authenticated caller was refused, or null for the home surface.</summary>
-        public string? DeniedExplanation { get; }
+        /// <summary>
+        /// The shared vocabulary's refusal for this area: its headline, its
+        /// explanation, and the remedy label every refusal is introduced by.
+        /// </summary>
+        public ExplorerStateMessage DeniedMessage { get; }
 
-        /// <summary>What to do about the refusal, or null for the home surface.</summary>
-        public string? DeniedRemedy { get; }
+        /// <summary>
+        /// What to do about the refusal. The gate's own remedy - the permission
+        /// that is missing and who issues it - once one has been reported, and
+        /// the shared vocabulary's general remedy until then.
+        /// </summary>
+        public string? DeniedRemedy { get; private set; }
 
         /// <summary>Why the address could not be honoured, or null for the home surface.</summary>
         public string? UnreachableNotice { get; }
@@ -853,5 +885,31 @@
 
         /// <summary>The id of the demoted entry's own label element.</summary>
         public string LabelElementId { get; }
+
+        /// <summary>
+        /// Adopts the remedy the gate reported with its decision, so the refusal
+        /// names the missing permission and its audience rather than repeating
+        /// the area's own name.
+        /// </summary>
+        /// <remarks>
+        /// Called once per demoted entry per render. The comparison is a
+        /// two-reference struct equality and the sentence is composed only when
+        /// the gate's answer actually changed, so a steady-state render
+        /// allocates nothing. An unspecified remedy falls back to the shared
+        /// vocabulary's general remedy rather than to nothing: a refusal that
+        /// states no remedy is the defect this whole path exists to prevent.
+        /// </remarks>
+        /// <param name="remedy">The remedy the gate attached to its denial.</param>
+        public void ApplyRemedy(ExplorerAccessRemedy remedy)
+        {
+            if (_remedyApplied && _remedy == remedy)
+            {
+                return;
+            }
+
+            _remedyApplied = true;
+            _remedy = remedy;
+            DeniedRemedy = remedy.Describe() ?? DeniedMessage.Remedy;
+        }
     }
 }

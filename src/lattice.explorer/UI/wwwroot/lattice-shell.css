@@ -531,6 +531,21 @@ code {
     font-size: var(--lx-text-small);
 }
 
+/*
+  The state's one-line summary. An empty catalog now says WHICH of the several
+  reasons it is empty for, so the summary is a real heading for the sentences
+  under it rather than the whole message.
+*/
+.lx-shell-nav-state-headline {
+    margin: 0;
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-shell-nav-state p {
+    margin: 0;
+}
+
 .lx-shell-nav-error {
     color: var(--lx-color-danger);
 }

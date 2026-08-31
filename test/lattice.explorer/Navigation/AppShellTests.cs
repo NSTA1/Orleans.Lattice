@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.DesignSystem.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
@@ -132,9 +133,13 @@ public sealed class AppShellTests
     }
 
     [Test]
-    public async Task A_denied_plugin_states_a_remedy_rather_than_a_bare_refusal()
+    public async Task A_denied_plugin_states_the_gates_remedy_naming_the_missing_permission()
     {
-        using var harness = ShellHarness.Create(Plugin("a", "Alpha", ExplorerPluginAccessGates.Denied));
+        // The point of the structured remedy: a refusal that repeats the area
+        // name the caller just clicked tells them nothing. This one names the
+        // grant they are missing and who issues it.
+        using var harness = ShellHarness.Create(
+            Plugin("a", "Backups", RemedyingGate.Requiring("Backup", "a platform administrator")));
         await harness.RenderAsync();
 
         var help = harness.Renderer.FindComponent<LatticeHelp>(harness.ComponentId);
@@ -144,13 +149,29 @@ public sealed class AppShellTests
         {
             Assert.That(help!.Value.Component.Tone, Is.EqualTo(LatticeHelpTone.Denial));
             Assert.That(
-                help.Value.Component.Explanation,
-                Is.EqualTo("Your account does not hold the permission Alpha requires in this cluster."));
-            Assert.That(
                 help.Value.Component.Remedy,
-                Is.EqualTo("Ask a platform administrator to grant you access to Alpha."),
-                "a denial that states no remedy leaves the caller with nowhere to go");
+                Is.EqualTo("Requires the Backup permission - ask a platform administrator."));
+            Assert.That(
+                help.Value.Component.Explanation,
+                Is.EqualTo(ExplorerAccessCopy.Denied("Backups").Explanation),
+                "and the refusal itself is the shared vocabulary's, not a second wording");
         });
+    }
+
+    [Test]
+    public async Task A_denial_with_no_declared_remedy_still_states_the_shared_one()
+    {
+        // A refusal that states no remedy at all is the defect the whole path
+        // exists to prevent, so an undeclared remedy falls back rather than
+        // rendering nothing.
+        using var harness = ShellHarness.Create(Plugin("a", "Alpha", ExplorerPluginAccessGates.Denied));
+        await harness.RenderAsync();
+
+        var help = harness.Renderer.FindComponent<LatticeHelp>(harness.ComponentId);
+
+        Assert.That(
+            help!.Value.Component.Remedy,
+            Is.EqualTo(ExplorerAccessCopy.Denied("Alpha").Remedy).And.Not.Empty);
     }
 
     [Test]
@@ -169,8 +190,8 @@ public sealed class AppShellTests
             Assert.That(tab.Disabled, Is.False, "a recoverable state must offer its remedy");
             Assert.That(
                 tab.Title,
-                Is.EqualTo("Alpha opens once you sign in. Choose Alpha to sign in, then it opens."),
-                "an invitation says what to do, not only that it is closed");
+                Is.EqualTo(ExplorerAccessCopy.Describe(ExplorerAccessCopy.SignInRequired("Alpha"))),
+                "an invitation says what to do, in the shared module's own words");
             Assert.That(harness.DemotedLabels, Is.Empty, "and stays prominent rather than being set aside");
             Assert.That(login.IsVisible, Is.True, "clicking it prompts a sign-in");
             Assert.That(harness.ActiveView, Is.Null, "and does not activate the plugin");
@@ -646,6 +667,27 @@ public sealed class AppShellTests
         public static SwitchableGate Denied() => new();
 
         public void Allow() => _access = ExplorerPluginAccess.Allowed;
+
+        public ValueTask<ExplorerPluginAccess> ProbeAsync(
+            IExplorerPluginHostContext context,
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(_access);
+    }
+
+    /// <summary>
+    /// A gate that refuses and declares the grant the caller is missing, so a
+    /// test can observe the remedy travelling from the gate to the rail.
+    /// </summary>
+    private sealed class RemedyingGate : IExplorerPluginAccessGate
+    {
+        private readonly ExplorerPluginAccess _access;
+
+        private RemedyingGate(ExplorerPluginAccess access) => _access = access;
+
+        public static RemedyingGate Requiring(string permission, string audience) =>
+            new(ExplorerPluginAccessContract.Resolve(
+                ExplorerPluginAccessFacts.Withheld,
+                ExplorerAccessRemedy.Requiring(permission, audience),
+                isCallerAuthenticated: true));
 
         public ValueTask<ExplorerPluginAccess> ProbeAsync(
             IExplorerPluginHostContext context,

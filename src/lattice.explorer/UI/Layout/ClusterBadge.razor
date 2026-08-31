@@ -1,8 +1,10 @@
 @using Orleans.Lattice.Api.State
 @using Orleans.Lattice.Explorer.Core
 @using Orleans.Lattice.Explorer.Core.Connection
+@using Orleans.Lattice.Explorer.UI.Appearance
 @implements IDisposable
 @inject ILatticeStateConnection Connection
+@inject IServiceProvider Services
 
 <header class="lx-shell-brand">
     <span class="lx-shell-brand-name">@ExplorerInfo.DisplayName</span>
@@ -27,10 +29,39 @@
         is a setting nobody finds.
     *@
     <div class="lx-shell-brand-trailing">
+        @*
+            The banner's trailing group, in the order a caller reads it: what the
+            view is pointed at, how the view is presented, then who is looking at
+            it.
+
+            The scope control leads, because it changes what every surface below
+            it shows. It used to sit inside the sign-in cluster, where a control
+            that decides what the whole product is reading was filed under the
+            caller's identity; the chrome is where it belongs.
+
+            The view settings follow, in their own labelled region rather than
+            inside the identity control, because a setting reached only through a
+            sign-out menu is a setting nobody finds.
+
+            Both are self-contained and own their own behaviour; the chrome only
+            says where they go. The slots after each are the extension point for
+            anything a downstream head contributes.
+        *@
         <div class="lx-shell-brand-scope">
+            <TenantScope />
             <ChromeSlot Placement="ExplorerChromeSlotPlacement.TenantScope" />
         </div>
         <div class="lx-shell-brand-settings">
+            @*
+                Resolved defensively rather than rendered unconditionally: the
+                appearance feature is opt-in through AddExplorerAppearance, and a
+                banner that hard-injects an optional feature's service would take
+                the whole shell down on a head that composes without it.
+            *@
+            @if (_hasAppearance)
+            {
+                <AppearanceSettings />
+            }
             <ChromeSlot Placement="ExplorerChromeSlotPlacement.ViewSettings" />
         </div>
         <div class="lx-shell-brand-auth">
@@ -43,6 +74,11 @@
     private string? _clusterId;
     private string? _serviceId;
 
+    // Resolved once. The appearance feature is opt-in, and a head that composes
+    // the Explorer without it must still get a banner rather than a render
+    // fault.
+    private bool _hasAppearance;
+
     private string ClusterTooltip =>
         string.IsNullOrEmpty(_serviceId)
             ? $"Connected cluster: {_clusterId}"
@@ -50,6 +86,8 @@
 
     protected override void OnInitialized()
     {
+        _hasAppearance = Services.GetService(typeof(IExplorerAppearance)) is not null;
+
         Connection.StatusChanged += OnStatusChanged;
         if (Connection.Status.State == LatticeConnectionState.Connected)
         {

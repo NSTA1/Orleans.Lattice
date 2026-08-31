@@ -7,6 +7,7 @@ using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Tests.Bunit;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -132,7 +133,55 @@ public sealed class NavigationPanelCatalogKindBunitTests : LatticeComponentTestC
         });
     }
 
-    private void ConfigureCatalog()
+    [Test]
+    public void The_catalog_spells_a_badge_out_rather_than_hiding_it_in_a_tooltip()
+    {
+        // "64 sh" and "agg" were abbreviations whose expansion lived only in a
+        // title attribute. The shared vocabulary supplies the readable text, and
+        // the readable text is what renders.
+        ConfigureCatalog();
+
+        var cut = Render<NavigationPanel>();
+        var badges = cut.FindAll(".lx-badge").Select(badge => badge.TextContent.Trim()).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(badges, Is.Not.Empty);
+            Assert.That(
+                badges.Any(text => text.Contains("shards", StringComparison.Ordinal)),
+                Is.True,
+                "a shard count reads as '4 shards', not '4 sh'");
+            Assert.That(
+                cut.FindAll(".lx-badge").Any(badge => badge.HasAttribute("title")),
+                Is.False,
+                "and carries no title attribute at all");
+        });
+    }
+
+    [Test]
+    public void An_empty_catalog_says_which_kind_of_empty_it_is()
+    {
+        // Never defaulted to "no trees found": an empty list that is empty
+        // because the read failed is a different thing, and only one of the two
+        // has a remedy.
+        ConfigureCatalog(items: []);
+
+        var cut = Render<NavigationPanel>();
+        var state = cut.Find(".lx-shell-nav-state");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                state.QuerySelector(".lx-shell-nav-state-headline")!.TextContent.Trim(),
+                Is.EqualTo(ExplorerStateCopy.Empty(ExplorerSubjects.Trees).Headline));
+            Assert.That(
+                state.TextContent,
+                Does.Contain(ExplorerStateCopy.Empty(ExplorerSubjects.Trees).Explanation),
+                "and says explicitly that nothing is hidden or filtered");
+        });
+    }
+
+    private void ConfigureCatalog(CatalogItem[]? items = null)
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
 
@@ -141,12 +190,13 @@ public sealed class NavigationPanelCatalogKindBunitTests : LatticeComponentTestC
             .LoadAsync(Arg.Any<CatalogKind>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(new CatalogPage
             {
-                Items =
+                Items = items ??
                 [
                     new CatalogItem
                     {
                         Id = "orders",
                         Kind = callInfo.ArgAt<CatalogKind>(0),
+                        ShardCount = 4,
                     },
                 ],
             }));
