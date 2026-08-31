@@ -54,6 +54,7 @@ public class BootstrapTransientRetryIntegrationTests
             LatticeSnapshotProviderUnitTests.TestOptions());
         var siteAHandler = new LatticeRemoteSnapshotService(
             siteAProvider,
+            new StubReplicationContext(SiteAClusterId, LatticeMergeMode.LwwRegister),
             NullLogger<LatticeRemoteSnapshotService>.Instance);
         _flakyTransport = new FlakyRemoteSnapshotTransport(siteAHandler, failuresBeforeSuccess: 1);
         SiteATransports[SiteAClusterId] = _flakyTransport;

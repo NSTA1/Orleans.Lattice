@@ -57,8 +57,19 @@ public class LatticeReplicationGrpcServiceTests
             sp.GetRequiredService<Serializer<PeerHighWaterMarkRequest>>(),
             sp.GetRequiredService<Serializer<PeerHighWaterMarkResponse>>());
         return new LatticeReplicationGrpcService(
-            method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance);
+            method, applier, cursorRegistry, policy, Substitute.For<IGrainFactory>(), new ReceiverAppliedContentIndex(), NullLogger<LatticeReplicationGrpcService>.Instance,
+            dictionaryProvider: null,
+            replicationContext: AllTreesEnrolled);
     }
+
+    /// <summary>
+    /// Enrollment context reporting a merge mode for every tree, so the
+    /// peer-read tree-scope gate admits the trees these tests exercise. The
+    /// gate itself is covered by
+    /// <see cref="LatticeReplicationGrpcServiceEnrollmentTests"/>.
+    /// </summary>
+    internal static readonly ILatticeReplicationContext AllTreesEnrolled =
+        new EnrollAllReplicationContext();
 
     private static LatticeReplicationGrpcService CreateServiceWithFactory(
         IGrainFactory grainFactory,
@@ -81,7 +92,9 @@ public class LatticeReplicationGrpcServiceTests
             NoOpReceiverFlowControlPolicy.Instance,
             grainFactory,
             appliedContentIndex,
-            NullLogger<LatticeReplicationGrpcService>.Instance);
+            NullLogger<LatticeReplicationGrpcService>.Instance,
+            dictionaryProvider: null,
+            replicationContext: AllTreesEnrolled);
     }
 
     private sealed class TestEncoder : IReplicationBatchEncoder
@@ -300,7 +313,8 @@ public class LatticeReplicationGrpcServiceTests
             Substitute.For<IGrainFactory>(),
             new ReceiverAppliedContentIndex(),
             NullLogger<LatticeReplicationGrpcService>.Instance,
-            dictionaryProvider);
+            dictionaryProvider,
+            AllTreesEnrolled);
     }
 
     private static ReplicationBatchEnvelopeBox EmptyBox() => new()

@@ -88,6 +88,7 @@ internal sealed class GrpcPublicApiContractFixture
                     services.AddSingleton<IReplicationBatchEncoder>(sp =>
                         new EnvelopeSerializerEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     services.Configure<LatticeReplicationSecurityOptions>(o =>
                         o.RequireAuthentication = false);

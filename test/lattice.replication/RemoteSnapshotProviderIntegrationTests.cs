@@ -69,6 +69,7 @@ public class RemoteSnapshotProviderIntegrationTests
             LatticeSnapshotProviderUnitTests.TestOptions());
         var siteAHandler = new LatticeRemoteSnapshotService(
             siteAProvider,
+            new StubReplicationContext(SiteAClusterId, LatticeMergeMode.LwwRegister),
             NullLogger<LatticeRemoteSnapshotService>.Instance);
         SiteATransports[SiteAClusterId] = new InProcessSnapshotTransport(siteAHandler);
 

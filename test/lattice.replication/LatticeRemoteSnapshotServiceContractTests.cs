@@ -23,6 +23,7 @@ public class LatticeRemoteSnapshotServiceContractTests : RemoteSnapshotTransport
         var sender = new StubSenderSnapshotProvider();
         var service = new LatticeRemoteSnapshotService(
             sender,
+            new StubReplicationContext("contract-cluster", LatticeMergeMode.LwwRegister),
             NullLogger<LatticeRemoteSnapshotService>.Instance);
         return Task.FromResult(new TransportFixture(service, sender, () => ValueTask.CompletedTask));
     }
