@@ -5,6 +5,9 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.DesignSystem.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
@@ -109,16 +112,44 @@ public sealed class AppShellTests
     }
 
     [Test]
-    public async Task A_denied_plugin_renders_disabled_and_visible_with_the_established_tooltip()
+    public async Task A_denied_plugin_is_demoted_below_the_divider_rather_than_hidden()
     {
         using var harness = ShellHarness.Create(Plugin("a", "Alpha", ExplorerPluginAccessGates.Denied));
         await harness.RenderAsync();
 
-        var tab = harness.Tab("Alpha");
         Assert.Multiple(() =>
         {
-            Assert.That(tab.Disabled, Is.True, "a denial greys out rather than hides");
-            Assert.That(tab.Title, Is.EqualTo("Alpha is not available for your account."));
+            Assert.That(
+                harness.Buttons.Select(b => b.Text),
+                Is.EqualTo(new[] { "Explore" }),
+                "a refusal leaves the rail proper");
+            Assert.That(
+                harness.DemotedLabels,
+                Is.EqualTo(new[] { "Alpha" }),
+                "and appears below the divider, because an area a caller cannot see "
+                + "is an area they cannot ask to be granted");
+        });
+    }
+
+    [Test]
+    public async Task A_denied_plugin_states_a_remedy_rather_than_a_bare_refusal()
+    {
+        using var harness = ShellHarness.Create(Plugin("a", "Alpha", ExplorerPluginAccessGates.Denied));
+        await harness.RenderAsync();
+
+        var help = harness.Renderer.FindComponent<LatticeHelp>(harness.ComponentId);
+
+        Assert.That(help, Is.Not.Null, "a refusal is explained through the help primitive, never a title");
+        Assert.Multiple(() =>
+        {
+            Assert.That(help!.Value.Component.Tone, Is.EqualTo(LatticeHelpTone.Denial));
+            Assert.That(
+                help.Value.Component.Explanation,
+                Is.EqualTo("Your account does not hold the permission Alpha requires in this cluster."));
+            Assert.That(
+                help.Value.Component.Remedy,
+                Is.EqualTo("Ask a platform administrator to grant you access to Alpha."),
+                "a denial that states no remedy leaves the caller with nowhere to go");
         });
     }
 
@@ -136,21 +167,32 @@ public sealed class AppShellTests
         Assert.Multiple(() =>
         {
             Assert.That(tab.Disabled, Is.False, "a recoverable state must offer its remedy");
-            Assert.That(tab.Title, Is.EqualTo("Alpha requires you to sign in."));
+            Assert.That(
+                tab.Title,
+                Is.EqualTo("Alpha opens once you sign in. Choose Alpha to sign in, then it opens."),
+                "an invitation says what to do, not only that it is closed");
+            Assert.That(harness.DemotedLabels, Is.Empty, "and stays prominent rather than being set aside");
             Assert.That(login.IsVisible, Is.True, "clicking it prompts a sign-in");
             Assert.That(harness.ActiveView, Is.Null, "and does not activate the plugin");
         });
     }
 
     [Test]
-    public async Task An_unavailable_plugin_renders_no_tab_at_all()
+    public async Task An_unavailable_plugin_renders_no_entry_at_all()
     {
         using var harness = ShellHarness.Create(
             Plugin("gone", "Gone", ExplorerPluginAccessGates.Unavailable),
             Plugin("here", "Here", ExplorerPluginAccessGates.Allowed));
         await harness.RenderAsync();
 
-        Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Here" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Here" }));
+            Assert.That(
+                harness.DemotedLabels,
+                Is.Empty,
+                "a capability the cluster does not have is not a refusal to demote");
+        });
     }
 
     [Test]
@@ -162,7 +204,11 @@ public sealed class AppShellTests
         using var harness = ShellHarness.Create(Plugin("a", "Alpha", hanging));
         await harness.RenderAsync();
 
-        Assert.That(harness.Tab("Alpha").Disabled, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore" }));
+            Assert.That(harness.DemotedLabels, Is.EqualTo(new[] { "Alpha" }));
+        });
     }
 
     // ---- activation ---------------------------------------------------------
@@ -185,6 +231,97 @@ public sealed class AppShellTests
     }
 
     [Test]
+    public async Task Activating_an_area_reflects_it_in_a_lower_case_route()
+    {
+        using var harness = ShellHarness.Create(
+            Plugin("orleans.lattice.alpha", "Alpha", ExplorerPluginAccessGates.Allowed));
+        await harness.RenderAsync();
+
+        await harness.ClickAsync(harness.Tab("Alpha"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                harness.Router.Current.Area,
+                Is.EqualTo("alpha"),
+                "the slug is derived from the plugin id the way every consumer derives it");
+            Assert.That(
+                ExplorerRoutePath.Format(harness.Router.Current),
+                Is.EqualTo("/area/alpha"),
+                "a contributed area is namespaced, and the address is the record of where you are");
+        });
+    }
+
+    [Test]
+    public async Task An_address_naming_an_area_opens_it_without_a_second_arbitrator()
+    {
+        using var harness = ShellHarness.Create(
+            Plugin("orleans.lattice.alpha", "Alpha", ExplorerPluginAccessGates.Allowed));
+        await harness.RenderAsync();
+
+        // The address is the intent. The shell reads it rather than holding its
+        // own copy of the active area, which is what keeps it from disagreeing
+        // with the entry policy that restores a remembered view.
+        await harness.OnDispatcherAsync(
+            () => harness.Router.NavigateTo(ExplorerRoute.Root.WithArea("alpha")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.ActiveView, Is.EqualTo(typeof(StubPluginView)));
+            Assert.That(harness.SurfaceTitle, Is.EqualTo("Alpha"));
+        });
+    }
+
+    [Test]
+    public async Task An_address_naming_an_area_the_gate_refuses_shows_home_and_says_why()
+    {
+        using var harness = ShellHarness.Create(
+            Plugin("orleans.lattice.alpha", "Alpha", ExplorerPluginAccessGates.Denied));
+        await harness.RenderAsync();
+
+        await harness.OnDispatcherAsync(
+            () => harness.Router.NavigateTo(ExplorerRoute.Root.WithArea("alpha")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.ActiveView, Is.Null);
+            Assert.That(harness.RendersHomeSurface, Is.True);
+            Assert.That(
+                harness.Router.Current.Area,
+                Is.EqualTo("alpha"),
+                "the address is a statement of intent and is not rewritten, so the area "
+                + "opens the moment a gate admits it");
+            Assert.That(
+                harness.Renderer.ElementTexts(harness.ComponentId, "p", "lx-shell-surface-notice"),
+                Is.EqualTo(new[]
+                {
+                    "This address asks for Alpha, which your account cannot open, "
+                    + "so the Explore surface is shown instead.",
+                }));
+        });
+    }
+
+    [Test]
+    public async Task A_plugin_whose_id_ends_in_the_reserved_home_slug_is_not_shadowed_by_it()
+    {
+        // 'explore' is the home area's reserved slug. Deriving it for a
+        // contributed area would put two tabs in the rail under one element id
+        // and make the address resolve to the wrong surface.
+        using var harness = ShellHarness.Create(
+            Plugin("orleans.lattice.explore", "Explorer plus", ExplorerPluginAccessGates.Allowed));
+        await harness.RenderAsync();
+
+        await harness.ClickAsync(harness.Tab("Explorer plus"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(harness.Router.Current.Area, Is.EqualTo("orleans.lattice.explore"));
+            Assert.That(harness.ActiveView, Is.EqualTo(typeof(StubPluginView)));
+            Assert.That(harness.SurfaceTitle, Is.EqualTo("Explorer plus"));
+        });
+    }
+
+    [Test]
     public async Task Clicking_the_home_tab_returns_to_the_home_surface()
     {
         using var harness = ShellHarness.Create(Plugin("a", "Alpha", ExplorerPluginAccessGates.Allowed));
@@ -197,18 +334,25 @@ public sealed class AppShellTests
         {
             Assert.That(harness.ActiveView, Is.Null);
             Assert.That(harness.RendersHomeSurface, Is.True);
+            Assert.That(harness.Router.Current.Area, Is.EqualTo("explore"));
         });
     }
 
     [Test]
-    public async Task Clicking_a_denied_tab_never_activates_it()
+    public async Task A_demoted_area_offers_no_control_to_activate()
     {
         using var harness = ShellHarness.Create(Plugin("a", "Alpha", ExplorerPluginAccessGates.Denied));
         await harness.RenderAsync();
 
-        await harness.ClickAsync(harness.Tab("Alpha"));
-
-        Assert.That(harness.ActiveView, Is.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                harness.Buttons.Any(b => string.Equals(b.Text, "Alpha", StringComparison.Ordinal)),
+                Is.False,
+                "a demoted entry is an inert name, not a disabled tab: a strip whose every "
+                + "tab is disabled has no tab to put in the document's tab sequence");
+            Assert.That(harness.ActiveView, Is.Null);
+        });
     }
 
     [Test]
@@ -264,8 +408,8 @@ public sealed class AppShellTests
             Assert.That(harness.RendersCatalog, Is.True, "the desktop frame keeps the catalog beside the detail pane");
             Assert.That(harness.RendersHomeSurface, Is.True);
             Assert.That(
-                harness.Buttons.Select(button => button.Text),
-                Is.EqualTo(new[] { "Explore" }),
+                harness.ShellButtons.Any(b => string.Equals(b.Text, "Catalog", StringComparison.Ordinal)),
+                Is.False,
                 "and adds no drawer toggle");
         });
     }
@@ -326,7 +470,7 @@ public sealed class AppShellTests
         {
             Assert.That(harness.ActiveView, Is.Null);
             Assert.That(harness.RendersHomeSurface, Is.True);
-            Assert.That(harness.Tab("Alpha").Disabled, Is.True);
+            Assert.That(harness.DemotedLabels, Is.EqualTo(new[] { "Alpha" }));
         });
     }
 
@@ -424,20 +568,21 @@ public sealed class AppShellTests
     }
 
     [Test]
-    public async Task A_re_probe_that_opens_a_gate_enables_its_tab_without_a_manual_refresh()
+    public async Task A_re_probe_that_opens_a_gate_promotes_its_entry_without_a_manual_refresh()
     {
         var gate = SwitchableGate.Denied();
         using var harness = ShellHarness.Create(Plugin("a", "Alpha", gate));
         await harness.RenderAsync();
-        var beforeDisabled = harness.Tab("Alpha").Disabled;
+        var beforeDemoted = harness.DemotedLabels;
 
         gate.Allow();
         await harness.RaiseConnectionAsync(LatticeConnectionState.Connected);
 
         Assert.Multiple(() =>
         {
-            Assert.That(beforeDisabled, Is.True);
-            Assert.That(harness.Tab("Alpha").Disabled, Is.False);
+            Assert.That(beforeDemoted, Is.EqualTo(new[] { "Alpha" }));
+            Assert.That(harness.DemotedLabels, Is.Empty);
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Alpha" }));
         });
     }
 
@@ -454,9 +599,11 @@ public sealed class AppShellTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Tab("Boom").Disabled, Is.True, "a faulted gate denies its own plugin");
-            Assert.That(harness.Tab("Okay").Disabled, Is.False);
-            Assert.That(harness.Tab("Nope").Disabled, Is.True);
+            Assert.That(
+                harness.DemotedLabels,
+                Is.EqualTo(new[] { "Boom", "Nope" }),
+                "a faulted gate denies its own plugin and no other");
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Okay" }));
             Assert.That(harness.Renderer.Exceptions, Is.Empty, "and never escapes into the shell");
         });
     }
@@ -471,8 +618,8 @@ public sealed class AppShellTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Tab("Slow").Disabled, Is.True);
-            Assert.That(harness.Tab("Fast").Disabled, Is.False);
+            Assert.That(harness.DemotedLabels, Is.EqualTo(new[] { "Slow" }));
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Fast" }));
         });
     }
 
@@ -529,17 +676,53 @@ public sealed class AppShellTests
 
         public ComponentTestRenderer Renderer { get; }
 
+        /// <summary>The shell's own component id, for a test that reads its frames directly.</summary>
+        public int ComponentId => _componentId;
+
         public AppShell Shell { get; private set; } = null!;
 
         public ExplorerPluginAccessStore Store { get; }
 
-        public IReadOnlyList<ComponentTestRenderer.RenderedButton> Buttons => Renderer.Buttons(_componentId);
+        /// <summary>The shell's route model, which is where the active area now lives.</summary>
+        public IExplorerShellRouter Router => _provider.GetRequiredService<IExplorerShellRouter>();
+
+        /// <summary>The declared preference contract the rail reads its hide setting from.</summary>
+        public IExplorerShellPreferences Preferences =>
+            _provider.GetRequiredService<IExplorerShellPreferences>();
+
+        /// <summary>
+        /// The rail's own buttons. The rail is a
+        /// <c>LatticeAdaptiveTabs</c> now, so its tabs are rendered by the
+        /// primitive rather than by the shell, and a test reads them from the
+        /// strip's own frames.
+        /// </summary>
+        public IReadOnlyList<ComponentTestRenderer.RenderedButton> Buttons
+        {
+            get
+            {
+                var strip = Renderer.FindComponent<LatticeAdaptiveTabs>(_componentId);
+                return strip is null
+                    ? []
+                    : Renderer.Buttons(strip.Value.Id);
+            }
+        }
+
+        /// <summary>The labels of the areas the rail has demoted below its divider.</summary>
+        public IReadOnlyList<string> DemotedLabels =>
+            Renderer.ElementTexts(_componentId, "span", "lx-shell-rail-demoted-label");
+
+        /// <summary>The shell's own buttons: the preference control and the help triggers.</summary>
+        public IReadOnlyList<ComponentTestRenderer.RenderedButton> ShellButtons =>
+            Renderer.Buttons(_componentId);
+
+        /// <summary>The one level-1 heading the shell renders, naming the active surface.</summary>
+        public string SurfaceTitle =>
+            Renderer.ElementTexts(_componentId, "h1").SingleOrDefault() ?? string.Empty;
 
         /// <summary>The type the shell currently renders dynamically, or <see langword="null"/> for the home surface.</summary>
         public Type? ActiveView => Renderer
-            .ChildComponents(_componentId)
-            .OfType<DynamicComponent>()
-            .FirstOrDefault()?
+            .FindComponent<DynamicComponent>(_componentId)?
+            .Component
             .Type;
 
         /// <summary>Whether the shell currently renders the caller-supplied home content.</summary>
@@ -566,6 +749,15 @@ public sealed class AppShellTests
 
             var services = new ServiceCollection();
             services.AddLogging();
+
+            // The shell reads its active area from the router and its "hide what
+            // I cannot use" preference from the declared contract. Both are
+            // registered for real rather than substituted: the route model is a
+            // pure in-memory type and the preference backing store defaults to an
+            // in-memory one, so a test drives them without a browser and without
+            // a clock.
+            services.AddExplorerSession();
+
             services.AddSingleton<IExplorerPluginCatalog>(catalog);
             services.AddSingleton<IExplorerPluginAccessStore>(store);
             services.AddSingleton(hostState);
@@ -662,9 +854,14 @@ public sealed class AppShellTests
             }
         }
 
-        /// <summary>The button carrying <paramref name="label"/>, whichever control it is.</summary>
+        /// <summary>
+        /// The button carrying <paramref name="label"/>, whichever control it
+        /// is: a rail tab, or one of the shell's own controls (the compact
+        /// drawer toggle, a help trigger).
+        /// </summary>
         public ComponentTestRenderer.RenderedButton Tab(string label) =>
-            Buttons.Single(button => string.Equals(button.Text, label, StringComparison.Ordinal));
+            Buttons.Concat(ShellButtons)
+                .Single(button => string.Equals(button.Text, label, StringComparison.Ordinal));
 
         public Task ClickAsync(ComponentTestRenderer.RenderedButton button) =>
             Renderer.ClickAsync(button.ClickHandlerId);

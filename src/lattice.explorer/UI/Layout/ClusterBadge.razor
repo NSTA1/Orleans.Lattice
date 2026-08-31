@@ -15,8 +15,27 @@
         </span>
     }
     <ConnectionStatusBanner />
-    <div class="lx-shell-brand-auth">
-        <AuthButton />
+    @*
+        The banner's trailing group, in the order a caller reads it: what the
+        view is pointed at, how the view is presented, then who is looking at it.
+
+        Neither of the first two is implemented here. The scope control (#1851)
+        and the view settings (#1852) ship in their own packages and register
+        themselves against a placement, so this file names a region and never a
+        component. The view settings sit in their own labelled region rather than
+        beside the sign-out control, because a setting buried in an identity menu
+        is a setting nobody finds.
+    *@
+    <div class="lx-shell-brand-trailing">
+        <div class="lx-shell-brand-scope">
+            <ChromeSlot Placement="ExplorerChromeSlotPlacement.TenantScope" />
+        </div>
+        <div class="lx-shell-brand-settings">
+            <ChromeSlot Placement="ExplorerChromeSlotPlacement.ViewSettings" />
+        </div>
+        <div class="lx-shell-brand-auth">
+            <AuthButton />
+        </div>
     </div>
 </header>
 

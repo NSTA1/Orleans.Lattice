@@ -19,7 +19,7 @@ public sealed class MetricsSelectionPlugin : IExplorerPlugin<IMetricsSurface>
         PluginId = SelectionPluginKeys.Metrics,
         Label = "Metrics",
         Surface = ExplorerPluginSurface.Selection,
-        Order = 100,
+        Order = 300,
         SelectionKinds = ExplorerPluginSelectionKinds.Tree | ExplorerPluginSelectionKinds.View,
     };
 

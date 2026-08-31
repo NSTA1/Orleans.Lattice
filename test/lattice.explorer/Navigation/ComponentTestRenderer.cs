@@ -218,6 +218,103 @@ internal sealed class ComponentTestRenderer(IServiceProvider services, ILoggerFa
         return false;
     }
 
+    /// <summary>
+    /// The text content of every element named <paramref name="elementName"/>
+    /// that <paramref name="componentId"/> currently renders, optionally
+    /// restricted to those whose <c>class</c> attribute contains
+    /// <paramref name="classContains"/>.
+    /// </summary>
+    /// <remarks>
+    /// The shell's demoted area entries are inert names rather than controls, so
+    /// they are not buttons and a test needs to read them as elements. Kept
+    /// alongside <see cref="Buttons"/> so both read the same settled frames.
+    /// </remarks>
+    /// <param name="componentId">The component whose frames to read.</param>
+    /// <param name="elementName">The element name to match.</param>
+    /// <param name="classContains">A class fragment to require, or <see langword="null"/> for any.</param>
+    public IReadOnlyList<string> ElementTexts(
+        int componentId,
+        string elementName,
+        string? classContains = null)
+    {
+        var texts = new List<string>();
+        var frames = GetCurrentRenderTreeFrames(componentId);
+        var array = frames.Array;
+
+        for (var i = 0; i < frames.Count; i++)
+        {
+            if (array[i].FrameType != RenderTreeFrameType.Element
+                || !string.Equals(array[i].ElementName, elementName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var end = i + array[i].ElementSubtreeLength;
+            string? cssClass = null;
+            var text = string.Empty;
+
+            for (var j = i + 1; j < end; j++)
+            {
+                switch (array[j].FrameType)
+                {
+                    case RenderTreeFrameType.Attribute
+                        when string.Equals(array[j].AttributeName, "class", StringComparison.Ordinal):
+                        cssClass = array[j].AttributeValue as string;
+                        break;
+                    case RenderTreeFrameType.Text:
+                        text += array[j].TextContent;
+                        break;
+                }
+            }
+
+            if (classContains is null
+                || cssClass?.Contains(classContains, StringComparison.Ordinal) == true)
+            {
+                texts.Add(text.Trim());
+            }
+        }
+
+        return texts;
+    }
+
+    /// <summary>
+    /// The value of <paramref name="attributeName"/> on the first element named
+    /// <paramref name="elementName"/> that <paramref name="componentId"/>
+    /// renders, or <see langword="null"/> when there is no such element or it
+    /// carries no such attribute.
+    /// </summary>
+    /// <param name="componentId">The component whose frames to read.</param>
+    /// <param name="elementName">The element name to match.</param>
+    /// <param name="attributeName">The attribute to read.</param>
+    public string? ElementAttribute(int componentId, string elementName, string attributeName)
+    {
+        var frames = GetCurrentRenderTreeFrames(componentId);
+        var array = frames.Array;
+
+        for (var i = 0; i < frames.Count; i++)
+        {
+            if (array[i].FrameType != RenderTreeFrameType.Element
+                || !string.Equals(array[i].ElementName, elementName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var end = i + array[i].ElementSubtreeLength;
+            for (var j = i + 1; j < end; j++)
+            {
+                if (array[j].FrameType == RenderTreeFrameType.Attribute
+                    && string.Equals(array[j].AttributeName, attributeName, StringComparison.Ordinal))
+                {
+                    return array[j].AttributeValue as string;
+                }
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
     /// <summary>Dispatches a click to <paramref name="handlerId"/>.</summary>
     public Task ClickAsync(ulong handlerId) =>
         Dispatcher.InvokeAsync(() => DispatchEventAsync(handlerId, null!, EventArgs.Empty));

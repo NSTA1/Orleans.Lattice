@@ -40,10 +40,25 @@
 
 <section class="lx-shell-detail" aria-label="Detail">
     <header class="lx-shell-detail-header">
+        <h2 class="lx-shell-detail-heading">@DetailHeading</h2>
+        @*
+            Tier three: the per-selection surfaces, as the underlined strip - the
+            primitive's default presentation, so it reads as neither the rail
+            above it nor the segmented toggle beside it.
+
+            The strip names the body it swaps. A role=tab that controls nothing
+            announces the tabs pattern without implementing it, leaving a
+            screen-reader caller with nothing to move into (WCAG SC 4.1.2). The
+            body is rendered here rather than as the strip's ChildContent because
+            the layout puts the title beside the strip and the content beneath
+            both.
+        *@
         <LatticeAdaptiveTabs Tabs="_tabs"
                              ActiveId="@(_restored ? _activePluginId : null)"
                              OnSelect="_activate"
                              Label="Detail tabs"
+                             Id="@ExplorerShellRegions.DetailStrip"
+                             PanelId="@ExplorerShellRegions.DetailPanel"
                              Class="lx-shell-detail-tabs" />
         @if (_selected is not null)
         {
@@ -51,7 +66,10 @@
         }
     </header>
 
-    <div class="lx-shell-detail-body">
+    <div class="lx-shell-detail-body"
+         id="@ExplorerShellRegions.DetailPanel"
+         role="tabpanel"
+         aria-labelledby="@_activeTabElementId">
         @if (_selected is null)
         {
             <div class="lx-shell-detail-empty">
@@ -85,6 +103,9 @@
     private const string NoSurfaceRegistered = "No detail surface is registered for this selection.";
     private const string NoSurfaceAvailable = "No detail surface for this selection is available for your account.";
 
+    /// <summary>The detail pane's heading, the level below the surface title.</summary>
+    private const string DetailHeading = "Detail";
+
     private readonly Action _render;
 
     private CatalogItem? _selected;
@@ -97,6 +118,10 @@
 
     private IExplorerPlugin? _activePlugin;
     private string? _activePluginId;
+
+    // The active tab's element id, so the body can name the tab that selected
+    // it. Recomputed with the active surface rather than per render.
+    private string? _activeTabElementId;
     private string? _retainedPluginId;
     private string _emptyBodyMessage = NoSurfaceRegistered;
 
@@ -241,6 +266,9 @@
 
         _activePlugin = active;
         _activePluginId = active?.Descriptor.PluginId;
+        _activeTabElementId = _activePluginId is null
+            ? null
+            : ExplorerShellRegions.TabElementId(ExplorerShellRegions.DetailStrip, _activePluginId);
         _emptyBodyMessage = plugins.Count == 0 ? NoSurfaceRegistered : NoSurfaceAvailable;
 
         RebuildViewKey();

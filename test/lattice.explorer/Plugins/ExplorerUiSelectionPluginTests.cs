@@ -198,12 +198,13 @@ public sealed class ExplorerUiSelectionPluginTests
         {
             Assert.That(
                 catalog.ForSelection(ExplorerPluginSelectionKind.Tree).Select(p => p.Descriptor.Label),
-                Is.EqualTo(new[] { "Metrics", "Topology", "Data", "Dead-letter" }),
-                "the strip's left-to-right order is preserved by the descriptor hints");
+                Is.EqualTo(new[] { "Data", "Topology", "Metrics", "Dead-letter" }),
+                "the strip's left-to-right order is preserved by the descriptor hints, and it "
+                + "runs from the primary task to the exceptional one");
 
             Assert.That(
                 catalog.ForSelection(ExplorerPluginSelectionKind.View).Select(p => p.Descriptor.Label),
-                Is.EqualTo(new[] { "Metrics", "Topology", "Data", "Dead-letter" }));
+                Is.EqualTo(new[] { "Data", "Topology", "Metrics", "Dead-letter" }));
 
             Assert.That(
                 catalog.ForSelection(ExplorerPluginSelectionKind.TagIndex).Select(p => p.Descriptor.Label),

@@ -3,11 +3,29 @@
 @using Orleans.Lattice.Explorer.DesignSystem.Components
 @implements IDisposable
 
+@*
+    The shell's outermost frame.
+
+    THE SKIP LINK IS THE FIRST TAB STOP, deliberately and structurally. The shell
+    puts a banner, a scope control, an identity control and a whole area rail
+    between the top of the document and the working surface, and a keyboard
+    caller met all of it again on every surface change. A same-page link to the
+    main landmark is the level-A remedy (WCAG SC 2.4.1 Bypass Blocks); it is
+    visually hidden until it takes focus, at which point it paints, because a
+    bypass a sighted keyboard caller cannot see is a bypass they cannot trust.
+
+    It is the first child of the shell body rather than of the document so that
+    it renders exactly when the surface it bypasses to does: pointing a skip link
+    at a main landmark that the configuration gate is currently withholding would
+    send a caller nowhere.
+*@
+
 <CascadingValue Value="_login" IsFixed="true">
     <LatticeAdaptiveRoot>
         <div class="lx-shell">
             <ConfigurationGate>
                 <div class="lx-shell-body">
+                    <a class="lx-shell-skip" href="@_skipTarget">Skip to main content</a>
                     <ClusterBadge />
                     <AppShell>
                         <Catalog>
@@ -33,6 +51,10 @@
 </CascadingValue>
 
 @code {
+    // Composed once as a constant rather than interpolated per render: the
+    // layout re-renders on every sign-in dialog transition.
+    private const string _skipTarget = "#" + ExplorerShellRegions.Main;
+
     private readonly LoginDialogState _login = new();
 
     protected override void OnInitialized() => _login.Changed += OnLoginChanged;

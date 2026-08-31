@@ -1,0 +1,41 @@
+@*
+    One region of the shell's banner: renders whatever features have contributed
+    to a placement, and nothing at all when none have.
+
+    The shell names the region; the contribution names itself. Rendering through
+    DynamicComponent is what keeps the two apart, so the tenant scope control
+    (#1851) and the view settings (#1852) can ship in their own packages without
+    the layout ever referencing them.
+
+    The catalog is resolved optionally: a deployment that contributes no chrome
+    registers no catalog, and the shell must render the banner regardless.
+*@
+
+@inject IServiceProvider Services
+
+@for (var i = 0; i < _slots.Count; i++)
+{
+    var slot = _slots[i];
+    <DynamicComponent @key="slot" Type="slot.ComponentType" />
+}
+
+@code {
+    private static readonly ExplorerChromeSlot[] None = [];
+
+    private IExplorerChromeSlotCatalog? _catalog;
+    private IReadOnlyList<ExplorerChromeSlot> _slots = None;
+
+    /// <summary>The banner region to render.</summary>
+    [Parameter] public ExplorerChromeSlotPlacement Placement { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnInitialized() =>
+        // Resolved once. The catalog is a singleton whose grouping is immutable,
+        // and OnParametersSet runs on every render of the banner above this, so
+        // a container lookup there would be a lookup per banner render.
+        _catalog = Services.GetService(typeof(IExplorerChromeSlotCatalog)) as IExplorerChromeSlotCatalog;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() =>
+        _slots = _catalog?.ForPlacement(Placement) ?? None;
+}

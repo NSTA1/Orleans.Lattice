@@ -13,6 +13,7 @@
 
 <nav class="lx-shell-nav" aria-label="Tree and view catalog">
     <header class="lx-shell-nav-header">
+        <h2 class="lx-shell-nav-title">@CatalogHeading</h2>
         <div class="lx-shell-nav-actions">
             @if (_navOptions.AllowEndpointConfiguration)
             {
@@ -32,32 +33,40 @@
             </button>
         </div>
 
-        <div class="lx-shell-nav-toggle" role="tablist" aria-label="Catalog kind">
-            <button type="button"
-                    role="tab"
-                    class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.Trees ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Trees ? "true" : "false")"
-                    @onclick="@(() => SwitchKindAsync(CatalogKind.Trees))">
-                Trees
-            </button>
-            <button type="button"
-                    role="tab"
-                    class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.Views ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Views ? "true" : "false")"
-                    @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
-                Views
-            </button>
-            <button type="button"
-                    role="tab"
-                    class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "true" : "false")"
-                    @onclick="@(() => SwitchKindAsync(CatalogKind.TagIndexes))">
-                Tag indexes
-            </button>
-        </div>
+        @*
+            Tier two: the catalog kind, as the segmented variant of the one tab
+            primitive. It used to be a hand-rolled role=tablist whose tabs
+            carried no tabindex and answered no arrow key, so a keyboard caller
+            tabbed through all three to pass it and a screen-reader caller was
+            promised the tabs pattern without being given it. The segmented
+            variant also reproduces the sunken-track look, so the strip reads as
+            a toggle between peers rather than as a second copy of the rail.
+        *@
+        <LatticeAdaptiveTabs Tabs="KindTabs"
+                             ActiveId="@(_preferencesApplied ? _kindId : null)"
+                             OnSelect="_switchKind"
+                             Label="Catalog kind"
+                             Variant="LatticeTabsVariant.Segmented"
+                             Id="@ExplorerShellRegions.CatalogKindStrip"
+                             PanelId="@ExplorerShellRegions.CatalogList"
+                             Class="lx-shell-nav-toggle" />
     </header>
 
-    <div class="lx-shell-nav-body">
+    @*
+        The catalog is swapped wholesale by a control the caller used, but the
+        swap itself completes asynchronously and off-screen: the list below
+        empties, reloads, and re-renders with entirely different content. Without
+        an announcement a screen-reader caller is told nothing at all, so the
+        region is rendered from the first pass - empty - and its text is set when
+        a load settles. A live region created at the same moment as its message
+        is silent (WCAG SC 4.1.3 Status Messages).
+    *@
+    <div class="lx-visually-hidden" role="status" aria-live="polite">@_announcement</div>
+
+    <div class="lx-shell-nav-body"
+         id="@ExplorerShellRegions.CatalogList"
+         role="tabpanel"
+         aria-labelledby="@_kindTabElementId">
         @if (_loading && _items.Count == 0)
         {
             <div class="lx-shell-nav-state">Loading catalog...</div>
@@ -167,6 +176,30 @@
 @code {
     private const int PageSize = 100;
 
+    /// <summary>The catalog pane's heading, the level below the surface title.</summary>
+    private const string CatalogHeading = "Catalog";
+
+    // The catalog-kind strip's three options, composed once as a static: the
+    // panel re-renders on every selection notification and every load, and
+    // rebuilding the tab items per render would allocate on all of them. The
+    // identities are the route kind slugs, so the strip, the address bar and the
+    // preference contract all spell a kind the same way.
+    private static readonly LatticeTabItem[] KindTabs =
+    [
+        new LatticeTabItem(ExplorerRouteSegments.Trees, "Trees")
+        {
+            Description = "Every tree on the cluster.",
+        },
+        new LatticeTabItem(ExplorerRouteSegments.Views, "Views")
+        {
+            Description = "Projections and change-history views over the trees.",
+        },
+        new LatticeTabItem(ExplorerRouteSegments.TagIndexes, "Tag indexes")
+        {
+            Description = "Tag indexes and the trees they cover.",
+        },
+    ];
+
     private ExplorerNavigationOptions _navOptions = new();
 
     private readonly List<CatalogItem> _items = new();
@@ -176,6 +209,24 @@
     // shows no badge. Empty for the Views / Tag-index kinds, which have no DLQ.
     private readonly Dictionary<string, int> _deadLetterCounts = new(StringComparer.Ordinal);
     private CatalogKind _kind = CatalogKind.Trees;
+    private readonly EventCallback<string> _switchKind;
+
+    /// <summary>The active kind's tab identity, which is its route slug.</summary>
+    private string _kindId = ExplorerRouteSegments.Trees;
+
+    /// <summary>The active kind's tab element id, so the catalog list names the tab that chose it.</summary>
+    private string _kindTabElementId =
+        ExplorerShellRegions.TabElementId(
+            ExplorerShellRegions.CatalogKindStrip,
+            ExplorerRouteSegments.Trees);
+
+    /// <summary>
+    /// The polite announcement for the last asynchronous catalog change. Empty
+    /// until one happens, so the region is in the accessibility tree before it
+    /// has anything to say.
+    /// </summary>
+    private string _announcement = string.Empty;
+
     private string KindLabel => _kind switch
     {
         CatalogKind.Trees => "Trees",
@@ -202,6 +253,38 @@
     // it can be restored without re-discovering it from the catalog).
     private const string KindStateKey = "nav-kind";
     private const string SelectionStateKey = "nav-selected";
+
+    /// <summary>Creates the panel, caching the delegate the catalog-kind strip binds.</summary>
+    public NavigationPanel() =>
+        // Bound once rather than per render: the strip re-renders on every
+        // selection notification and every load, and a lambda in the markup would
+        // allocate a delegate on each of them.
+        _switchKind = EventCallback.Factory.Create<string>(this, SwitchKindAsync);
+
+    /// <summary>The route kind slug naming <paramref name="kind"/>.</summary>
+    private static string SlugFor(CatalogKind kind) => kind switch
+    {
+        CatalogKind.Views => ExplorerRouteSegments.Views,
+        CatalogKind.TagIndexes => ExplorerRouteSegments.TagIndexes,
+        _ => ExplorerRouteSegments.Trees,
+    };
+
+    /// <summary>The catalog kind <paramref name="slug"/> names.</summary>
+    private static CatalogKind KindFor(string? slug) => slug switch
+    {
+        ExplorerRouteSegments.Views => CatalogKind.Views,
+        ExplorerRouteSegments.TagIndexes => CatalogKind.TagIndexes,
+        _ => CatalogKind.Trees,
+    };
+
+    // Kept in step with _kind, so the strip's active id and the panel's
+    // aria-labelledby are field reads rather than per-render switches.
+    private void SyncKindIdentity()
+    {
+        _kindId = SlugFor(_kind);
+        _kindTabElementId =
+            ExplorerShellRegions.TabElementId(ExplorerShellRegions.CatalogKindStrip, _kindId);
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -252,6 +335,7 @@
 
         _preferencesApplied = true;
         _kind = Preferences.GetOrDefault(KindStateKey, CatalogKind.Trees);
+        SyncKindIdentity();
 
         var saved = Preferences.GetOrDefault<CatalogItem?>(SelectionStateKey, null);
         if (saved is not null)
@@ -260,14 +344,16 @@
         }
     }
 
-    private async Task SwitchKindAsync(CatalogKind kind)
+    private async Task SwitchKindAsync(string kindId)
     {
+        var kind = KindFor(kindId);
         if (_kind == kind)
         {
             return;
         }
 
         _kind = kind;
+        SyncKindIdentity();
 
         // Retain the toggle as a durable preference.
         await Preferences.SetAsync(KindStateKey, kind);
@@ -320,8 +406,28 @@
         finally
         {
             _loading = false;
+            Announce();
             StateHasChanged();
         }
+    }
+
+    // Says what the catalog now holds, once a load has settled. Composed on the
+    // load path rather than on the render path: this runs once per catalog
+    // change, where a render runs on every selection notification.
+    private void Announce()
+    {
+        if (_error is not null)
+        {
+            _announcement = KindLabel + " could not be loaded. " + _error;
+            return;
+        }
+
+        _announcement = _items.Count == 0
+            ? KindLabel + ": " + EmptyMessage
+            : _items.Count == 1
+                ? KindLabel + ": 1 item."
+                : KindLabel + ": " + _items.Count.ToString(System.Globalization.CultureInfo.CurrentCulture)
+                    + " items.";
     }
 
     // Fetches the dead-letter count for each of the given trees and records the
@@ -399,6 +505,7 @@
         if (_preferencesApplied && selected is not null && selected.Kind != _kind)
         {
             _kind = selected.Kind;
+            SyncKindIdentity();
             await Preferences.SetAsync(KindStateKey, _kind);
             await ReloadAsync();
             return;
