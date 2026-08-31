@@ -1,0 +1,245 @@
+@*
+    The help primitive: one keyboard-reachable, touch-sized, screen-reader
+    associated way to explain a term or a refusal.
+
+    It replaces the native `title` attribute, which is invisible on touch,
+    unreachable by keyboard, and announced inconsistently. This is a disclosure:
+    a button that toggles a panel, so a pointer, a keyboard and a screen reader
+    all reach the same text by the same means.
+
+    The panel is always in the DOM and merely `hidden` while collapsed, because
+    an element referenced by `aria-describedby` contributes its text to the
+    accessible description even when hidden. A control can therefore point at
+    LatticeHelp.ExplanationElementId(id) once and be described whether or not
+    the caller has opened the disclosure.
+
+    Two shapes, one component. `Explanation` alone explains a term. Adding
+    `Remedy` and Tone="Denial" explains a refusal and says what to do about it,
+    which is the shape every gated surface owes its caller.
+*@
+
+@if (_hasContent)
+{
+    <span class="@_hostClass">
+        <button type="button"
+                class="lx-help-trigger"
+                id="@_triggerElementId"
+                aria-expanded="@(IsOpen ? "true" : "false")"
+                aria-controls="@_explanationElementId"
+                aria-label="@_triggerAccessibleName"
+                @onclick="ToggleAsync"
+                @onkeydown="OnKeyDownAsync">
+            <span class="lx-help-glyph" aria-hidden="true">@_glyph</span>
+            @if (!string.IsNullOrEmpty(TriggerText))
+            {
+                <span class="lx-help-trigger-text">@TriggerText</span>
+            }
+        </button>
+        <span class="lx-help-panel"
+              id="@_explanationElementId"
+              role="note"
+              hidden="@(!IsOpen)"
+              @onkeydown="OnKeyDownAsync">
+            @if (!string.IsNullOrEmpty(Explanation))
+            {
+                <span class="lx-help-explanation">@Explanation</span>
+            }
+            @if (!string.IsNullOrEmpty(Remedy))
+            {
+                <span class="lx-help-remedy">
+                    <span class="lx-help-remedy-label">@RemedyLabel</span>
+                    @Remedy
+                </span>
+            }
+            @ChildContent
+        </span>
+    </span>
+}
+
+@code {
+    private const string InformationalHostClass = "lx-help";
+    private const string DenialHostClass = "lx-help is-denial";
+    private const string InformationalGlyph = "?";
+    private const string DenialGlyph = "!";
+    private const string ExplanationIdSuffix = "-explanation";
+
+    private readonly string _instanceId = "lx-help-" + Guid.NewGuid().ToString("N");
+
+    private string _hostClass = InformationalHostClass;
+    private string _glyph = InformationalGlyph;
+    private string _triggerElementId = string.Empty;
+    private string _explanationElementId = string.Empty;
+    private string _triggerAccessibleName = string.Empty;
+    private string? _elementIdPrefix;
+    private LatticeHelpTone? _hostClassTone;
+    private string? _hostClassSuffix;
+    private bool _hasContent;
+
+    /// <summary>
+    /// The term or control being explained. Used to compose the trigger's
+    /// accessible name, so a screen-reader caller hears which of several
+    /// explanations they are about to open rather than a row of bare
+    /// question marks.
+    /// </summary>
+    [Parameter] public string? Term { get; set; }
+
+    /// <summary>The explanation itself.</summary>
+    [Parameter] public string? Explanation { get; set; }
+
+    /// <summary>
+    /// What the caller can do about it. Supplied with
+    /// <see cref="LatticeHelpTone.Denial"/> so a refusal always states its
+    /// remedy rather than only its refusal.
+    /// </summary>
+    [Parameter] public string? Remedy { get; set; }
+
+    /// <summary>
+    /// The label introducing <see cref="Remedy"/>. Defaults to
+    /// <c>What to do:</c>.
+    /// </summary>
+    [Parameter] public string RemedyLabel { get; set; } = "What to do:";
+
+    /// <summary>
+    /// Whether this explains a term or a refusal. Defaults to
+    /// <see cref="LatticeHelpTone.Informational"/>.
+    /// </summary>
+    [Parameter] public LatticeHelpTone Tone { get; set; }
+
+    /// <summary>
+    /// Overrides the trigger's accessible name. Leave <see langword="null"/> to
+    /// compose it from <see cref="Term"/> and <see cref="Tone"/>.
+    /// </summary>
+    [Parameter] public string? TriggerLabel { get; set; }
+
+    /// <summary>
+    /// Visible text rendered beside the trigger's glyph, for a help affordance
+    /// that reads as a phrase rather than as an icon. Leave
+    /// <see langword="null"/> for the icon-only form.
+    /// </summary>
+    [Parameter] public string? TriggerText { get; set; }
+
+    /// <summary>
+    /// Whether the explanation is disclosed. The component toggles this itself
+    /// when the caller activates the trigger; bind it when a host needs to open
+    /// or close the disclosure programmatically.
+    /// </summary>
+    [Parameter] public bool IsOpen { get; set; }
+
+    /// <summary>Raised when the disclosure opens or closes, for two-way binding.</summary>
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+
+    /// <summary>
+    /// A stable element-id prefix for the trigger and the explanation, so a
+    /// control can describe itself with
+    /// <see cref="ExplanationElementId"/> without rendering this component
+    /// first. Defaults to a per-instance generated value.
+    /// </summary>
+    [Parameter] public string? Id { get; set; }
+
+    /// <summary>Additional CSS classes appended to the help element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <summary>
+    /// Further explanation rendered inside the panel, below the text - a link
+    /// to documentation, or a control that performs the remedy.
+    /// </summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// The id of the explanation element a <see cref="LatticeHelp"/> with
+    /// <see cref="Id"/> renders.
+    /// </summary>
+    /// <remarks>
+    /// Point the explained control's <c>aria-describedby</c> at this. The
+    /// explanation is in the DOM whether or not the disclosure is open, and an
+    /// element referenced by <c>aria-describedby</c> contributes its text even
+    /// while hidden, so the description holds in both states.
+    /// </remarks>
+    /// <param name="id">The value passed to <see cref="Id"/>.</param>
+    /// <returns>The explanation element's id.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is null.</exception>
+    public static string ExplanationElementId(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        return id + ExplanationIdSuffix;
+    }
+
+    /// <summary>
+    /// The trigger's accessible name: <see cref="TriggerLabel"/> when supplied,
+    /// otherwise composed from <see cref="Term"/> and <see cref="Tone"/>.
+    /// </summary>
+    /// <remarks>
+    /// Composed once per parameter change rather than read per render, because
+    /// the composed form concatenates and a disclosure re-renders every time it
+    /// opens or closes.
+    /// </remarks>
+    private string ComposeTriggerAccessibleName()
+    {
+        if (!string.IsNullOrEmpty(TriggerLabel))
+        {
+            return TriggerLabel;
+        }
+
+        if (string.IsNullOrEmpty(Term))
+        {
+            return Tone == LatticeHelpTone.Denial ? "Why this is unavailable" : "Explain this";
+        }
+
+        return Tone == LatticeHelpTone.Denial
+            ? "Why " + Term + " is unavailable"
+            : "Explain " + Term;
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        _hasContent = !string.IsNullOrEmpty(Explanation)
+            || !string.IsNullOrEmpty(Remedy)
+            || ChildContent is not null;
+
+        var prefix = Id ?? _instanceId;
+        if (!string.Equals(prefix, _elementIdPrefix, StringComparison.Ordinal))
+        {
+            _elementIdPrefix = prefix;
+            _triggerElementId = prefix + "-trigger";
+            _explanationElementId = ExplanationElementId(prefix);
+        }
+
+        RebuildHostClass();
+        _triggerAccessibleName = ComposeTriggerAccessibleName();
+        _glyph = Tone == LatticeHelpTone.Denial ? DenialGlyph : InformationalGlyph;
+    }
+
+    // Composed once per parameter change rather than on every render pass.
+    private void RebuildHostClass()
+    {
+        if (_hostClassTone == Tone && string.Equals(_hostClassSuffix, Class, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _hostClassTone = Tone;
+        _hostClassSuffix = Class;
+
+        var toneClass = Tone == LatticeHelpTone.Denial ? DenialHostClass : InformationalHostClass;
+        _hostClass = string.IsNullOrEmpty(Class) ? toneClass : toneClass + " " + Class;
+    }
+
+    private Task ToggleAsync() => SetOpenAsync(!IsOpen);
+
+    private Task OnKeyDownAsync(KeyboardEventArgs args) =>
+        IsOpen && string.Equals(args.Key, "Escape", StringComparison.Ordinal)
+            ? SetOpenAsync(false)
+            : Task.CompletedTask;
+
+    private Task SetOpenAsync(bool isOpen)
+    {
+        if (IsOpen == isOpen)
+        {
+            return Task.CompletedTask;
+        }
+
+        IsOpen = isOpen;
+        return IsOpenChanged.HasDelegate ? IsOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
+    }
+}

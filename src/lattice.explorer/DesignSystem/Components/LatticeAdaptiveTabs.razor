@@ -8,17 +8,21 @@
     last inline slot when it would otherwise be hidden - so a caller can always
     see where they are, at every breakpoint.
 
-    Inline capacity comes from the breakpoint token layer
-    (LatticeBreakpoints.TabInlineCapacity), never from a measurement or a media
-    query (epic decision D7). A caller may override it with InlineCapacity when
-    a surface knows better.
+    Inline capacity is MEASURED, not assumed: LatticeTabCapacity sizes the
+    labels the strip actually holds against the width it actually has, so a
+    strip of long labels overflows sooner and a strip of short ones later. A
+    caller may still pin it with InlineCapacity when a surface knows better.
 
-    Keyboard support follows the WAI-ARIA tabs pattern: a roving tabindex puts
-    exactly one tab in the tab order, and Left/Right/Home/End move between the
-    enabled tabs.
+    One primitive backs every strip in the shell. Variant chooses the
+    presentation - an underlined tab strip, a segmented toggle, or the quieter
+    subordinate control a nested sub-surface wears - while the behaviour is
+    identical in all three: a roving tabindex puts exactly one tab in the tab
+    order, Left/Right/Home/End move between the enabled tabs, every tab names
+    the panel it controls, and a disabled tab is greyed and explained rather
+    than hidden.
 *@
 
-<div class="lx-tabstrip-host @Class" data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
+<div class="@_hostClass" data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
     <div class="lx-tabstrip"
          role="tablist"
          aria-label="@Label"
@@ -36,10 +40,11 @@
                         id="@_tabElementIds[index]"
                         class="@(isActive ? ActiveTabClass : TabClass)"
                         aria-selected="@(isActive ? "true" : "false")"
-                        aria-controls="@(ChildContent is null ? null : _panelElementId)"
+                        aria-controls="@_panelControlsId"
+                        aria-describedby="@(tab.Description is null ? null : _tabDescriptionIds[index])"
                         tabindex="@(index == _rovingIndex ? "0" : "-1")"
                         disabled="@(!tab.IsEnabled)"
-                        title="@(tab.Description ?? tab.Label)"
+                        title="@tab.Description"
                         @ref="_tabElements[index]"
                         @onclick="@(() => SelectAsync(tab))">
                     @tab.Label
@@ -47,6 +52,25 @@
             }
         }
     </div>
+    @if (_hasDescriptions)
+    {
+        @*
+            Outside the tablist on purpose: a tablist owns tabs, and a bare span
+            among them is an unroled child that the ARIA required-children rule
+            flags. aria-describedby reaches across the document, so the
+            descriptions sit beside the strip instead.
+        *@
+        <div class="lx-visually-hidden">
+            @for (var i = 0; i < _tabs.Count; i++)
+            {
+                var tab = _tabs[i];
+                if (tab.Description is not null)
+                {
+                    <span id="@_tabDescriptionIds[i]">@tab.Description</span>
+                }
+            }
+        </div>
+    }
     @if (_layout.HasOverflow)
     {
         <div class="lx-tabstrip-overflow-host">
@@ -74,8 +98,9 @@
                                 class="lx-tabstrip-overflow-item"
                                 role="menuitemradio"
                                 aria-checked="@(isActive ? "true" : "false")"
+                                aria-describedby="@(tab.Description is null ? null : _tabDescriptionIds[i])"
                                 disabled="@(!tab.IsEnabled)"
-                                title="@(tab.Description ?? tab.Label)"
+                                title="@tab.Description"
                                 @onclick="@(() => SelectFromOverflowAsync(tab))">
                             @tab.Label
                         </button>
@@ -102,6 +127,11 @@
     // Pre-composed literals rather than per-render interpolation.
     private const string TabClass = "lx-tab";
     private const string ActiveTabClass = "lx-tab is-active";
+    private const string DescriptionIdSuffix = "-description";
+    private const string UnderlinedHostClass = "lx-tabstrip-host";
+    private const string SegmentedHostClass = "lx-tabstrip-host lx-tabstrip-segmented";
+    private const string SubordinateHostClass =
+        "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-subordinate";
 
     private static readonly IReadOnlyList<LatticeTabItem> NoTabs = Array.Empty<LatticeTabItem>();
 
@@ -114,13 +144,20 @@
     // been, so a steady-state render allocates nothing for the references.
     private ElementReference[] _tabElements = Array.Empty<ElementReference>();
     private string[] _tabElementIds = Array.Empty<string>();
+    private string[] _tabDescriptionIds = Array.Empty<string>();
     private string? _elementIdPrefix;
     private string _panelElementId = string.Empty;
+    private string? _panelControlsId;
     private string _overflowMenuElementId = string.Empty;
     private string _overflowToggleElementId = string.Empty;
+    private string _hostClass = UnderlinedHostClass;
+    private LatticeTabsVariant? _hostClassVariant;
+    private string? _hostClassSuffix;
+    private LatticeStripMetrics _metrics = LatticeStripMetrics.Default;
     private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
     private int _activeIndex = -1;
     private int _rovingIndex = -1;
+    private bool _hasDescriptions;
     private bool _restoreFocusToActiveTab;
 
     /// <summary>The tabs to render, in display order.</summary>
@@ -144,6 +181,16 @@
     [Parameter] public string Label { get; set; } = "Tabs";
 
     /// <summary>
+    /// The presentation the strip wears. Defaults to
+    /// <see cref="LatticeTabsVariant.Underlined"/>; choose
+    /// <see cref="LatticeTabsVariant.Segmented"/> for a toggle between peer
+    /// options and <see cref="LatticeTabsVariant.Subordinate"/> for a control
+    /// nested inside an already selected surface. The variant changes only the
+    /// presentation - keyboard behaviour and ARIA semantics are identical.
+    /// </summary>
+    [Parameter] public LatticeTabsVariant Variant { get; set; }
+
+    /// <summary>
     /// Pins the breakpoint this strip renders for, overriding the cascaded
     /// shell context. Leave <see langword="null"/> - the intended path - to
     /// follow <see cref="LatticeAdaptiveRoot"/>; set it when a surface knows it
@@ -160,13 +207,31 @@
     [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
 
     /// <summary>
-    /// Overrides the number of tabs rendered inline before the strip overflows.
-    /// Leave <see langword="null"/> to use the breakpoint's token value from
-    /// <see cref="LatticeBreakpoints.TabInlineCapacity"/>, which is the intended
-    /// path; set it only when a surface genuinely knows its strip is narrower or
-    /// wider than the breakpoint implies.
+    /// Overrides the number of tabs rendered inline before the strip overflows,
+    /// bypassing the measurement.
     /// </summary>
+    /// <remarks>
+    /// Leave <see langword="null"/> - the intended path - to let the strip
+    /// measure its own labels against the width it has. Set it only when a
+    /// surface genuinely wants a fixed count regardless of label length.
+    /// </remarks>
     [Parameter] public int? InlineCapacity { get; set; }
+
+    /// <summary>
+    /// The inline extent the strip has to fill, in CSS pixels, used by the
+    /// capacity measurement. Leave <see langword="null"/> to size against the
+    /// cascaded viewport width, or the breakpoint's nominal width when the head
+    /// reports a band rather than a width. Set it when the strip occupies a
+    /// pane whose width the caller knows and the viewport's does not describe.
+    /// </summary>
+    [Parameter] public double? AvailableWidth { get; set; }
+
+    /// <summary>
+    /// The strip's geometry, used by the capacity measurement. Leave
+    /// <see langword="null"/> to use the geometry of the chosen
+    /// <see cref="Variant"/>.
+    /// </summary>
+    [Parameter] public LatticeStripMetrics? Metrics { get; set; }
 
     /// <summary>The label of the overflow control. Defaults to <c>More</c>.</summary>
     [Parameter] public string OverflowLabel { get; set; } = "More";
@@ -191,10 +256,19 @@
     /// <summary>
     /// The active tab's panel content. When supplied it is rendered in a
     /// <c>role="tabpanel"</c> region labelled by the active tab, completing the
-    /// tabs pattern; omit it to render the strip alone and host the panel
-    /// yourself.
+    /// tabs pattern; omit it and name your own panel with <see cref="PanelId"/>
+    /// when the panel lives elsewhere in the layout.
     /// </summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// The id of the <c>role="tabpanel"</c> element this strip controls, for a
+    /// caller that renders the panel itself rather than passing it as
+    /// <see cref="ChildContent"/>. Every tab points at it through
+    /// <c>aria-controls</c>. Ignored when <see cref="ChildContent"/> is
+    /// supplied, because the strip then owns the panel and knows its id.
+    /// </summary>
+    [Parameter] public string? PanelId { get; set; }
 
     /// <summary>
     /// A stable element-id prefix for the tabs, the panel, and the overflow
@@ -217,6 +291,34 @@
 
     private string TabElementId(string tabId) => ElementIdPrefix + "-tab-" + tabId;
 
+    private static string VariantHostClass(LatticeTabsVariant variant) => variant switch
+    {
+        LatticeTabsVariant.Segmented => SegmentedHostClass,
+        LatticeTabsVariant.Subordinate => SubordinateHostClass,
+        _ => UnderlinedHostClass,
+    };
+
+    private static LatticeStripMetrics VariantMetrics(LatticeTabsVariant variant) =>
+        variant == LatticeTabsVariant.Underlined
+            ? LatticeStripMetrics.Default
+            : LatticeStripMetrics.Segment;
+
+    // Composed once per parameter change rather than on every render pass, so a
+    // re-render caused by a selection costs no string concatenation.
+    private void RebuildHostClass()
+    {
+        if (_hostClassVariant == Variant && string.Equals(_hostClassSuffix, Class, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _hostClassVariant = Variant;
+        _hostClassSuffix = Class;
+
+        var variantClass = VariantHostClass(Variant);
+        _hostClass = string.IsNullOrEmpty(Class) ? variantClass : variantClass + " " + Class;
+    }
+
     // Element ids are composed once per parameter change rather than on every
     // render pass, so a strip of any length allocates no strings while
     // rendering.
@@ -231,18 +333,36 @@
             _overflowToggleElementId = OverflowToggleElementId;
         }
 
+        // Every tab names the panel it controls. The strip's own panel when it
+        // renders one, otherwise the panel the caller named - and nothing at
+        // all when the caller named none, because pointing aria-controls at an
+        // element that does not exist is worse than omitting it.
+        _panelControlsId = ChildContent is not null ? _panelElementId : PanelId;
+
         if (_tabElementIds.Length < _tabs.Count)
         {
             _tabElementIds = new string[_tabs.Count];
+            _tabDescriptionIds = new string[_tabs.Count];
         }
 
         // Rebuilt unconditionally rather than guarded on the tab list's
         // identity: a caller that mutates the list it already handed over would
         // otherwise leave this cache pointing at ids that no longer belong to
         // the tabs beside them.
+        _hasDescriptions = false;
         for (var i = 0; i < _tabs.Count; i++)
         {
-            _tabElementIds[i] = TabElementId(_tabs[i].Id);
+            var id = TabElementId(_tabs[i].Id);
+            _tabElementIds[i] = id;
+
+            if (_tabs[i].Description is null)
+            {
+                _tabDescriptionIds[i] = string.Empty;
+                continue;
+            }
+
+            _hasDescriptions = true;
+            _tabDescriptionIds[i] = id + DescriptionIdSuffix;
         }
     }
 
@@ -251,12 +371,14 @@
     {
         _tabs = Tabs ?? NoTabs;
         _breakpoint = Breakpoint ?? AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default;
+        _metrics = Metrics ?? VariantMetrics(Variant);
 
         if (_tabElements.Length < _tabs.Count)
         {
             _tabElements = new ElementReference[_tabs.Count];
         }
 
+        RebuildHostClass();
         RebuildElementIds();
 
         _activeIndex = IndexOfActive();
@@ -308,8 +430,32 @@
         }
     }
 
-    private int ResolveInlineCapacity() =>
-        InlineCapacity ?? LatticeBreakpoints.TabInlineCapacity(_breakpoint);
+    // The strip measures what it holds against the width it has, rather than
+    // taking a fixed count that cannot know whether a label reads "Data" or
+    // "Retention and residency".
+    private int ResolveInlineCapacity()
+    {
+        if (InlineCapacity is int pinned)
+        {
+            return pinned;
+        }
+
+        return LatticeTabCapacity.Measure(_tabs, ResolveAvailableWidth(), _metrics);
+    }
+
+    private double ResolveAvailableWidth()
+    {
+        if (AvailableWidth is double supplied)
+        {
+            return supplied;
+        }
+
+        // A pinned breakpoint pins the width too: the caller asked for the
+        // shape of a band, not for the window's real width.
+        return Breakpoint is null && AdaptiveContext is not null
+            ? AdaptiveContext.LayoutWidth
+            : LatticeBreakpoints.NominalWidth(_breakpoint);
+    }
 
     private int IndexOfActive()
     {

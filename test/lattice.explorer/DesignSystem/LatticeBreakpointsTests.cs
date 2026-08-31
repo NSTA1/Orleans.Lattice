@@ -99,6 +99,58 @@ public sealed class LatticeBreakpointsTests
             Throws.TypeOf<ArgumentOutOfRangeException>());
     }
 
+    [TestCase(LatticeBreakpoint.Compact, LatticeBreakpoints.CompactNominalWidth)]
+    [TestCase(LatticeBreakpoint.Medium, LatticeBreakpoints.MediumNominalWidth)]
+    [TestCase(LatticeBreakpoint.Expanded, LatticeBreakpoints.ExpandedNominalWidth)]
+    public void NominalWidth_returns_a_representative_width_for_the_band(
+        LatticeBreakpoint breakpoint, int expected)
+    {
+        Assert.That(LatticeBreakpoints.NominalWidth(breakpoint), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void NominalWidth_resolves_back_to_the_breakpoint_it_describes()
+    {
+        foreach (var breakpoint in LatticeBreakpoints.All)
+        {
+            Assert.That(
+                LatticeBreakpoints.Resolve(LatticeBreakpoints.NominalWidth(breakpoint)),
+                Is.EqualTo(breakpoint),
+                "a nominal width that fell in another band would size a layout for the "
+                + "wrong shape");
+        }
+    }
+
+    [Test]
+    public void NominalWidth_is_non_zero_for_every_breakpoint()
+    {
+        // The reason this exists rather than reusing MinimumWidth: compact's
+        // lower bound is zero, which is useless as a width to measure against.
+        foreach (var breakpoint in LatticeBreakpoints.All)
+        {
+            Assert.That(LatticeBreakpoints.NominalWidth(breakpoint), Is.GreaterThan(0));
+        }
+    }
+
+    [Test]
+    public void NominalWidth_increases_with_the_band()
+    {
+        Assert.That(
+            LatticeBreakpoints.NominalWidth(LatticeBreakpoint.Compact),
+            Is.LessThan(LatticeBreakpoints.NominalWidth(LatticeBreakpoint.Medium)));
+        Assert.That(
+            LatticeBreakpoints.NominalWidth(LatticeBreakpoint.Medium),
+            Is.LessThan(LatticeBreakpoints.NominalWidth(LatticeBreakpoint.Expanded)));
+    }
+
+    [Test]
+    public void NominalWidth_rejects_an_undeclared_breakpoint()
+    {
+        Assert.That(
+            () => LatticeBreakpoints.NominalWidth((LatticeBreakpoint)42),
+            Throws.TypeOf<ArgumentOutOfRangeException>());
+    }
+
     [TestCase(LatticeBreakpoint.Compact, LatticeBreakpoints.CompactName)]
     [TestCase(LatticeBreakpoint.Medium, LatticeBreakpoints.MediumName)]
     [TestCase(LatticeBreakpoint.Expanded, LatticeBreakpoints.ExpandedName)]

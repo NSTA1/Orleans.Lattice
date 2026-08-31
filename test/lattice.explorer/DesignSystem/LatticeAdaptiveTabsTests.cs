@@ -24,6 +24,20 @@ public sealed class LatticeAdaptiveTabsTests
         new("tag-index", "Tag index"),
     ];
 
+    /// <summary>
+    /// The same six tabs with labels long enough that they cannot all fit,
+    /// which is what distinguishes a measured capacity from a fixed one.
+    /// </summary>
+    private static readonly LatticeTabItem[] SixLongTabs =
+    [
+        new("retention", "Retention and residency"),
+        new("compliance", "Compliance and schema policy"),
+        new("membership", "Membership and delegation"),
+        new("dead-letter", "Dead letters and replay"),
+        new("history", "History and revision timeline"),
+        new("tag-index", "Tag indexes and projections"),
+    ];
+
     private static Task<string> RenderAsync(
         LatticeBreakpoint breakpoint,
         IReadOnlyList<LatticeTabItem>? tabs = null,
@@ -140,13 +154,28 @@ public sealed class LatticeAdaptiveTabsTests
     }
 
     [Test]
-    public async Task Render_atMedium_keepsTheBreakpointsCapacityInlineAndOverflowsTheRest()
+    public async Task Render_atMedium_keepsShortLabelsInlineBecauseTheyMeasureAsFitting()
     {
         var html = await RenderAsync(LatticeBreakpoint.Medium, activeId: "metrics");
 
         Assert.Multiple(() =>
         {
-            Assert.That(CountInlineTabs(html), Is.EqualTo(LatticeBreakpoints.MediumTabInlineCapacity));
+            // The regression this closes: a fixed capacity of four collapsed
+            // two of these six short labels into an overflow menu at a width
+            // that comfortably holds all six.
+            Assert.That(CountInlineTabs(html), Is.EqualTo(SixTabs.Length));
+            Assert.That(html, Does.Not.Contain("lx-tabstrip-overflow-toggle"));
+        });
+    }
+
+    [Test]
+    public async Task Render_atMedium_overflowsWhenTheLabelsAreTooLongToFit()
+    {
+        var html = await RenderAsync(LatticeBreakpoint.Medium, tabs: SixLongTabs, activeId: "retention");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CountInlineTabs(html), Is.LessThan(SixLongTabs.Length));
             Assert.That(html, Does.Contain("lx-tabstrip-overflow-toggle"));
             Assert.That(html, Does.Contain("aria-haspopup=\"menu\""));
             Assert.That(html, Does.Contain("aria-controls=\"tabs-overflow\""));
@@ -154,13 +183,26 @@ public sealed class LatticeAdaptiveTabsTests
     }
 
     [Test]
-    public async Task Render_atCompact_keepsOnlyTheActiveTabInline()
+    public async Task Render_measuresCapacityFromLabelLengthRatherThanFromTheBreakpointAlone()
+    {
+        var shortLabels = await RenderAsync(LatticeBreakpoint.Compact, activeId: "metrics");
+        var longLabels = await RenderAsync(LatticeBreakpoint.Compact, tabs: SixLongTabs, activeId: "retention");
+
+        Assert.That(
+            CountInlineTabs(longLabels),
+            Is.LessThan(CountInlineTabs(shortLabels)),
+            "the same breakpoint fits fewer long labels than short ones, which is what a "
+            + "fixed per-breakpoint constant cannot express");
+    }
+
+    [Test]
+    public async Task Render_atCompact_overflowsAndKeepsTheActiveTabInline()
     {
         var html = await RenderAsync(LatticeBreakpoint.Compact, activeId: "history");
 
         Assert.Multiple(() =>
         {
-            Assert.That(CountInlineTabs(html), Is.EqualTo(LatticeBreakpoints.CompactTabInlineCapacity));
+            Assert.That(CountInlineTabs(html), Is.LessThan(SixTabs.Length));
             Assert.That(html, Does.Contain(">History</button>"));
             Assert.That(html, Does.Contain("lx-tabstrip-overflow-toggle"));
         });
@@ -171,14 +213,15 @@ public sealed class LatticeAdaptiveTabsTests
     public async Task Render_atNarrowBreakpoints_keepsTheActiveTabVisibleEvenWhenItWouldOverflow(
         LatticeBreakpoint breakpoint)
     {
-        // "tag-index" is the last of six, beyond both narrow capacities.
-        var html = await RenderAsync(breakpoint, activeId: "tag-index");
+        // "tag-index" is the last of six long labels, beyond what either narrow
+        // band measures as fitting.
+        var html = await RenderAsync(breakpoint, tabs: SixLongTabs, activeId: "tag-index");
 
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("lx-tab is-active"));
             Assert.That(html, Does.Contain("aria-selected=\"true\""));
-            Assert.That(html, Does.Contain(">Tag index</button>"));
+            Assert.That(html, Does.Contain(">Tag indexes and projections</button>"));
         });
     }
 
@@ -389,7 +432,46 @@ public sealed class LatticeAdaptiveTabsTests
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("data-lx-breakpoint=\"compact\""));
-            Assert.That(CountInlineTabs(html), Is.EqualTo(LatticeBreakpoints.CompactTabInlineCapacity));
+            Assert.That(CountInlineTabs(html), Is.LessThan(SixTabs.Length),
+                "the cascaded compact band sizes the strip against a compact width");
+        });
+    }
+
+    [Test]
+    public async Task Render_sizesAgainstTheCascadedViewportWidthWhenTheHeadReportsOne()
+    {
+        var narrow = await DesignSystemRenderHarness.RenderCascadedAsync<LatticeAdaptiveTabs>(
+            new LatticeAdaptiveContext(
+                LatticeBreakpoint.Compact, LatticeDensity.Cosy, IsMeasured: true, ViewportWidth: 320),
+            new Dictionary<string, object?> { ["Tabs"] = SixTabs, ["ActiveId"] = "metrics" });
+
+        var wide = await DesignSystemRenderHarness.RenderCascadedAsync<LatticeAdaptiveTabs>(
+            new LatticeAdaptiveContext(
+                LatticeBreakpoint.Compact, LatticeDensity.Cosy, IsMeasured: true, ViewportWidth: 599),
+            new Dictionary<string, object?> { ["Tabs"] = SixTabs, ["ActiveId"] = "metrics" });
+
+        Assert.That(CountInlineTabs(narrow), Is.LessThan(CountInlineTabs(wide)),
+            "a measured width is strictly more information than a band, so two widths in "
+            + "the same band do not have to produce the same strip");
+    }
+
+    [Test]
+    public async Task Render_anExplicitAvailableWidthOverridesTheCascadedWidth()
+    {
+        var html = await DesignSystemRenderHarness.RenderCascadedAsync<LatticeAdaptiveTabs>(
+            new LatticeAdaptiveContext(
+                LatticeBreakpoint.Expanded, LatticeDensity.Cosy, IsMeasured: true, ViewportWidth: 1920),
+            new Dictionary<string, object?>
+            {
+                ["Tabs"] = SixTabs,
+                ["ActiveId"] = "metrics",
+                ["AvailableWidth"] = (double?)200,
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CountInlineTabs(html), Is.LessThan(SixTabs.Length));
+            Assert.That(html, Does.Contain("lx-tabstrip-overflow-toggle"));
         });
     }
 

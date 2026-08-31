@@ -106,7 +106,8 @@ public sealed class DetailPanelTests
         {
             Assert.That(tab.Disabled, Is.False);
             Assert.That(tab.IsActive, Is.True);
-            Assert.That(tab.Title, Is.EqualTo("Alpha"), "an allowed surface carries no advisory tooltip");
+            Assert.That(tab.Title, Is.Null,
+                "an allowed surface carries no advisory tooltip; the label is not an explanation");
             Assert.That(harness.ActiveView, Is.EqualTo(typeof(AlphaProbeView)));
         });
     }
