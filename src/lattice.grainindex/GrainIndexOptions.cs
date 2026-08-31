@@ -42,4 +42,18 @@ public sealed class GrainIndexOptions
     /// foreground traffic. Must be greater than zero.
     /// </summary>
     public TimeSpan BackfillInterval { get; set; } = DefaultBackfillInterval;
+
+    /// <summary>
+    /// What silo start does when this index's declaration has drifted from the
+    /// one its already-written entries were built under, on a field
+    /// <see cref="GrainIndexDriftClassification"/> classifies as drift-breaking.
+    /// Defaults to <see cref="GrainIndexDriftPolicy.Reject"/>, which fails
+    /// startup rather than serving queries from an index that no longer agrees
+    /// with the declaration reading it.
+    /// <para>
+    /// A drift-safe change ignores this setting: the stored record is refreshed
+    /// and the change logged under either policy.
+    /// </para>
+    /// </summary>
+    public GrainIndexDriftPolicy DriftPolicy { get; set; } = GrainIndexDriftPolicy.Reject;
 }
