@@ -22,6 +22,7 @@
   <Project Path="src/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.csproj" />
   <Project Path="src/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.csproj" />
   <Project Path="src/lattice.api.mcp.repocontext.replication/Orleans.Lattice.Api.Mcp.RepoContext.Replication.csproj" />
+  <Project Path="src/lattice.grainindex/Orleans.Lattice.GrainIndex.csproj" />
   <Project Path="src/lattice.membership/Orleans.Lattice.Membership.csproj" />
   <Project Path="src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj" />
   <Project Path="src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj" />
@@ -87,6 +88,7 @@
   <Project Path="test/lattice.api.mcp.telemetry.azure/Orleans.Lattice.Api.Mcp.Telemetry.Azure.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Tests.csproj" />
   <Project Path="test/lattice.api.mcp.repocontext.replication/Orleans.Lattice.Api.Mcp.RepoContext.Replication.Tests.csproj" />
+  <Project Path="test/lattice.grainindex/Orleans.Lattice.GrainIndex.Tests.csproj" />
   <Project Path="test/lattice.membership/Orleans.Lattice.Membership.Tests.csproj" />
   <Project Path="test/lattice.membership.entra/Orleans.Lattice.Membership.Entra.Tests.csproj" />
   <Project Path="test/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.Tests.csproj" />
