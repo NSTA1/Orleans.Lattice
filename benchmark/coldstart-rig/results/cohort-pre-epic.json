@@ -1,0 +1,679 @@
+{
+  "schemaVersion": 1,
+  "kind": "coldstart-rig/cohort",
+  "cohortId": "s14-pre-epic-quiet",
+  "generatedUtc": "2026-08-31T22:15:32.7824325Z",
+  "hostContext": {
+    "dockerCpus": 16,
+    "dockerMemoryBytes": 29249163264,
+    "runningContainers": 1,
+    "foreignContainers": 1,
+    "foreignContainerNames": [
+      "repocontextcontainer-embedder-1"
+    ],
+    "contended": true
+  },
+  "configuration": {
+    "project": "lattice-coldstart",
+    "hostPort": 18080,
+    "mcpImage": "repocontext-mcp:coldstart-rig",
+    "embedderImage": "rc-embedder:coldstart-rig",
+    "masterVolume": "lattice-coldstart-master",
+    "workVolume": "lattice-coldstart-work",
+    "repoId": "lattice",
+    "semanticQuery": "where is the readiness health probe wired",
+    "warmQueryCount": 5,
+    "scenarios": [
+      "first-boot",
+      "graceful-restart",
+      "sigkill-restart"
+    ],
+    "runs": 3
+  },
+  "runs": [
+    {
+      "runIndex": 1,
+      "scenarios": [
+        {
+          "scenario": "first-boot",
+          "runIndex": 1,
+          "containerStartedAtUtc": "2026-08-31T21:50:09.6302308Z",
+          "liveSeconds": 3.736,
+          "readySeconds": 3.751,
+          "firstQuerySeconds": 64.093,
+          "firstSemanticQuerySeconds": 64.093,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 60332.3,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 11461.1,
+            "p50": 15958.6,
+            "p95": 34710.0,
+            "max": 34710.0,
+            "mean": 18690.0,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 7223.5,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 166.473,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 338,
+              "PeakCpuPercent": 76.54,
+              "MeanCpuPercent": 5.22,
+              "PeakMemoryBytes": 722364006,
+              "MeanMemoryBytes": 709706019
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 338,
+              "PeakCpuPercent": 980.84,
+              "MeanCpuPercent": 336.91,
+              "PeakMemoryBytes": 3757022642,
+              "MeanMemoryBytes": 3052452139
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 333,
+            "WarningLines": 4,
+            "ErrorLines": 0,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-first-boot-run1.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-first-boot-run1.csv"
+        },
+        {
+          "scenario": "graceful-restart",
+          "runIndex": 1,
+          "containerStartedAtUtc": "2026-08-31T21:53:36.3502302Z",
+          "liveSeconds": 4.104,
+          "readySeconds": 4.117,
+          "firstQuerySeconds": 32.359,
+          "firstSemanticQuerySeconds": 32.359,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 28240.7,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 193.0,
+            "p50": 205.8,
+            "p95": 224.4,
+            "max": 224.4,
+            "mean": 208.9,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 82912.6,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 34.303,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 224,
+              "PeakCpuPercent": 317.78,
+              "MeanCpuPercent": 8.45,
+              "PeakMemoryBytes": 724461158,
+              "MeanMemoryBytes": 710392920
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 224,
+              "PeakCpuPercent": 1328.93,
+              "MeanCpuPercent": 245.52,
+              "PeakMemoryBytes": 3163243414,
+              "MeanMemoryBytes": 2723741097
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 267,
+            "WarningLines": 4,
+            "ErrorLines": 0,
+            "ReplayOverBudgetWarnings": 3,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-graceful-restart-run1.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-graceful-restart-run1.csv"
+        },
+        {
+          "scenario": "sigkill-restart",
+          "runIndex": 1,
+          "containerStartedAtUtc": "2026-08-31T21:55:37.3943380Z",
+          "liveSeconds": 3.716,
+          "readySeconds": 3.727,
+          "firstQuerySeconds": 27.004,
+          "firstSemanticQuerySeconds": 27.004,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 23276.1,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 172.8,
+            "p50": 180.1,
+            "p95": 200.0,
+            "max": 200.0,
+            "mean": 181.7,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 32334.3,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 28.828,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 112,
+              "PeakCpuPercent": 239.31,
+              "MeanCpuPercent": 9.81,
+              "PeakMemoryBytes": 719637709,
+              "MeanMemoryBytes": 710438327
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 112,
+              "PeakCpuPercent": 1314.93,
+              "MeanCpuPercent": 495.93,
+              "PeakMemoryBytes": 2935610147,
+              "MeanMemoryBytes": 2378433186
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 385,
+            "WarningLines": 70,
+            "ErrorLines": 0,
+            "ReplayOverBudgetWarnings": 69,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-sigkill-restart-run1.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-sigkill-restart-run1.csv"
+        }
+      ]
+    },
+    {
+      "runIndex": 2,
+      "scenarios": [
+        {
+          "scenario": "first-boot",
+          "runIndex": 2,
+          "containerStartedAtUtc": "2026-08-31T21:57:08.8172722Z",
+          "liveSeconds": 7.611,
+          "readySeconds": 8.625,
+          "firstQuerySeconds": 126.487,
+          "firstSemanticQuerySeconds": 126.487,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 117857.5,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 4950.2,
+            "p50": 5307.1,
+            "p95": 5782.2,
+            "max": 5782.2,
+            "mean": 5345.2,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 7850.8,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 313.389,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 621,
+              "PeakCpuPercent": 1206.72,
+              "MeanCpuPercent": 112.45,
+              "PeakMemoryBytes": 725404877,
+              "MeanMemoryBytes": 711375234
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 621,
+              "PeakCpuPercent": 1380.36,
+              "MeanCpuPercent": 380.16,
+              "PeakMemoryBytes": 3816078442,
+              "MeanMemoryBytes": 2905513199
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 445,
+            "WarningLines": 9,
+            "ErrorLines": 3,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-first-boot-run2.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-first-boot-run2.csv"
+        },
+        {
+          "scenario": "graceful-restart",
+          "runIndex": 2,
+          "containerStartedAtUtc": "2026-08-31T22:02:57.3371931Z",
+          "liveSeconds": 3.781,
+          "readySeconds": 3.791,
+          "firstQuerySeconds": 33.764,
+          "firstSemanticQuerySeconds": 33.764,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 29971.7,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 175.1,
+            "p50": 179.0,
+            "p95": 222.6,
+            "max": 222.6,
+            "mean": 189.2,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 30076.2,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 35.562,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 121,
+              "PeakCpuPercent": 222.3,
+              "MeanCpuPercent": 8.93,
+              "PeakMemoryBytes": 722154291,
+              "MeanMemoryBytes": 711478748
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 121,
+              "PeakCpuPercent": 1304.38,
+              "MeanCpuPercent": 436.96,
+              "PeakMemoryBytes": 2990370980,
+              "MeanMemoryBytes": 2445115689
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 263,
+            "WarningLines": 1,
+            "ErrorLines": 0,
+            "ReplayOverBudgetWarnings": 0,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-graceful-restart-run2.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-graceful-restart-run2.csv"
+        },
+        {
+          "scenario": "sigkill-restart",
+          "runIndex": 2,
+          "containerStartedAtUtc": "2026-08-31T22:04:14.9431163Z",
+          "liveSeconds": 7.985,
+          "readySeconds": 12.054,
+          "firstQuerySeconds": 60.825,
+          "firstSemanticQuerySeconds": 60.825,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 48767.9,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 436.6,
+            "p50": 790.2,
+            "p95": 5211.6,
+            "max": 5211.6,
+            "mean": 1729.2,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 10616.4,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 70.658,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 144,
+              "PeakCpuPercent": 1165.95,
+              "MeanCpuPercent": 121.55,
+              "PeakMemoryBytes": 725090304,
+              "MeanMemoryBytes": 712229956
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 144,
+              "PeakCpuPercent": 1520.25,
+              "MeanCpuPercent": 692.46,
+              "PeakMemoryBytes": 3146063544,
+              "MeanMemoryBytes": 2229697657
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 283,
+            "WarningLines": 1,
+            "ErrorLines": 12,
+            "ReplayOverBudgetWarnings": 0,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-sigkill-restart-run2.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-sigkill-restart-run2.csv"
+        }
+      ]
+    },
+    {
+      "runIndex": 3,
+      "scenarios": [
+        {
+          "scenario": "first-boot",
+          "runIndex": 3,
+          "containerStartedAtUtc": "2026-08-31T22:05:59.2336640Z",
+          "liveSeconds": 4.427,
+          "readySeconds": 5.037,
+          "firstQuerySeconds": 72.46,
+          "firstSemanticQuerySeconds": 72.46,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 67419.7,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 5186.1,
+            "p50": 5368.4,
+            "p95": 5724.8,
+            "max": 5724.8,
+            "mean": 5387.1,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 10228.6,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 290.794,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 590,
+              "PeakCpuPercent": 1255.82,
+              "MeanCpuPercent": 199.26,
+              "PeakMemoryBytes": 726034022,
+              "MeanMemoryBytes": 712663790
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 590,
+              "PeakCpuPercent": 1217.27,
+              "MeanCpuPercent": 410.04,
+              "PeakMemoryBytes": 4471060955,
+              "MeanMemoryBytes": 3422368837
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 393,
+            "WarningLines": 8,
+            "ErrorLines": 2,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-first-boot-run3.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-first-boot-run3.csv"
+        },
+        {
+          "scenario": "graceful-restart",
+          "runIndex": 3,
+          "containerStartedAtUtc": "2026-08-31T22:12:15.2923067Z",
+          "liveSeconds": 5.208,
+          "readySeconds": 5.856,
+          "firstQuerySeconds": 61.081,
+          "firstSemanticQuerySeconds": 61.081,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 55222.4,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 234.2,
+            "p50": 397.4,
+            "p95": 3311.3,
+            "max": 3311.3,
+            "mean": 1022.7,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 58290.9,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 67.159,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 239,
+              "PeakCpuPercent": 1103.01,
+              "MeanCpuPercent": 77.53,
+              "PeakMemoryBytes": 726558310,
+              "MeanMemoryBytes": 713142680
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 239,
+              "PeakCpuPercent": 1669.62,
+              "MeanCpuPercent": 403.97,
+              "PeakMemoryBytes": 2980707303,
+              "MeanMemoryBytes": 2292667217
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 297,
+            "WarningLines": 1,
+            "ErrorLines": 2,
+            "ReplayOverBudgetWarnings": 0,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-graceful-restart-run3.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-graceful-restart-run3.csv"
+        },
+        {
+          "scenario": "sigkill-restart",
+          "runIndex": 3,
+          "containerStartedAtUtc": "2026-08-31T22:14:24.8703998Z",
+          "liveSeconds": 3.675,
+          "readySeconds": 3.684,
+          "firstQuerySeconds": 23.875,
+          "firstSemanticQuerySeconds": 23.875,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 20189.1,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 166.9,
+            "p50": 181.3,
+            "p95": 185.0,
+            "max": 185.0,
+            "mean": 177.8,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 21296.5,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 25.625,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 84,
+              "PeakCpuPercent": 285.0,
+              "MeanCpuPercent": 12.48,
+              "PeakMemoryBytes": 726872883,
+              "MeanMemoryBytes": 713401178
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 84,
+              "PeakCpuPercent": 1175.17,
+              "MeanCpuPercent": 555.26,
+              "PeakMemoryBytes": 2921651503,
+              "MeanMemoryBytes": 2291072250
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 399,
+            "WarningLines": 71,
+            "ErrorLines": 0,
+            "ReplayOverBudgetWarnings": 70,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\log-sigkill-restart-run3.txt",
+          "statsPath": "C:\\dev\\copilot-worktrees\\lattice\\staudtnathan-microsoft-legendary-journey\\benchmark\\.run\\coldstart-rig\\cohorts\\s14-pre-epic-quiet\\stats-sigkill-restart-run3.csv"
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "scenario": "first-boot",
+      "samples": 3,
+      "firstQuerySeconds": [
+        64.093,
+        126.487,
+        72.46
+      ],
+      "firstQuerySecondsMin": 64.093,
+      "firstQuerySecondsMax": 126.487,
+      "firstQuerySecondsMean": 87.68,
+      "firstQueryRelativeSpreadPct": 71.16,
+      "firstSemanticQuerySeconds": [
+        64.093,
+        126.487,
+        72.46
+      ],
+      "firstSemanticQuerySecondsMean": 87.68,
+      "firstSemanticRelativeSpreadPct": 71.16,
+      "semanticAchievedCount": 3,
+      "readySecondsMean": 5.804,
+      "readyRelativeSpreadPct": 83.97,
+      "retrievalModes": [
+        "semantic"
+      ]
+    },
+    {
+      "scenario": "graceful-restart",
+      "samples": 3,
+      "firstQuerySeconds": [
+        32.359,
+        33.764,
+        61.081
+      ],
+      "firstQuerySecondsMin": 32.359,
+      "firstQuerySecondsMax": 61.081,
+      "firstQuerySecondsMean": 42.401,
+      "firstQueryRelativeSpreadPct": 67.74,
+      "firstSemanticQuerySeconds": [
+        32.359,
+        33.764,
+        61.081
+      ],
+      "firstSemanticQuerySecondsMean": 42.401,
+      "firstSemanticRelativeSpreadPct": 67.74,
+      "semanticAchievedCount": 3,
+      "readySecondsMean": 4.588,
+      "readyRelativeSpreadPct": 45.01,
+      "retrievalModes": [
+        "semantic"
+      ]
+    },
+    {
+      "scenario": "sigkill-restart",
+      "samples": 3,
+      "firstQuerySeconds": [
+        27.004,
+        60.825,
+        23.875
+      ],
+      "firstQuerySecondsMin": 23.875,
+      "firstQuerySecondsMax": 60.825,
+      "firstQuerySecondsMean": 37.235,
+      "firstQueryRelativeSpreadPct": 99.24,
+      "firstSemanticQuerySeconds": [
+        27.004,
+        60.825,
+        23.875
+      ],
+      "firstSemanticQuerySecondsMean": 37.235,
+      "firstSemanticRelativeSpreadPct": 99.24,
+      "semanticAchievedCount": 3,
+      "readySecondsMean": 6.488,
+      "readyRelativeSpreadPct": 129.0,
+      "retrievalModes": [
+        "semantic"
+      ]
+    }
+  ]
+}

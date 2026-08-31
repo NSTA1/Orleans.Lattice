@@ -34,7 +34,14 @@
 	the master volume when it exists, because a Docker volume lives inside the
 	VM's own filesystem and scans roughly an order of magnitude faster than a
 	host bind mount of the same bytes; 'staging' forces the extracted host
-	copy; 'volume' forces the master volume.
+	copy; 'volume' forces a volume.
+
+.PARAMETER SqliteVolume
+	Which rig volume 'volume' (and 'auto') reads the grain-state database from.
+	Defaults to the pristine master. Point it at the WORKING volume to census a
+	box that has moved on since it was restored - a healed one, for example -
+	while still walking a host staging copy of the same state for the WAL half.
+	The name goes through the isolation guard, so only a rig volume is readable.
 
 .PARAMETER SkipWal
 	Skip the file-WAL framing walk. It is the slow half of the census (it
@@ -53,6 +60,7 @@ param(
 	[string] $StagingPath,
 	[string] $ParametersFile,
 	[ValidateSet('auto', 'volume', 'staging')] [string] $SqliteSource = 'auto',
+	[string] $SqliteVolume,
 	[string] $ExpectationsFile,
 	[switch] $SkipExpectations,
 	[switch] $SkipWal,
@@ -78,15 +86,23 @@ if (-not (Test-Path -LiteralPath $StagingPath)) {
 }
 $StagingPath = (Resolve-Path -LiteralPath $StagingPath).Path
 
+if (-not $SqliteVolume) { $SqliteVolume = "$($config.MasterVolume)" }
+# Guard the volume name here, not at the mount, so an out-of-namespace name is
+# refused before any container binds it.
+$sqliteVolumeViolations = Test-RigVolumeName -Volume $SqliteVolume -Config $config -Label 'volume'
+if ($sqliteVolumeViolations.Count -gt 0) {
+	throw ("Rig isolation guard REFUSED to read grain state: " + ($sqliteVolumeViolations -join '; ') + '.')
+}
+
 $useVolume = switch ($SqliteSource) {
 	'volume' { $true }
 	'staging' { $false }
-	default { Test-RigVolumeExists -Name "$($config.MasterVolume)" }
+	default { Test-RigVolumeExists -Name $SqliteVolume }
 }
 
 Write-Host "Census source" -ForegroundColor Cyan
 Write-Host "  staging  : $StagingPath"
-Write-Host "  sqlite   : $(if ($useVolume) { "volume $($config.MasterVolume)" } else { 'staging directory' })"
+Write-Host "  sqlite   : $(if ($useVolume) { "volume $SqliteVolume" } else { 'staging directory' })"
 Write-Host ''
 
 $metrics = [ordered] @{}
@@ -117,7 +133,7 @@ if (-not $SkipWal) {
 
 # --- Grain-state database ------------------------------------------------
 $sqliteArgs = @{ Config = $config }
-if ($useVolume) { $sqliteArgs['Volume'] = "$($config.MasterVolume)" } else { $sqliteArgs['StagingPath'] = $StagingPath }
+if ($useVolume) { $sqliteArgs['Volume'] = $SqliteVolume } else { $sqliteArgs['StagingPath'] = $StagingPath }
 
 Write-Host 'Reading grain-state size by grain type ...' -ForegroundColor Cyan
 $grainState = foreach ($row in (Invoke-RigSqlite @sqliteArgs -SqlName 'grain-state-by-type')) {
@@ -229,6 +245,7 @@ $result = [ordered] @{
 		tarball      = "$($config.BackupTarball)"
 		staging      = $StagingPath
 		sqliteSource = if ($useVolume) { 'volume' } else { 'staging' }
+		sqliteVolume = if ($useVolume) { $SqliteVolume } else { $null }
 		masterVolume = "$($config.MasterVolume)"
 	}
 	wal                    = $wal

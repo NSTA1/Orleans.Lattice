@@ -312,6 +312,51 @@ _AssertRefuses -Name 'REFUSES an empty resolved compose document' -Fragment 'emp
 	-Action { Assert-RigComposeIsolation -Document $null -Config $baseline }
 
 # ---------------------------------------------------------------------------
+Write-Host 'Test-RigStagingManifestCurrent (staging cache validity)' -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+
+# The manifest arrives from ConvertFrom-Json, so it is a PSCustomObject whose
+# numbers may be Int64 or String depending on how it was written. Exercise the
+# real shape, not a hashtable stand-in.
+$manifestJson = '{"tarballPath":"x.tar","tarballSizeBytes":1841364992,"tarballLastWriteTicks":638939999999999999,"tarballLastWriteUtc":"2026-08-29T09:59:36.2231117Z"}'
+$currentManifest = $manifestJson | ConvertFrom-Json
+
+_Assert -Name 'a manifest matching size and last-write ticks is current' `
+	-Condition (Test-RigStagingManifestCurrent -Manifest $currentManifest -TarballSizeBytes 1841364992 -TarballLastWriteTicks 638939999999999999)
+
+_Assert -Name 'a different tarball size is NOT current' `
+	-Condition (-not (Test-RigStagingManifestCurrent -Manifest $currentManifest -TarballSizeBytes 1841364993 -TarballLastWriteTicks 638939999999999999))
+
+_Assert -Name 'a different last-write time is NOT current' `
+	-Condition (-not (Test-RigStagingManifestCurrent -Manifest $currentManifest -TarballSizeBytes 1841364992 -TarballLastWriteTicks 638939999999999998))
+
+# THE REGRESSION. A manifest written by an older revision of the rig has no
+# tarballLastWriteTicks field at all. Under Set-StrictMode -Version Latest,
+# reading it directly is a TERMINATING error, so prepare-master.ps1 crashed
+# ("The property 'tarballLastWriteTicks' cannot be found on this object")
+# instead of treating an unreadable manifest as a cache miss. Encountered for
+# real by S14 (#1844) against a staging copy left by an earlier S8 run.
+$legacyManifest = '{"tarballPath":"x.tar","tarballSizeBytes":1841364992,"tarballLastWriteUtc":"2026-08-29T09:59:36.2231117Z"}' | ConvertFrom-Json
+_Assert -Name 'a legacy manifest missing tarballLastWriteTicks reports NOT current instead of throwing' `
+	-Condition (-not (Test-RigStagingManifestCurrent -Manifest $legacyManifest -TarballSizeBytes 1841364992 -TarballLastWriteTicks 638939999999999999))
+
+$sizelessManifest = '{"tarballPath":"x.tar","tarballLastWriteTicks":638939999999999999}' | ConvertFrom-Json
+_Assert -Name 'a manifest missing tarballSizeBytes reports NOT current instead of throwing' `
+	-Condition (-not (Test-RigStagingManifestCurrent -Manifest $sizelessManifest -TarballSizeBytes 1841364992 -TarballLastWriteTicks 638939999999999999))
+
+$garbledManifest = '{"tarballSizeBytes":"not-a-number","tarballLastWriteTicks":638939999999999999}' | ConvertFrom-Json
+_Assert -Name 'an unparseable field reports NOT current instead of throwing' `
+	-Condition (-not (Test-RigStagingManifestCurrent -Manifest $garbledManifest -TarballSizeBytes 1841364992 -TarballLastWriteTicks 638939999999999999))
+
+_Assert -Name 'a null manifest reports NOT current' `
+	-Condition (-not (Test-RigStagingManifestCurrent -Manifest $null -TarballSizeBytes 1 -TarballLastWriteTicks 1))
+
+# A hashtable manifest is accepted too, because Get-RigMember handles both
+# shapes and a caller may hand one in without a JSON round trip.
+_Assert -Name 'a hashtable manifest is read through the same accessor' `
+	-Condition (Test-RigStagingManifestCurrent -Manifest @{ tarballSizeBytes = 7; tarballLastWriteTicks = 9 } -TarballSizeBytes 7 -TarballLastWriteTicks 9)
+
+# ---------------------------------------------------------------------------
 Write-Host 'Get-RigWalSegmentCensus (offline file-WAL framing)' -ForegroundColor Cyan
 # ---------------------------------------------------------------------------
 
