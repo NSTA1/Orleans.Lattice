@@ -1502,9 +1502,9 @@ public class LatticeOptions
     public TimeSpan? WalRetention { get; set; }
 
     /// <summary>
-    /// Cadence at which the per-silo core WAL garbage-collection
-    /// scheduler (<see cref="ILatticeWalGc"/>) runs a pass over every
-    /// registered tree, so a durable-WAL host gets bounded WAL retention
+    /// Upper bound on the cadence at which the per-silo core WAL
+    /// garbage-collection scheduler (<see cref="ILatticeWalGc"/>) runs a pass
+    /// over a registered tree, so a durable-WAL host gets bounded WAL retention
     /// without the replication package and without any caller invoking
     /// <see cref="ILatticeWalGc.RunOnceAsync"/>.
     /// <para>
@@ -1512,11 +1512,13 @@ public class LatticeOptions
     /// <b>enabled</b>: the core library trims the WAL of every registered
     /// tree (replicated or not) at least once an hour, so the WAL can no
     /// longer grow without bound and <see cref="WalRetention"/> is
-    /// effective out of the box. A pass is retention housekeeping, not a
-    /// latency-sensitive operation, so the coarse default keeps the
-    /// storage cost low (one fan-out per silo per hour); a host that
-    /// needs a tighter disk bound - a high write rate paired with a small
-    /// <see cref="WalRetention"/> - can lower it, and
+    /// effective out of the box. This is the <i>quiet-path</i> tick: a tree
+    /// whose passes are reclaiming entries is collected far more often, down to
+    /// <see cref="WalGcMinInterval"/>, and relaxes back to this interval once it
+    /// has nothing left to reclaim. A pass is retention housekeeping, not a
+    /// latency-sensitive operation, so the coarse ceiling keeps the idle
+    /// storage cost low; a host that needs a tighter disk bound - a high write
+    /// rate paired with a small <see cref="WalRetention"/> - can lower it, and
     /// <see cref="TimeSpan.Zero"/> (or any non-positive value) disables
     /// the scheduler entirely to restore the historical caller-driven
     /// behaviour.
@@ -1537,6 +1539,70 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalGcInterval"/> (1 hour, enabled).</summary>
     public static readonly TimeSpan DefaultWalGcInterval = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Upper bound on the randomized delay before the per-silo WAL
+    /// garbage-collection scheduler runs its <b>first</b> pass. The scheduler
+    /// draws a uniform offset in <c>[WalGcStartupDelay / 2, WalGcStartupDelay)</c>
+    /// so the first pass stays clear of the silo's activation window and no two
+    /// silos in a rolling restart align their first fan-out.
+    /// <para>
+    /// Defaults to <see cref="DefaultWalGcStartupDelay"/> (30 seconds), so the
+    /// first pass lands 15 to 30 seconds after start. Before this knob existed
+    /// the first pass was staggered across <c>[WalGcInterval / 2,
+    /// WalGcInterval)</c> - 30 to 60 minutes at the default cadence - so a host
+    /// recreated more often than that never trimmed its WAL at all. Decoupling
+    /// the startup stagger from the steady-state cadence keeps both properties
+    /// (post-activation, de-correlated) while making reclamation reachable on a
+    /// short-lived box.
+    /// </para>
+    /// <para>
+    /// The effective window is capped at <see cref="WalGcInterval"/>, so a host
+    /// that configures a cadence shorter than this knob is not made to wait
+    /// longer than one interval for its first pass. Set
+    /// <see cref="TimeSpan.Zero"/> (or any non-positive value) to run the first
+    /// pass immediately, which forfeits both the activation-window guard and
+    /// cross-silo de-correlation and is intended for single-silo hosts and
+    /// tests. This is a global knob read from the default (unnamed) options;
+    /// per-tree overrides do not apply, and the value is read once at start.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalGcStartupDelay { get; set; } = DefaultWalGcStartupDelay;
+
+    /// <summary>Default value for <see cref="WalGcStartupDelay"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultWalGcStartupDelay = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Lower bound on the adaptive per-tree WAL garbage-collection cadence: the
+    /// interval the scheduler falls back to for a tree whose last pass actually
+    /// reclaimed entries, so a fast-growing log is collected promptly instead of
+    /// waiting out a fixed <see cref="WalGcInterval"/> tick.
+    /// <para>
+    /// The scheduler keeps an independent cadence per tree inside the closed band
+    /// <c>[WalGcMinInterval, WalGcInterval]</c>. A pass that trims at least one
+    /// entry - the observation that the tree had backlog above the trim floor -
+    /// snaps that tree back to this floor; a pass that trims nothing (or fails)
+    /// doubles the tree's interval, up to <see cref="WalGcInterval"/> as the
+    /// quiet-path ceiling. So a busy tree is collected at this cadence, an idle
+    /// tree geometrically relaxes to the configured interval and costs nothing,
+    /// and neither one can affect the other's schedule.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalGcMinInterval"/> (30 seconds). Set
+    /// <see cref="TimeSpan.Zero"/> (or any non-positive value) to disable the
+    /// adaptive cadence and restore a fixed <see cref="WalGcInterval"/> tick for
+    /// every tree; a value above <see cref="WalGcInterval"/> is likewise clamped
+    /// to the interval, which has the same effect. This knob does not change what
+    /// a pass may reclaim - trim eligibility and the coverage-gated trim floor are
+    /// untouched - only how often a pass runs. This is a global knob read from
+    /// the default (unnamed) options; per-tree overrides do not apply, and the
+    /// value is read once at start.
+    /// </para>
+    /// </summary>
+    public TimeSpan WalGcMinInterval { get; set; } = DefaultWalGcMinInterval;
+
+    /// <summary>Default value for <see cref="WalGcMinInterval"/> (30 seconds).</summary>
+    public static readonly TimeSpan DefaultWalGcMinInterval = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Optional advisory per-tree ceiling, in bytes, on retained WAL size.

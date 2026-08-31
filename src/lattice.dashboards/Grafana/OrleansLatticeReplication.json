@@ -1534,6 +1534,43 @@
       "targets": [
         { "refId": "A", "expr": "sum by (cause) (rate(orleans_lattice_replication_saga_compensations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{cause}}" }
       ]
+    },
+    {
+      "id": 65,
+      "title": "WAL GC pass rate by outcome (ops/s)",
+      "description": "Rate of WAL garbage-collection passes the per-silo scheduler drove, split by outcome (orleans.lattice.wal.gc.passes). reclaimed = the pass trimmed at least one entry, so the tree had backlog above the trim floor; idle = nothing was reclaimable; failed = the pass threw. Emitted once per pass unconditionally, so this series is the denominator for the per-tree reclaim rate and the reference that tells apart a tree with no backlog from a tree that is not being collected at all.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 176 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}" }
+      ]
+    },
+    {
+      "id": 66,
+      "title": "WAL GC adaptive interval (p50/p95, s)",
+      "description": "The cadence the WAL garbage-collection scheduler selected per tree after its most recent pass (orleans.lattice.wal.gc.interval). The value moves inside the configured band [LatticeOptions.WalGcMinInterval, LatticeOptions.WalGcInterval]: a sustained reading at the floor is a tree whose log is growing faster than one pass reclaims, and a reading at the ceiling is a quiet tree. Read against the pass-outcome panel this shows the cadence tightening under backlog and relaxing once the backlog clears.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 183 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le, tree) (rate(orleans_lattice_wal_gc_interval_seconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_wal_gc_interval_seconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+      ]
+    },
+    {
+      "id": 67,
+      "title": "WAL GC retained backlog after pass (p95, bytes)",
+      "description": "95th-percentile retained WAL bytes left after a garbage-collection pass (orleans.lattice.wal.gc.backlog_bytes), sampled from the pass own report so it costs no extra I/O. Byte accounting is a provider capability gated behind LatticeOptions.WalMaxRetainedBytes, so this series is absent on a host without it - and because orleans.lattice.wal.gc.passes is emitted unconditionally, a tree reporting passes but no backlog samples is knowably not measured rather than ambiguously at zero backlog.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 183 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_wal_gc_backlog_bytes_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
+      ]
     }
   ]
 }

@@ -865,6 +865,67 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
 
+    /// <summary>
+    /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
+    /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>
+    /// (<see cref="OutcomeReclaimed"/> when the pass trimmed at least one entry,
+    /// <see cref="OutcomeIdle"/> when it found nothing above the trim floor, and
+    /// <see cref="OutcomeFailed"/> when the pass threw). Pairing the reclaimed rate
+    /// against the total pass rate gives the per-tree reclaim rate, and the failed
+    /// rate isolates a wedged tree without needing to read the scheduler's logs.
+    /// </summary>
+    public static readonly Counter<long> WalGcPasses =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.passes", unit: "{pass}",
+            description: "WAL garbage-collection passes driven by the per-silo scheduler, tagged by tree and outcome.");
+
+    /// <summary>
+    /// Histogram of the adaptive WAL garbage-collection cadence, in seconds: the
+    /// interval the scheduler selected for a tree after its most recent pass,
+    /// tagged with <see cref="TagTree"/>. The value moves inside the configured
+    /// band <c>[<see cref="LatticeOptions.WalGcMinInterval"/>,
+    /// <see cref="LatticeOptions.WalGcInterval"/>]</c>, so a sustained reading at
+    /// the floor is a tree whose log is growing faster than one pass reclaims and
+    /// a reading at the ceiling is a quiet tree. This is the instrument that shows
+    /// the cadence responding to backlog.
+    /// </summary>
+    public static readonly Histogram<double> WalGcInterval =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.gc.interval", unit: "s",
+            description: "Adaptive WAL garbage-collection interval selected per tree, tagged by tree.");
+
+    /// <summary>
+    /// Histogram of retained WAL bytes remaining after a garbage-collection pass,
+    /// tagged with <see cref="TagTree"/>. Sampled from the pass's own
+    /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/>, so it costs no extra
+    /// I/O. Read against <see cref="WalGcInterval"/> it answers the operational
+    /// question this instrument pair exists for: is the backlog falling, and is
+    /// the cadence tightening while it does.
+    /// <para>
+    /// <b>Byte accounting is a capability, and its absence is knowable rather
+    /// than silent.</b> The series exists for a tree only when the byte-pressure
+    /// policy is enabled (<see cref="LatticeOptions.WalMaxRetainedBytes"/> is
+    /// set) <i>and</i> the configured <see cref="IWalStorageProvider"/> reports a
+    /// retained byte size. <see cref="WalGcPasses"/> is emitted unconditionally
+    /// for every pass, so a tree that is reporting passes but no backlog bytes is
+    /// positively identifying a host without byte accounting - the two series are
+    /// read together, and no consumer has to distinguish "no backlog" from "not
+    /// measured". Reclaimed volume in that configuration is still observable in
+    /// records through <see cref="WalEntriesTrimmed"/> and
+    /// <see cref="OutcomeReclaimed"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalGcBacklogBytes =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.gc.backlog_bytes", unit: "By",
+            description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
+
+    /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
+
+    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that found nothing above the trim floor).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
+
+    /// <summary><see cref="TagOutcome"/> = <c>failed</c> (a WAL GC pass that threw).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeFailed = new(TagOutcome, "failed");
+
     // --- Leaf-materialiser durable pin instruments (issue #1030) ------------
 
     /// <summary>
