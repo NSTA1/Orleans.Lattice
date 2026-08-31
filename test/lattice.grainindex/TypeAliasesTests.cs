@@ -84,4 +84,31 @@ public sealed class TypeAliasesTests
             "An alias value identifies exactly one type on the wire, so no two constants may "
             + "share one. Duplicates: " + string.Join("; ", duplicates));
     }
+
+    [Test]
+    public void Every_alias_constant_is_referenced_by_exactly_one_type()
+    {
+        var declared = typeof(TypeAliases).Assembly
+            .GetTypes()
+            .Select(t => t.GetCustomAttribute<AliasAttribute>())
+            .Where(a => a is not null)
+            .GroupBy(a => a!.Alias, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        var offenders = AliasConstants()
+            .Select(f => new { f.Name, Value = (string)f.GetRawConstantValue()! })
+            .Select(a => new
+            {
+                a.Name,
+                a.Value,
+                Count = declared.TryGetValue(a.Value, out var count) ? count : 0,
+            })
+            .Where(a => a.Count != 1)
+            .Select(a => $"{a.Name} = '{a.Value}' is referenced by {a.Count} types")
+            .ToArray();
+
+        Assert.That(offenders, Is.Empty,
+            "An alias constant that no type carries is dead wire-format vocabulary, and one that "
+            + "two types carry makes the payload ambiguous. Offenders: " + string.Join("; ", offenders));
+    }
 }

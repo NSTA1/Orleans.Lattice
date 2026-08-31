@@ -26,9 +26,10 @@ namespace Orleans.Lattice.GrainIndex;
 /// because Orleans resolves aliases from a single cluster-wide registry.
 /// </para>
 /// <para>
-/// The table is deliberately empty: this package currently declares no
-/// serializable type. Later work adds one constant here per
-/// <c>[GenerateSerializer]</c> type it introduces.
+/// The table currently names the three types this package puts on the wire or
+/// into the index registry: the persisted index descriptor, the persisted
+/// projected-property descriptor, and the grain-key encoding failure. Later work
+/// adds one constant here per <c>[GenerateSerializer]</c> type it introduces.
 /// </para>
 /// </summary>
 internal static class TypeAliases
@@ -46,4 +47,13 @@ internal static class TypeAliases
     /// payload carries one.
     /// </summary>
     internal const int MaxAliasLength = 6;
+
+    /// <summary>Alias for <see cref="GrainIndexDescriptor"/>.</summary>
+    internal const string GrainIndexDescriptor = "ol.gix";
+
+    /// <summary>Alias for <see cref="GrainIndexPropertyDescriptor"/>.</summary>
+    internal const string GrainIndexPropertyDescriptor = "ol.gip";
+
+    /// <summary>Alias for <see cref="GrainIndexKeyEncodingException"/>.</summary>
+    internal const string GrainIndexKeyEncodingException = "ol.gie";
 }
