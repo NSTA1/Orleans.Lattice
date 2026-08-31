@@ -56,4 +56,13 @@ internal static class TypeAliases
 
     /// <summary>Alias for <see cref="GrainIndexKeyEncodingException"/>.</summary>
     internal const string GrainIndexKeyEncodingException = "ol.gie";
+
+    /// <summary>Alias for <see cref="GrainIndexEntry"/>.</summary>
+    internal const string GrainIndexEntry = "ol.gxe";
+
+    /// <summary>Alias for <see cref="GrainIndexProjection"/>.</summary>
+    internal const string GrainIndexProjection = "ol.gxp";
+
+    /// <summary>Alias for <see cref="GrainIndexUpdatePlan"/>.</summary>
+    internal const string GrainIndexUpdatePlan = "ol.gxu";
 }

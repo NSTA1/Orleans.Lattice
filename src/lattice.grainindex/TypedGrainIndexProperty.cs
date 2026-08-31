@@ -48,4 +48,8 @@ public sealed class TypedGrainIndexProperty<TState, TProperty> : GrainIndexPrope
 
     /// <inheritdoc />
     public override object? GetValue(TState state) => Accessor(state);
+
+    /// <inheritdoc />
+    internal override void AppendEntry(GrainIndexEntryWriter writer, TState state) =>
+        writer.Append(Name, EncodedName, Accessor(state));
 }
