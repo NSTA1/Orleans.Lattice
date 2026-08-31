@@ -56,4 +56,18 @@ public sealed class GrainIndexOptions
     /// </para>
     /// </summary>
     public GrainIndexDriftPolicy DriftPolicy { get; set; } = GrainIndexDriftPolicy.Reject;
+
+    /// <summary>
+    /// When this index's entries are published relative to the grain's own
+    /// state write. Defaults to
+    /// <see cref="GrainIndexProjectionMode.Synchronous"/>, which writes the
+    /// entries as part of the write path and surfaces a failure to the caller.
+    /// <para>
+    /// The mode is read once, when the index's enrolment path is built, because
+    /// it changes the shape of a grain's write path rather than tuning it;
+    /// changing it at run time would leave already-activated grains on the old
+    /// path.
+    /// </para>
+    /// </summary>
+    public GrainIndexProjectionMode ProjectionMode { get; set; } = GrainIndexProjectionMode.Synchronous;
 }

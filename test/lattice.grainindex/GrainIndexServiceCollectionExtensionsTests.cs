@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.GrainIndex.Enrollment;
+using Orleans.Runtime;
 using Orleans.Serialization;
 
 namespace Orleans.Lattice.GrainIndex.Tests;
@@ -345,4 +347,125 @@ public sealed class GrainIndexServiceCollectionExtensionsTests
                 static cfg => cfg.WithName("compound").Include(x => x.Age)),
             Throws.TypeOf<GrainIndexKeyEncodingException>(),
             "A grain that cannot be indexed is a declaration error, not a grain to skip silently.");
+
+    [Test]
+    public void The_declaration_registers_the_enrolment_path_the_indexed_attribute_binds_to()
+    {
+        var builder = new StubSiloBuilder();
+        builder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+            static cfg => cfg.WithName("users").Include(x => x.Age));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                builder.Services.Any(d =>
+                    d.ServiceType == typeof(IAttributeToFactoryMapper<IndexedAttribute>)),
+                Is.True,
+                "Without the mapper an [Indexed] parameter is just an unresolvable constructor "
+                + "argument, so every tracked grain would fail to activate.");
+            Assert.That(
+                builder.Services.Any(d => d.ServiceType == typeof(IGrainIndexEnrollmentStore)),
+                Is.True);
+            Assert.That(
+                builder.Services.Any(d => d.ServiceType == typeof(GrainIndexEnrollmentSet<>)),
+                Is.True);
+            Assert.That(
+                builder.Services.Any(d => d.ServiceType == typeof(GrainIndexOutboxDrainer)),
+                Is.True);
+            Assert.That(
+                builder.Services.Any(d =>
+                    d.ServiceType == typeof(IHostedService)
+                    && d.ImplementationType == typeof(GrainIndexOutboxHostedService)),
+                Is.True);
+        });
+    }
+
+    [Test]
+    public void Declaring_several_indexes_registers_the_enrolment_path_once()
+    {
+        var builder = new StubSiloBuilder();
+        builder
+            .AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("users").Include(x => x.Age))
+            .AddGrainIndex<ITestGuidKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("others").Include(x => x.Age));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                builder.Services.Count(d => d.ServiceType == typeof(GrainIndexOutboxDrainer)),
+                Is.EqualTo(1),
+                "One drain serves the whole silo: a second would race the first over the same "
+                + "outbox entries.");
+            Assert.That(
+                builder.Services.Count(d =>
+                    d.ServiceType == typeof(IHostedService)
+                    && d.ImplementationType == typeof(GrainIndexOutboxHostedService)),
+                Is.EqualTo(1));
+            Assert.That(
+                builder.Services.Count(d =>
+                    d.ServiceType == typeof(IAttributeToFactoryMapper<IndexedAttribute>)),
+                Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void The_outbox_settings_take_their_documented_defaults()
+    {
+        using var provider = Provider(static builder => builder
+            .AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("users").Include(x => x.Age)));
+
+        var options = provider.GetRequiredService<IOptions<GrainIndexOutboxOptions>>().Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Enabled, Is.True);
+            Assert.That(options.RetryInterval, Is.EqualTo(GrainIndexOutboxOptions.DefaultRetryInterval));
+        });
+    }
+
+    [Test]
+    public void Configure_grain_index_outbox_overrides_the_silo_wide_settings()
+    {
+        using var provider = Provider(static builder => builder
+            .AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
+                static cfg => cfg.WithName("users").Include(x => x.Age))
+            .ConfigureGrainIndexOutbox(static options =>
+            {
+                options.Enabled = false;
+                options.MaxBatchSize = 4;
+            }));
+
+        var options = provider.GetRequiredService<IOptions<GrainIndexOutboxOptions>>().Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.Enabled, Is.False);
+            Assert.That(options.MaxBatchSize, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public void Configure_grain_index_outbox_rejects_a_null_argument()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => GrainIndexServiceCollectionExtensions.ConfigureGrainIndexOutbox(
+                    null!, static _ => { }),
+                Throws.ArgumentNullException);
+            Assert.That(
+                () => new StubSiloBuilder().ConfigureGrainIndexOutbox(null!),
+                Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
+    public void Configure_grain_index_outbox_returns_the_same_builder_so_silo_setup_chains()
+    {
+        var builder = new StubSiloBuilder();
+
+        Assert.That(builder.ConfigureGrainIndexOutbox(static _ => { }), Is.SameAs(builder));
+    }
 }
