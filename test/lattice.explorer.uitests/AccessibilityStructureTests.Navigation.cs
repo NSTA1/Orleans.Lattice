@@ -18,7 +18,12 @@ public sealed partial class AccessibilityStructureTests
     private const int MaxFocusStops = 30;
 
     /// <summary>The catalog-kind tab strip, the one asynchronous state change this harness can drive.</summary>
-    private const string CatalogKindStripSelector = ".lx-shell-nav-toggle[role=tablist]";
+    // A DESCENDANT selector, deliberately. The shared tab primitive puts the
+    // caller's Class on its host element and role=tablist on the inner strip, so
+    // no single element can carry both. The original compound selector encoded
+    // the hand-rolled markup #1850 replaced, and would match nothing once the
+    // catalog-kind toggle moved onto LatticeAdaptiveTabs.
+    private const string CatalogKindStripSelector = ".lx-shell-nav-toggle [role=tablist]";
 
     /// <summary>The catalog kind switched to, chosen because it is not the default.</summary>
     private const string CatalogKindTarget = "Views";
