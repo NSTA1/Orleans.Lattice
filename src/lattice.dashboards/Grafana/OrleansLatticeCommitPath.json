@@ -692,6 +692,19 @@
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
         { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_materialiser_drain_lag_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }
       ]
+    },
+    {
+      "id": 126,
+      "title": "Mutation-observer inline latency p95 (ms) by observer",
+      "description": "Per-observer breakdown of the inline IMutationObserver callback cost (orleans.lattice.observer.duration), split by the observer CLR type. Observers run inline on the write path, so this is latency the caller pays: it is the by-observer decomposition of the aggregate observer step on the Commit-step latency panel above. A single series climbing away from its peers names the misbehaving observer (synchronous I/O, a blocking call, a chatty downstream). The measurement is taken on the faulting path too, so an observer that throws slowly still shows up here.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 149 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, observer) (rate(orleans_lattice_observer_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{observer}}" },
+        { "refId": "B", "expr": "histogram_quantile(0.50, sum by (le, observer) (rate(orleans_lattice_observer_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{observer}}" }
+      ]
     }
   ]
 }

@@ -27,6 +27,7 @@ Every Lattice instrument carries a consistent set of low-cardinality tags:
 | `shard` | shard-level instruments only | Physical shard index as an `int` |
 | `operation` | `orleans.lattice.leaf.scan.duration` only | `keys` or `entries` |
 | `step` | `orleans.lattice.leaf.commit.duration` only | `wal`, `apply`, `observer`, or `digest` |
+| `observer` | `orleans.lattice.observer.duration` only | The `IMutationObserver` implementation's CLR type name (`Type.FullName`) |
 | `stage` | `orleans.lattice.set.stage.duration`, `orleans.lattice.set_many.stage.duration`, `orleans.lattice.get.stage.duration`, `orleans.lattice.get_many.stage.duration`, `orleans.lattice.saga.broadcast.shard.stage.duration` | Sub-stage name within an envelope - see each instrument below |
 | `phase` | `orleans.lattice.provider.commit.duration`, `orleans.lattice.provider.retry.exhausted`, `orleans.lattice.provider.idempotent_replays` | `phase1` (per-batch partition txn) or `phase2` (manifest partition txn); `idempotent_replays` is always `phase1` |
 | `status` | `orleans.lattice.provider.retry.attempts`, `orleans.lattice.provider.retry.exhausted`, `orleans.lattice.provider.retry.short_circuited` | Azure Tables HTTP status string (e.g. `503`, `429`; `0` for a transport-level failure with no HTTP exchange; `unknown` when the SDK surfaced no status) |
@@ -328,7 +329,7 @@ dashboards. Charted on the Overview dashboard's "Atomic action (saga / TCC)" row
 | `orleans.lattice.atomic_action.step` | `Counter<long>` | `{step}` | One increment per step effect the saga runs. Tagged `phase=forward` \| `compensate` and `outcome=ok` \| `fault`. The `compensate` series is non-zero only when a saga rolls back; a `compensate,fault` point is the leading indicator of a park. |
 | `orleans.lattice.atomic_action.duration` | `Histogram<double>` | `ms` | End-to-end saga duration measured from saga start (persisted, so it includes time suspended across silo restarts) to the terminal transition. Tagged by `outcome` so rollback-path latency is separable from happy-path latency. |
 
-
+### Events
 
 These counters are emitted only when event publication is enabled on at least
 one tree. They let operators detect a misconfigured stream provider or a
@@ -348,6 +349,25 @@ the same pipeline as the traffic they affect.
 | Name | Kind | Unit | Description |
 |---|---|---|---|
 | `orleans.lattice.config.changed` | `Counter<long>` | `{change}` | A per-tree configuration change was applied. Tagged `config` = the configuration dimension (currently `publish_events` from `ILattice.SetPublishEventsEnabledAsync`). |
+
+### Mutation observers
+
+Registered [`IMutationObserver`](api.md#mutation-observers) callbacks run *inline*
+on the grain write path, so every millisecond an observer spends is a millisecond
+added to the caller's write latency. This histogram attributes that cost to the
+specific observer that incurred it, on the same pipeline as the traffic it slows
+down - which is how a misbehaving observer (synchronous I/O, a blocking call, a
+chatty downstream) is identified rather than merely suspected.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.observer.duration` | `Histogram<double>` | `ms` | Wall-clock time one registered `IMutationObserver` spent inside a single `OnMutationAsync` callback. Tagged `observer` = the observer's CLR type name and `tree` = the mutated tree. Recorded on the faulting path too, so an observer that throws slowly is still visible; the dispatcher continues to suppress the exception. Zero-cost when no observer is registered (the dispatcher returns before any timing work) and elided when no metrics listener is attached. |
+
+The instrument takes one sample per observer per published mutation, so N
+registered observers contribute N samples per mutation. `sum by (observer)` over
+the `_sum` series ranks observers by total latency contributed, while
+`histogram_quantile` over the `_bucket` series exposes a single slow observer that
+a mean would hide.
 
 ### Materialised views
 
