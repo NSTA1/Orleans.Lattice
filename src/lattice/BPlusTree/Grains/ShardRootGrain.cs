@@ -34,6 +34,11 @@ internal sealed partial class ShardRootGrain(
         // Best-effort - a failure here is logged inside the helper and
         // the next routed Delete will re-mark the leaf.
         await FlushPendingDirtyMarksOnDeactivateAsync(cancellationToken);
+
+        // Persist the leaf-access Markov chain so the next activation - which,
+        // after a silo restart, is exactly when leaf caches are coldest - has a
+        // ranking to pre-warm from. Best-effort; failures are logged inside.
+        await FlushLeafAccessModelOnDeactivateAsync(cancellationToken);
     }
 
     private string? _treeId;

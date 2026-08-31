@@ -136,7 +136,6 @@ internal sealed class ShardRootState
     [Id(13)] public HybridLogicalClock LastDirtyAdvance { get; set; }
 
     /// <summary>
-    /// <summary>
     /// Non-null when this shard's physical tree has been superseded by a
     /// shadow-cutover restore but retained in place for revert. Drives the
     /// hot-path redirect gate (<c>ThrowIfRetainedRedirect</c>): a
@@ -179,6 +178,21 @@ internal sealed class ShardRootState
     /// Meaningful only while <see cref="WriteFenceSagaId"/> is non-<c>null</c>.
     /// </summary>
     [Id(16)] public long WriteFenceDeadlineTicks { get; set; }
+
+    /// <summary>
+    /// Bounded snapshot of this shard's leaf-access frequency histogram, used to
+    /// rank which leaf caches to pre-warm after the shard root reactivates.
+    /// Written by a coalescing timer (and once more on clean deactivation)
+    /// rather than per read, so the read path never pays a storage write for it.
+    /// <para>
+    /// <see langword="null"/> is the steady state when leaf-cache pre-warm is
+    /// disabled (the default) or nothing has been observed yet. Adding this slot
+    /// is backward-compatible: state persisted before the field existed
+    /// deserializes with <c>LeafAccessModel = null</c>, which restores an empty
+    /// model and simply pre-warms nothing until traffic re-populates it.
+    /// </para>
+    /// </summary>
+    [Id(17)] public LeafAccessModelSnapshot? LeafAccessModel { get; set; }
 }
 
 /// <summary>

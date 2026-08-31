@@ -317,6 +317,11 @@ internal static class TypeAliases
     // folded into ShardRootState.LeafStateBytesTotal / SnapshotBytesTotal.
     internal const string LeafByteFootprint = "ol.lbf";
 
+    // Bounded persisted form of a shard root's leaf-access histogram,
+    // carried in ShardRootState.LeafAccessModel so leaf-cache pre-warm has a
+    // ranking to work from immediately after a silo restart.
+    internal const string LeafAccessModelSnapshot = "ol.lam";
+
     // Storage-usage accounting (byte-accurate retained footprint)
     internal const string TreeStorageUsageReport = "ol.tsu";
     internal const string ClusterStorageUsageReport = "ol.csu";

@@ -81,6 +81,33 @@ internal sealed partial class ShardRootGrain
             // returns a single bool from the routing snapshot.
             await internalNode.AreChildrenLeavesAsync();
         }
+
+        // Opt-in leaf-cache pre-warm (issue #332). Off unless
+        // LatticeOptions.LeafCachePreWarmCount is positive. Ranks this shard's
+        // persisted leaf-access Markov chain by long-run read probability and
+        // primes that many LeafCacheGrain activations on this silo - the same
+        // silo that will serve the reads, because this grain is the only caller
+        // of the stateless-worker cache. Strictly best-effort: every failure is
+        // swallowed inside, so pre-warm can never fail warm-up.
+        await PreWarmLeafCachesAsync();
+    }
+
+    /// <inheritdoc />
+    public Task ForceDeactivateAsync()
+    {
+        // Test-only deactivation seam, mirroring
+        // BPlusLeafGrain.ForceDeactivateAsync. Wraps the protected
+        // Grain.DeactivateOnIdle() extension so integration tests can drive a
+        // real deactivate/reactivate cycle - and therefore a real
+        // OnDeactivateAsync leaf-access-model flush through the real Orleans
+        // serializer and storage provider - without waiting on the silo's
+        // idle-collection scheduler. The runtime schedules the deactivation
+        // after the current grain turn completes, so the caller must poll or
+        // briefly wait before observing the fresh activation; blocking here
+        // would deadlock, because OnDeactivateAsync can only run once this
+        // turn ends.
+        this.DeactivateOnIdle();
+        return Task.CompletedTask;
     }
 
     public async Task UnmarkDeletedAsync()

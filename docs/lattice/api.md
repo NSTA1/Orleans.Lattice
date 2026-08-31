@@ -584,6 +584,32 @@ For a cluster-wide roll-up across every registered tree, resolve the
 await tree.WarmUpAsync(cancellationToken);
 ```
 
+##### Optional leaf-cache pre-warm
+
+Warm-up pre-activates shard roots and root nodes unconditionally. It can
+*additionally* prime the read-through leaf caches that were hottest before the
+silo went down, which is what removes the cold-start read-latency spike rather
+than just the first-write spike. This is opt-in and off by default: set
+[`LeafCachePreWarmCount`](configuration.md#leafcacheprewarmcount) to a positive
+number of leaves per shard.
+
+When enabled, each shard root maintains a bounded histogram of the leaves its
+reads route to, persists a compact snapshot of it alongside its own durable
+state, and - on the next activation - ranks that histogram by observed read
+frequency and primes the top N leaf caches. Ranking by frequency rather than
+recency is what makes the selection useful: an LRU list ranks a leaf touched
+once immediately before shutdown above a leaf that is read constantly, whereas
+frequency ranks by how much of the shard's read traffic actually lands on each
+leaf. Because the shard root is the only caller of the `[StatelessWorker]`
+cache, the primed activations land on the silo that will serve the subsequent
+reads.
+
+Pre-warm is strictly best-effort: a leaf that has since been merged away, or a
+transient storage fault, is swallowed and never fails `WarmUpAsync`. See
+[`LeafCachePreWarmCount`](configuration.md#leafcacheprewarmcount) for the memory
+and persistence bounds, and [Metrics](metrics.md) for the
+`orleans.lattice.warmup.leaf_cache.*` instruments.
+
 #### Events
 
 | Method | Signature | Description |
