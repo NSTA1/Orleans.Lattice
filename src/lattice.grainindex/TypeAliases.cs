@@ -20,16 +20,20 @@ namespace Orleans.Lattice.GrainIndex;
 /// Invariants every constant added here must satisfy, enforced by
 /// <c>TypeAliasesTests</c> in this package's test project: the canonical
 /// <c>ol.</c> prefix, a total length of at most six characters, uniqueness
-/// within this table, and (once the package declares serializable types)
-/// exactly one referencing type. A new alias must also be checked for
-/// collisions against the core and sibling-package tables at authoring time,
-/// because Orleans resolves aliases from a single cluster-wide registry.
+/// within this table, and exactly one referencing type. A new alias must also be
+/// checked for collisions against the core and sibling-package tables at
+/// authoring time, because Orleans resolves aliases from a single cluster-wide
+/// registry.
 /// </para>
 /// <para>
-/// The table currently names the three types this package puts on the wire or
-/// into the index registry: the persisted index descriptor, the persisted
-/// projected-property descriptor, and the grain-key encoding failure. Later work
-/// adds one constant here per <c>[GenerateSerializer]</c> type it introduces.
+/// The table names every type this package puts on the wire or into durable
+/// storage, in the categories the package is built from: the persisted
+/// declaration shapes and their fingerprint, the index-registry and enrolment
+/// records, the projection and entry-encoding types, the backfill checkpoint and
+/// its grain interface, the administrative report surface, the query match
+/// record, and the package's serializable exceptions. Add one constant here per
+/// <c>[GenerateSerializer]</c> type introduced, and per grain interface that
+/// needs a stable wire identity.
 /// </para>
 /// </summary>
 internal static class TypeAliases
