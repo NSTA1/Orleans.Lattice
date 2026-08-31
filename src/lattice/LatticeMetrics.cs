@@ -350,6 +350,24 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.shard.splits_committed", unit: "{split}",
             description: "Adaptive shard-split commits (ShardMap swap published).");
 
+    /// <summary>
+    /// Counter incremented once per online shard-consolidation commit, fired
+    /// from <c>TreeShardConsolidationGrain.FinaliseAsync</c> immediately after
+    /// the terminal state write succeeds, so an increment always corresponds to
+    /// a durably-committed fold.
+    /// <para>
+    /// The exact inverse of <see cref="ShardSplitsCommitted"/>, and the metric
+    /// that proves a tree an over-eager splitter shattered is actually being
+    /// healed: plotted together, a sustained gap between the two is a tree
+    /// whose physical shard count is still climbing. Tagged
+    /// <see cref="TagShard"/> with the <em>donor</em> shard index - the shard
+    /// being retired from the routing map.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardConsolidationsCommitted =
+        Meter.CreateCounter<long>("orleans.lattice.shard.consolidations_committed", unit: "{consolidation}",
+            description: "Online shard-consolidation commits (donor shard retired from the ShardMap).");
+
     // --- Leaf-level instruments (BPlusLeafGrain) ---------------------------------
 
     /// <summary>

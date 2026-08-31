@@ -470,6 +470,35 @@
       ]
     },
     {
+      "id": 61,
+      "title": "Consolidations committed (rate)",
+      "description": "Rate of online shard consolidations committed (orleans.lattice.shard.consolidations_committed), by tree. Each increment is one donor shard retired from the routing map, counted only after the fold's terminal state write is durable. This is the inverse of Splits committed: compare the two to tell a tree that is actually healing from one whose physical shard count is still climbing.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 1000
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (rate(orleans_lattice_shard_consolidations_committed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
       "id": 10,
       "title": "Coordinator completions (rate)",
       "type": "timeseries",

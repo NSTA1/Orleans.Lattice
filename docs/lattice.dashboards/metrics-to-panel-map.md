@@ -34,6 +34,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard.writes` | counter (`{op}`, **per-operation**) | `tree`, `shard` | Overview | Cluster throughput (ops/s), Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.records_written` | counter (`{record}`, **per-record**) | `tree`, `shard` | Overview | Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.splits_committed` | counter | `tree`, `shard` | Overview | Splits committed |
+| `orleans.lattice.shard.consolidations_committed` | counter | `tree`, `shard` | Overview | Consolidations committed |
 | `orleans.lattice.leaf.write.duration` | histogram (ms) | `tree` | Overview, CommitPath | Leaf write duration percentiles |
 | `orleans.lattice.leaf.scan.duration` | histogram (ms) | `tree`, `operation` | Overview | Leaf scan duration p95 by operation |
 | `orleans.lattice.leaf.compaction.duration` | histogram (ms) | `tree` | Overview, CommitPath | Compaction duration p95 |

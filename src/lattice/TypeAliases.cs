@@ -126,6 +126,12 @@ internal static class TypeAliases
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
 
+    // Online shard consolidation (the inverse of an adaptive split).
+    internal const string TreeShardConsolidationState = "ol.cns";
+    internal const string ShardConsolidationPhase = "ol.cnp";
+    internal const string ShardConsolidationProgress = "ol.cnr";
+    internal const string ShardConsolidationPlan = "ol.cnl";
+
     // Leaf projection staleness surface. Thrown by BPlusLeafGrain during
     // activation (ReplayWalSinceCheckpointAsync) when the durable projection
     // checkpoint has fallen off / diverged from the per-shard WAL and the
@@ -403,6 +409,7 @@ internal static class TypeAliases
     internal const string ITreeMergeGrain = "ol.gtm";
     internal const string ITreeResizeGrain = "ol.gtr";
     internal const string ITreeShardSplitGrain = "ol.gss";
+    internal const string ITreeShardConsolidationGrain = "ol.gcn";
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ITagIndexReconcileGrain = "ol.gti";

@@ -439,6 +439,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task MarkSlotsMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount);
 
     /// <summary>
+    /// Lifts the moved-away seal recorded by
+    /// <see cref="MarkSlotsMovedAwayAsync"/> for
+    /// <paramref name="sortedSlots"/>, so reads on those slots are served from
+    /// this leaf again.
+    /// <para>
+    /// Called on every leaf of the <b>survivor</b> shard when an online
+    /// consolidation folds virtual slots back onto a shard that had previously
+    /// split them away. The seal is otherwise sticky by design; consolidation
+    /// is the one operation that legitimately reverses it, and it does so only
+    /// after the donor has been frozen and its entries drained onto this
+    /// shard, so nothing stale is ever unsealed.
+    /// </para>
+    /// <para>
+    /// Idempotent and allocation-lean: a leaf carrying no seal, or none for
+    /// the requested slots, returns without touching storage. Slots recorded
+    /// under a different virtual shard count are left untouched.
+    /// </para>
+    /// </summary>
+    /// <param name="sortedSlots">Sorted, distinct virtual slots to unseal.</param>
+    /// <param name="virtualShardCount">Virtual shard count the slots are expressed in.</param>
+    Task UnmarkSlotsMovedAwayAsync(int[] sortedSlots, int virtualShardCount);
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing all entries whose timestamp is
     /// newer than what <paramref name="sinceVersion"/> has seen.
     /// Returns an empty delta if the caller is already up to date.

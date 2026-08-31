@@ -2670,6 +2670,66 @@ public class LatticeOptions
     public ILatticeRetryPolicy? RetryPolicy { get; set; }
 
     /// <summary>
+    /// Maximum number of donor entries the online shard-consolidation
+    /// coordinator accumulates in a single
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>
+    /// call to the survivor shard during drain. Larger values reduce per-call
+    /// overhead; smaller values bound peak memory on the coordinator silo and
+    /// the size of the Orleans grain message. The drain is idempotent under
+    /// any chunking - re-running converges via CRDT LWW - so this is purely a
+    /// cost knob and never a correctness input.
+    /// </summary>
+    public int ConsolidationDrainBatchSize { get; set; } = DefaultConsolidationDrainBatchSize;
+
+    /// <summary>Default value for <see cref="ConsolidationDrainBatchSize"/> (1024 entries).</summary>
+    public const int DefaultConsolidationDrainBatchSize = 1024;
+
+    /// <summary>
+    /// Maximum number of donor leaves the online shard-consolidation
+    /// coordinator visits in a single background pass before persisting its
+    /// resume cursor and yielding.
+    /// <para>
+    /// This is what turns consolidating a thousand-leaf donor from one
+    /// unbounded stall into steady background work: each pass does a bounded
+    /// amount of drain, records where it got to, and lets the next timer tick
+    /// continue. It also bounds the blast radius of an interruption, because a
+    /// crash resumes from the persisted cursor instead of restarting the
+    /// sweep. Set higher to consolidate faster at the cost of longer
+    /// individual turns on the donor's leaves.
+    /// </para>
+    /// </summary>
+    public int ConsolidationDrainLeavesPerPass { get; set; } = DefaultConsolidationDrainLeavesPerPass;
+
+    /// <summary>Default value for <see cref="ConsolidationDrainLeavesPerPass"/> (16 leaves).</summary>
+    public const int DefaultConsolidationDrainLeavesPerPass = 16;
+
+    /// <summary>
+    /// Maximum number of online shard consolidations a driver may run
+    /// concurrently against a single tree.
+    /// <para>
+    /// Each consolidation drains a whole donor shard into its neighbour, so
+    /// running many at once turns a background repair into a foreground load
+    /// spike on exactly the busy deployment consolidation exists to heal. The
+    /// conservative default of 1 makes healing a steady trickle; a driver that
+    /// has measured headroom can raise it. Consolidations of overlapping
+    /// donor/survivor pairs are refused regardless of this value.
+    /// </para>
+    /// <para>
+    /// <b>Set to <c>0</c> to admit no consolidation at all.</b> That is the
+    /// supported way to switch automated shard healing off without removing
+    /// the driver, and it is a legal value rather than a rejected one. A
+    /// negative value is rejected at startup by
+    /// <c>LatticeOptionsValidator</c>. This cap is enforced by the healing
+    /// driver that schedules folds, not by the consolidation coordinator
+    /// itself, which owns only the correctness of a single fold.
+    /// </para>
+    /// </summary>
+    public int MaxConcurrentShardConsolidations { get; set; } = DefaultMaxConcurrentShardConsolidations;
+
+    /// <summary>Default value for <see cref="MaxConcurrentShardConsolidations"/> (1).</summary>
+    public const int DefaultMaxConcurrentShardConsolidations = 1;
+
+    /// <summary>
     /// The name of the Orleans grain storage provider used by Lattice grains.
     /// Used internally by <see cref="LatticeServiceCollectionExtensions.AddLattice"/>
     /// and exposed for advanced scenarios where callers register storage directly.

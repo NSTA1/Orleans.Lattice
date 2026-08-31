@@ -86,6 +86,30 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "(0 disables the occupancy floor and its per-candidate probe; a positive value is the minimum "
                 + "number of live entries a shard must hold before an autonomic split can relieve anything).");
         }
+        if (options.ConsolidationDrainBatchSize < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ConsolidationDrainBatchSize)} must be greater than or equal to 1 "
+                + "(it is the number of donor entries the online shard-consolidation coordinator accumulates per "
+                + "MergeManyAsync flush to the survivor; there is no meaningful 'disabled' value, because a fold that "
+                + "flushes no entries could never drain the donor).");
+        }
+        if (options.ConsolidationDrainLeavesPerPass < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ConsolidationDrainLeavesPerPass)} must be greater than or equal to 1 "
+                + "(it is the number of donor leaves the online shard-consolidation coordinator visits per background "
+                + "pass; 0 would visit no leaf per pass, so a fold would never make progress and would sit in its "
+                + "drain phase indefinitely rather than being disabled).");
+        }
+        if (options.MaxConcurrentShardConsolidations < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxConcurrentShardConsolidations)} must be greater than or equal to 0 "
+                + "(0 admits no online shard consolidation at all, which is the supported way to switch automated "
+                + "shard healing off; a positive value caps how many folds a driver may run concurrently against "
+                + "one tree).");
+        }
         if (options.MaxLiveKeys is { } maxLiveKeys && maxLiveKeys < 1)
         {
             return ValidateOptionsResult.Fail(
