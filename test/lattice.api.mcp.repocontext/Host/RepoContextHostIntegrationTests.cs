@@ -84,16 +84,35 @@ public sealed class RepoContextHostIntegrationTests
         return RepoContextHostBuilder.Build(builder, config);
     }
 
+    /// <summary>
+    /// Waits until the host reports ready on the <b>readiness endpoint itself</b>,
+    /// which since the retrieval-readiness work is the conjunction of the
+    /// lifecycle-phase check and the vector-plane retrieval check.
+    /// </summary>
+    /// <remarks>
+    /// Polling the endpoint rather than a single component is deliberate: it is
+    /// exactly what an orchestrator observes, so the helper cannot silently drift
+    /// into a weaker precondition than its name claims the next time the probe's
+    /// composition changes. The retrieval half is driven asynchronously by
+    /// <c>RepoContextRetrievalWarmupService</c> off <c>ApplicationStarted</c>, so
+    /// waiting only on <c>RepoContextReadinessState</c> returns before the endpoint
+    /// agrees and races the very assertion it exists to establish.
+    /// </remarks>
     private static async Task WaitForReadyAsync(WebApplication app)
     {
-        var readiness = app.Services.GetRequiredService<RepoContextReadinessState>();
+        using var client = app.GetTestServer().CreateClient();
         var deadline = DateTime.UtcNow.AddSeconds(60);
-        while (!readiness.IsReady && DateTime.UtcNow < deadline)
+        HttpStatusCode last = default;
+        while (DateTime.UtcNow < deadline)
         {
+            last = (await client.GetAsync(RepoContextHostBuilder.ReadinessPath, Ct)).StatusCode;
+            if (last == HttpStatusCode.OK)
+                return;
+
             await Task.Delay(100, Ct);
         }
 
-        Assert.That(readiness.IsReady, Is.True, "The host did not reach readiness within the timeout.");
+        Assert.Fail($"The host did not report ready within the timeout; the readiness probe last returned {last}.");
     }
 
     [Test]
