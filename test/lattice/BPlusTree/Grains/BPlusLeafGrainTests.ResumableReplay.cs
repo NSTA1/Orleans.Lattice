@@ -28,9 +28,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// verify: (1) the checkpoint advances incrementally across slices; (2) a
 /// mid-replay teardown leaves partial progress AND a covering snapshot durable;
 /// (3) the next activation rehydrates from that snapshot and resumes from the
-/// durable offset instead of replaying from zero; (4) the incremental advance
-/// never passes a deferred terminal / DeleteRange; and (5) it never passes an
-/// unresolved saga prepare.
+/// durable offset instead of replaying from zero; (4) a range delete a
+/// single-partition replay can apply in place does not pin the ceiling
+/// (issue #1831 - the cross-partition shape, where the clamp genuinely bites,
+/// is covered in <c>BPlusLeafGrainTests.ReplayFlushCeiling.cs</c>); and (5) the
+/// advance never passes an unresolved saga prepare.
 /// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
@@ -291,13 +293,17 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Incremental_flush_never_advances_past_a_deferred_delete_range()
+    public async Task Incremental_flush_drains_a_single_partition_delete_range_in_place()
     {
-        // Sets at 1,2; a DeleteRange terminal at offset 3 (deferred to pass 2);
-        // Sets at 4,5. The incremental flush must clamp the checkpoint at 2
-        // (below the deferred terminal) throughout pass 1, and only the
-        // post-pass-2 reconciliation may advance it to 5. The persist sequence
-        // must therefore never touch offsets 3 or 4.
+        // Sets at 1,2; a DeleteRange terminal at offset 3; Sets at 4,5. In a
+        // single-partition tree there is no other partition still to absorb,
+        // so the range delete's targets are all in the Cache by the time it is
+        // read and it is applied in place rather than deferred to pass 2
+        // (issue #1831). The incremental flush therefore tracks the slice
+        // boundaries (2, 4, 5) instead of freezing at 2 for the whole replay.
+        // The clamp itself is unchanged and is covered, in the shape where it
+        // genuinely bites, by
+        // Cross_partition_delete_range_still_holds_the_incremental_ceiling.
         var entries = new[]
         {
             Set(1, "a1"),
@@ -317,14 +323,12 @@ public partial class BPlusLeafGrainTests
 
         await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
 
-        Assert.That(persistedOffsets, Does.Not.Contain(3L),
-            "Checkpoint must never be flushed at the deferred DeleteRange offset.");
-        Assert.That(persistedOffsets, Does.Not.Contain(4L),
-            "Checkpoint must not advance past the deferred DeleteRange before pass 2 applies it.");
-        Assert.That(persistedOffsets, Does.Contain(2L),
-            "The contiguous prefix below the deferred terminal must still be flushed incrementally.");
+        Assert.That(persistedOffsets, Is.EqualTo(new long[] { 2, 4, 5 }),
+            "A range delete drained in place must not pin the incremental flush ceiling.");
+        Assert.That(persistedOffsets, Is.Ordered.Ascending,
+            "The checkpoint must advance monotonically across slices.");
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L),
-            "Post-pass-2 reconciliation advances the checkpoint to the full applied frontier.");
+            "The replay converges on the full applied frontier.");
     }
 
     [Test]
