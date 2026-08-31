@@ -1,0 +1,74 @@
+@using Orleans.Lattice.Explorer.Core.Vocabulary
+
+@*
+    Renders a run of vocabulary badges the readable way: the full text, plus the
+    expansion carried accessibly whenever the two differ.
+
+    It exists because a badge used to be an abbreviation with the whole meaning
+    hidden in a `title` attribute - invisible on touch, unreachable by keyboard,
+    announced inconsistently. ExplorerBadges (#1853) settles the wording; this
+    settles the markup, so no surface has to remember the aria-hidden / visually
+    hidden pairing itself.
+
+    Deliberately NOT a help disclosure per badge. A focusable trigger on every
+    badge of every row would put a tab stop between the reader and the content
+    below, which trades one accessibility defect for a worse one. The readable
+    text is what makes a badge accessible; the glossary stays reachable from the
+    surfaces that explain a concept once.
+
+    The caller owns the buffer. Pass the array and the count that
+    ExplorerBadges.ForCatalogItem returned, filled on the load path, so a
+    re-render reads structs out of an array rather than re-deriving them.
+*@
+
+@if (_count > 0)
+{
+    <span class="lx-selection-badges">
+        @for (var i = 0; i < _count; i++)
+        {
+            var badge = Badges![i];
+            <span class="@(badge.IsMuted ? MutedClass : BadgeClass)" @key="badge.TermId">
+                @badge.Text
+                @if (!string.Equals(badge.Text, badge.Expansion, StringComparison.Ordinal))
+                {
+                    @* The rendered text is readable but says less than the
+                       expansion ("Aggregation" against "Aggregation view"), so
+                       the whole phrase is carried for a screen reader without
+                       lengthening the visible badge. *@
+                    <span class="lx-visually-hidden">@badge.Expansion</span>
+                }
+            </span>
+        }
+    </span>
+}
+
+@code {
+    private const string BadgeClass = "lx-badge";
+    private const string MutedClass = "lx-badge lx-badge-muted";
+
+    private int _count;
+
+    /// <summary>
+    /// The caller-owned buffer holding the badges, filled on the load path.
+    /// Slots beyond <see cref="Count"/> are ignored, so one buffer can be
+    /// reused for the component's lifetime.
+    /// </summary>
+    [Parameter]
+    public ExplorerBadge[]? Badges { get; set; }
+
+    /// <summary>
+    /// How many leading slots of <see cref="Badges"/> are filled - the value
+    /// <see cref="ExplorerBadges.ForCatalogItem"/> returned. Clamped to the
+    /// buffer's length, so an over-large count can never read an unwritten
+    /// slot.
+    /// </summary>
+    [Parameter]
+    public int Count { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var available = Badges?.Length ?? 0;
+        _count = Count <= 0 ? 0 : Count < available ? Count : available;
+    }
+}

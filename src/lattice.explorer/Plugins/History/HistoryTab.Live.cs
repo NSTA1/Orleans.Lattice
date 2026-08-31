@@ -76,6 +76,18 @@ public partial class HistoryTab
         }
         finally
         {
+            // Release the field before disposing, and only when this loop is
+            // still the owner. Without this the field dangles at a disposed
+            // source once the change feed ends on its own - a server-side stream
+            // close, or simply an empty feed - and the next StopFollowing (on a
+            // key change, or from Dispose) cancels a disposed source and throws
+            // ObjectDisposedException out of the renderer's teardown. Cancel is
+            // the one member that is not safe to call after Dispose.
+            if (ReferenceEquals(_liveCts, cts))
+            {
+                _liveCts = null;
+            }
+
             cts.Dispose();
         }
     }
@@ -191,11 +203,43 @@ public partial class HistoryTab
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Cancels the live tail and any pending backfill, and releases both fields.
+    /// </summary>
+    /// <remarks>
+    /// Each field is cleared before it is cancelled, so a second call - the one
+    /// <see cref="Dispose(bool)"/> makes after a key change already stopped the
+    /// tail - has nothing left to cancel. The cancellation itself tolerates a
+    /// source its own loop disposed first: the loop's teardown can run off the
+    /// renderer's context, so the two can interleave, and <c>Cancel</c> is the
+    /// only member of a token source that is not safe after disposal.
+    /// </remarks>
     private void StopFollowing()
     {
-        _liveCts?.Cancel();
+        var live = _liveCts;
         _liveCts = null;
-        _backfillCts?.Cancel();
+        Cancel(live);
+
+        var backfill = _backfillCts;
         _backfillCts = null;
+        Cancel(backfill);
+    }
+
+    private static void Cancel(CancellationTokenSource? cts)
+    {
+        if (cts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The loop that owned it finished and released it first, which is
+            // the outcome cancelling was asking for.
+        }
     }
 }

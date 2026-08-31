@@ -1,0 +1,151 @@
+@using Orleans.Lattice.Explorer.Core.Vocabulary
+
+@*
+    The one block every per-selection surface renders when it has nothing to
+    show: what happened, what it means, what to do about it, and - when a single
+    action resolves it - a focusable control that performs it.
+
+    It exists because the surfaces used to write that copy themselves, one line
+    each, and a one-line "No entries." cannot distinguish an empty tree from a
+    tenant-scoped filter from a missing grant. The copy now comes from
+    ExplorerStateCopy, which names the situation; this component is only its
+    presentation, so the wording is settled in one place and rendered in one
+    shape.
+
+    Two properties of the shape are load-bearing rather than decorative:
+
+      - The root is a polite live region. A surface renders this component in
+        the same slot for every state it can be in, so moving from loading to
+        failed to empty updates one element rather than swapping three, and the
+        change is announced instead of appearing silently (conformance checklist
+        criterion 5).
+
+      - A state that has an action renders it as a real button. A scrollable
+        region with no keyboard-reachable content is a WCAG 2.1.1 failure, and
+        the detail body that hosts these surfaces scrolls, so a remedy that is
+        only prose is both an accessibility defect and a dead end.
+*@
+
+@if (Message is not null)
+{
+    <div class="@_hostClass" role="status" aria-busy="@_busy">
+        <p class="lx-selection-message-headline">@Message.Headline</p>
+        <p class="lx-selection-message-explanation">@Message.Explanation</p>
+        @if (!string.IsNullOrEmpty(Message.Remedy))
+        {
+            <p class="lx-selection-message-remedy">
+                <strong class="lx-selection-message-remedy-label">@Message.RemedyLabel</strong>
+                @Message.Remedy
+            </p>
+        }
+        @if (_actionLabel is not null)
+        {
+            <button type="button" class="lx-btn lx-selection-message-action" @onclick="OnAction">
+                @_actionLabel
+            </button>
+        }
+        @ChildContent
+    </div>
+}
+
+@code {
+    private const string BaseClass = "lx-selection-message";
+    private const string DenialClass = "lx-selection-message is-denial";
+    private const string FailedClass = "lx-selection-message is-failed";
+    private const string BusyClass = "lx-selection-message is-busy";
+
+    private string _hostClass = BaseClass;
+    private string? _busy;
+    private string? _actionLabel;
+
+    // The inputs the composed host class depends on, remembered so a re-render
+    // that changed neither does not recompose it.
+    private ExplorerStateKind? _classKind;
+    private string? _classSuffix;
+
+    /// <summary>
+    /// The state to render, or <see langword="null"/> when the surface has data
+    /// and nothing to say. Rendering nothing for <see langword="null"/> is what
+    /// lets a surface bind this component unconditionally.
+    /// </summary>
+    [Parameter]
+    public ExplorerStateMessage? Message { get; set; }
+
+    /// <summary>
+    /// The label of the action button, overriding
+    /// <see cref="ExplorerStateMessage.ActionLabel"/>. Supply it when the
+    /// surface can resolve a state the general copy offers no action for - a
+    /// failed read it can retry, for example.
+    /// </summary>
+    [Parameter]
+    public string? ActionLabel { get; set; }
+
+    /// <summary>
+    /// Invoked when the action is activated. No button is rendered unless both
+    /// a label is resolved and this has a delegate, so a message can never
+    /// offer an action that does nothing.
+    /// </summary>
+    [Parameter]
+    public EventCallback OnAction { get; set; }
+
+    /// <summary>Additional CSS classes appended to the block.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>
+    /// Further content rendered inside the block, below the action - a
+    /// surface-specific control that performs a remedy this component cannot
+    /// express as one button.
+    /// </summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var message = Message;
+        if (message is null)
+        {
+            _busy = null;
+            _actionLabel = null;
+            return;
+        }
+
+        // Only rendered when something will actually happen: a label with no
+        // handler is a button that refuses silently, which is the defect this
+        // whole issue exists to remove.
+        var label = string.IsNullOrEmpty(ActionLabel) ? message.ActionLabel : ActionLabel;
+        _actionLabel = string.IsNullOrEmpty(label) || !OnAction.HasDelegate ? null : label;
+
+        // aria-busy is enumerated, not boolean: it must carry the literal
+        // string, because Blazor omits an attribute bound to false and would
+        // therefore drop it on the state that most needs it.
+        _busy = message.IsBusy ? "true" : null;
+
+        RebuildHostClass(message.Kind);
+    }
+
+    private void RebuildHostClass(ExplorerStateKind kind)
+    {
+        if (_classKind == kind && string.Equals(_classSuffix, Class, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _classKind = kind;
+        _classSuffix = Class;
+
+        // Tone is carried by a class rather than by colour alone at the call
+        // site, so the palette owns how a denial and a failure look and neither
+        // is expressed as a hue this component picked.
+        var tone = kind switch
+        {
+            ExplorerStateKind.NotPermitted or ExplorerStateKind.SignInRequired => DenialClass,
+            ExplorerStateKind.Failed => FailedClass,
+            ExplorerStateKind.Loading => BusyClass,
+            _ => BaseClass,
+        };
+
+        _hostClass = string.IsNullOrEmpty(Class) ? tone : tone + " " + Class;
+    }
+}

@@ -8,9 +8,12 @@
         <span class="lx-history-kind lx-history-kind-@HistoryFormat.KindClass(Row.Kind)">@HistoryFormat.KindLabel(Row.Kind)</span>
         @if (Row.IsLiveTail)
         {
-            <span class="lx-history-live-tag" title="Appended live from the change feed; metadata only, pending durable backfill.">live</span>
+            @* The expansion is carried in the DOM rather than in a title
+               attribute, which no keyboard or touch caller could reach. Static
+               markup, so it costs nothing per row. *@
+            <span class="lx-history-live-tag">live<span class="lx-visually-hidden"> - appended from the change feed, metadata only, pending durable backfill</span></span>
         }
-        <span class="lx-history-time" title="@HistoryFormat.FormatAbsolute(Row.Hlc)">@HistoryFormat.FormatRelative(Row.Hlc)</span>
+        <span class="lx-history-time">@HistoryFormat.FormatRelative(Row.Hlc)<span class="lx-visually-hidden"> (@HistoryFormat.FormatAbsolute(Row.Hlc))</span></span>
         <span class="lx-history-origin">@HistoryFormat.OriginLabel(Row.OriginClusterId)</span>
     </div>
     <div>

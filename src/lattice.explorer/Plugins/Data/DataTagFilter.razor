@@ -34,9 +34,11 @@
 
     @if (!string.IsNullOrEmpty(SelectedIndex))
     {
+        @* The button's own text says what it does, and the chosen index is named
+           in the select beside it, so the tooltip repeating both was composing a
+           string per render for nothing. *@
         <button type="button" class="lx-btn lx-data-tagfilter-explore"
                 disabled="@Loading"
-                title="@($"Browse the {SelectedIndex} tag index")"
                 @onclick="OnExplore">
             Explore tag index
         </button>

@@ -45,14 +45,16 @@
     font-size: var(--lx-text-body);
 }
 
-.lx-metrics-error {
-    color: var(--lx-color-danger);
-}
+/* The `.lx-metrics-error` rule that used to sit here is gone with the inline
+   error line it coloured. Loading, failed and empty now come from the shared
+   SelectionStateView, which carries tone as a class rather than as a colour
+   this stylesheet picked. `.lx-metrics-state` survives because the paused
+   notice below still uses it.
 
-/* Detail counts and per-shard hotness go dark while the table is too busy to
+   Detail counts and per-shard hotness go dark while the table is too busy to
    sample. That is a degraded reading rather than a failure, so it takes the
-   warning colour rather than the danger one .lx-metrics-error uses - the two
-   read differently because they mean different things. */
+   warning colour rather than the danger one - the two read differently because
+   they mean different things. */
 .lx-metrics-paused {
     color: var(--lx-color-warning);
 }

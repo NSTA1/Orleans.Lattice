@@ -9,28 +9,23 @@
     The sections sit in a three-column grid at medium and expanded, and stack
     into one column at compact - chosen from the cascaded breakpoint by name,
     never from a media query (epic decision D7).
+
+    Every state the surface can be in - a selection it cannot render, a read in
+    flight, a read that failed, an index the caller may not read - is one
+    SelectionStateView in one slot, so the copy names which situation the reader
+    is in rather than saying "nothing here", and the transition between two
+    states updates one live region instead of swapping three elements.
 *@
 
 <div class="lx-tagindex">
-    @if (string.IsNullOrEmpty(IndexName))
+    @if (State is not null)
     {
-        <div class="lx-selection-state">This selection is not a tag index.</div>
-    }
-    else if (_loading && !_loaded)
-    {
-        <div class="lx-selection-state">Loading tag index...</div>
-    }
-    else if (_error is not null)
-    {
-        <div class="lx-selection-state lx-selection-state-error">
-            <span>@_error</span>
-            <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
-        </div>
+        <SelectionStateView Message="State" OnAction="_retryLoad" />
     }
     else
     {
         <div class="lx-tagindex-summary">
-            <span class="lx-badge">index</span>
+            <SelectionBadgeList Badges="_badges" Count="_badgeCount" />
             <span class="lx-tagindex-name">@IndexName</span>
             <span class="lx-tagindex-stat">@_coveredTrees.Count covered tree@(_coveredTrees.Count == 1 ? "" : "s")</span>
             <span class="lx-tagindex-stat">@_tags.Count tag@(_tags.Count == 1 ? "" : "s")</span>
