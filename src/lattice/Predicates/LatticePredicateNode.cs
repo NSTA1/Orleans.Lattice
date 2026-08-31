@@ -51,6 +51,69 @@ public readonly record struct LatticePredicateNode
     /// </summary>
     [Id(6)] public LatticePredicateNode[]? Children { get; init; }
 
+    /// <summary>
+    /// Compares two nodes by structure: every scalar field plus an ordered,
+    /// recursive comparison of <see cref="Children"/>. The compiler-generated
+    /// record equality compares <see cref="Children"/> with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for an array is
+    /// reference equality, so two structurally identical predicate trees would
+    /// otherwise never be equal - and a tree that round-trips through
+    /// serialization would never equal its pre-serialization self.
+    /// </summary>
+    public bool Equals(LatticePredicateNode other) =>
+        Kind == other.Kind
+        && string.Equals(MemberPath, other.MemberPath, StringComparison.Ordinal)
+        && Constant.Equals(other.Constant)
+        && ComparisonOperator == other.ComparisonOperator
+        && BooleanOperator == other.BooleanOperator
+        && StringMethod == other.StringMethod
+        && ChildrenEqual(Children, other.Children);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Kind);
+        hash.Add(MemberPath, StringComparer.Ordinal);
+        hash.Add(Constant);
+        hash.Add(ComparisonOperator);
+        hash.Add(BooleanOperator);
+        hash.Add(StringMethod);
+        if (Children is { } children)
+        {
+            hash.Add(children.Length);
+            foreach (var child in children)
+            {
+                hash.Add(child);
+            }
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool ChildrenEqual(LatticePredicateNode[]? left, LatticePredicateNode[]? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>Creates a member-access node for the given dotted path.</summary>
     public static LatticePredicateNode Member(string memberPath) =>
         new() { Kind = LatticePredicateNodeKind.Member, MemberPath = memberPath };

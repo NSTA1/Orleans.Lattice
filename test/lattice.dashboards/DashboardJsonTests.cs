@@ -364,6 +364,121 @@ public sealed class DashboardJsonTests
         }
     }
 
+    [Test]
+    public void No_dashboard_panel_rectangles_overlap()
+    {
+        // gridPos is layout Grafana does not defend: when two panels' rectangles
+        // intersect it silently repacks them on load, so the checked-in JSON
+        // stops describing what an operator sees, and the next author computes a
+        // "next free y" from coordinates that no longer hold - compounding the
+        // drift. Nothing about authoring a panel prevents the collision: two
+        // branches each appending a row at the current bottom both write the same
+        // y, and a textual merge keeps both without conflicting. It is the
+        // coordinate twin of Every_panel_id_in_a_dashboard_is_unique, so it is
+        // guarded here rather than left to review.
+        //
+        // Rectangles are compared only within each panels-array scope (siblings
+        // share one grid), recursing into nested panels arrays exactly as the id
+        // guard does, so an overlap among panels collapsed inside a row is caught
+        // without falsely colliding a row's children against top-level panels.
+        foreach (var kind in LatticeDashboards.All)
+        {
+            using var doc = JsonDocument.Parse(LatticeDashboards.GetGrafanaDashboardJson(kind));
+
+            var collisions = new List<string>();
+            CollectPanelOverlaps(doc.RootElement, collisions);
+
+            Assert.That(collisions, Is.Empty,
+                $"Dashboard '{kind}' has panels whose gridPos rectangles overlap. Grafana repacks " +
+                $"overlapping panels on load, so the JSON stops matching the rendered layout. Re-space " +
+                $"the panels so no two rectangles intersect:{Environment.NewLine}  - " +
+                string.Join(Environment.NewLine + "  - ", collisions));
+        }
+    }
+
+    private readonly record struct PanelRect(int Id, string Title, int X, int Y, int W, int H);
+
+    /// <summary>
+    /// Walks every <c>panels</c> array in the document and records, per scope,
+    /// each pair of sibling panels whose gridPos rectangles intersect. Recurses
+    /// into nested <c>panels</c> arrays (collapsed rows) so a row's children are
+    /// checked against each other, not against unrelated top-level panels.
+    /// </summary>
+    private static void CollectPanelOverlaps(JsonElement element, List<string> collisions)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (element.TryGetProperty("panels", out var panels)
+            && panels.ValueKind == JsonValueKind.Array)
+        {
+            var rects = new List<PanelRect>();
+            foreach (var panel in panels.EnumerateArray())
+            {
+                if (panel.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (TryReadPanelRect(panel, out var rect))
+                {
+                    rects.Add(rect);
+                }
+
+                CollectPanelOverlaps(panel, collisions);
+            }
+
+            for (var i = 0; i < rects.Count; i++)
+            {
+                for (var j = i + 1; j < rects.Count; j++)
+                {
+                    var a = rects[i];
+                    var b = rects[j];
+                    if (a.X < b.X + b.W && b.X < a.X + a.W && a.Y < b.Y + b.H && b.Y < a.Y + a.H)
+                    {
+                        var y0 = Math.Max(a.Y, b.Y);
+                        var y1 = Math.Min(a.Y + a.H, b.Y + b.H);
+                        collisions.Add(
+                            $"id {a.Id} '{a.Title}' (x{a.X}..{a.X + a.W}, y{a.Y}..{a.Y + a.H}) intersects " +
+                            $"id {b.Id} '{b.Title}' (x{b.X}..{b.X + b.W}, y{b.Y}..{b.Y + b.H}) over rows {y0}..{y1}");
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool TryReadPanelRect(JsonElement panel, out PanelRect rect)
+    {
+        rect = default;
+        if (!panel.TryGetProperty("gridPos", out var gridPos)
+            || gridPos.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!(gridPos.TryGetProperty("x", out var x) && x.TryGetInt32(out var xi))
+            || !(gridPos.TryGetProperty("y", out var y) && y.TryGetInt32(out var yi))
+            || !(gridPos.TryGetProperty("w", out var w) && w.TryGetInt32(out var wi))
+            || !(gridPos.TryGetProperty("h", out var h) && h.TryGetInt32(out var hi)))
+        {
+            return false;
+        }
+
+        var id = panel.TryGetProperty("id", out var idEl)
+            && idEl.ValueKind == JsonValueKind.Number
+            && idEl.TryGetInt32(out var pid)
+            ? pid
+            : -1;
+        var title = panel.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String
+            ? t.GetString() ?? "(untitled)"
+            : "(untitled)";
+
+        rect = new PanelRect(id, title, xi, yi, wi, hi);
+        return true;
+    }
+
     private static HashSet<string> ExtractInstrumentTokens(string json)
     {
         using var doc = JsonDocument.Parse(json);

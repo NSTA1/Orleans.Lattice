@@ -150,13 +150,12 @@ has no entries for, so data sitting on an untouched shard is still detected. A
 shard that already holds a root node rejects the load with
 `InvalidOperationException`.
 
-`BeginBulkLoadAsync` probes the tree first with a shallow diagnostic and rejects
-a populated one with `TreeNotEmptyException`. The shallow probe counts live keys
-only; it does not walk the leaves to count tombstones. A tree you emptied by
-deleting every key therefore reports zero live keys and **passes the probe**,
-even though the tombstoned rows are still in the leaves and the append grafts
-onto the existing tree rather than building a fresh one. Create a fresh tree
-rather than emptying an existing one.
+`BeginBulkLoadAsync` probes the tree first with a deep diagnostic and rejects a
+non-empty one with `TreeNotEmptyException`. The probe counts both live keys and
+tombstones, so a tree you emptied by deleting every key - which leaves tombstoned
+rows in the leaves even though no live keys remain - is correctly rejected rather
+than grafted onto. Creating a fresh tree is still the cleanest restart story, but
+emptying an existing one no longer slips past the guard.
 
 The streaming extension performs no emptiness check at all - neither a probe of
 its own nor the one-shot path's per-shard rejection. It appends to whatever is
