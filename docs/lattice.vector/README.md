@@ -76,8 +76,9 @@ index.Add(1, new float[] { 1f, 0f, 0f });
 index.Add(2, new float[] { 0f, 1f, 0f });
 index.Add(3, new float[] { 0.9f, 0.1f, 0f });
 
-// Partition the corpus. Below the training minimum the index stays exact,
-// answering by exhaustive scan, which is correct but not sub-linear.
+// Partition the corpus. This corpus is far below MinimumTrainingCount (1024),
+// so the index deliberately stays unpartitioned and answers exactly by
+// exhaustive scan - correct for a small corpus, just not yet sub-linear.
 index.Train();
 
 // Results are written into a caller-owned span: the query path allocates nothing.
@@ -85,8 +86,8 @@ Span<VectorSearchResult> results = stackalloc VectorSearchResult[2];
 var found = index.Search(new float[] { 1f, 0f, 0f }, results, out var mode);
 
 // 'mode' reports how the answer was produced, so an approximate result is never
-// mistaken for an exact one.
-_ = mode == VectorSearchMode.Approximate;
+// mistaken for an exact one. Here it is Exhaustive, because the corpus is small.
+_ = mode == VectorSearchMode.Exhaustive;
 _ = found;
 ```
 

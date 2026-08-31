@@ -79,11 +79,12 @@ centroids. The cells simply stop carving the space where the data now lives, so
 more of a query's true neighbours fall outside the partitions it probes.
 
 Measured on a workload that replaced a fifth of the corpus with vectors drawn
-around a *different* set of cluster centres, recall fell to about 0.83.
+around a *different* set of cluster centres, recall fell to 0.875.
 
 **The repair is retraining**, and the index tells you when to consider it:
 
-- An update counter since the last training pass is the drift signal.
+- An update counter since the last training pass (`DurableVectorIndex.UpdatesSinceTraining`)
+  is the drift signal.
 - A retrain re-partitions the corpus in place. It re-reads nothing, because the
   corpus is already resident.
 - Measured: 0.875 drifted, 1.000 after retraining.

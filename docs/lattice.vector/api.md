@@ -29,7 +29,7 @@ The index itself. Constructed from `VectorIndexOptions`.
 |---|---|
 | `Add(long, ReadOnlySpan<float>)` | Insert a vector under a key that is not already present. |
 | `Upsert(long, ReadOnlySpan<float>)` | Insert or replace. |
-| `Remove(long)` | Retire a vector. Constant time in the dimension; never a tombstone. |
+| `Remove(long)` | Retire a vector. Constant time in the corpus size (one backfill, whatever the corpus holds); never a tombstone. |
 | `Contains(long)`, `TryGetVector(long, Span<float>)` | Presence and retrieval. |
 | `Clear()` | Drop everything. |
 | `EnsureCapacity(int)` | Reserve ahead of a bulk load, which makes the insert run allocation-free. |
@@ -68,7 +68,6 @@ The index itself. Constructed from `VectorIndexOptions`.
 | `VectorIndexFormatException` | Thrown when a persisted form cannot be believed. |
 | `VectorSimilarity` | `Dot`, `Norm`, `Cosine`, `Scale`, `Normalize`, vectorised. |
 | `VectorIndexMemory` | Per-slot and total byte accounting. |
-| `VectorRandom` | The seeded generator, exposed so a caller can reproduce a build. |
 
 ## The durable layer
 
@@ -76,15 +75,21 @@ The index itself. Constructed from `VectorIndexOptions`.
 
 Orchestrates persistence and incremental maintenance over a `VectorIndex`.
 
+There is no public constructor. `DurableVectorIndex.OpenAsync(store, source, options, loadMode, cancellationToken)`
+is the only entry point; `loadMode` selects a full load or a lazy partial one.
+
 | Member | Purpose |
 |---|---|
-| `Progress` | A `VectorIndexBuildProgress`: phase, generation, vectors indexed and expected, partitions persisted and total, and whether the state was restored rather than recomputed. |
-| `IsReady`, `IngestedFraction` | Build completion. `IngestedFraction` reports `1` when the expected count is unknown, deliberately, so a caller never renders a progress bar implying knowledge the index does not have. |
+| `OpenAsync` | Static. Opens (and, for a full load, restores) an index over a store and a source. |
+| `KeyPrefix`, `Generation`, `LoadMode` | Where the index lives, which partitioning is live, and how it was opened. |
+| `Status`, `Count`, `UpdatesSinceTraining` | The core's status, the live vector count, and the drift signal that tells you when to retrain. |
+| `Progress` | A `VectorIndexBuildProgress`: phase, generation, vectors indexed and expected, partitions persisted and total, whether the state was restored rather than recomputed, plus `IsReady` and `IngestedFraction`. `IngestedFraction` reports `1` when the build is ready *or* when the expected count is unknown, deliberately, so a caller never renders a progress bar implying knowledge the index does not have. |
 | `BuildStepAsync` | Does one bounded slice of build work and returns progress. |
 | `RunBuildAsync` | Loops `BuildStepAsync` to completion. |
 | `UpsertAsync`, `RemoveAsync` | Incremental maintenance. |
+| `TryGetId`, `TryGetKey` | Resolve between an external string identifier and the index's `long` key. |
 | `FlushAsync` | Persist the partitions whose stamps moved. |
-| `SearchAsync` | Query, returning a `VectorSearchOutcome`. |
+| `Search`, `SearchAsync` | Query, returning a `VectorSearchOutcome`. |
 | `ReconcileAsync` | Bounded sweep against the store of record, always settling in the source's favour. |
 | `RebuildAsync`, `RetrainAsync` | Full rebuild, and re-partition in place after distribution drift. |
 
@@ -113,6 +118,8 @@ would be wrong; reporting it as approximate would also be wrong.
 | `IVectorSource`, `VectorSourceEntry` | The store-of-record seam the background build streams from. |
 | `VectorKeyDictionary` | The durable string-to-`long` identifier mapping. A monotonic allocator, never a hash. |
 | `VectorIndexBuildPhase` | `NotStarted`, `Ingesting`, `Training`, `Persisting`, `Ready`. Monotonic. |
+| `VectorIndexBuildState`, `VectorIndexManifest`, `VectorIndexPartitionState` | The durable build checkpoint, the commit record, and per-partition commit state. |
+| `VectorIndexStorageKeys`, `VectorIndexPersistenceFormat`, `VectorIndexRecord` | The key layout, the framing constants, and the checksummed record envelope. |
 | `VectorIndexLoadMode` | Full load versus lazy partial load. |
 | `VectorSearchOutcome` | A search result set plus the mode that produced it. |
 | `DurableVectorIndexOptions` | Durable-layer configuration; see [Configuration](configuration.md). |

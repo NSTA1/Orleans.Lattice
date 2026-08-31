@@ -18,7 +18,7 @@ chosen against five criteria:
 | Query cost | Sub-linear: `C` centroid comparisons plus `probes * (n / C)`. Measured speedup over exhaustive grows from about 3x at 10,000 to about 14x at 1,000,000. | Also sub-linear, typically with a better constant factor. |
 | Memory per vector | `dimensions * 4 + 12` bytes. No per-vector object header and no adjacency structure. | Adds a whole adjacency graph per vector. |
 | Incremental insert | Assign to the nearest centroid and append. No retrain needed for correctness. | Supported, but each insert mutates shared graph structure. |
-| Delete | First class and constant time in the dimension: the cell's hole is backfilled with its last member. Never a tombstone, so a deleted vector cannot resurface. | The known weak point, usually tombstones plus periodic rebuild. |
+| Delete | First class and constant time in the corpus size: the cell's hole is backfilled with its last member, which copies one vector's worth of floats regardless of how many vectors the index holds. Never a tombstone, so a deleted vector cannot resurface. | The known weak point, usually tombstones plus periodic rebuild. |
 
 **The criterion that actually decided it is durability.** An IVF cell is a natural
 bounded chunk, and a query provably touches only the cells it probes, so a partial
@@ -37,10 +37,12 @@ reason to exist.
 ### Cells own their vectors contiguously
 
 The first implementation used posting lists of slot identifiers into one global
-vector block - the textbook layout. It reached only about 2.6x speedup at
-1,000,000 vectors and was *slower than exhaustive* at 50,000, because the probe
-scan is cache-hostile: every scored vector is an indirection into a different part
-of a large array.
+vector block - the textbook layout. Measured during development it reached only
+about 2.6x speedup at 1,000,000 vectors and was *slower than exhaustive* at
+50,000, because the probe scan is cache-hostile: every scored vector is an
+indirection into a different part of a large array. (That figure describes a
+superseded implementation, so it is not reproducible from the committed harness;
+the qualitative point is what matters.)
 
 Rewriting so that each cell owns its members' vectors **contiguously in its own
 block** took the same algorithm to about 14x. Do not reintroduce an indirection
@@ -54,9 +56,10 @@ becomes linear in the corpus again while still looking like an approximate index
 
 The default is therefore `clamp(2 * ceil(sqrt(partitionCount)), 8, partitionCount)`,
 which makes the fraction of the corpus scanned *fall* as the corpus grows: about
-25% at 5,000 vectors, about 6% at 1,000,000. A test asserts that the scanned
-fraction strictly falls with corpus size. A future "probe more for better recall"
-change must not turn this back into a fraction.
+25% at 5,000 vectors, about 6% at 1,000,000. The recall harness reports that
+scanned fraction at each corpus size, so the property is visible in the committed
+evidence. A future "probe more for better recall" change must not turn this back
+into a fraction.
 
 ## Determinism
 
