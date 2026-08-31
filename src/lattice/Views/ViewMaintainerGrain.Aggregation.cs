@@ -58,6 +58,10 @@ internal sealed partial class ViewMaintainerGrain
         // the maintainer reports its own cursor after the fold below.
         var contributions = new List<AggregationContribution>();
         var completedTransactions = new List<Guid>();
+        // Classify while folding: the drain loop already visits every projected
+        // contribution, so record whether any is a RangeReconcile here instead of
+        // re-walking the whole buffer with a separate .Exists pass after the drain.
+        var hasRangeReconcile = false;
         var handler = new ViewDrainHandler(
             this,
             mutation =>
@@ -65,6 +69,10 @@ internal sealed partial class ViewMaintainerGrain
                 foreach (var contribution in registration.AggregationProjection!.Project(mutation))
                 {
                     contributions.Add(contribution);
+                    if (contribution.Kind == AggregationContributionKind.RangeReconcile)
+                    {
+                        hasRangeReconcile = true;
+                    }
                 }
             },
             completedTransactions);
@@ -100,7 +108,7 @@ internal sealed partial class ViewMaintainerGrain
 
         // An unconstrained range delete cannot be lowered to exact retractions; a
         // full rebuild reconciles the affected range and re-advances the checkpoint.
-        if (contributions.Exists(static c => c.Kind == AggregationContributionKind.RangeReconcile))
+        if (hasRangeReconcile)
         {
             logger.LogInformation(
                 "Aggregation view '{ViewName}' observed an unconstrained range delete; rebuilding to reconcile the affected range.",
