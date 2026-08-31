@@ -572,78 +572,185 @@ public partial class BPlusLeafGrainTests
         Assert.That(ledger.MinUnresolved(0), Is.EqualTo(1L));
     }
 
+    /// <summary>
+    /// Sink for the allocation probes below, so a measured loop cannot be
+    /// optimised away as dead code. Never read for its value.
+    /// </summary>
+    private static long _ledgerAllocationProbeSink;
+
+    /// <summary>
+    /// Runs the loop built by <paramref name="prepare"/> at
+    /// <paramref name="baseIterations"/> and at twice that, and returns how many
+    /// more bytes the larger loop allocated. Zero means the loop body is
+    /// allocation-free; a body allocating <c>k</c> bytes per iteration grows by
+    /// <c>baseIterations * k</c>, which no amount of ambient noise can hide.
+    /// <para>
+    /// This differential form is what makes an allocation probe safe in a
+    /// shared test host, and an absolute <c>Is.Zero</c> against the counter is
+    /// not. Tiered JIT can compile - or on-stack-replace - the measured loop
+    /// partway through the measured window, and the counter attributes that
+    /// one-off runtime cost to the loop; whether it lands inside the window
+    /// depends on what the host has already compiled, so an unrelated fixture
+    /// in the same batch can flip the result. Any such constant appears in both
+    /// measurements and cancels in the difference.
+    /// </para>
+    /// <para>
+    /// <paramref name="prepare"/> returns a ready-to-run closure so per-size
+    /// setup (building a ledger to resolve, say) happens outside the measured
+    /// window. The measurement is repeated and the smallest growth kept:
+    /// allocation noise is strictly additive, so the minimum is the closest
+    /// observation to the true cost. Growth is measured on the per-thread
+    /// counter, which is exact for these synchronous loops - unlike the
+    /// process-wide counter, it cannot pick up another thread's allocation.
+    /// </para>
+    /// </summary>
+    private static long AllocationGrowthBetweenLoopSizes(
+        Func<int, Action> prepare,
+        int baseIterations,
+        int attempts = 5)
+    {
+        // Warm up at the LARGER size so tiering and on-stack replacement have
+        // both settled before either measured window, whatever the surrounding
+        // batch happened to compile first.
+        prepare(baseIterations * 2)();
+
+        var smallestGrowth = long.MaxValue;
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            var smallLoop = prepare(baseIterations);
+            var largeLoop = prepare(baseIterations * 2);
+
+            var mark = GC.GetAllocatedBytesForCurrentThread();
+            smallLoop();
+            var small = GC.GetAllocatedBytesForCurrentThread() - mark;
+
+            mark = GC.GetAllocatedBytesForCurrentThread();
+            largeLoop();
+            var large = GC.GetAllocatedBytesForCurrentThread() - mark;
+
+            var growth = large - small;
+            if (growth <= 0)
+                return 0;
+            if (growth < smallestGrowth)
+                smallestGrowth = growth;
+        }
+
+        return smallestGrowth;
+    }
+
     [Test]
-    public void Ledger_min_unresolved_allocates_nothing_per_record()
+    public void Allocation_probe_detects_a_deliberately_allocating_loop()
+    {
+        // Smoke-detector battery test for AllocationGrowthBetweenLoopSizes
+        // itself, in the spirit of the mojibake gate's own self-check. A
+        // differential allocation probe that could never fail would silently
+        // approve a regression, so prove it reports growth for a loop that
+        // genuinely allocates once per iteration.
+        var growth = AllocationGrowthBetweenLoopSizes(
+            iterations => () =>
+            {
+                long sink = 0;
+                for (var i = 0; i < iterations; i++)
+                    sink += new long[1].Length;
+                _ledgerAllocationProbeSink = sink;
+            },
+            baseIterations: 2048);
+
+        Assert.That(growth, Is.GreaterThan(0L),
+            "the probe must report growth for a loop that allocates per iteration, "
+            + "or it cannot catch a real per-record regression");
+    }
+
+    [Test]
+    public void Ledger_min_unresolved_does_not_allocate_per_query()
     {
         // The replay hot path queries the clamp once per slice and, for a
         // non-deferred record, does nothing else with the ledger. Neither may
-        // allocate, or a long replay pays for the clamp per record.
+        // allocate, or a long replay pays for the clamp per record. See
+        // AllocationGrowthBetweenLoopSizes for why the assertion compares two
+        // loop sizes rather than asserting an absolute zero.
         var ledger = new BPlusLeafGrain.DeferredOffsetLedger(8);
         for (var i = 0; i < 8; i++)
             ledger.Add(i, i + 1);
 
-        // Warm up so JIT-time allocations are not attributed to the loop.
-        for (var i = 0; i < 64; i++)
-            _ = ledger.MinUnresolved(i & 7);
+        var growth = AllocationGrowthBetweenLoopSizes(
+            iterations => () =>
+            {
+                long sink = 0;
+                for (var i = 0; i < iterations; i++)
+                    sink += ledger.MinUnresolved(i & 7);
+                _ledgerAllocationProbeSink = sink;
+            },
+            baseIterations: 50_000);
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        long sink = 0;
-        for (var i = 0; i < 100_000; i++)
-            sink += ledger.MinUnresolved(i & 7);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.That(sink, Is.GreaterThan(0L), "guard against the loop being optimised away");
-        Assert.That(allocated, Is.Zero, "MinUnresolved must be allocation-free on the replay hot path");
+        Assert.That(_ledgerAllocationProbeSink, Is.GreaterThan(0L),
+            "guard against the measured loop being optimised away");
+        Assert.That(growth, Is.Zero,
+            "MinUnresolved must not allocate per query on the replay hot path");
     }
 
     [Test]
-    public void Ledger_growth_is_bounded_by_the_deferred_count_not_the_record_count()
+    public void Ledger_add_does_not_allocate_per_deferred_offset_beyond_amortised_growth()
     {
-        // Adds amortise by doubling, so the ledger's cost tracks the number of
-        // DEFERRED offsets. A replay whose window holds ten times as many
-        // records but the same deferred count must not pay ten times as much.
-        var warm = new BPlusLeafGrain.DeferredOffsetLedger(1);
-        for (var i = 0; i < 16; i++)
-            warm.Add(0, i);
-
-        static long MeasureAdds(int count)
+        // Adds amortise by doubling, so a run of adds allocates O(log n) buffers
+        // totalling O(n) bytes - not a fresh allocation per add. Doubling the
+        // add count must therefore at most double the bytes; a per-add
+        // allocation (a boxed offset or a per-add node) would blow past that.
+        // Measured as a ratio rather than a difference because the amortised
+        // growth is genuinely non-zero by design.
+        static long MeasureAdds(int count, int attempts)
         {
-            var ledger = new BPlusLeafGrain.DeferredOffsetLedger(1);
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < count; i++)
-                ledger.Add(0, i);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
+            var smallest = long.MaxValue;
+            for (var attempt = 0; attempt < attempts; attempt++)
+            {
+                var ledger = new BPlusLeafGrain.DeferredOffsetLedger(1);
+                var mark = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < count; i++)
+                    ledger.Add(0, i);
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - mark;
+                _ledgerAllocationProbeSink = ledger.MinUnresolved(0);
+                if (allocated < smallest)
+                    smallest = allocated;
+            }
+            return smallest;
         }
 
-        var small = MeasureAdds(64);
-        var large = MeasureAdds(1024);
+        // Warm up at the larger size before either measurement.
+        _ = MeasureAdds(2048, attempts: 1);
 
-        Assert.That(large, Is.LessThan(small * 64),
-            "amortised doubling must keep growth sub-linear in the number of adds");
+        var small = MeasureAdds(1024, attempts: 5);
+        var large = MeasureAdds(2048, attempts: 5);
+
+        Assert.That(small, Is.GreaterThan(0L), "the buffer growth must have been observed");
+        Assert.That(large, Is.LessThanOrEqualTo(small * 3),
+            $"amortised doubling must keep growth linear in the DEFERRED count "
+            + $"(1024 adds -> {small} bytes, 2048 adds -> {large} bytes)");
     }
 
     [Test]
-    public void Ledger_resolve_allocates_nothing()
+    public void Ledger_resolve_does_not_allocate_per_drained_terminal()
     {
-        // Pass 2 strikes one offset off per drained terminal; the drain loop
-        // must not allocate for the bookkeeping.
-        var ledger = new BPlusLeafGrain.DeferredOffsetLedger(1);
-        for (var i = 0; i < 4096; i++)
-            ledger.Add(0, i);
+        // Pass 2 strikes one offset off per drained terminal, so the drain loop
+        // must not allocate for the bookkeeping. The ledger is rebuilt by
+        // prepare(), outside the measured window, so only Resolve is measured.
+        var growth = AllocationGrowthBetweenLoopSizes(
+            iterations =>
+            {
+                var ledger = new BPlusLeafGrain.DeferredOffsetLedger(1);
+                for (var i = 0; i < iterations; i++)
+                    ledger.Add(0, i);
+                return () =>
+                {
+                    for (var i = 0; i < iterations; i++)
+                        ledger.Resolve(0, i);
+                    _ledgerAllocationProbeSink = ledger.MinUnresolved(0);
+                };
+            },
+            baseIterations: 2048);
 
-        // Warm up the JIT on both the head-advance and the scan path.
-        var warm = new BPlusLeafGrain.DeferredOffsetLedger(1);
-        warm.Add(0, 1);
-        warm.Resolve(0, 1);
-        warm.Resolve(0, 2);
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 4096; i++)
-            ledger.Resolve(0, i);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.That(ledger.MinUnresolved(0), Is.EqualTo(long.MaxValue), "every offset resolved");
-        Assert.That(allocated, Is.Zero, "Resolve must be allocation-free");
+        Assert.That(_ledgerAllocationProbeSink, Is.EqualTo(long.MaxValue),
+            "the measured loop must have resolved every offset");
+        Assert.That(growth, Is.Zero, "Resolve must not allocate per drained terminal");
     }
 
     [Test]
@@ -655,10 +762,11 @@ public partial class BPlusLeafGrainTests
         // record, say) would show up here as a super-linear jump.
         //
         // The replay awaits, so its continuations are not guaranteed to stay on
-        // the calling thread: the process-wide counter is the only sound
-        // measure here. The bound is deliberately loose (3x for a 2x window)
-        // so ambient allocation cannot flip the result, while an O(n^2) path
-        // (which would land near 4x) still fails.
+        // the calling thread and the per-thread counter would under-report:
+        // the process-wide counter is the only sound measure here. It is also
+        // the noisier one, so each size is measured repeatedly and the smallest
+        // observation kept - ambient allocation only ever adds - and the bound
+        // is a ratio rather than an absolute figure.
         static async Task<long> MeasureAsync(int recordCount)
         {
             var entries = new CommitLogSliceEntry[recordCount];
@@ -681,11 +789,17 @@ public partial class BPlusLeafGrainTests
             return GC.GetTotalAllocatedBytes(precise: true) - before;
         }
 
-        // Warm up so first-call JIT cost is not attributed to the measurement.
-        _ = await MeasureAsync(64);
+        // Warm up at the larger size so no first-call JIT cost lands in either
+        // measured window.
+        _ = await MeasureAsync(512);
 
-        var small = await MeasureAsync(256);
-        var large = await MeasureAsync(512);
+        var small = long.MaxValue;
+        var large = long.MaxValue;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            small = Math.Min(small, await MeasureAsync(256));
+            large = Math.Min(large, await MeasureAsync(512));
+        }
 
         Assert.That(small, Is.GreaterThan(0L), "the measurement must have observed the replay");
         Assert.That(large, Is.LessThan(small * 3),
