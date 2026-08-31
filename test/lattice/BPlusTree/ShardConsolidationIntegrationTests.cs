@@ -455,39 +455,15 @@ public class ShardConsolidationIntegrationTests
     }
 
     // --- Cancellation and progress ---
+    //
+    // Cancellation lives in ShardConsolidationCancellationIntegrationTests,
+    // which runs on the slow-pump fixture. Its contract is phase-dependent (a
+    // request is honoured only pre-Swap), so asserting it requires a fold that
+    // is deterministically still cancellable - which this fixture, draining a
+    // small tree in a single pump pass, cannot provide.
 
     [Test]
-    public async Task A_cancelled_fold_leaves_the_tree_readable_writable_and_foldable_again()
-    {
-        var treeId = $"cons-cancel-{Guid.NewGuid():N}";
-        var tree = await _fixture.CreateTreeAsync(treeId);
-        var expected = await PopulateAsync(tree, "ck", 120);
-
-        var coordinator = Consolidator(treeId, 3);
-        await coordinator.StartAsync(2);
-        Assert.That(await coordinator.CancelAsync(), Is.True);
-        await coordinator.RunConsolidationPassAsync();
-
-        Assert.That(await coordinator.IsIdleAsync(), Is.True);
-        var progress = await coordinator.GetProgressAsync();
-        Assert.That(progress.Cancelled, Is.True);
-        Assert.That(progress.Complete, Is.False);
-        Assert.That(await PhysicalShardCountAsync(treeId), Is.EqualTo(FourShardClusterFixture.TestShardCount),
-            "An abandoned fold must leave the tree's physical topology exactly as it was.");
-
-        await AssertAllReadableAsync(tree, expected, "after the fold was abandoned");
-        await tree.SetAsync("post-cancel", Encoding.UTF8.GetBytes("ok"));
-        Assert.That(await tree.GetAsync("post-cancel"), Is.Not.Null);
-
-        // The abandoned fold must not have poisoned the pair.
-        await RunFoldAsync(treeId, donor: 3, survivor: 2);
-        Assert.That(await PhysicalShardCountAsync(treeId),
-            Is.EqualTo(FourShardClusterFixture.TestShardCount - 1));
-        await AssertAllReadableAsync(tree, expected, "after re-folding the previously abandoned pair");
-    }
-
-    [Test]
-    public async Task Progress_reports_the_fold_advancing_and_then_completing()
+    public async Task Progress_reports_the_fold_identity_and_its_completion()
     {
         var treeId = $"cons-progress-{Guid.NewGuid():N}";
         var tree = await _fixture.CreateTreeAsync(treeId);
@@ -496,11 +472,20 @@ public class ShardConsolidationIntegrationTests
         var coordinator = Consolidator(treeId, 3);
         await coordinator.StartAsync(2);
 
+        // Only fields that StartAsync sets and no later phase mutates are safe
+        // to assert here: the background phase timer can carry the fold to any
+        // phase, up to and including completion, between these two calls. In
+        // particular InProgress is NOT assertable at this point - asserting it
+        // would be a race against the pump, passing on an idle machine and
+        // failing under CI load. Mid-flight progress reporting is covered
+        // deterministically by the unit-level
+        // GetProgress_reports_the_in_flight_fold_and_its_counters, which drives
+        // the phase machine directly with no timer involved.
         var started = await coordinator.GetProgressAsync();
-        Assert.That(started.InProgress, Is.True);
         Assert.That(started.DonorShardIndex, Is.EqualTo(3));
         Assert.That(started.SurvivorShardIndex, Is.EqualTo(2));
         Assert.That(started.SlotsToFold, Is.GreaterThan(0));
+        Assert.That(started.OperationId, Is.Not.Null.And.Not.Empty);
 
         for (var i = 0; i < 64 && !await coordinator.IsIdleAsync(); i++)
             await coordinator.RunConsolidationPassAsync();
@@ -508,8 +493,12 @@ public class ShardConsolidationIntegrationTests
         var finished = await coordinator.GetProgressAsync();
         Assert.That(finished.Complete, Is.True);
         Assert.That(finished.InProgress, Is.False);
+        Assert.That(finished.Cancelled, Is.False);
         Assert.That(finished.UpdatedAtTicks, Is.GreaterThanOrEqualTo(started.UpdatedAtTicks));
-        Assert.That(finished.OperationId, Is.EqualTo(started.OperationId));
+        Assert.That(finished.OperationId, Is.EqualTo(started.OperationId),
+            "A fold keeps one operation id from start to commit, so a driver can correlate its polls.");
+        Assert.That(finished.EntriesDrained, Is.GreaterThan(0),
+            "A fold over a populated donor must report the entries it moved.");
     }
 
     [Test]
@@ -522,9 +511,28 @@ public class ShardConsolidationIntegrationTests
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/3");
         await split.SplitAsync(sourceShardIndex: 3);
 
-        Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await Consolidator(treeId, 3).StartAsync(2),
-            "A fold and a split contending for one shard's migration record would strand slots.");
+        // The split coordinator has its own background phase timer, so it can
+        // run itself to completion while this test is still setting up. Attempt
+        // the fold first, then check whether the split was still in flight: a
+        // split never restarts once idle, so observing it still running now
+        // proves it was running during the attempt, which makes the refusal
+        // below required rather than merely likely.
+        InvalidOperationException? refusal = null;
+        try
+        {
+            await Consolidator(treeId, 3).StartAsync(2);
+        }
+        catch (InvalidOperationException ex)
+        {
+            refusal = ex;
+        }
+
+        Assert.That(await split.IsIdleAsync(), Is.False,
+            "The split completed before the consolidation attempt landed, so this run never exercised "
+            + "the contention guard. The split coordinator advances one phase per two-second pump tick.");
+        Assert.That(refusal, Is.Not.Null,
+            "A fold and a split contending for one shard's migration record would strand slots, so "
+            + "consolidation must refuse while a split is in flight on the same shard.");
 
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
