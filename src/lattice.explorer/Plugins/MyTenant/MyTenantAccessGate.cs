@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
@@ -9,24 +10,23 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 /// Tenant area when they hold admin authority over their <em>own active</em>
 /// tenant.
 /// <para>
-/// The probe resolves in three steps, cheapest first, and every one of them
-/// fails closed:
+/// The probe reports <em>facts</em> in three steps, cheapest first, and every
+/// one of them fails closed:
 /// </para>
 /// <list type="number">
 ///   <item>
 ///     <description>
 ///     <b>Is there tenancy here at all?</b> A deployment without the tenancy
-///     add-on reports <see cref="ExplorerPluginAccessState.Unavailable"/>
-///     without a call, so the area renders nothing rather than an error (epic
-///     decision D9).
+///     add-on reports an absent capability without a call, so the area renders
+///     nothing rather than an error (epic decision D9).
 ///     </description>
 ///   </item>
 ///   <item>
 ///     <description>
 ///     <b>Does the cluster serve tenant administration?</b> Delegated to the
 ///     shared availability probe, whose answer already separates "the surface
-///     does not exist here" from "you are not signed in" from "you were
-///     refused".
+///     does not exist here" from "no credential was presented" from "the grant
+///     was withheld".
 ///     </description>
 ///   </item>
 ///   <item>
@@ -39,6 +39,13 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 ///     </description>
 ///   </item>
 /// </list>
+/// <para>
+/// A withheld grant is reported as withheld, not as a denial:
+/// <see cref="ExplorerPluginAccessContract"/> renders it as a sign-in prompt for
+/// an anonymous caller and as a denial for a signed-in one. Deciding it here is
+/// how this gate came to tell a signed-out visitor that they did not hold admin
+/// authority over an active tenant they never had.
+/// </para>
 /// <para>
 /// Client gating is advisory (epic decision D6): the cluster re-enforces every
 /// read and every mutation, so a caller who slipped past this gate still
@@ -60,10 +67,15 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 /// installed; the plugin never asks it for an authorization decision, which
 /// stays with <paramref name="domain"/>.
 /// </param>
+/// <param name="session">
+/// The Explorer's sign-in seam, read only to tell an anonymous refusal from an
+/// authenticated one.
+/// </param>
 internal sealed class MyTenantAccessGate(
     IMyTenantDomain domain,
     IExplorerPluginAccessStore store,
-    IExplorerTenantOperatorGate? operatorGate = null) : IMyTenantAccessGate
+    IExplorerTenantOperatorGate? operatorGate = null,
+    IExplorerAuthSession? session = null) : ExplorerPluginAccessGate, IMyTenantAccessGate
 {
     private const string NoTenancyReason =
         "This deployment does not have the tenancy add-on enabled, so there is no tenant to administer.";
@@ -74,19 +86,35 @@ internal sealed class MyTenantAccessGate(
     private const string NotTenantAdminReason =
         "You do not hold admin authority over your active tenant.";
 
+    private const string UnprovenReason =
+        "Your admin authority over this tenant could not be confirmed.";
+
+    /// <summary>
+    /// The grant a refused caller is missing, and who issues it. Cached, so
+    /// attaching it to a denial costs nothing per probe.
+    /// </summary>
+    private static readonly ExplorerAccessRemedy MissingGrant =
+        ExplorerAccessRemedy.Requiring("Tenant admin", "your tenant's administrator");
+
     private readonly IMyTenantDomain _domain = domain ?? throw new ArgumentNullException(nameof(domain));
 
     private readonly IExplorerPluginAccessStore _store = store ?? throw new ArgumentNullException(nameof(store));
 
     private readonly IExplorerTenantOperatorGate? _operatorGate = operatorGate;
 
-    /// <inheritdoc />
-    public async ValueTask<ExplorerPluginAccess> ProbeAsync(
-        IExplorerPluginHostContext context,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
+    private readonly IExplorerAuthSession? _session = session;
 
+    /// <inheritdoc />
+    public override ExplorerAccessRemedy Remedy => MissingGrant;
+
+    /// <inheritdoc />
+    protected override bool IsCallerAuthenticated => _session?.IsAuthenticated ?? false;
+
+    /// <inheritdoc />
+    protected override async ValueTask<ExplorerPluginAccessFacts> EvaluateAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken)
+    {
         PublishOperatorGateDiagnostic();
 
         // D9: no tenancy add-on, so the surface does not exist here. Both the
@@ -95,42 +123,49 @@ internal sealed class MyTenantAccessGate(
         // than half a surface.
         if (!context.Tenant.IsActive || !_domain.IsTenancyEnabled)
         {
-            return ExplorerPluginAccess.ReportUnavailable(NoTenancyReason);
+            return ExplorerPluginAccessFacts.CapabilityAbsent(NoTenancyReason);
         }
 
         // Does the cluster serve tenant administration for this caller at all?
-        // Unavailable, authentication-required, and denied all pass straight
-        // through: this gate can only narrow that answer, never widen it.
+        // An absent capability, an unauthenticated connection, and a withheld
+        // grant all pass straight through: this gate can only narrow that
+        // answer, never widen it.
         var availability = await _domain.ProbeAvailabilityAsync(cancellationToken).ConfigureAwait(false);
-        if (!availability.IsAllowed)
+        if (availability.State != ExplorerPluginAccessState.Allowed)
         {
-            return availability;
+            return ExplorerPluginAccessFacts.From(availability);
         }
 
         var tenantId = ResolveActiveTenantId(context);
         if (string.IsNullOrEmpty(tenantId))
         {
-            return ExplorerPluginAccess.Deny(NoActiveTenantReason);
+            return ExplorerPluginAccessFacts.Withhold(NoActiveTenantReason);
         }
 
         // The narrowest read that proves tenant-admin standing: the cluster
         // admits a live admin subject of this tenant, and a platform operator
         // acting on it, and refuses everyone else. A not-found answer is the
-        // cluster deliberately refusing to confirm the tenant exists, so it is a
-        // denial here rather than an absence.
+        // cluster deliberately refusing to confirm the tenant exists, so the
+        // grant is withheld rather than the surface being absent.
         var admins = await _domain.Tenants
             .ListAdminSubjectsAsync(tenantId, cancellationToken)
             .ConfigureAwait(false);
 
+        // A seam that answered nothing proved nothing.
+        if (admins is null)
+        {
+            return ExplorerPluginAccessFacts.Withhold(UnprovenReason);
+        }
+
         return admins.Status switch
         {
-            TenantOperationStatus.Succeeded => ExplorerPluginAccess.Allowed,
+            TenantOperationStatus.Succeeded => ExplorerPluginAccessFacts.Granted,
             TenantOperationStatus.AuthenticationRequired =>
-                ExplorerPluginAccess.RequireAuthentication(admins.Message),
-            TenantOperationStatus.Unavailable => ExplorerPluginAccess.ReportUnavailable(admins.Message),
+                ExplorerPluginAccessFacts.CredentialMissing(admins.Message),
+            TenantOperationStatus.Unavailable => ExplorerPluginAccessFacts.CapabilityAbsent(admins.Message),
             TenantOperationStatus.Denied or TenantOperationStatus.NotFound =>
-                ExplorerPluginAccess.Deny(NotTenantAdminReason),
-            _ => ExplorerPluginAccess.Deny(admins.Message),
+                ExplorerPluginAccessFacts.Withhold(NotTenantAdminReason),
+            _ => ExplorerPluginAccessFacts.Withhold(admins.Message),
         };
     }
 

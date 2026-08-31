@@ -1,4 +1,6 @@
 using Grpc.Core;
+using NSubstitute;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Tests.Plugins;
@@ -11,6 +13,15 @@ namespace Orleans.Lattice.Explorer.Tests.Tenancy;
 /// the tenancy plugins render nothing, and no fault escapes a probe as an
 /// exception.
 /// </summary>
+/// <remarks>
+/// The probe reports facts and <see cref="ExplorerPluginAccessContract"/> picks
+/// the state, so a refusal it cannot classify reads as a denial for a signed-in
+/// caller and as a sign-in prompt for an anonymous one. Most of these tests
+/// therefore run signed in, and
+/// <see cref="A_refused_anonymous_caller_is_asked_to_sign_in_rather_than_denied"/>
+/// covers the other half - the defect that told a signed-out visitor tenancy was
+/// not available for their account (issue #1854).
+/// </remarks>
 [TestFixture]
 public class TenancyAvailabilityTests
 {
@@ -19,9 +30,19 @@ public class TenancyAvailabilityTests
     [SetUp]
     public void SetUp() => _client = new FakeTenantAdminClient();
 
-    private TenancyAvailability Create(StubTenantSwitcher? switcher) => new(_client, switcher);
+    private static IExplorerAuthSession SignedIn(bool authenticated = true)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(authenticated);
+        return session;
+    }
 
-    private TenancyAvailability Create() => new(_client, new StubTenantSwitcher());
+    private TenancyAvailability Create(StubTenantSwitcher? switcher) => new(_client, switcher, SignedIn());
+
+    private TenancyAvailability Create() => new(_client, new StubTenantSwitcher(), SignedIn());
+
+    private TenancyAvailability CreateAnonymous() =>
+        new(_client, new StubTenantSwitcher(), SignedIn(authenticated: false));
 
     [Test]
     public void Constructor_rejects_a_null_client() =>
@@ -117,8 +138,31 @@ public class TenancyAvailabilityTests
         Assert.Multiple(() =>
         {
             Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
-            Assert.That(access.IsVisible, Is.True, "a denial greys out rather than hides");
+            Assert.That(access.IsVisible, Is.True, "a denial is demoted rather than hidden");
             Assert.That(access.Reason, Is.EqualTo("not yours"));
+
+            // A denial states a remedy rather than only that it is unavailable.
+            Assert.That(access.Remedy.Permission, Is.EqualTo("Tenant read"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
+        });
+    }
+
+    [Test]
+    public async Task A_refused_anonymous_caller_is_asked_to_sign_in_rather_than_denied()
+    {
+        // The measured defect (issue #1854): a signed-out visitor was told that
+        // tenancy was "not available for your account" when the honest answer was
+        // "sign in". The server refuses an anonymous caller and an authenticated
+        // but unauthorized one identically, so only the credential state can tell
+        // them apart.
+        _client.Throws = new LatticeAuthorizationDeniedException("not yours");
+
+        var access = await CreateAnonymous().ProbeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
+            Assert.That(access.IsVisible, Is.True);
         });
     }
 

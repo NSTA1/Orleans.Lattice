@@ -1,7 +1,9 @@
 using Grpc.Core;
+using NSubstitute;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.Backup;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Tests.Plugins;
@@ -9,22 +11,49 @@ using Orleans.Lattice.Explorer.Tests.Plugins;
 namespace Orleans.Lattice.Explorer.Tests.Backup;
 
 /// <summary>
-/// The Backups plugin's own access gate. It reproduces the coarse catalog gate
-/// the area used to read from the shared capability record, now as the
-/// plugin-level decision keyed under <see cref="BackupsPluginKeys.PluginId"/>,
-/// plus the per-tree decisions the scope probe files.
+/// The Backups plugin's own access gate: the coarse cluster-wide backup grant
+/// keyed under <see cref="BackupsPluginKeys.PluginId"/>, plus the per-tree
+/// decisions the scope probe files.
 /// </summary>
+/// <remarks>
+/// The coarse gate reads a capability flag rather than observing that a call
+/// succeeded (issue #1854). A cluster that lets a read-only identity page an
+/// empty backup catalog used to make the area render enabled for an identity
+/// with no backup grant at all; the flag is the question the gate actually
+/// wants answered.
+/// </remarks>
 [TestFixture]
 public class BackupCapabilityServiceTests
 {
     private static readonly IExplorerPluginHostContext Context =
         PluginTestHost.Context(BackupsPluginKeys.PluginId);
 
+    /// <summary>
+    /// A signed-in caller. Most of these tests are about an authenticated
+    /// identity that lacks the grant, which is the case that must render as a
+    /// denial; an anonymous one resolves to a sign-in prompt instead.
+    /// </summary>
+    private static IExplorerAuthSession SignedIn(bool authenticated = true)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(authenticated);
+        return session;
+    }
+
+    /// <summary>Grants (or withholds) the cluster-wide backup authority the coarse gate reads.</summary>
+    private static void ClusterBackupGrant(FakeBackupControlClient client, bool canList) =>
+        client.CapabilitiesByTree[BackupCapabilityService.CapabilityProbeTreeId] = new BackupScopeCapabilities
+        {
+            Scope = BackupScopeSelector.WholeTree(BackupCapabilityService.CapabilityProbeTreeId),
+            CanList = canList,
+        };
+
     private static (BackupCapabilityService Service, ExplorerPluginAccessStore Store) Create(
-        FakeBackupControlClient client)
+        FakeBackupControlClient client,
+        bool authenticated = true)
     {
         var store = new ExplorerPluginAccessStore();
-        return (new BackupCapabilityService(client, store), store);
+        return (new BackupCapabilityService(client, store, SignedIn(authenticated)), store);
     }
 
     [Test]
@@ -52,9 +81,10 @@ public class BackupCapabilityServiceTests
     }
 
     [Test]
-    public async Task ProbeAsync_list_reachable_allows_the_plugin()
+    public async Task ProbeAsync_a_cluster_wide_backup_grant_allows_the_plugin()
     {
-        var client = new FakeBackupControlClient { ListResult = new BackupCatalogPage() };
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: true);
         var (service, _) = Create(client);
 
         var access = await service.ProbeAsync(Context);
@@ -62,7 +92,47 @@ public class BackupCapabilityServiceTests
         Assert.Multiple(() =>
         {
             Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
-            Assert.That(client.LastListRequest!.PageSize, Is.EqualTo(1));
+            Assert.That(client.LastProbedScope!.TreeId, Is.EqualTo(BackupCapabilityService.CapabilityProbeTreeId));
+        });
+    }
+
+    [Test]
+    public async Task ProbeAsync_a_reachable_endpoint_without_a_backup_grant_denies_the_plugin()
+    {
+        // The measured defect (issue #1854): as data-reader - an identity holding
+        // only cluster Read and RangeRead - the catalog list succeeded and the
+        // Backups entry rendered enabled, so the user was invited into a surface
+        // the server then refused. Reaching the control plane is not a grant.
+        var client = new FakeBackupControlClient { ListResult = new BackupCatalogPage() };
+        ClusterBackupGrant(client, canList: false);
+        var (service, _) = Create(client);
+
+        var access = await service.ProbeAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
+            Assert.That(client.ListCallCount, Is.Zero, "the coarse gate reads a capability flag, not a catalog page");
+
+            // The denial states a remedy: which grant, and who issues it.
+            Assert.That(access.Remedy.Permission, Is.EqualTo("Backup"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
+        });
+    }
+
+    [Test]
+    public async Task ProbeAsync_an_anonymous_caller_is_invited_to_sign_in_rather_than_denied()
+    {
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: false);
+        var (service, _) = Create(client, authenticated: false);
+
+        var access = await service.ProbeAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
+            Assert.That(access.IsVisible, Is.True);
         });
     }
 
@@ -71,7 +141,7 @@ public class BackupCapabilityServiceTests
     {
         var client = new FakeBackupControlClient
         {
-            ListThrows = new LatticeAuthorizationDeniedException("denied"),
+            CapabilitiesThrows = new LatticeAuthorizationDeniedException("denied"),
         };
         var (service, _) = Create(client);
 
@@ -85,7 +155,7 @@ public class BackupCapabilityServiceTests
     {
         var client = new FakeBackupControlClient
         {
-            ListThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
+            CapabilitiesThrows = new RpcException(new Status(StatusCode.Unavailable, "gone")),
         };
         var (service, _) = Create(client);
 
@@ -95,11 +165,31 @@ public class BackupCapabilityServiceTests
     }
 
     [Test]
+    public async Task ProbeAsync_an_unimplemented_facade_hides_the_area_rather_than_denying_it()
+    {
+        // A cluster that does not serve backup control at all has nothing to sign
+        // in for and nothing to be granted, so the entry disappears.
+        var client = new FakeBackupControlClient
+        {
+            CapabilitiesThrows = new RpcException(new Status(StatusCode.Unimplemented, "no backups here")),
+        };
+        var (service, _) = Create(client);
+
+        var access = await service.ProbeAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Unavailable));
+            Assert.That(access.IsVisible, Is.False);
+        });
+    }
+
+    [Test]
     public async Task ProbeAsync_unconfigured_session_denies_the_plugin()
     {
         var client = new FakeBackupControlClient
         {
-            ListThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
+            CapabilitiesThrows = new InvalidOperationException("explorer is not configured with an endpoint"),
         };
         var (service, _) = Create(client);
 
@@ -113,13 +203,35 @@ public class BackupCapabilityServiceTests
     {
         var client = new FakeBackupControlClient
         {
-            ListThrows = new LatticeAuthorizationDeniedException("denied"),
+            CapabilitiesThrows = new LatticeAuthorizationDeniedException("denied"),
         };
         var (service, _) = Create(client);
 
         var access = await service.ProbeAsync(Context);
 
         Assert.That(access.IsVisible, Is.True);
+    }
+
+    [Test]
+    public async Task A_stale_scope_grant_does_not_re_admit_an_anonymous_caller()
+    {
+        // A scope grant the store still remembers is evidence about a credential
+        // the server has since stopped accepting. Reading it as an admission
+        // would let a signed-out caller back into the area on stale evidence, so
+        // an unauthenticated coarse answer wins outright.
+        var client = new FakeBackupControlClient();
+        client.CapabilitiesByTree["tree-a"] = new BackupScopeCapabilities
+        {
+            Scope = BackupScopeSelector.WholeTree("tree-a"),
+            CanList = true,
+        };
+        var (service, _) = Create(client, authenticated: false);
+        await service.ProbeScopeAsync("tree-a");
+
+        client.CapabilitiesThrows = new RpcException(new Status(StatusCode.Unauthenticated, "sign in"));
+        var access = await service.ProbeAsync(Context);
+
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
     }
 
     [Test]
@@ -186,18 +298,16 @@ public class BackupCapabilityServiceTests
         // The retired capability record kept its per-scope map across a coarse
         // re-probe, and the area's enable rule was "coarse OR any scope grants
         // list". The keyed model must reproduce that exactly.
-        var client = new FakeBackupControlClient
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: false);
+        client.CapabilitiesByTree["tree-a"] = new BackupScopeCapabilities
         {
-            CapabilitiesResult = new BackupScopeCapabilities
-            {
-                Scope = BackupScopeSelector.WholeTree("tree-a"),
-                CanList = true,
-            },
+            Scope = BackupScopeSelector.WholeTree("tree-a"),
+            CanList = true,
         };
         var (service, _) = Create(client);
         await service.ProbeScopeAsync("tree-a");
 
-        client.ListThrows = new LatticeAuthorizationDeniedException("denied");
         var access = await service.ProbeAsync(Context);
 
         Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
@@ -211,21 +321,19 @@ public class BackupCapabilityServiceTests
         // re-probe that finds the grant gone closes the area again. Latching the
         // answer in the service instead would leave the gate reporting Allowed
         // for the rest of the circuit's life.
-        var client = new FakeBackupControlClient
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: false);
+        client.CapabilitiesByTree["tree-a"] = new BackupScopeCapabilities
         {
-            CapabilitiesResult = new BackupScopeCapabilities
-            {
-                Scope = BackupScopeSelector.WholeTree("tree-a"),
-                CanList = true,
-            },
+            Scope = BackupScopeSelector.WholeTree("tree-a"),
+            CanList = true,
         };
         var (service, store) = Create(client);
         await service.ProbeScopeAsync("tree-a");
-        client.ListThrows = new LatticeAuthorizationDeniedException("denied");
         var whileGranted = await service.ProbeAsync(Context);
 
         // The grant behind the scope goes away, and the scope is re-probed.
-        client.CapabilitiesResult = new BackupScopeCapabilities
+        client.CapabilitiesByTree["tree-a"] = new BackupScopeCapabilities
         {
             Scope = BackupScopeSelector.WholeTree("tree-a"),
             CanList = false,
@@ -250,17 +358,15 @@ public class BackupCapabilityServiceTests
         // Reset is what the shell drives on sign-out: every decision is dropped
         // so a stale admission cannot survive an identity change. A gate whose
         // sticky half lived in the service would survive it regardless.
-        var client = new FakeBackupControlClient
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: false);
+        client.CapabilitiesByTree["tree-a"] = new BackupScopeCapabilities
         {
-            CapabilitiesResult = new BackupScopeCapabilities
-            {
-                Scope = BackupScopeSelector.WholeTree("tree-a"),
-                CanList = true,
-            },
+            Scope = BackupScopeSelector.WholeTree("tree-a"),
+            CanList = true,
         };
         var (service, store) = Create(client);
         await service.ProbeScopeAsync("tree-a");
-        client.ListThrows = new LatticeAuthorizationDeniedException("denied");
 
         store.Reset();
         var access = await service.ProbeAsync(Context);
@@ -275,22 +381,20 @@ public class BackupCapabilityServiceTests
         // hold the area open: the enable rule is "any scope grants *list*", and
         // reading the operation scopes as list grants would re-open an area the
         // caller cannot read a single backup in.
-        var client = new FakeBackupControlClient
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: false);
+        client.CapabilitiesByTree["tree-a"] = new BackupScopeCapabilities
         {
-            CapabilitiesResult = new BackupScopeCapabilities
-            {
-                Scope = BackupScopeSelector.WholeTree("tree-a"),
-                CanList = false,
-                CanCapture = true,
-                CanCaptureIncremental = true,
-                CanRestore = true,
-                CanDelete = true,
-            },
+            Scope = BackupScopeSelector.WholeTree("tree-a"),
+            CanList = false,
+            CanCapture = true,
+            CanCaptureIncremental = true,
+            CanRestore = true,
+            CanDelete = true,
         };
         var (service, store) = Create(client);
         await service.ProbeScopeAsync("tree-a");
 
-        client.ListThrows = new LatticeAuthorizationDeniedException("denied");
         var access = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
@@ -307,14 +411,15 @@ public class BackupCapabilityServiceTests
         // twice turned an idempotent initializer into a second-call no-op, so
         // the gate is asserted to make the round trip rather than only the first
         // leg of it.
-        var client = new FakeBackupControlClient { ListResult = new BackupCatalogPage() };
+        var client = new FakeBackupControlClient();
+        ClusterBackupGrant(client, canList: true);
         var (service, store) = Create(client);
         var first = await service.ProbeAsync(Context);
 
-        client.ListThrows = new LatticeAuthorizationDeniedException("denied");
+        client.CapabilitiesThrows = new LatticeAuthorizationDeniedException("denied");
         var denied = await service.ProbeAsync(Context);
 
-        client.ListThrows = null;
+        client.CapabilitiesThrows = null;
         var reopened = await service.ProbeAsync(Context);
 
         Assert.Multiple(() =>
@@ -324,7 +429,7 @@ public class BackupCapabilityServiceTests
             Assert.That(reopened.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
             Assert.That(store.Get(BackupsPluginKeys.PluginId).IsAllowed, Is.False,
                 "the gate reports its decision; the refresher is what files it");
-            Assert.That(client.ListCallCount, Is.EqualTo(3), "every probe is a fresh read");
+            Assert.That(client.CapabilityProbeCallCount, Is.EqualTo(3), "every probe is a fresh read");
         });
     }
 

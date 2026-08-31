@@ -1,4 +1,7 @@
+using NSubstitute;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 
@@ -8,11 +11,27 @@ namespace Orleans.Lattice.Explorer.Tests.Tenants;
 /// The Tenants plugin's four-state gate: the surface exists only where the
 /// cluster serves tenancy, and only a validated platform operator may use it.
 /// </summary>
+/// <remarks>
+/// The gate reports facts and <see cref="ExplorerPluginAccessContract"/> picks
+/// the state, so a withheld grant reads as a denial for a signed-in caller and
+/// as a sign-in prompt for an anonymous one. These tests run signed in unless
+/// they say otherwise; the anonymous half is the defect issue #1854 fixes.
+/// </remarks>
 [TestFixture]
 public sealed class TenantsAccessGateTests
 {
     private static IExplorerPluginHostContext Context() =>
         PluginTestHost.Context(TenantsPluginKeys.PluginId);
+
+    private static IExplorerAuthSession SignedIn(bool authenticated = true)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(authenticated);
+        return session;
+    }
+
+    private static TenantsAccessGate Gate(ITenancyDomain domain, bool authenticated = true) =>
+        new(domain, SignedIn(authenticated));
 
     [Test]
     public void Constructor_null_domain_throws()
@@ -34,7 +53,7 @@ public sealed class TenantsAccessGateTests
     public async Task Probe_operator_on_a_tenancy_cluster_is_allowed()
     {
         var domain = new FakeTenancyDomain { Availability = ExplorerPluginAccess.Allowed, IsOperator = true };
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         var access = await gate.ProbeAsync(Context());
 
@@ -45,7 +64,7 @@ public sealed class TenantsAccessGateTests
     public async Task Probe_non_operator_on_a_tenancy_cluster_is_denied_but_visible()
     {
         var domain = new FakeTenancyDomain { Availability = ExplorerPluginAccess.Allowed, IsOperator = false };
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         var access = await gate.ProbeAsync(Context());
 
@@ -54,8 +73,29 @@ public sealed class TenantsAccessGateTests
             Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
             Assert.That(access.Reason, Is.EqualTo(TenantsAccessGate.NotOperatorReason));
 
-            // A denial greys the area out rather than hiding it, so a caller can
-            // see that a tenant surface exists and is not theirs.
+            // A denial demotes the area rather than hiding it, so a caller can
+            // see that a tenant surface exists and is not theirs - and it states
+            // a remedy rather than only that it is unavailable.
+            Assert.That(access.IsVisible, Is.True);
+            Assert.That(access.Remedy.Permission, Is.EqualTo("Admin"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
+        });
+    }
+
+    [Test]
+    public async Task Probe_non_operator_who_is_anonymous_is_asked_to_sign_in_rather_than_denied()
+    {
+        // The measured defect (issue #1854): signed out, the Tenants entry said
+        // "Tenants is not available for your account" - a statement about an
+        // account the visitor does not have. The recoverable answer is a sign-in.
+        var domain = new FakeTenancyDomain { Availability = ExplorerPluginAccess.Allowed, IsOperator = false };
+        var gate = Gate(domain, authenticated: false);
+
+        var access = await gate.ProbeAsync(Context());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
             Assert.That(access.IsVisible, Is.True);
         });
     }
@@ -69,7 +109,7 @@ public sealed class TenantsAccessGateTests
             IsOperator = true,
         };
 
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         var access = await gate.ProbeAsync(Context());
 
@@ -92,7 +132,7 @@ public sealed class TenantsAccessGateTests
             IsOperator = true,
         };
 
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         await gate.ProbeAsync(Context());
 
@@ -115,7 +155,7 @@ public sealed class TenantsAccessGateTests
             IsOperator = true,
         };
 
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         var access = await gate.ProbeAsync(Context());
 
@@ -138,7 +178,7 @@ public sealed class TenantsAccessGateTests
             IsOperator = true,
         };
 
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         var access = await gate.ProbeAsync(Context());
 
@@ -158,7 +198,7 @@ public sealed class TenantsAccessGateTests
         // default(ExplorerPluginAccess) is Denied with no reason, so an unprobed
         // or defaulted availability can never admit a caller.
         var domain = new FakeTenancyDomain { Availability = default, IsOperator = true };
-        var gate = new TenantsAccessGate(domain);
+        var gate = Gate(domain);
 
         var access = await gate.ProbeAsync(Context());
 

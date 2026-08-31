@@ -1,5 +1,7 @@
 using Grpc.Core;
+using NSubstitute;
 using Orleans.Lattice.Api.Telemetry;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Tests.Plugins;
@@ -12,6 +14,12 @@ namespace Orleans.Lattice.Explorer.Tests.Telemetry;
 /// <see cref="ExplorerPluginAccessState.Unavailable"/> so a telemetry plugin
 /// renders nothing, and no fault escapes a probe as an exception.
 /// </summary>
+/// <remarks>
+/// The probe reports facts and <see cref="ExplorerPluginAccessContract"/> picks
+/// the state, so a refusal it cannot classify reads as a denial for a signed-in
+/// caller and as a sign-in prompt for an anonymous one. These tests run signed
+/// in unless they say otherwise.
+/// </remarks>
 [TestFixture]
 public class TelemetryAvailabilityTests
 {
@@ -20,7 +28,17 @@ public class TelemetryAvailabilityTests
     [SetUp]
     public void SetUp() => _client = new FakeTelemetryQueryClient();
 
-    private TelemetryAvailability Create() => new(new TelemetryQueryService(_client));
+    private static IExplorerAuthSession SignedIn(bool authenticated = true)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(authenticated);
+        return session;
+    }
+
+    private TelemetryAvailability Create() => new(new TelemetryQueryService(_client), SignedIn());
+
+    private TelemetryAvailability CreateAnonymous() =>
+        new(new TelemetryQueryService(_client), SignedIn(authenticated: false));
 
     private static IExplorerPluginHostContext ConnectedContext()
     {
@@ -122,9 +140,23 @@ public class TelemetryAvailabilityTests
         Assert.Multiple(() =>
         {
             Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
-            Assert.That(access.IsVisible, Is.True, "a denial greys out rather than hides");
+            Assert.That(access.IsVisible, Is.True, "a denial is demoted rather than hidden");
             Assert.That(access.Reason, Is.EqualTo("not yours"));
+
+            // A denial states a remedy rather than only that it is unavailable.
+            Assert.That(access.Remedy.Permission, Is.EqualTo("Telemetry"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
         });
+    }
+
+    [Test]
+    public async Task A_refused_anonymous_caller_is_asked_to_sign_in_rather_than_denied()
+    {
+        _client.CatalogThrows = new LatticeAuthorizationDeniedException("not yours");
+
+        var access = await CreateAnonymous().ProbeAsync();
+
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
     }
 
     [Test]
