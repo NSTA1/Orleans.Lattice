@@ -319,7 +319,15 @@ individually** when:
 
 `MaxConcurrentAutoSplits` is enforced **per tree**: because `HotShardMonitorGrain` is keyed by tree id, each tree counts only its own in-flight splits. In a multi-tenant or many-tree cluster the summed drain I/O from many trees splitting at once can saturate the storage provider even though no single tree exceeds its own cap.
 
-`MaxClusterConcurrentAutoSplits` (default `null` = disabled) opts in to a cluster-wide admission gate - a singleton `IClusterSplitConcurrencyGrain` (well-known integer key `0`) - that caps the aggregate number of concurrently in-flight autonomic splits across all trees. The ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When the option is `null` the monitor never resolves or calls the gate, so the disabled path issues no extra RPC per tick and is byte-for-byte identical to running without the option.
+`MaxClusterConcurrentAutoSplits` (default `null` = disabled) opts in to a cluster-wide admission gate - a singleton `IClusterSplitConcurrencyGrain` (well-known integer key `0`) - that caps the aggregate number of concurrently in-flight autonomic splits across all trees. The ceiling is enforced **in addition to** each tree's `MaxConcurrentAutoSplits` and can only ever **lower** the number of splits a tree triggers, never raise it. When the option is `null` the monitor never requests a slot, so nothing is ever denied and the number of splits a tree starts is byte-for-byte identical to running without the option.
+
+A tree with the ceiling unset does still publish an observation-only footprint to that singleton while it has splits in flight, because the same grain is the cluster's readable split-activity source (see [Reading split activity](#reading-split-activity)). Those footprints are held in a separate list and never consume admission headroom - a tree that never opted into a shared budget must not be able to throttle one that did - and publication is edge-triggered, so a tree with nothing splitting issues no call at all.
+
+### Reading split activity
+
+Split progress is also exposed as a metric (`orleans.lattice.split.in_flight`), but metrics are write-only in-process: nothing can read one back to *decide* something. `ILatticeAdmin.GetSplitActivityAsync` is the readable counterpart, returning a cluster-wide `SplitActivityReport` (`InFlight`, `ReportingTrees`, `ObservedAt`, `AnyInFlight`) assembled from the footprints above. It costs a single call to the singleton and never fans out across trees or shards.
+
+Its first consumer is the `Orleans.Lattice.Scaling` scale-in safety gate, which suppresses scale-in while any split is in flight so a silo is never drained underneath one; it is equally useful to an operator tool or a deployment guard. Because the count comes from per-pass heartbeats it trails reality by at most one `HotShardSampleInterval` and is a lower bound, and footprints expire, so a silo lost mid-split cannot pin the count above zero indefinitely.
 
 ### Per-tree heartbeat footprints (self-healing)
 
