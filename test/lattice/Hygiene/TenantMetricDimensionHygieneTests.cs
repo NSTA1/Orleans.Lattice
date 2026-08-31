@@ -86,7 +86,8 @@ public sealed class TenantMetricDimensionHygieneTests
     ///   caller-chosen name, and an insecure-channel warning is keyed by peer and
     ///   transport; neither carries a tree.</item>
     ///   <item><b>Platform tooling</b> - the repository-context MCP surface meters
-    ///   its own usage, which is operator tooling rather than tenant traffic.</item>
+    ///   its own usage and its own retrieval readiness, which are properties of the
+    ///   operator-facing host process rather than of any tenant's traffic.</item>
     /// </list>
     /// Adding an instrument here is a deliberate, reviewable act: it declares the
     /// series invisible to every tenant-scoped telemetry query.
@@ -143,8 +144,17 @@ public sealed class TenantMetricDimensionHygieneTests
         "TreesMismatchedCounter",
         "TreesProbedCounter",
         "_callsCounter",
+        // repocontext.retrieval.ready_seconds - time from host start to the retrieval
+        // plane first serving. Readiness is a property of the HOST PROCESS, not of any
+        // tenant's data: the box either can serve semantic retrieval or it cannot, so
+        // attributing it to a tenant would be meaningless and would add cardinality for
+        // no signal.
+        "_readySeconds",
         "_replacedCounter",
         "_responseCounter",
+        // repocontext.retrieval.unavailable - vector-plane fault episodes. Same reason:
+        // the plane is unavailable for the whole process, not for one tenant.
+        "_unavailable",
     ];
 
     private static IReadOnlyList<MetricEmissionScanner.EmissionSite>? _sites;
