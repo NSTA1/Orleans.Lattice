@@ -248,11 +248,8 @@ internal sealed class LatticeCrossTreeTxGrain(
         // stamped onto every sub-saga's terminal records so the
         // receiver-side cross-tree visibility barrier sees an identical
         // participant set on every terminal of this operation.
-        var participantTreeIds = participants
-            .Select(p => p.TreeId)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(t => t, StringComparer.Ordinal)
-            .ToArray();
+        var participantTreeIds = CanonicalStringSet.SortedDistinctArray(
+            participants.Select(p => p.TreeId));
         var voteTasks = new Task<CrossTreePrepareVote>[participants.Count];
         for (var i = 0; i < participants.Count; i++)
         {

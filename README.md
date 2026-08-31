@@ -50,7 +50,7 @@ Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos
 | **Change history** | Per-key revision timeline for both tree shapes: successive values (with diffs) for last-writer-wins keys and decoded element-level member changes for CRDT keys. Read it from the core `ScanEntryHistoryAsync`, the read-only State API, or the Explorer's History tab with live-follow. Served from a durable, retention-bounded history view when enabled, or a best-effort retained-WAL-window fallback otherwise. | [Change History](docs/lattice/change-history.md) | [sample](samples/ChangeHistory/README.md) |
 | **Conflict-free merges** | Concurrent writes converge deterministically. | [State Primitives](docs/lattice/state-primitives.md) | [sample](samples/ConflictFreeMerges/README.md) |
 | **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/README.md) | [sample](samples/CrossClusterReplication/README.md) |
-| **Diagnostics** | `DiagnoseAsync` returns a per-tree health snapshot: per-shard depth, live keys, tombstones, hotness, and recent splits. | [Diagnostics](docs/lattice/diagnostics.md) | [sample](samples/Diagnostics/README.md) |
+| **Diagnostics** | `DiagnoseAsync` returns a per-tree health snapshot: per-shard depth, live keys, tombstones, hotness, and recent splits. | [Diagnostics](docs/lattice/diagnostics.md) - [Troubleshooting](docs/lattice/troubleshooting.md) | [sample](samples/Diagnostics/README.md) |
 | **Distributed lock** | `ILatticeLockGrain` is a FIFO-fair, cluster-wide distributed lock / lease keyed by name, with monotonic fencing tokens so a superseded holder is detectable by the resource it guards, and bounded leases so a crashed holder cannot wedge the lock forever. Non-blocking acquire, renew, release, and try-acquire. | [Distributed Lock](docs/lattice/distributed-lock.md) | [sample](samples/DistributedLock/README.md) |
 | **Durable cursors** | Server-checkpointed iterators that survive silo failovers, client restarts, and topology changes. Resume from the last yielded key automatically. | [Durable Cursors](docs/lattice/durable-cursors.md) | [sample](samples/DurableCursors/README.md) |
 | **Events** | Per-tree `LatticeTreeEvent` Orleans stream with operation-id correlation. | [Events](docs/lattice/events.md) | [sample](samples/Events/README.md) |
@@ -135,6 +135,7 @@ Use these documents for day-to-day use and operations:
 - [Compression](docs/lattice/compression.md) - the public `ILatticeCompressor` seam, `AddLatticeCompressor` registration, tag-space partitioning, and how to plug in a custom algorithm.
 - [Samples](docs/lattice/samples.md) - runnable sample projects exercising `ILattice`.
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
+- [Troubleshooting](docs/lattice/troubleshooting.md) - symptom-driven diagnosis: reading a `DiagnoseAsync` report, storage-provider write failures, split activity, slow scans, and stale reads.
 
 For internals (the "how"):
 
