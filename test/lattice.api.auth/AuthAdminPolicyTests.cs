@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Api.Auth.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public sealed class AuthAdminPolicyTests
+public sealed partial class AuthAdminPolicyTests
 {
     private const string Subject = "policy-subject";
     private const string Intruder = "intruder";

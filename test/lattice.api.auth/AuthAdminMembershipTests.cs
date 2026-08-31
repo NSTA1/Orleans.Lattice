@@ -112,6 +112,40 @@ public sealed class AuthAdminMembershipTests
     }
 
     [Test]
+    public async Task list_groups_emits_a_continuation_token_when_more_groups_remain()
+    {
+        // A page that fills exactly to the requested size has to resume from the
+        // last group it returned, which is the only path that evaluates the page
+        // key selector; a page-size of one forces it deterministically.
+        using (AsAdmin())
+        {
+            await _fixture.Admin.UpsertGroupAsync(new AuthGroup { GroupId = "page-group-a" });
+            await _fixture.Admin.UpsertGroupAsync(new AuthGroup { GroupId = "page-group-b" });
+
+            var first = await _fixture.Admin.ListGroupsAsync(new AuthPageRequest { PageSize = 1 });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first.Entries, Has.Count.EqualTo(1));
+                Assert.That(first.NextPageToken, Is.Not.Null);
+                Assert.That(first.NextPageToken, Is.EqualTo(first.Entries[0].GroupId));
+            });
+
+            var second = await _fixture.Admin.ListGroupsAsync(
+                new AuthPageRequest { PageSize = 1, PageToken = first.NextPageToken });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(second.Entries, Has.Count.EqualTo(1));
+                Assert.That(
+                    second.Entries[0].GroupId,
+                    Is.Not.EqualTo(first.Entries[0].GroupId),
+                    "the continuation token must resume strictly after the previous page");
+            });
+        }
+    }
+
+    [Test]
     public void upsert_null_group_throws()
     {
         using (AsAdmin())
