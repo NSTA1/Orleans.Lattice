@@ -40,7 +40,9 @@ public sealed class LatticeSchemaDeadLetterEntry
         ArgumentNullException.ThrowIfNull(reason);
         ArgumentOutOfRangeException.ThrowIfNegative(valueByteLength);
         Key = key;
-        ValuePreview = valuePreview;
+        // Defensively copy the caller-owned buffer so a mutation of the original
+        // array after construction cannot change this [Immutable] entry.
+        _valuePreview = (byte[])valuePreview.Clone();
         ValueByteLength = valueByteLength;
         Reason = reason;
         Source = source;
@@ -51,9 +53,14 @@ public sealed class LatticeSchemaDeadLetterEntry
     [Id(0)]
     public string Key { get; }
 
-    /// <summary>A bounded copy of the offending value's leading bytes.</summary>
+    // Serialized backing field for ValuePreview. The [Id] lives on the field so
+    // the public getter can hand back a defensive copy on every read, keeping the
+    // [Immutable] contract even against a caller that mutates the returned array.
     [Id(1)]
-    public byte[] ValuePreview { get; }
+    private readonly byte[] _valuePreview;
+
+    /// <summary>A bounded copy of the offending value's leading bytes.</summary>
+    public byte[] ValuePreview => (byte[])_valuePreview.Clone();
 
     /// <summary>
     /// The original value byte length. Greater than <see cref="ValuePreview"/>

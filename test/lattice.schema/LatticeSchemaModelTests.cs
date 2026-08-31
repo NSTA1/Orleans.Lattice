@@ -26,6 +26,19 @@ public class LatticeSchemaModelTests
     }
 
     [Test]
+    public void Policy_copies_rules_so_a_post_construction_mutation_does_not_change_it()
+    {
+        var rules = new List<LatticeSchemaRule> { LatticeSchemaRule.Json(), LatticeSchemaRule.MaxLength(8) };
+        var policy = new LatticeSchemaPolicy(rules);
+
+        // Mutating the caller's list after construction must not reach the
+        // [Immutable] policy.
+        rules.Clear();
+
+        Assert.That(policy.Rules, Has.Count.EqualTo(2));
+    }
+
+    [Test]
     public void Policy_null_rules_throws()
     {
         Assert.That(() => new LatticeSchemaPolicy(null!), Throws.ArgumentNullException);
@@ -45,6 +58,33 @@ public class LatticeSchemaModelTests
         Assert.That(entry.Reason, Is.EqualTo("bad"));
         Assert.That(entry.Source, Is.EqualTo(LatticeSchemaDeadLetterSource.Replication));
         Assert.That(entry.TimestampUtc, Is.EqualTo(ts));
+    }
+
+    [Test]
+    public void DeadLetterEntry_copies_the_preview_so_a_post_construction_mutation_does_not_change_it()
+    {
+        var preview = new byte[] { 1, 2, 3 };
+        var entry = new LatticeSchemaDeadLetterEntry(
+            "k", preview, 3, "r", LatticeSchemaDeadLetterSource.Restore, DateTimeOffset.UtcNow);
+
+        // Mutating the caller's buffer after construction must not reach the
+        // [Immutable] entry.
+        preview[0] = 99;
+
+        Assert.That(entry.ValuePreview, Is.EqualTo(new byte[] { 1, 2, 3 }));
+    }
+
+    [Test]
+    public void DeadLetterEntry_preview_getter_returns_a_copy_that_cannot_mutate_the_entry()
+    {
+        var entry = new LatticeSchemaDeadLetterEntry(
+            "k", new byte[] { 1, 2, 3 }, 3, "r", LatticeSchemaDeadLetterSource.Restore, DateTimeOffset.UtcNow);
+
+        // Mutating the array handed back by the getter must not change what the
+        // next read returns.
+        entry.ValuePreview[0] = 99;
+
+        Assert.That(entry.ValuePreview, Is.EqualTo(new byte[] { 1, 2, 3 }));
     }
 
     [Test]

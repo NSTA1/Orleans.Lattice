@@ -320,4 +320,63 @@ public sealed class LatticeAtomicWriteBuilderTests
             factory.BeginAtomicWrite("op").ForTree("orders").Set("k", Bytes("v")).CommitAsync(cts.Token));
         Assert.That(captured, Is.Empty);
     }
+
+    // === Defensive copy of caller-owned staged buffers ===
+
+    [Test]
+    public async Task Set_copies_the_value_so_a_post_stage_mutation_cannot_reach_the_committed_batch()
+    {
+        var factory = FactoryCapturing(out var captured);
+        var value = Bytes("v1");
+
+        var builder = factory.BeginAtomicWrite("op").ForTree("orders").Set("k", value);
+        // Mutate the caller's buffer after staging but before commit.
+        value[0] = (byte)'X';
+        await builder.CommitAsync();
+
+        var committed = captured.Single().Single().Entries.Single().Value;
+        Assert.That(Encoding.UTF8.GetString(committed), Is.EqualTo("v1"));
+    }
+
+    [Test]
+    public async Task SetWithDelta_copies_value_and_delta_so_a_post_stage_mutation_cannot_reach_the_committed_batch()
+    {
+        var factory = FactoryCapturing(out var captured);
+        var value = Bytes("v1");
+        var delta = Bytes("d1");
+
+        var builder = factory.BeginAtomicWrite("op").ForTree("orders").SetWithDelta("k", value, delta);
+        value[0] = (byte)'X';
+        delta[0] = (byte)'Y';
+        await builder.CommitAsync();
+
+        var batch = captured.Single().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(batch.Entries.Single().Value), Is.EqualTo("v1"));
+            Assert.That(Encoding.UTF8.GetString(batch.EntryDeltas!.Single()!), Is.EqualTo("d1"));
+        });
+    }
+
+    [Test]
+    public async Task Set_of_a_staged_crdt_write_copies_value_and_delta_so_a_post_stage_mutation_cannot_reach_the_committed_batch()
+    {
+        var factory = FactoryCapturing(out var captured);
+        var value = Bytes("v1");
+        var delta = Bytes("d1");
+
+        var builder = factory.BeginAtomicWrite("op")
+            .ForTree("orders")
+            .Set(new LatticeStagedCrdtWrite("k", value, delta));
+        value[0] = (byte)'X';
+        delta[0] = (byte)'Y';
+        await builder.CommitAsync();
+
+        var batch = captured.Single().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(batch.Entries.Single().Value), Is.EqualTo("v1"));
+            Assert.That(Encoding.UTF8.GetString(batch.EntryDeltas!.Single()!), Is.EqualTo("d1"));
+        });
+    }
 }
