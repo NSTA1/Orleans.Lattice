@@ -103,6 +103,25 @@ public class LatticeTagIndexIntegrationTests
     }
 
     [Test]
+    public async Task Key_AddAsync_deduplicates_repeated_tags_in_one_write()
+    {
+        var sfx = Guid.NewGuid().ToString("N");
+        var tree = Tree($"items-{sfx}");
+        await tree.SetAsync("a", Bytes("1"));
+        var idx = TagIndex(tree, $"colors-{sfx}");
+
+        // A single write carrying duplicate tags (and mixed order) must be
+        // normalized to the distinct set - this exercises NormalizeTags, whose
+        // small-set path dedups with an ordinal linear scan rather than a
+        // HashSet. The stored, sorted result is the distinct set regardless of
+        // input duplication or order.
+        await idx.Key("a").AddAsync(["red", "round", "red", "round", "red"]);
+
+        Assert.That(await idx.Key("a").GetAsync(), Is.EqualTo(new[] { "red", "round" }));
+        Assert.That(await idx.WithAnyTags("red", "round").CountAsync(), Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task Key_GetAsync_returns_current_tags_sorted()
     {
         var sfx = Guid.NewGuid().ToString("N");

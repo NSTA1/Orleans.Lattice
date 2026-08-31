@@ -235,12 +235,26 @@ internal sealed class TagIndexReconcileGrain(
             return;
         }
         var keep = new HashSet<string>(covered, StringComparer.Ordinal);
-        if (keep.Count == state.State.Baselines.Count
-            && state.State.Baselines.Keys.All(keep.Contains))
+        // Collect stale tree-ids in a single direct pass over the baseline
+        // dictionary. The prior form issued two separate LINQ passes over
+        // `.Keys` - a `.All(keep.Contains)` method-group delegate, then a
+        // `.Where(t => !keep.Contains(t)).ToList()` capturing closure plus Where
+        // iterator plus List - allocating that machinery on every reconcile
+        // begin even when nothing has drifted. Deferring the list until the
+        // first stale key means the common no-drift case allocates nothing
+        // beyond the membership set, and the drift case builds only the list.
+        List<string>? stale = null;
+        foreach (var (treeId, _) in state.State.Baselines)
+        {
+            if (!keep.Contains(treeId))
+            {
+                (stale ??= []).Add(treeId);
+            }
+        }
+        if (stale is null)
         {
             return;
         }
-        var stale = state.State.Baselines.Keys.Where(t => !keep.Contains(t)).ToList();
         foreach (var treeId in stale)
         {
             state.State.Baselines.Remove(treeId);
