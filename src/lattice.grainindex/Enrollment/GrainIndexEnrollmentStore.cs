@@ -131,6 +131,39 @@ internal sealed class GrainIndexEnrollmentStore : IGrainIndexEnrollmentStore
     }
 
     /// <inheritdoc />
+    public async IAsyncEnumerable<string> ScanSeenKeysAsync(
+        string indexName,
+        string firstKeyInclusive,
+        string lastKeyInclusive,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(indexName);
+        ArgumentNullException.ThrowIfNull(firstKeyInclusive);
+        ArgumentNullException.ThrowIfNull(lastKeyInclusive);
+
+        var prefix = GrainIndexRegistryKeys.SeenPrefix(indexName);
+
+        // Appending U+0000 to the inclusive upper bound yields the smallest
+        // string ordinally greater than it, which turns the caller's inclusive
+        // range into the half-open one the tree scans.
+        var startInclusive = string.Concat(prefix, firstKeyInclusive);
+        var endExclusive = string.Concat(prefix, lastKeyInclusive, "\u0000");
+
+        // The scope has to span the whole enumeration rather than only its
+        // first page, for the same reason the outbox scan's does: each
+        // continuation is a fresh grain call.
+        using var scope = EnterSystemOrigin();
+
+        var keys = _registry.KeysAsync(
+            startInclusive,
+            endExclusive,
+            cancellationToken: cancellationToken);
+
+        await foreach (var key in keys.WithCancellation(cancellationToken).ConfigureAwait(true))
+            yield return key[prefix.Length..];
+    }
+
+    /// <inheritdoc />
     public async IAsyncEnumerable<GrainIndexPendingProjection> ScanPendingAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {

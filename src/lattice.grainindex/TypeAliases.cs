@@ -89,4 +89,16 @@ internal static class TypeAliases
 
     /// <summary>Alias for <c>GrainIndexPendingProjection</c>.</summary>
     internal const string GrainIndexPendingProjection = "ol.gxo";
+
+    /// <summary>Alias for <see cref="GrainIndexBackfillStatus"/>.</summary>
+    internal const string GrainIndexBackfillStatus = "ol.gbs";
+
+    /// <summary>Alias for <see cref="GrainIndexBackfillBatchResult"/>.</summary>
+    internal const string GrainIndexBackfillBatchResult = "ol.gbb";
+
+    /// <summary>Alias for <c>GrainIndexBackfillCheckpoint</c>.</summary>
+    internal const string GrainIndexBackfillCheckpoint = "ol.gbc";
+
+    /// <summary>Alias for <c>IGrainIndexBackfillGrain</c>.</summary>
+    internal const string IGrainIndexBackfillGrain = "ol.gbg";
 }

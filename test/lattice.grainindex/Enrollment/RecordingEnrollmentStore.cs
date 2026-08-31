@@ -98,6 +98,36 @@ internal sealed class RecordingEnrollmentStore : IGrainIndexEnrollmentStore
     }
 
     /// <inheritdoc />
+    public async IAsyncEnumerable<string> ScanSeenKeysAsync(
+        string indexName,
+        string firstKeyInclusive,
+        string lastKeyInclusive,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(indexName);
+        ArgumentNullException.ThrowIfNull(firstKeyInclusive);
+        ArgumentNullException.ThrowIfNull(lastKeyInclusive);
+        Log.Add($"scanseen:{indexName}/{firstKeyInclusive}..{lastKeyInclusive}");
+
+        var prefix = $"{indexName}/";
+        var matches = Enrollments.Keys
+            .Where(k => k.StartsWith(prefix, StringComparison.Ordinal))
+            .Select(k => k[prefix.Length..])
+            .Where(k =>
+                string.CompareOrdinal(k, firstKeyInclusive) >= 0
+                && string.CompareOrdinal(k, lastKeyInclusive) <= 0)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var grainKey in matches)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return grainKey;
+            await Task.Yield();
+        }
+    }
+
+    /// <inheritdoc />
     public async IAsyncEnumerable<GrainIndexPendingProjection> ScanPendingAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {

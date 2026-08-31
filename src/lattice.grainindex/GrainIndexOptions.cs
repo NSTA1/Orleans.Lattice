@@ -44,6 +44,20 @@ public sealed class GrainIndexOptions
     public TimeSpan BackfillInterval { get; set; } = DefaultBackfillInterval;
 
     /// <summary>
+    /// Whether this host drives the index's background backfill on its own -
+    /// starting it at silo start and running its passes on a schedule. Defaults
+    /// to <c>true</c>.
+    /// <para>
+    /// Switching it off changes nothing about the crawl itself: its checkpoint
+    /// is still durable and its control primitives still work. It only means
+    /// this host does not schedule the passes, which is what a deployment that
+    /// drives the crawl deliberately - or a test that needs a pass to happen at
+    /// an exact moment - wants.
+    /// </para>
+    /// </summary>
+    public bool BackfillEnabled { get; set; } = true;
+
+    /// <summary>
     /// What silo start does when this index's declaration has drifted from the
     /// one its already-written entries were built under, on a field
     /// <see cref="GrainIndexDriftClassification"/> classifies as drift-breaking.

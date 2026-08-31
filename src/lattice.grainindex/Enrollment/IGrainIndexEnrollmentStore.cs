@@ -69,6 +69,27 @@ internal interface IGrainIndexEnrollmentStore
     Task WithdrawAsync(string indexName, string grainKey, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Streams the encoded grain keys one index has already recorded as
+    /// enrolled, within an inclusive key range, in ascending order.
+    /// </summary>
+    /// <remarks>
+    /// This is how a background backfill skips a batch's already-indexed grains
+    /// with one contiguous range read of the seen markers rather than a point
+    /// read per grain. The bounds are grain keys, not registry keys: the store
+    /// owns the marker key shape and composes them.
+    /// </remarks>
+    /// <param name="indexName">The index name. Must not be <c>null</c>.</param>
+    /// <param name="firstKeyInclusive">The lowest grain key to report. Must not be <c>null</c>.</param>
+    /// <param name="lastKeyInclusive">The highest grain key to report. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    /// <returns>The enrolled grain keys in the range, in ascending ordinal order.</returns>
+    IAsyncEnumerable<string> ScanSeenKeysAsync(
+        string indexName,
+        string firstKeyInclusive,
+        string lastKeyInclusive,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Streams every outstanding outbox entry, across every index, in key
     /// order.
     /// </summary>
