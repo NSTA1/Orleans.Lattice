@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.GrainIndex.Registry;
 using Orleans.Serialization;
+using Orleans.TestingHost;
 
 namespace Orleans.Lattice.GrainIndex.Tests.Registry;
 
@@ -44,6 +45,14 @@ public sealed class GrainIndexRegistryIntegrationTests
 
     private IGrainIndexRegistryStore Store() =>
         new GrainIndexRegistryStore(_fixture.Cluster.GrainFactory, _serializer);
+
+    /// <summary>
+    /// The silo's own service container. The services <c>AddLattice</c> and
+    /// <c>AddGrainIndex</c> register live here, not in the cluster client's
+    /// container that <c>TestCluster.ServiceProvider</c> exposes.
+    /// </summary>
+    private IServiceProvider SiloServices() =>
+        _fixture.Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
 
     /// <summary>
     /// Reconciles <paramref name="declare"/> against the live registry tree,
@@ -268,10 +277,12 @@ public sealed class GrainIndexRegistryIntegrationTests
     {
         const string Index = "integration-default-resolver";
 
-        // The resolver the core registers when no replication package is
-        // present. Reconciling against it must behave exactly as reconciling
-        // against no resolver at all.
-        var coreDefault = _fixture.Cluster.ServiceProvider.GetService<ILatticeMergeModeResolver>();
+        // The resolver AddLattice registers when no replication package is
+        // present. It lives in the SILO's container, not the client's, so it is
+        // reached through the silo host rather than TestCluster.ServiceProvider.
+        // Reconciling against it must behave exactly as reconciling against no
+        // resolver at all.
+        var coreDefault = SiloServices().GetService<ILatticeMergeModeResolver>();
 
         await ReconcileAsync(
             static builder => builder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
@@ -281,7 +292,7 @@ public sealed class GrainIndexRegistryIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(coreDefault, Is.Not.Null,
-                "The core registers a default resolver, so the guard always has something to ask.");
+                "AddLattice registers a default resolver, so the guard always has something to ask.");
             Assert.That(
                 coreDefault!.Resolve(GrainIndexTreeNames.ForIndex(Index)), Is.Null,
                 "The default reports every tree as not replicated.");
