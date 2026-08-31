@@ -579,6 +579,16 @@ public partial class BPlusLeafGrainTests
     private static long _ledgerAllocationProbeSink;
 
     /// <summary>
+    /// Escape hatch for the battery test's deliberately-allocating loop.
+    /// <b>Load-bearing: do not remove, and do not "simplify" the assignment
+    /// away.</b> Storing the allocated reference into a static field is what
+    /// makes the allocation genuinely escape, which is the only thing that
+    /// forces the JIT to put it on the heap. See
+    /// <see cref="Allocation_probe_detects_a_deliberately_allocating_loop"/>.
+    /// </summary>
+    private static object? _escapingAllocationSink;
+
+    /// <summary>
     /// Runs the loop built by <paramref name="prepare"/> at
     /// <paramref name="baseIterations"/> and at twice that, and returns how many
     /// more bytes the larger loop allocated. Zero means the loop body is
@@ -597,11 +607,13 @@ public partial class BPlusLeafGrainTests
     /// <para>
     /// <paramref name="prepare"/> returns a ready-to-run closure so per-size
     /// setup (building a ledger to resolve, say) happens outside the measured
-    /// window. The measurement is repeated and the smallest growth kept:
-    /// allocation noise is strictly additive, so the minimum is the closest
-    /// observation to the true cost. Growth is measured on the per-thread
-    /// counter, which is exact for these synchronous loops - unlike the
-    /// process-wide counter, it cannot pick up another thread's allocation.
+    /// window. The measurement is repeated and the smallest growth kept, then
+    /// clamped at zero: allocation noise is strictly additive, so the minimum is
+    /// the closest observation to the true cost, and a negative difference can
+    /// only mean the smaller loop absorbed more noise than the larger one.
+    /// Growth is measured on the per-thread counter, which is exact for these
+    /// synchronous loops - unlike the process-wide counter, it cannot pick up
+    /// another thread's allocation.
     /// </para>
     /// </summary>
     private static long AllocationGrowthBetweenLoopSizes(
@@ -629,13 +641,15 @@ public partial class BPlusLeafGrainTests
             var large = GC.GetAllocatedBytesForCurrentThread() - mark;
 
             var growth = large - small;
-            if (growth <= 0)
-                return 0;
             if (growth < smallestGrowth)
                 smallestGrowth = growth;
         }
 
-        return smallestGrowth;
+        // Every attempt is kept rather than short-circuiting on the first
+        // non-positive difference: a single noisy attempt on a loop that DOES
+        // allocate would otherwise be reported as allocation-free, which is the
+        // false negative the battery test exists to catch.
+        return smallestGrowth > 0 ? smallestGrowth : 0;
     }
 
     [Test]
@@ -646,16 +660,31 @@ public partial class BPlusLeafGrainTests
         // differential allocation probe that could never fail would silently
         // approve a regression, so prove it reports growth for a loop that
         // genuinely allocates once per iteration.
+        //
+        // THE ESCAPE IS LOAD-BEARING. Storing each allocation into the static
+        // _escapingAllocationSink is the whole point: it is what makes the
+        // reference outlive the iteration, and only an escaping allocation is
+        // guaranteed to land on the heap. A non-escaping allocation of constant
+        // size - `new long[1].Length`, say - is precisely what .NET 10's tier-1
+        // escape analysis is designed to stack-allocate or elide outright, so
+        // the loop would allocate nothing, this probe would truthfully report
+        // zero growth, and the battery test would become the very false
+        // negative it exists to prevent. That is not hypothetical: it is how
+        // this test first failed, and it is the mirror image of the tiering
+        // effect the differential probe above was written to survive (tier-1
+        // ADDING a one-off cost inside the window, versus tier-1 REMOVING the
+        // allocation under test). Do not replace this with a cheaper-looking
+        // allocation that does not escape.
         var growth = AllocationGrowthBetweenLoopSizes(
             iterations => () =>
             {
-                long sink = 0;
                 for (var i = 0; i < iterations; i++)
-                    sink += new long[1].Length;
-                _ledgerAllocationProbeSink = sink;
+                    _escapingAllocationSink = new object();
             },
             baseIterations: 2048);
 
+        Assert.That(_escapingAllocationSink, Is.Not.Null,
+            "the measured loop must have run and stored an escaping allocation");
         Assert.That(growth, Is.GreaterThan(0L),
             "the probe must report growth for a loop that allocates per iteration, "
             + "or it cannot catch a real per-record regression");
