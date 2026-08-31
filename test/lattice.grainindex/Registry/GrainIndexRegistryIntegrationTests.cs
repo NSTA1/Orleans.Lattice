@@ -47,14 +47,6 @@ public sealed class GrainIndexRegistryIntegrationTests
         new GrainIndexRegistryStore(_fixture.Cluster.GrainFactory, _serializer);
 
     /// <summary>
-    /// The silo's own service container. The services <c>AddLattice</c> and
-    /// <c>AddGrainIndex</c> register live here, not in the cluster client's
-    /// container that <c>TestCluster.ServiceProvider</c> exposes.
-    /// </summary>
-    private IServiceProvider SiloServices() =>
-        _fixture.Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
-
-    /// <summary>
     /// Reconciles <paramref name="declare"/> against the live registry tree,
     /// which is what a silo start does for the declaration set it is holding.
     /// </summary>
@@ -279,10 +271,10 @@ public sealed class GrainIndexRegistryIntegrationTests
 
         // The resolver AddLattice registers when no replication package is
         // present. It lives in the SILO's container, not the client's, so it is
-        // reached through the silo host rather than TestCluster.ServiceProvider.
-        // Reconciling against it must behave exactly as reconciling against no
-        // resolver at all.
-        var coreDefault = SiloServices().GetService<ILatticeMergeModeResolver>();
+        // reached through the fixture's silo-host accessor rather than
+        // TestCluster.ServiceProvider. Reconciling against it must behave
+        // exactly as reconciling against no resolver at all.
+        var coreDefault = _fixture.SiloServices.GetService<ILatticeMergeModeResolver>();
 
         await ReconcileAsync(
             static builder => builder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(

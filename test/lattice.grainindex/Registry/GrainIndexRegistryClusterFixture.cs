@@ -39,6 +39,14 @@ public sealed class GrainIndexRegistryClusterFixture
     /// <summary>The deployed cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
 
+    /// <summary>
+    /// The primary silo's service provider. The cluster's own
+    /// <see cref="TestCluster.ServiceProvider"/> is the <i>client's</i>, which
+    /// does not carry the silo-side registrations these tests inspect.
+    /// </summary>
+    public IServiceProvider SiloServices =>
+        Cluster.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services;
+
     /// <summary>Deploys the cluster.</summary>
     public async Task InitializeAsync()
     {
@@ -60,7 +68,10 @@ public sealed class GrainIndexRegistryClusterFixture
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            // The core lattice grains take reminders, so a test silo that omits
+            // this fails during cluster start-up rather than in a test body.
             siloBuilder.UseInMemoryReminderService();
+
             siloBuilder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
                 static cfg => cfg
                     .WithName(DeclaredIndexName)
