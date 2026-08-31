@@ -22,7 +22,9 @@ public static class ExplorerTenantServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the fail-closed tenant-view seam - the per-circuit tenant context,
-    /// the platform-operator gate, the active
+    /// the platform-operator gate, the accessible-tenant source behind the shell's
+    /// tenant scope control, the per-circuit scope-notice slot the shell announces
+    /// outcomes from, the active
     /// <see cref="IExplorerTenantView"/>, the identity-to-tenant resolver that
     /// establishes the caller's active tenant from their sign-in, and the
     /// operator-gated tenant switcher behind the shell's tenant selector - so the
@@ -37,6 +39,16 @@ public static class ExplorerTenantServiceCollectionExtensions
     /// <em>after</em> the administrative surface that supplies one (the Access
     /// feature registers a gate backed by its own administrator decision), so the
     /// real gate wins the <c>TryAdd</c>.
+    /// </para>
+    /// <para>
+    /// The accessible-tenant source follows the same rule: it defaults to the
+    /// fail-closed <see cref="ActiveTenantOnlyAccessibleTenantSource"/>, which
+    /// reports only the tenant the caller is already scoped to, because
+    /// enumerating a cluster's tenants belongs to the administrative surface that
+    /// already asks the cluster for them. Register a real
+    /// <see cref="IExplorerAccessibleTenantSource"/> before this call to have the
+    /// tenant scope control and the tenant administration area offer one list
+    /// rather than two.
     /// </para>
     /// </summary>
     /// <remarks>
@@ -58,6 +70,8 @@ public static class ExplorerTenantServiceCollectionExtensions
 
         services.TryAddScoped<IExplorerTenantContext, ExplorerTenantContext>();
         services.TryAddScoped<IExplorerTenantOperatorGate>(_ => DeniedExplorerTenantOperatorGate.Instance);
+        services.TryAddScoped<IExplorerAccessibleTenantSource, ActiveTenantOnlyAccessibleTenantSource>();
+        services.TryAddScoped<IExplorerTenantScopeNotices, ExplorerTenantScopeNotices>();
         services.TryAddScoped<IExplorerTenantView, ExplorerTenantView>();
         services.TryAddScoped<IExplorerTenantIdentityResolver, DefaultExplorerTenantIdentityResolver>();
         services.TryAddScoped<IExplorerTenantSwitcher, ExplorerTenantSwitcher>();

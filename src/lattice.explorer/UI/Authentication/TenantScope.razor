@@ -1,0 +1,419 @@
+@*
+    The shell's tenant scope control: which tenant the Explorer is reading as,
+    and whether the view spans every tenant the caller can reach.
+
+    Self-contained by design. It resolves everything it needs from the container
+    and takes no required parameter, so the chrome places it with
+    <TenantScope /> and owns none of its behaviour.
+
+    The shape follows how many tenants the caller can actually reach, because a
+    control that demands an id from memory is not a control:
+      - a validated operator with more than one reachable tenant -> a drop-down
+        of exactly those tenants, with the current one selected;
+      - one, or none, and the caller is not an operator and is on the reserved
+        default tenant -> nothing at all, so a single-tenant cluster looks
+        exactly like a non-tenant one;
+      - otherwise -> a quiet, non-interactive statement of the current tenant.
+
+    Only an operator is ever offered the drop-down, because only an operator may
+    switch: the seam refuses anyone else, so offering the control to anyone else
+    would promise something it cannot do.
+
+    Every outcome is announced. The seam's fail-closed bool used to be discarded
+    by the only caller, so a refusal and a success looked identical. Now a
+    refusal, an unreachable tenant, an applied switch and an abandoned remembered
+    tenant each reach a live region as well as the page.
+*@
+
+@using Orleans.Lattice.Explorer.Core.Tenancy
+@using Orleans.Lattice.Explorer.Core.Vocabulary
+@implements IDisposable
+@inject IServiceProvider Services
+@inject IExplorerAuthSession AuthSession
+
+@if (_render)
+{
+    <div class="@_hostClass">
+        @if (_shape == TenantAffordance.Picker)
+        {
+            <label class="lx-visually-hidden" for="@SelectElementId">@ExplorerVocabulary.ActiveTenantLabel</label>
+            <select id="@SelectElementId"
+                    class="lx-shell-tenant-input"
+                    aria-describedby="@ActiveTenantDescribedBy"
+                    @onchange="OnTenantSelectedAsync">
+                @* Indexed rather than foreach: the list is typed as IReadOnlyList,
+                   so foreach would allocate an interface enumerator on every
+                   render pass of a control the shell re-renders freely. *@
+                @for (var i = 0; i < _accessible.Count; i++)
+                {
+                    var tenant = _accessible[i];
+                    <option value="@tenant.Value" selected="@(string.Equals(tenant.Value, _activeTenantValue, StringComparison.Ordinal))">
+                        @tenant.Value
+                    </option>
+                }
+            </select>
+        }
+        else if (_shape == TenantAffordance.Quiet)
+        {
+            <span class="lx-shell-tenant">
+                <span class="lx-shell-tenant-label">@ExplorerVocabulary.ActiveTenantLabel</span>
+                <span class="lx-shell-tenant-id" aria-describedby="@ActiveTenantDescribedBy">@_activeTenantValue</span>
+            </span>
+        }
+
+        @if (_shape != TenantAffordance.Hidden)
+        {
+            <LatticeHelp Id="@ActiveTenantHelpId"
+                         Term="@ActiveTenantTerm.Label"
+                         Explanation="@ActiveTenantTerm.Explanation" />
+        }
+
+        @if (_isDefaultTenant)
+        {
+            <LatticeHelp Id="@DefaultTenantHelpId"
+                         Term="@DefaultTenantTerm.Label"
+                         Explanation="@DefaultTenantTerm.Explanation" />
+        }
+
+        @if (_isOperator)
+        {
+            <label class="lx-shell-tenant-alltenants">
+                <input type="checkbox"
+                       checked="@_allTenants"
+                       aria-describedby="@AllTenantsDescribedBy"
+                       @onchange="OnAllTenantsChangedAsync" />
+                @ExplorerVocabulary.AllTenantsLabel
+            </label>
+            <LatticeHelp Id="@AllTenantsHelpId"
+                         Term="@AllTenantsTerm.Label"
+                         Explanation="@AllTenantsTerm.Explanation" />
+        }
+
+        @* Both regions are always in the DOM: an assistive technology announces a
+           live region's text when it changes, not when the region appears. They
+           carry no class of their own - the chrome owns this cluster's styling and
+           reaches them as .lx-shell-tenant-switch [role=status] / [role=alert]. *@
+        <span role="status">@_politeNotice</span>
+        <span role="alert">@_assertiveNotice</span>
+    </div>
+}
+
+@code {
+    /// <summary>What shape the tenant affordance takes for the current caller.</summary>
+    private enum TenantAffordance
+    {
+        /// <summary>Nothing renders: a single-tenant cluster looks like a non-tenant one.</summary>
+        Hidden,
+
+        /// <summary>A non-interactive statement of the current tenant: there is nothing to choose between.</summary>
+        Quiet,
+
+        /// <summary>A drop-down of the tenants this caller can reach.</summary>
+        Picker,
+    }
+
+    private const string SelectElementId = "lx-tenant-scope-select";
+    private const string ActiveTenantHelpId = "lx-tenant-scope-active";
+    private const string AllTenantsHelpId = "lx-tenant-scope-all";
+    private const string DefaultTenantHelpId = "lx-tenant-scope-default";
+    private const string HostClass = "lx-shell-tenant-switch";
+
+    // The glossary term for the reserved default tenant if the vocabulary module
+    // defines one, and the general definition of a tenant until it does. Probed
+    // rather than written here, because a second wording for one concept is the
+    // defect the shared vocabulary exists to close.
+    private const string DefaultTenantTermId = "default-tenant";
+
+    private static readonly ExplorerTerm ActiveTenantTerm = ExplorerGlossary.Get(ExplorerTermIds.ActiveTenant);
+    private static readonly ExplorerTerm AllTenantsTerm = ExplorerGlossary.Get(ExplorerTermIds.AllTenants);
+
+    private static readonly ExplorerTerm DefaultTenantTerm =
+        ExplorerGlossary.Find(DefaultTenantTermId) ?? ExplorerGlossary.Get(ExplorerTermIds.Tenant);
+
+    // Composed once: LatticeHelp.ExplanationElementId concatenates, and these are
+    // read on every render pass.
+    private static readonly string ActiveTenantDescribedBy = LatticeHelp.ExplanationElementId(ActiveTenantHelpId);
+    private static readonly string AllTenantsDescribedBy = LatticeHelp.ExplanationElementId(AllTenantsHelpId);
+
+    private IExplorerTenantSwitcher? _switcher;
+    private IExplorerTenantIdentityResolver? _resolver;
+    private IExplorerAccessibleTenantSource? _tenantSource;
+    private IExplorerTenantScopeNotices? _notices;
+    private IExplorerShellPreferences? _preferences;
+
+    private bool _active;
+    private bool _render;
+    private bool _subscribed;
+    private bool _restoredVisibility;
+
+    private TenantAffordance _shape;
+    private bool _isOperator;
+    private bool _isDefaultTenant;
+    private bool _allTenants;
+    private ExplorerTenantId? _activeTenant;
+    private string? _activeTenantValue;
+    private string? _politeNotice;
+    private string? _assertiveNotice;
+
+    // Held across refreshes and iterated by the render path, never re-fetched per
+    // render: the source may reach the cluster.
+    private IReadOnlyList<ExplorerTenantId> _accessible = Array.Empty<ExplorerTenantId>();
+
+    /// <summary>
+    /// Additional CSS classes on the control's host element, so the chrome can
+    /// place it without the control knowing where it sits.
+    /// </summary>
+    [Parameter] public string? Class { get; set; }
+
+    private string _hostClass = HostClass;
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() =>
+        _hostClass = string.IsNullOrEmpty(Class) ? HostClass : HostClass + " " + Class;
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        // Resolve the tenancy seams optionally: when tenant scoping is not enabled
+        // none is registered, so this component stays inert and renders nothing -
+        // the shell is byte-for-byte unchanged from a non-tenant deployment.
+        _switcher = Services.GetService(typeof(IExplorerTenantSwitcher)) as IExplorerTenantSwitcher;
+        _resolver = Services.GetService(typeof(IExplorerTenantIdentityResolver)) as IExplorerTenantIdentityResolver;
+        _tenantSource = Services.GetService(typeof(IExplorerAccessibleTenantSource)) as IExplorerAccessibleTenantSource;
+        _notices = Services.GetService(typeof(IExplorerTenantScopeNotices)) as IExplorerTenantScopeNotices;
+        _preferences = Services.GetService(typeof(IExplorerShellPreferences)) as IExplorerShellPreferences;
+
+        if (_switcher is null || !_switcher.IsActive)
+        {
+            return;
+        }
+
+        _active = true;
+        AuthSession.AuthenticationChanged += OnAuthenticationChanged;
+        _subscribed = true;
+        await RefreshAsync();
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A prerender pass cannot reach browser storage, so the remembered tenant is
+    /// unreadable until the circuit is live. Hydrating here and refreshing once
+    /// more is what makes the scope survive a reload rather than only a
+    /// re-render.
+    /// </remarks>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !_active || _preferences is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _preferences.EnsureLoadedAsync();
+        }
+        catch
+        {
+            // No durable store reachable: the in-memory scope still stands.
+        }
+
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Re-reads the caller's scope from the seams and recomputes the control's
+    /// shape. Establishing the tenant is the resolver's job and it never
+    /// overwrites a switch, so calling this straight after a mutation reports the
+    /// new scope rather than reverting it.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        if (_switcher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_resolver is not null)
+            {
+                await _resolver.ResolveAsync();
+            }
+
+            _isOperator = await _switcher.IsOperatorAsync();
+
+            await RestoreVisibilityAsync();
+
+            _accessible = _tenantSource is null
+                ? Array.Empty<ExplorerTenantId>()
+                : await _tenantSource.GetAccessibleTenantsAsync();
+
+            _activeTenant = _switcher.ActiveTenant;
+            _activeTenantValue = _activeTenant?.Value;
+            _isDefaultTenant = _activeTenant == ExplorerTenantId.Default;
+            _allTenants = _switcher.RequestedVisibility == ExplorerTenantVisibility.AllTenants;
+            _shape = ChooseAffordance();
+            _render = _shape != TenantAffordance.Hidden || _isOperator;
+            ReadNotice();
+        }
+        catch
+        {
+            // The tenant control is best-effort presentation: a failure to resolve
+            // must never disrupt the shell. The server stays the enforcement point.
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// The control's shape for the current caller. A picker is offered only when
+    /// there is genuinely a choice; the reserved default tenant alone is not
+    /// worth a control, which is what keeps a non-tenant deployment unchanged.
+    /// </summary>
+    private TenantAffordance ChooseAffordance()
+    {
+        // Fail-closed by construction: only a validated operator may switch, so
+        // only a validated operator is offered a control that switches. Rendering
+        // a picker that always refuses would be dishonest as well as useless.
+        if (_isOperator && _accessible.Count > 1)
+        {
+            return TenantAffordance.Picker;
+        }
+
+        if (_activeTenant is not { } tenant)
+        {
+            return TenantAffordance.Hidden;
+        }
+
+        // An operator is always told which tenant they are reading as, because
+        // they can move between them; anyone else only when it is not the default.
+        return _isOperator || tenant != ExplorerTenantId.Default
+            ? TenantAffordance.Quiet
+            : TenantAffordance.Hidden;
+    }
+
+    /// <summary>
+    /// Re-applies the remembered all-tenant setting once the durable store has
+    /// hydrated, so the view spans what it spanned last session.
+    /// </summary>
+    /// <remarks>
+    /// Attempted only for a validated operator. The switcher would refuse anyone
+    /// else anyway - the fail-closed guarantee does not depend on this check -
+    /// but attempting it would announce a refusal for something the caller did
+    /// not just do.
+    /// </remarks>
+    private async Task RestoreVisibilityAsync()
+    {
+        if (_restoredVisibility || !_isOperator || _preferences is null || _switcher is null)
+        {
+            return;
+        }
+
+        if (!_preferences.IsLoaded)
+        {
+            // Reading an unhydrated store reports "nothing remembered"; re-attempt
+            // once it has loaded rather than settling on that.
+            return;
+        }
+
+        _restoredVisibility = true;
+
+        if (!_preferences.GetOrDefault(ExplorerPreferenceKeys.AllTenantsVisible, false) ||
+            _switcher.RequestedVisibility == ExplorerTenantVisibility.AllTenants)
+        {
+            return;
+        }
+
+        // Restoring what the caller already chose is not news, so put back
+        // whatever was actually worth announcing.
+        var pending = _notices?.Current;
+        await _switcher.SetVisibilityAsync(ExplorerTenantVisibility.AllTenants);
+
+        if (_notices is null)
+        {
+            return;
+        }
+
+        if (pending is null)
+        {
+            _notices.Clear();
+        }
+        else
+        {
+            _notices.Publish(pending);
+        }
+    }
+
+    private void ReadNotice()
+    {
+        var notice = _notices?.Current;
+        _politeNotice = notice is { IsDenial: false } ? notice.Message : null;
+        _assertiveNotice = notice is { IsDenial: true } ? notice.Message : null;
+    }
+
+    private async Task OnTenantSelectedAsync(ChangeEventArgs args)
+    {
+        if (_switcher is null || args.Value is not string selected || string.IsNullOrWhiteSpace(selected))
+        {
+            return;
+        }
+
+        if (string.Equals(selected, _activeTenantValue, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!IsAccessible(selected))
+        {
+            // Never scope to a tenant this caller cannot reach - and say so,
+            // rather than leaving the control looking as though it did nothing.
+            _notices?.Publish(ExplorerTenantScopeNotice.Unknown(selected));
+            await RefreshAsync();
+            return;
+        }
+
+        // The switcher is fail-closed and states its own outcome; the refresh
+        // below reports whichever one it published.
+        await _switcher.SwitchTenantAsync(new ExplorerTenantId(selected));
+        await RefreshAsync();
+    }
+
+    private async Task OnAllTenantsChangedAsync(ChangeEventArgs args)
+    {
+        if (_switcher is null)
+        {
+            return;
+        }
+
+        var requested = args.Value is true
+            ? ExplorerTenantVisibility.AllTenants
+            : ExplorerTenantVisibility.ActiveTenant;
+
+        await _switcher.SetVisibilityAsync(requested);
+        await RefreshAsync();
+    }
+
+    private bool IsAccessible(string tenantId)
+    {
+        for (var i = 0; i < _accessible.Count; i++)
+        {
+            if (string.Equals(_accessible[i].Value, tenantId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void OnAuthenticationChanged() => _ = RefreshAsync();
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (_subscribed)
+        {
+            AuthSession.AuthenticationChanged -= OnAuthenticationChanged;
+        }
+    }
+}
