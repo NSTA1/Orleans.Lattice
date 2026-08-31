@@ -657,21 +657,49 @@ internal sealed partial class BPlusLeafGrain
         // would also re-fold the digest incrementally on every row.
         // We instead invalidate the digest below and let the lazy
         // full-walk recompute it.
-        Cache.Clear();
-        // Encoding-agnostic streaming decode. A binary blob decodes each row
-        // straight into the cache with no intermediate row collection; a
-        // legacy blob walks its row list exactly as before. The payload was
-        // validated above, so a mid-stream parse failure is impossible here
-        // and would throw rather than silently truncate the snapshot.
-        foreach (var row in blob.EnumerateRows())
+        //
+        // Bounded hydration (issue #1839). When the blob carries a binary
+        // frame and partial hydration is enabled, attach the frame as the
+        // cache's lazily hydrated backing instead of decoding it: the cache
+        // then reports the whole snapshot's row count, footprint and live
+        // count immediately, and materialises entry ranges out of the frame
+        // only as reads require them. Activation cost stops being a function
+        // of blob size. The attach can decline (a legacy row list, or a frame
+        // whose rows are not strictly ascending and therefore not safely
+        // seekable), and declining simply falls through to the full decode
+        // below - the pre-#1839 behaviour, byte for byte.
+        //
+        // This changes nothing about coverage. RecordDurableSnapshotCoverage
+        // ran above off the blob's own offsets, and a capture materialises
+        // every row before it writes, so a partially hydrated leaf can never
+        // stamp coverage for rows it does not hold.
+        var hydrationOptions = await GetOptionsAsync();
+        var attached = false;
+        if (hydrationOptions.LeafPartialHydrationEnabled
+            && blob.HasBinaryRowPayload()
+            && blob.EncodedRows is { Length: > 0 } frame)
         {
-            Cache.StoreRow(row.Key, row.Value);
-            if (row.MergeMode is { } mode)
+            attached = Cache.TryAttachSnapshot(frame, hydrationOptions.LeafHydrationResidentBytes);
+        }
+
+        if (!attached)
+        {
+            Cache.Clear();
+            // Encoding-agnostic streaming decode. A binary blob decodes each row
+            // straight into the cache with no intermediate row collection; a
+            // legacy blob walks its row list exactly as before. The payload was
+            // validated above, so a mid-stream parse failure is impossible here
+            // and would throw rather than silently truncate the snapshot.
+            foreach (var row in blob.EnumerateRows())
             {
-                // Recover the durable per-key merge-mode discriminator from
-                // the checkpoint so a freeze/capture after a rehydrate-from-
-                // checkpoint (without a full WAL replay) stays mode-faithful.
-                Cache.SetMergeMode(row.Key, mode);
+                Cache.StoreRow(row.Key, row.Value);
+                if (row.MergeMode is { } mode)
+                {
+                    // Recover the durable per-key merge-mode discriminator from
+                    // the checkpoint so a freeze/capture after a rehydrate-from-
+                    // checkpoint (without a full WAL replay) stays mode-faithful.
+                    Cache.SetMergeMode(row.Key, mode);
+                }
             }
         }
 

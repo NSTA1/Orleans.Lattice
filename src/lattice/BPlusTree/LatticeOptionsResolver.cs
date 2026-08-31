@@ -595,6 +595,8 @@ internal sealed class LatticeOptionsResolver(
             LeafSnapshotMargin = baseOptions.LeafSnapshotMargin,
             LeafSnapshotReClassifyEveryNCheckpoints = baseOptions.LeafSnapshotReClassifyEveryNCheckpoints,
             LeafSnapshotBinaryEncodingEnabled = baseOptions.LeafSnapshotBinaryEncodingEnabled,
+            LeafPartialHydrationEnabled = baseOptions.LeafPartialHydrationEnabled,
+            LeafHydrationResidentBytes = baseOptions.LeafHydrationResidentBytes,
             MinTombstoneRatioForCompaction = baseOptions.MinTombstoneRatioForCompaction,
             MaxLeafEntriesBeforeForcedCompaction = baseOptions.MaxLeafEntriesBeforeForcedCompaction,
             CompactionTriggerCooldown = baseOptions.CompactionTriggerCooldown,

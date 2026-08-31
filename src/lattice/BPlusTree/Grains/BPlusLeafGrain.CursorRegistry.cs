@@ -344,12 +344,19 @@ internal sealed partial class BPlusLeafGrain
     /// empty partition (safe to release its WAL trim block) from one that holds
     /// committed-but-not-yet-checkpointed data (which still depends on the whole
     /// WAL and must keep its block).
+    /// <para>
+    /// Walks keys only. The answer depends on nothing but the keys, so pulling
+    /// the payload of a lazily hydrated snapshot through this - on a path that
+    /// runs on every checkpoint flush and at deactivation - would force a leaf
+    /// to materialise itself in full to answer a question about routing, which
+    /// is exactly the cost bounded hydration exists to avoid.
+    /// </para>
     /// </summary>
     private bool[] ComputePartitionsWithLiveData(int partitionCount)
     {
         var hasData = new bool[partitionCount];
         var remaining = partitionCount;
-        foreach (var (key, _) in Cache.EnumerateRows())
+        foreach (var key in Cache.EnumerateKeysUnordered())
         {
             var partition = WalPartitionHash.Compute(key, partitionCount);
             if (!hasData[partition])

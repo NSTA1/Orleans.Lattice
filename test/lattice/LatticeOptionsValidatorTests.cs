@@ -53,6 +53,25 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.FailureMessage, Does.Contain("KeysPageSize"));
     }
 
+    [TestCase(0L)]
+    [TestCase(1L)]
+    [TestCase(4L * 1024 * 1024)]
+    public void LeafHydrationResidentBytes_zero_or_positive_succeeds(long value)
+    {
+        var result = Validate(o => o.LeafHydrationResidentBytes = value);
+        Assert.That(result.Succeeded, Is.True,
+            "0 leaves the resident snapshot footprint unbounded; a positive value caps it");
+    }
+
+    [TestCase(-1L)]
+    [TestCase(long.MinValue)]
+    public void LeafHydrationResidentBytes_negative_fails(long value)
+    {
+        var result = Validate(o => o.LeafHydrationResidentBytes = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain("LeafHydrationResidentBytes"));
+    }
+
     [Test]
     public void MaxKeyLength_null_succeeds()
     {

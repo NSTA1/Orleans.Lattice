@@ -48,6 +48,13 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "(0 persists the leaf-access model only on clean deactivation; a positive value is the coalescing "
                 + "window in milliseconds for the shard-root flush timer).");
         }
+        if (options.LeafHydrationResidentBytes < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafHydrationResidentBytes)} must be greater than or equal to 0 "
+                + "(0 leaves a partially hydrated leaf's resident snapshot footprint unbounded so nothing is ever "
+                + "evicted; a positive value caps it and evicts the least recently used clean hydrated ranges).");
+        }
         if (options.MaxClusterConcurrentAutoSplits is { } maxClusterConcurrentAutoSplits && maxClusterConcurrentAutoSplits < 1)
         {
             return ValidateOptionsResult.Fail(
