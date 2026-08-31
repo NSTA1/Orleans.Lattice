@@ -209,19 +209,19 @@ public sealed class LatticeAtomicWriteBuilderTests
     }
 
     [Test]
-    public void SetWhere_rejects_a_second_predicate_on_the_same_tree_even_when_it_is_identical()
+    public void SetWhere_admits_a_restatement_of_an_identical_predicate_on_the_same_tree()
     {
         var factory = Substitute.For<IGrainFactory>();
         var builder = factory.BeginAtomicWrite("op")
             .ForTree("orders")
             .SetWhere<Doc>("a", new Doc("ada", 7), d => d.Score > 3);
 
-        // NOTE: the guard is `!existing.Equals(ir)`, which is meant to admit a
-        // restatement of the same predicate for a second key in the slice. It does
-        // not, because LatticePredicateNode is a record struct whose Children array
-        // compares by reference - see issue #1827. This test pins the behaviour as it
-        // actually is; update it when that issue is fixed.
-        Assert.Throws<InvalidOperationException>(
+        // The guard is `!existing.Equals(ir)`, which admits a restatement of the
+        // same predicate for a second key in the slice. Since issue #1827 gave
+        // LatticePredicateNode structural equality, two compilations of the same
+        // predicate compare equal, so restating it is idempotent rather than a
+        // conflict.
+        Assert.DoesNotThrow(
             () => builder.SetWhere<Doc>("b", new Doc("bob", 9), d => d.Score > 3));
     }
 

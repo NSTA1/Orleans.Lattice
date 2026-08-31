@@ -780,11 +780,16 @@ internal sealed class LatticeTreeAdmin : ILatticeTreeAdmin
 
         // Bulk-load is a bottom-up tree-creation primitive, so require the target to
         // start empty: an "already exists / has data" is surfaced as a distinct, typed
-        // TreeNotEmptyException rather than a silent right-edge append. The cheap
-        // per-shard projection distinguishes an empty tree from a populated one; a
-        // tree carrying only tombstones is likewise treated as non-empty.
+        // TreeNotEmptyException rather than a silent right-edge append. The per-shard
+        // projection distinguishes an empty tree from a populated one; a tree carrying
+        // only tombstones is likewise treated as non-empty. The probe must be deep:
+        // the shallow projection only counts live keys (it never populates
+        // TotalTombstones), so a shallow probe would let an all-deleted, tombstone-only
+        // tree masquerade as empty. Deep is not asymptotically dearer here - both modes
+        // walk the whole leaf chain; deep just reads per-leaf stats (live + tombstones)
+        // instead of a live-only count.
         var diagnostics = await _grainFactory.GetGrain<ILattice>(effectiveTreeId)
-            .DiagnoseAsync(deep: false, cancellationToken)
+            .DiagnoseAsync(deep: true, cancellationToken)
             .ConfigureAwait(false);
         if (diagnostics.TotalLiveKeys > 0 || diagnostics.TotalTombstones > 0)
         {
