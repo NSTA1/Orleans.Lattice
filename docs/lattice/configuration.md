@@ -763,7 +763,7 @@ Prefer the advisory-first workflow: dry-run with [`AdmissionAdvisoryLiveKeys`](#
 
 Absolute ceiling on how many physical shards **autonomic growth** may give one tree (default: `256`). It bounds adaptive splitting only; an explicit `ILattice.ReshardAsync` is an operator decision and is not capped by it.
 
-The ceiling is a backstop, not a tuning knob. Without one, a pathological admission sequence has no terminating condition, and the deployment that motivated this work reached over a thousand leaves on trees sized for dozens - against exactly 64 on every tree the embedder did not write - a shape that made every cold start pay for a grain activation per leaf that relieved nothing. (The measured census counted leaf grains, which is the unit the cold-start cost is actually paid in; the shard ceiling bounds the splitting that multiplies them.)
+The ceiling is a backstop, not a tuning knob. Without one, a pathological admission sequence has no terminating condition. Note the deployment that motivated this work turned out **not** to have hit it: measurement on a restored copy found every tree, including the three the embedder writes, sitting at exactly the base 64 physical shards. The thousand-plus figure reported for those trees counts **leaf grains** - B+ tree nodes inside a shard - not shards, and a leaf count is not what adaptive split creates or what consolidation folds. The ceiling therefore guards against a failure mode that is real in principle but was not the one observed; the observed cold-start cost was a grain activation per leaf, which bounded hydration and the approximate index address directly.
 
 **Cost:** none. It is one comparison per admission.
 
