@@ -24,6 +24,18 @@ internal sealed class LeafSnapshotStorageGrain(
     IGrainContext IGrainBase.GrainContext => context;
 
     /// <summary>
+    /// True when <paramref name="blob"/> is a snapshot a leaf can actually
+    /// rehydrate from: it carries a durably-captured prefix <b>and</b> its row
+    /// payload reads back in full. A truncated or corrupt row payload - in
+    /// either encoding - must present as "no snapshot", never as a snapshot
+    /// with fewer rows. A blob reporting coverage it cannot reproduce would let
+    /// the coverage-gated WAL GC trim the last durable copy of that prefix, so
+    /// this is a fail-closed gate rather than a nicety.
+    /// </summary>
+    private static bool HasUsableSnapshot(LeafSnapshotBlob blob)
+        => HasCapturedPrefix(blob) && blob.ValidateRowPayload();
+
+    /// <summary>
     /// True when <paramref name="blob"/> carries a durably-captured prefix that
     /// a leaf can rehydrate from. The scalar <see cref="LeafSnapshotBlob.SnapshotOffset"/>
     /// only describes partition 0; under the default <c>WalPartitions = 8</c> a
@@ -88,6 +100,18 @@ internal sealed class LeafSnapshotStorageGrain(
         // non-decreasing and the retained rows back the higher coverage; the
         // rehydrate path already relies on exactly this ("Coverage is monotonic
         // and we always load the latest blob" in TryRehydrateFromSnapshotAsync).
+        //
+        // Refuse an incoming blob whose own row payload does not read back:
+        // overwriting a good durable snapshot with an unreadable one would
+        // strand the coverage it already authorised the GC to trim to. An
+        // unreadable incoming blob can only be a caller bug, and dropping the
+        // write leaves the last known-good snapshot in place for the next
+        // capture to supersede.
+        if (!blob.ValidateRowPayload())
+        {
+            return;
+        }
+
         state.State = MergeMonotone(state.State, blob);
         await state.WriteStateAsync().ConfigureAwait(true);
     }
@@ -104,10 +128,13 @@ internal sealed class LeafSnapshotStorageGrain(
     /// </summary>
     private static LeafSnapshotBlob MergeMonotone(LeafSnapshotBlob existing, LeafSnapshotBlob incoming)
     {
-        // No durable prefix yet (first capture, or post-clear): the incoming blob
+        // No durable prefix yet (first capture, or post-clear), or a stored
+        // blob whose row payload no longer reads back: the incoming blob
         // is authoritative verbatim. Preserves the exact first-save contract the
-        // capture round-trip tests and the byte-size lazy back-fill rely on.
-        if (!HasCapturedPrefix(existing))
+        // capture round-trip tests and the byte-size lazy back-fill rely on, and
+        // makes a corrupt stored blob heal on the next capture instead of
+        // poisoning the merge.
+        if (!HasUsableSnapshot(existing))
         {
             return incoming;
         }
@@ -147,12 +174,15 @@ internal sealed class LeafSnapshotStorageGrain(
             mergedOffsets[p] = Math.Max(EffectiveOffset(existing, p), EffectiveOffset(incoming, p));
         }
 
-        var mergedRows = new Dictionary<string, LeafSnapshotRow>(StringComparer.Ordinal);
-        foreach (var row in existing.Rows)
+        // Ordinal-sorted so the merged row set carries the same ascending key
+        // order a capture produces, which is what the binary frame's index
+        // table is required to be in for a key-range seek to be meaningful.
+        var mergedRows = new SortedDictionary<string, LeafSnapshotRow>(StringComparer.Ordinal);
+        foreach (var row in existing.EnumerateRows())
         {
             mergedRows[row.Key] = row;
         }
-        foreach (var row in incoming.Rows)
+        foreach (var row in incoming.EnumerateRows())
         {
             if (mergedRows.TryGetValue(row.Key, out var prior))
             {
@@ -170,13 +200,24 @@ internal sealed class LeafSnapshotStorageGrain(
             }
         }
 
-        var rows = new List<LeafSnapshotRow>(mergedRows.Count);
-        rows.AddRange(mergedRows.Values);
+        var rows = new LeafSnapshotRow[mergedRows.Count];
+        var index = 0;
+        foreach (var row in mergedRows.Values)
+        {
+            rows[index++] = row;
+        }
+
+        // Preserve the incoming capture's encoding so a merge never silently
+        // downgrades a frame-encoded blob back to the legacy row graph (nor
+        // upgrades one while the write-side switch is off - the switch is what
+        // decided the incoming shape).
+        var encodeBinary = incoming.HasBinaryRowPayload();
 
         return new LeafSnapshotBlob
         {
             SnapshotOffset = mergedOffsets[0],
-            Rows = rows,
+            Rows = encodeBinary ? Array.Empty<LeafSnapshotRow>() : rows,
+            EncodedRows = encodeBinary ? LeafSnapshotCodec.Encode(rows) : null,
             CapturedAtTicks = Math.Max(existing.CapturedAtTicks, incoming.CapturedAtTicks),
             // The row set changed, so the incoming blob's precomputed footprint no
             // longer describes it. Leave the slot at 0 so GetSnapshotByteSizeAsync
@@ -220,8 +261,11 @@ internal sealed class LeafSnapshotStorageGrain(
         // LeafSnapshotBlob's default, but the scalar only describes partition 0.
         // A blob captured for a leaf whose live data is in a non-zero partition
         // (partition 0 idle) carries a -1 scalar yet a >= 0 per-partition slot;
-        // it is loadable and MUST NOT be discarded (see HasCapturedPrefix).
-        if (!HasCapturedPrefix(state.State))
+        // it is loadable and MUST NOT be discarded (see HasCapturedPrefix). A
+        // blob whose row payload does not read back is reported as absent, so
+        // the caller falls through to WAL replay rather than treating an
+        // unreadable snapshot as coverage.
+        if (!HasUsableSnapshot(state.State))
         {
             return Task.FromResult<LeafSnapshotBlob?>(null);
         }
@@ -234,25 +278,35 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!HasCapturedPrefix(state.State))
+        if (!HasUsableSnapshot(state.State))
         {
             return Task.FromResult(0L);
         }
 
         // O(1) field read for blobs persisted with the precomputed byte
         // total. Legacy blobs (persisted before the SnapshotBytes slot
-        // existed) decode the slot as 0; recompute once from Rows and
+        // existed) decode the slot as 0; recompute once from the rows and
         // cache the answer on the in-memory state (no WriteStateAsync) so
         // a subsequent reactivation reading the legacy blob picks the
         // same value back up on first read and the next foreground
         // capture-overwrite stamps the slot durably.
-        if (state.State.SnapshotBytes > 0 || state.State.Rows.Count == 0)
+        if (state.State.SnapshotBytes > 0 || state.State.GetRowCount() == 0)
         {
             return Task.FromResult(state.State.SnapshotBytes);
         }
 
+        // A binary frame carries every length it needs inline, so the total is
+        // summed by walking the frame without materialising a single key string
+        // or value array.
+        if (state.State.EncodedRows is { Length: > 0 } frame
+            && LeafSnapshotCodec.TryComputeStateBytes(frame, out var framedBytes))
+        {
+            state.State.SnapshotBytes = framedBytes;
+            return Task.FromResult(framedBytes);
+        }
+
         long bytes = 0;
-        foreach (var row in state.State.Rows)
+        foreach (var row in state.State.EnumerateRows())
         {
             bytes += System.Text.Encoding.UTF8.GetByteCount(row.Key)
                 + (row.Value.IsTombstone ? 0 : (row.Value.Value?.Length ?? 0));

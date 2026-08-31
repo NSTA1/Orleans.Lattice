@@ -95,7 +95,11 @@ public class LeafSnapshotRehydrateIntegrationTests
         var blob = await snapshotGrain.LoadAsync(CancellationToken.None);
         Assert.That(blob, Is.Not.Null, "Capture must persist a blob through the snapshot grain.");
         Assert.That(blob!.SnapshotOffset, Is.GreaterThanOrEqualTo(0L));
-        var capturedKeys = blob.Rows.Select(r => r.Key).ToHashSet();
+        var capturedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in blob.EnumerateRows())
+        {
+            capturedKeys.Add(row.Key);
+        }
         Assert.That(capturedKeys, Is.SupersetOf(keys),
             "Snapshot blob must carry every key written through the public API.");
 
