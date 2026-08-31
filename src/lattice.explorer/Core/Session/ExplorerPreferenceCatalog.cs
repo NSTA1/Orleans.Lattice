@@ -4,6 +4,20 @@ namespace Orleans.Lattice.Explorer.Core.Session;
 /// Default <see cref="IExplorerPreferenceCatalog"/>: the shell's declared keys
 /// plus whatever features register, held in registration order.
 /// </summary>
+/// <remarks>
+/// <b>Register this through an explicit factory, never by implementation type.</b>
+/// The two constructors below are ambiguous to a DI container: registering
+/// <c>TryAddSingleton&lt;IExplorerPreferenceCatalog, ExplorerPreferenceCatalog&gt;()</c>
+/// makes Microsoft.Extensions.DependencyInjection choose the constructor with the
+/// most satisfiable parameters, and an <see cref="IEnumerable{T}"/> is always
+/// satisfiable because the container synthesises an empty sequence for it. The
+/// seed constructor therefore wins with zero keys and the parameterless one never
+/// runs, yielding an empty catalog that makes every
+/// <see cref="IExplorerShellPreferences"/> member throw. Use
+/// <c>TryAddSingleton&lt;IExplorerPreferenceCatalog&gt;(_ =&gt; new ExplorerPreferenceCatalog())</c>,
+/// as <see cref="ExplorerSessionServiceCollectionExtensions.AddExplorerSession"/>
+/// does.
+/// </remarks>
 public sealed class ExplorerPreferenceCatalog : IExplorerPreferenceCatalog
 {
     private readonly List<ExplorerPreferenceKey> _keys = [];

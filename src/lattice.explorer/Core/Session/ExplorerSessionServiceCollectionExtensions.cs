@@ -35,13 +35,37 @@ public static class ExplorerSessionServiceCollectionExtensions
     public static IServiceCollection AddExplorerSession(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+
         services.TryAddScoped<IUiSessionStore, UiSessionStore>();
         services.TryAddScoped<IUiPreferenceBackingStore, InMemoryUiPreferenceBackingStore>();
-        services.TryAddScoped<IUiPreferenceStore, UiPreferenceStore>();
+
+        // Registered through an explicit factory rather than by implementation
+        // type for the reason given at ExplorerPreferenceCatalog below: the type
+        // has more than one public constructor, so registering it by type leaves
+        // the choice to the container's greedy selection. Its longer constructor
+        // is currently unsatisfiable (nothing registers a TimeSpan), so the
+        // selection happens to be right today - but that is an accident of the
+        // signature, not a property anyone declared, and it would flip silently
+        // if a satisfiable parameter were ever added. Naming the constructor here
+        // costs one line and removes the question.
+        services.TryAddScoped<IUiPreferenceStore>(provider =>
+            new UiPreferenceStore(provider.GetRequiredService<IUiPreferenceBackingStore>()));
 
         // Key declarations are statements about the application, so the catalog
         // is a singleton; what is remembered under them is per session.
-        services.TryAddSingleton<IExplorerPreferenceCatalog, ExplorerPreferenceCatalog>();
+        //
+        // The factory is load-bearing, not a style choice. ExplorerPreferenceCatalog
+        // has two public constructors - a parameterless one that seeds the shell's
+        // declared keys, and one taking IEnumerable<ExplorerPreferenceKey> for a
+        // caller that wants to seed explicitly. Registering it by implementation
+        // type lets the container pick, and it picks the constructor with the most
+        // satisfiable parameters; an IEnumerable<T> is ALWAYS satisfiable, because
+        // the container synthesises an empty sequence for it. So the type
+        // registration silently produced an EMPTY catalog, which made every member
+        // of IExplorerShellPreferences throw "not a registered preference key" on a
+        // real head while every unit test - each of which constructs the catalog
+        // directly - passed. Name the constructor and the ambiguity disappears.
+        services.TryAddSingleton<IExplorerPreferenceCatalog>(_ => new ExplorerPreferenceCatalog());
 
         // Both identity sources are optional: a head or a test that registers the
         // stores without a sign-in or a configured connection still gets a working
