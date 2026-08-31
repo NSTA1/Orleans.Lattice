@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 
@@ -39,12 +40,24 @@ public abstract class UiTestBase
     /// <c>window.innerWidth</c> cannot provide. The context records a trace so a
     /// failure can be replayed.
     /// </summary>
-    protected async Task<IPage> NewPageAsync(int width, int height)
-    {
-        var context = await ExplorerAppHostSetup.Browser.NewContextAsync(new BrowserNewContextOptions
+    protected Task<IPage> NewPageAsync(int width, int height) =>
+        NewPageAsync(new BrowserNewContextOptions
         {
             ViewportSize = new ViewportSize { Width = width, Height = height },
         });
+
+    /// <summary>
+    /// Opens a fresh browser context configured by <paramref name="options"/> and
+    /// returns a new page in it. The overload exists so a fixture can emulate a user
+    /// preference that only a browser context can express - <c>prefers-reduced-motion</c>
+    /// and <c>forced-colors</c> among them - which is exactly the class of conformance
+    /// criterion no renderer-based test can reach. The context records a trace so a
+    /// failure can be replayed.
+    /// </summary>
+    /// <param name="options">The context options, including the viewport size.</param>
+    protected async Task<IPage> NewPageAsync(BrowserNewContextOptions options)
+    {
+        var context = await ExplorerAppHostSetup.Browser.NewContextAsync(options);
         _contexts.Add(context);
 
         await context.Tracing.StartAsync(new TracingStartOptions
@@ -67,33 +80,49 @@ public abstract class UiTestBase
     protected async Task<IPage> OpenHomeAsync(int width, int height)
     {
         var page = await NewPageAsync(width, height);
-        await page.GotoAsync(BaseUri.ToString());
-
-        // The shell frame is server-rendered, but the compact/expanded layout is only
-        // settled once the interactive circuit connects and the breakpoint observer
-        // reports the real viewport. The adaptive root marks itself measured only after
-        // the circuit is live and the breakpoint observer has run, so waiting for
-        // data-lx-measured="true" is the deterministic, web-first way to synchronize on
-        // "circuit connected and viewport classified" without any fixed delay. This
-        // wait failing is also the earliest, clearest signal that the app did not
-        // render at all (for example because the framework asset 404'd) - which the
-        // host's own startup probe should already have caught.
-        await page.Locator(".lx-root[data-lx-measured='true']").First.WaitForAsync(new LocatorWaitForOptions
-        {
-            State = WaitForSelectorState.Attached,
-            Timeout = CircuitReadyTimeoutMs,
-        });
-
+        await NavigateHomeAsync(page);
         return page;
     }
 
     /// <summary>
-    /// The time to allow for the Blazor Server circuit to connect and report the
-    /// viewport breakpoint. Generous relative to a local connect (which is well under
-    /// a second) so a loaded CI agent does not flake, while still failing in bounded
-    /// time if the circuit never establishes.
+    /// Opens a page in a context configured by <paramref name="options"/>, navigates to
+    /// the Explorer home surface, and waits for the interactive circuit. Use it when the
+    /// state under test is a browser-level user preference rather than a page-level one.
     /// </summary>
-    private const float CircuitReadyTimeoutMs = 30_000;
+    /// <param name="options">The context options, including the viewport size.</param>
+    protected async Task<IPage> OpenHomeAsync(BrowserNewContextOptions options)
+    {
+        var page = await NewPageAsync(options);
+        await NavigateHomeAsync(page);
+        return page;
+    }
+
+    private static async Task NavigateHomeAsync(IPage page)
+    {
+        await page.GotoAsync(BaseUri.ToString());
+
+        // The shell frame is server-rendered, but the compact/expanded layout is only
+        // settled once the interactive circuit connects and the breakpoint observer
+        // reports the real viewport. ExplorerShell.WaitForShellReadyAsync waits on the
+        // adaptive root's data-lx-measured="true", the deterministic, web-first signal
+        // for "circuit connected and viewport classified", with no fixed delay. It is
+        // shared with the post-sign-in redirect, which lands a second document and a
+        // fresh circuit that must be waited on the same way.
+        await ExplorerShell.WaitForShellReadyAsync(page);
+    }
+
+    /// <summary>
+    /// Opens the Explorer home surface at the viewport width that lands squarely
+    /// inside <paramref name="breakpoint"/>'s band, and asserts the design system
+    /// genuinely classified the viewport into that band before returning.
+    /// </summary>
+    /// <param name="breakpoint">The breakpoint band to render in.</param>
+    protected async Task<IPage> OpenHomeAsync(LatticeBreakpoint breakpoint)
+    {
+        var page = await OpenHomeAsync(ExplorerShell.ViewportWidth(breakpoint), ExplorerShell.ViewportHeight);
+        await ExplorerShell.AssertBreakpointAsync(page, breakpoint);
+        return page;
+    }
 
     /// <summary>
     /// Stops tracing, writes failure artifacts when the test did not pass, and disposes
