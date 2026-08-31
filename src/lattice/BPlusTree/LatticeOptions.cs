@@ -255,8 +255,10 @@ public class LatticeOptions
     /// Number of leaf caches each shard root pre-warms when
     /// <see cref="ILattice.WarmUpAsync"/> runs, ranked by a persisted histogram
     /// of the leaves this shard's reads have visited.
-    /// <c>0</c> (the default) disables the whole feature: no access is tracked,
-    /// nothing is persisted, and warm-up behaves exactly as before.
+    /// Defaults to <see cref="DefaultLeafCachePreWarmCount"/> (<c>8</c>).
+    /// <c>0</c> is the kill switch: it disables the whole feature, so no access
+    /// is tracked, nothing is persisted, and warm-up primes nothing - exactly the
+    /// behaviour of a deployment from before the feature existed.
     /// <para>
     /// When positive, every routed cache read increments the target leaf's visit
     /// count in a bounded in-memory histogram. A coalescing timer
@@ -350,7 +352,27 @@ public class LatticeOptions
     /// <summary>Default value for <see cref="MinTombstoneRatioForCompaction"/> (<c>0.0</c> - disabled).</summary>
     public const double DefaultMinTombstoneRatioForCompaction = 0.0;
 
-    /// <summary>Default value for <see cref="MaxLeafEntriesBeforeForcedCompaction"/> (<c>0</c> - disabled).</summary>
+    /// <summary>
+    /// Default value for <see cref="MaxLeafEntriesBeforeForcedCompaction"/>
+    /// (<c>0</c> - disabled).
+    /// <para>
+    /// Deliberately left disabled. Arming a size trigger cluster-wide has two
+    /// costs that a host is better placed than the library to accept. First,
+    /// <c>TombstoneCompactionGrain</c> only opens the compaction
+    /// <c>trigger</c> metric-tag scope when this knob or
+    /// <see cref="MinTombstoneRatioForCompaction"/> is non-default, so turning
+    /// it on by default would start tagging previously untagged per-leaf
+    /// instruments and silently break every dashboard filtering on the empty
+    /// trigger label. Second, the leaf evaluates the trigger by walking its whole
+    /// entry table on every successful foreground commit, which forces a
+    /// partially hydrated leaf to materialise in full and works against
+    /// <see cref="LeafPartialHydrationEnabled"/>. Nothing is lost by leaving it
+    /// off: the reminder-driven compaction pass still reaps tombstones on its
+    /// regular cadence, and a host that knows its trees churn can arm the
+    /// trigger per tree (as the repository-context host does for its churn
+    /// trees).
+    /// </para>
+    /// </summary>
     public const int DefaultMaxLeafEntriesBeforeForcedCompaction = 0;
 
     /// <summary>Default value for <see cref="CompactionTriggerCooldown"/> (5 minutes).</summary>
@@ -380,12 +402,24 @@ public class LatticeOptions
     public const int DefaultDirtyLeafFlushIntervalMs = 50;
 
     /// <summary>
-    /// Default value for <see cref="LeafCachePreWarmCount"/> (<c>0</c>).
-    /// Leaf-cache pre-warm is opt-in: zero disables leaf-access tracking and
-    /// the post-restart pre-warm fan-out entirely, so an unconfigured cluster
-    /// behaves exactly as it did before the feature existed.
+    /// Default value for <see cref="LeafCachePreWarmCount"/> (<c>8</c>).
+    /// <para>
+    /// Leaf-cache pre-warm is <b>on by default</b>: a cold-start improvement that
+    /// has to be switched on heals nothing, because the deployments that most need
+    /// it are precisely the ones nobody reconfigures. The value matches the shard
+    /// root's own pre-warm fan-out concurrency, so warm-up issues exactly one
+    /// bounded wave of priming calls per shard and never queues behind its own
+    /// semaphore - the warm-up cost is one round trip regardless of shard count.
+    /// It is one eighth of <see cref="MaxLeafCachePreWarmCount"/>, leaving ample
+    /// headroom for a deployment with a wider hot set.
+    /// </para>
+    /// <para>
+    /// Set <see cref="LeafCachePreWarmCount"/> to <c>0</c> to restore the previous
+    /// behaviour exactly: no access tracking, no persisted model, and a warm-up
+    /// that primes nothing.
+    /// </para>
     /// </summary>
-    public const int DefaultLeafCachePreWarmCount = 0;
+    public const int DefaultLeafCachePreWarmCount = 8;
 
     /// <summary>
     /// Hard upper bound on <see cref="LeafCachePreWarmCount"/> (<c>64</c>).
@@ -1723,7 +1757,18 @@ public class LatticeOptions
     /// </summary>
     public TimeSpan WalGcInterval { get; set; } = DefaultWalGcInterval;
 
-    /// <summary>Default value for <see cref="WalGcInterval"/> (1 hour, enabled).</summary>
+    /// <summary>
+    /// Default value for <see cref="WalGcInterval"/> (1 hour, enabled).
+    /// <para>
+    /// Deliberately unchanged now that this value is the <i>ceiling</i> of the
+    /// adaptive band rather than a fixed tick. Responsiveness is governed by
+    /// <see cref="WalGcStartupDelay"/> (first pass within 30 seconds of start)
+    /// and <see cref="WalGcMinInterval"/> (the floor a reclaiming tree collapses
+    /// to), so lowering this ceiling would only make an <i>idle</i> tree poll
+    /// more often - paying storage cost for passes that reclaim nothing - while
+    /// buying no responsiveness on a tree that has work to do.
+    /// </para>
+    /// </summary>
     public static readonly TimeSpan DefaultWalGcInterval = TimeSpan.FromHours(1);
 
     /// <summary>
@@ -1807,6 +1852,20 @@ public class LatticeOptions
     /// <see langword="null"/> (the default) disables the policy entirely: the
     /// byte-pressure evaluator short-circuits with zero hot-path cost. When
     /// set, the value must be strictly positive.
+    /// </para>
+    /// <para>
+    /// Deliberately left disabled. This is a capacity quota, not a retention
+    /// mechanism: a correct value is a fraction of the volume the WAL lives on,
+    /// which the library cannot know, and any value the library picked would be
+    /// wrong for most deployments in one direction or the other. Enabling it also
+    /// costs one <c>GetRetainedByteSizeAsync</c> probe per WAL partition on every
+    /// garbage-collection pass - a cost every consumer would pay for a signal
+    /// most do not need. Leaving it off does not blind an operator: the
+    /// unconditional pass counter still reports every pass and its outcome, and
+    /// reclaimed volume is visible through the entries-trimmed counter, so a tree
+    /// reporting passes but no retained-byte samples is knowably "not measured"
+    /// rather than "no backlog". Set it when the WAL volume has a hard size
+    /// budget and the provider accounts bytes.
     /// </para>
     /// </summary>
     public long? WalMaxRetainedBytes { get; set; }
