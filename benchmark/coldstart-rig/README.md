@@ -297,6 +297,39 @@ and reports match or mismatch (exiting non-zero on any mismatch). Point the rig
 at a different backup and pass `-SkipExpectations`, or replace the expectations
 file with figures for that backup.
 
+**The pinned figures are the PRE-epic baseline.** They describe a deployment
+whose WAL had been trimmed once, ever (559,455 data records against exactly 64
+trim records, one per shard). Epic #1830 is deliberately changing that: S2
+(#1832) moved the first WAL GC pass from 30-60 minutes after start to 15-30
+seconds, and made the cadence backlog-driven. So a census taken on a volume
+captured from a **post-S2** image will legitimately report a higher trim count
+and `DIFFER` on that check.
+
+That is the measurement working, not the rig breaking. When inspecting a
+post-change volume, pass `-SkipExpectations` and compare `wal.trimRecords` and
+`wal.tree.<treeId>.trimRecords` against the pre-change census instead:
+
+```powershell
+./inspect-state.ps1 -SkipExpectations -StagingPath <post-change-staging-dir>
+```
+
+### Measuring WAL reclamation
+
+Do it from **durable state, not telemetry**. The RepoContext container exposes
+no metrics endpoint, and it is not going to gain one: epic decision D5 requires
+every mechanism to be default-on so an existing deployment heals with no
+operator action, and S13's acceptance criterion is that the host picks up every
+mechanism with no change to its compose file or environment. Adding an exporter
+or environment plumbing for `LatticeOptions` would invert that promise, so the
+whole `orleans.lattice.wal.gc.*` family is unreachable from any external
+instrument by design.
+
+The offline census is the stronger instrument for this question anyway: it
+parses the file-WAL framing and counts Trim records per shard on a restored copy
+of the volume, so it measures what is actually on disk and cannot be defeated by
+a missing exporter, a sampling window, or a dropped metric. It is what
+established the "64 trims, one per shard, ever" figure in the first place.
+
 `-SkipWal` skips the framing walk, which is the slow half (roughly 100 seconds
 for 105 segments / 559k records). That walk **streams**: it reads each record's
 9-byte frame header plus the 8 body bytes it actually needs and seeks past the
