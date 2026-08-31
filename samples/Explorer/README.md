@@ -53,17 +53,19 @@ the auth and schema gRPC admin APIs and auto-signs-in as a bootstrap
 administrator (`explorer-admin`), so the **Explore** and **Access** areas are
 live out of the box. The **Schema** area ships hidden and stays hidden here; set
 `LATTICE_EXPLORER_ENABLE_SCHEMA=true` before running to surface it. The
-**Backups** area resolves as denied, because this sample does not co-host the
-backup gRPC API.
+**Backups** area resolves as unavailable, because this sample maps the state,
+auth and schema gRPC services but not the backup one, so the probe reports the
+capability as absent from the cluster.
 
-A denied area is not hidden and is not merely greyed. It stays visible, grouped
+An unavailable area renders no entry at all, and the rail's "why can I not see
+everything?" affordance names it, so the absence is disclosed once rather than
+being silently missing. That is deliberately different from a denial, which is
+the state for a capability the cluster does serve and this caller may not use. A
+denied area is not hidden and is not merely greyed: it stays visible, grouped
 below a divider at lower visual weight, and states the permission it needs and
-who to ask - so Backups here reads as a capability the product has and this
-deployment has not wired up, rather than as something broken or absent. An area
-the cluster does not serve at all renders no entry, and the rail's "why can I
-not see everything?" affordance names it. Signing out changes Access from denied
-to an invitation to sign in, because an anonymous caller is never told a surface
-is unavailable for their account.
+who to ask. Signing out changes Access from active to an invitation to sign in,
+because an anonymous caller is never told a surface is unavailable for their
+account.
 
 The gating is advisory throughout: the server is the sole enforcement point, so
 showing a denied entry costs nothing and hiding it would buy nothing. See
@@ -82,9 +84,10 @@ showing a denied entry costs nothing and hiding it would buy nothing. See
   first-class palette, and high contrast is a separate axis that layers over
   whichever theme is active. The choice is applied at first paint, so reloading
   in light mode never flashes dark.
-- **Tenancy adapts.** This sample is single-tenant, so no tenant chrome appears
-  at all. On a cluster where the caller can reach more than one tenant, a
-  drop-down appears instead.
+- **Tenancy adapts.** This sample runs a single tenant, so no tenant picker
+  appears: the drop-down is offered only to a platform operator who can reach
+  more than one tenant. See
+  [tenant scope](../../docs/lattice.explorer/tenant-scope.md).
 - **Keyboard only.** Tab once from the top: the first stop is a skip link into
   the main region. Arrow keys move within the rail and within every tab strip,
   and every tab is bound to a real panel.

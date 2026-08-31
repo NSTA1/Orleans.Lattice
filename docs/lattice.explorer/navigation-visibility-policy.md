@@ -31,9 +31,15 @@ such as tenant ids or tree names.
 | `Denied` | The caller is authenticated but holds no grant | Visible but demoted, below a divider, at lower visual weight, stating a remedy |
 | `Unavailable` | The cluster does not serve the capability at all | Hidden, and explained once in a capabilities affordance |
 
-The order matters, and is evaluated as written: capability, then credential,
-then grant. Two consequences are worth stating explicitly, because both were
-once wrong.
+The order matters, and is evaluated as written: capability, then grant, then
+credential. An absent capability wins over everything, because neither a
+credential nor a grant can conjure a facade the cluster does not serve. A
+demonstrated grant is checked next, so a caller who provably holds it is
+admitted whatever the shell believes about their sign-in state. Only a caller
+who did not demonstrate a grant is then sorted by credential: anonymous yields
+`AuthenticationRequired`, and signed-in yields `Denied`.
+
+Two consequences are worth stating explicitly, because both were once wrong.
 
 **An anonymous caller is never `Denied`.** Telling someone who has not signed in
 that a surface "is not available for your account" is wrong on its face; the

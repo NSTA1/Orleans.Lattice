@@ -55,15 +55,26 @@ at run time and so cannot own a literal path segment:
 
 ```text
 /area/backups
-/area/tenant-administration
+/area/tenants
+/area/tenants/detail/acme/quotas
 ```
+
+An area's slug is derived from its plugin id, not from its label, so renaming an
+area does not move it. The Tenant administration area is registered under the
+plugin id `orleans.lattice.tenants` and therefore addresses as `/area/tenants`;
+My tenant addresses as `/area/mytenant`. A contributed area carries the same
+optional kind, id and surface tail as the home area.
 
 Two further routes exist: `/reset-view`, which clears remembered state, and
 `/not-found`.
 
-Parsing is forgiving. A bare `/tenant-administration` still resolves to that
-area, is reported as normalised, and the address bar is rewritten to the
-canonical `/area/tenant-administration`.
+Parsing is forgiving. Handed a bare `/tenants`, the address parser still
+resolves the area, reports the address as normalised, and lets the shell rewrite
+the address bar to the canonical `/area/tenants`. That tolerance is in the
+parser, which is what the shell hands an address it has already received: since
+every declared route begins with a literal segment and no catch-all exists, an
+un-namespaced area is not by itself a routable address a browser can request
+cold.
 
 ### Paths are lower case
 

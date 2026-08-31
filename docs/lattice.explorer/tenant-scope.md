@@ -19,14 +19,22 @@ administration** and **My tenant**, and the bare word "Tenants" is retired.
 
 ## The picker adapts to what you can reach
 
-The scope control's shape follows how many tenants the caller can actually
-reach, so a deployment that has no tenancy story shows no tenancy chrome.
+The scope control's shape follows both what the caller may do and how many
+tenants they can actually reach, so a deployment that has no tenancy story shows
+no tenancy chrome.
 
-| Reachable tenants | What is shown |
+| Situation | What is shown |
 | --- | --- |
-| 0, or only the reserved `default` on a single-tenant cluster | Nothing. A non-tenant deployment looks unchanged. |
-| 1 | A quiet, non-interactive display of the current tenant. No picker, because there is nothing to pick. |
-| More than 1 | A drop-down listing the reachable tenants with the current one marked. |
+| No tenant is established, and the caller is not a platform operator | Nothing. A non-tenant deployment looks unchanged. |
+| A caller who is not a platform operator, scoped to one tenant | A quiet, non-interactive display of the current tenant. |
+| A platform operator who can reach one tenant | The same quiet display. No picker, because there is nothing to pick. |
+| A platform operator who can reach more than one | A drop-down listing the reachable tenants with the current one marked. |
+
+The drop-down is offered only to a caller who validates as a platform operator,
+because only such a caller may switch: fail-closed by construction, rather than
+rendering a control that would always refuse. A caller scoped to the reserved
+`default` tenant and holding no operator standing is shown nothing at all, which
+is what keeps a single-tenant deployment free of tenancy chrome.
 
 It is never a free-text box. Requiring a tenant id from memory was the previous
 design, and it meant the console listed every tenant in one place while

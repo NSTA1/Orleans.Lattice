@@ -24,12 +24,15 @@ connected user.
 An area the connected user cannot use is shown **visible but demoted**, not
 hidden: it is grouped below a divider at lower visual weight and states the
 permission it needs and who to ask. The Backups area entry is `Allowed` when the
-connected endpoint reports at least list / read backup access; otherwise it
-resolves `Denied` and is demoted, so the user can see the capability exists and
-ask for the grant rather than being unable to tell it apart from a capability
-this cluster does not serve at all. A caller who has not signed in gets
-`AuthenticationRequired` and an invitation to sign in, never a denial. This
-area-entry check is the one advisory capability gate on the backups path; see
+connected endpoint's capability probe reports list access; if the probe answers
+without it, or the endpoint faults, the grant is withheld and the area resolves
+`Denied` and is demoted, so the user can see the capability exists and ask for
+the grant. A caller who has not signed in gets `AuthenticationRequired` and an
+invitation to sign in, never a denial. The one case that hides the area instead
+is a cluster that does not serve backup control at all: that answers
+`Unimplemented`, resolves `Unavailable`, and renders no entry, with the absence
+named in the rail's capabilities affordance. This area-entry check is the one
+advisory capability gate on the backups path; see
 [Navigation visibility policy](navigation-visibility-policy.md).
 
 Inside the Backups area there is **no client-side permission pre-check**: the

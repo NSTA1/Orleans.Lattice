@@ -130,9 +130,15 @@ the ones above it did not:
 | Order | Condition | State |
 |---|---|---|
 | 1 | The cluster does not serve the capability | `Unavailable` |
-| 2 | The caller is anonymous | `AuthenticationRequired` |
-| 3 | The caller is authenticated but holds no grant | `Denied` |
-| 4 | Otherwise | `Allowed` |
+| 2 | The caller demonstrably holds the grant | `Allowed` |
+| 3 | The caller presented no accepted credential | `AuthenticationRequired` |
+| 4 | Otherwise (signed in, no grant) | `Denied` |
+
+The grant is checked **before** the credential, not after it, so a caller who
+provably holds it is admitted whatever the shell believes about their sign-in
+state. The converse of rule 2 is the load-bearing half: a probe that cannot
+positively demonstrate the grant never reaches it and falls through to rules 3
+and 4, so "the call did not fail" is not by itself an admission.
 
 The four states render differently, so pick the one that matches what you mean:
 

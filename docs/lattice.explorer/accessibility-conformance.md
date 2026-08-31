@@ -60,6 +60,10 @@ Two disciplines make those results mean something:
   whether a keyboard user can bypass the chrome, or whether a change was
   announced. Those are asserted explicitly, but explicit assertions are still
   assertions written by the same people who wrote the code.
+- **Only critical and serious findings fail the sweep.** The gate filters axe
+  results to those two impact levels, so a moderate or minor finding is reported
+  but does not break the build. A clean run therefore means "no critical or
+  serious violation", not "no violation".
 - **No formal third-party audit has been carried out**, and no testing with
   assistive-technology users has been done. Everything here is self-assessment.
 - **The browser lane is advisory, not a required check.** It is path-filtered to

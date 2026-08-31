@@ -61,17 +61,23 @@ showing an error.
 
 ## Capability-aware, demote not hide
 
-The area is gated in two layers. The coarse **SchemaAllowed** gate is endpoint
-**reachability**: the capability probe RPC returns an all-false set on an
-authorization denial rather than throwing, so the gate reports available whenever
-that probe completes without a transport fault; if the endpoint is unreachable the
-area resolves `Unavailable` and renders no entry, with the absence explained in
-the rail's capabilities affordance rather than left as a silent gap. Inside the
-area, each mutating action - setting or clearing a policy, changing or advancing
-the version config, running remediation, scanning compliance - disables from the
-**per-tree capability snapshot** the panel requests when a tree is loaded (and
-also whenever no tree is loaded or an action is already in flight), not from the
-coarse gate.
+The area is gated in two layers. The coarse **SchemaAllowed** gate is the
+capability probe's own answer: the probe reports each capability as a flag
+rather than throwing on an authorization denial, and it is the flags it reports,
+not the fact that it completed, that constitute the grant - a probe that comes
+back with nothing set withholds rather than admits. The resulting state follows
+the fault. A cluster that does not serve schema administration at all answers
+`Unimplemented`, and the area resolves `Unavailable` and renders no entry, with
+the absence explained in the rail's capabilities affordance rather than left as
+a silent gap. Any other transport fault, including an unreachable endpoint or a
+console not yet configured with one, withholds the grant instead: the area
+resolves `Denied` for a signed-in caller and `AuthenticationRequired` for an
+anonymous one, and is re-probed when the connection status next changes. Inside
+the area, each mutating action - setting or clearing a policy, changing or
+advancing the version config, running remediation, scanning compliance -
+disables from the **per-tree capability snapshot** the panel requests when a
+tree is loaded (and also whenever no tree is loaded or an action is already in
+flight), not from the coarse gate.
 
 ## Advisory, not a security boundary
 
