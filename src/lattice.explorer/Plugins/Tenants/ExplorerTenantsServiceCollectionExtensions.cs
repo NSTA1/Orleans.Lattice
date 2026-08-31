@@ -7,14 +7,15 @@ using Orleans.Lattice.Explorer.Plugins.Tenancy;
 namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
-/// Registration helpers for the Explorer's Tenants (platform-operator tenant
-/// management) plugin: its access gate, the shared tenancy seam it operates
-/// through, the tenant-view scoping it requires, and the plugin registration
-/// that surfaces the area in the shell.
+/// Registration helpers for the Explorer's tenant administration
+/// (platform-operator) plugin: its access gate, the shared tenancy seam it
+/// operates through, the tenant-view scoping it requires, the accessible-tenant
+/// source the shell's tenant picker reads, and the plugin registration that
+/// surfaces the area in the shell.
 /// <para>
 /// Both helpers ship in the plugin's own package, so a head opts the area in by
 /// referencing this package and calling them, and the shared UI library carries
-/// no reference to the Tenants feature at all (epic decision D5).
+/// no reference to the feature at all (epic decision D5).
 /// </para>
 /// </summary>
 public static class ExplorerTenantsServiceCollectionExtensions
@@ -27,8 +28,8 @@ public static class ExplorerTenantsServiceCollectionExtensions
     internal const string MisorderedGateMessage =
         "The Explorer's tenant-view seam was registered before a platform-operator gate was "
         + "supplied, so IExplorerTenantOperatorGate resolved to the fail-closed default and no "
-        + "caller can ever validate as an operator. The Tenants area would render permanently "
-        + "denied to everyone. Register the surface that supplies the gate first - "
+        + "caller can ever validate as an operator. The tenant administration area would render "
+        + "permanently denied to everyone. Register the surface that supplies the gate first - "
         + "AddExplorerAccess(), whose administrator decision backs it - and call "
         + "AddExplorerTenants()/AddExplorerTenantsPlugin() after it. A head supplying its own "
         + "IExplorerTenantOperatorGate must register it as an implementation type or a singleton "
@@ -40,15 +41,16 @@ public static class ExplorerTenantsServiceCollectionExtensions
     /// platform-operator gate at all.
     /// </summary>
     internal const string MissingGateMessage =
-        "The Tenants area is reserved for platform operators, but no IExplorerTenantOperatorGate "
-        + "has been registered, so no caller could ever validate as one and the area would render "
-        + "permanently denied to everyone. Register the surface that supplies the gate first - "
-        + "AddExplorerAccess(), whose administrator decision backs it - or register your own "
-        + "IExplorerTenantOperatorGate implementation, before calling AddExplorerTenants() or "
-        + "AddExplorerTenantsPlugin().";
+        "The tenant administration area is reserved for platform operators, but no "
+        + "IExplorerTenantOperatorGate has been registered, so no caller could ever validate as "
+        + "one and the area would render permanently denied to everyone. Register the surface "
+        + "that supplies the gate first - AddExplorerAccess(), whose administrator decision backs "
+        + "it - or register your own IExplorerTenantOperatorGate implementation, before calling "
+        + "AddExplorerTenants() or AddExplorerTenantsPlugin().";
 
     /// <summary>
-    /// Registers the Tenants feature: the plugin's access gate, the shared
+    /// Registers the tenant administration feature: the plugin's access gate, the
+    /// real accessible-tenant source behind the shell's tenant picker, the shared
     /// tenancy seam it operates through
     /// (<see cref="ExplorerTenancyServiceCollectionExtensions.AddExplorerTenancy"/>),
     /// and the Explorer's tenant-view scoping
@@ -95,6 +97,12 @@ public static class ExplorerTenantsServiceCollectionExtensions
 
         RequirePlatformOperatorGate(services);
 
+        // The one-source-of-truth seam, registered BEFORE AddExplorerTenantView
+        // so it wins that method's TryAdd against the navigation core's
+        // fail-closed default. This is what makes the shell's tenant picker and
+        // this area's tenant list two views of one list rather than two lists.
+        services.TryAddScoped<IExplorerAccessibleTenantSource, TenantsAccessibleTenantSource>();
+
         // Tenant scoping, then the shared tenancy seam that reads it. Both are
         // TryAdd-based and idempotent, so a head that already called either - or
         // a sibling tenancy plugin that did - is unaffected.
@@ -109,16 +117,17 @@ public static class ExplorerTenantsServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers the Tenants area plugin, so the shell enumerates it from the
-    /// container and renders its panel. Calls <see cref="AddExplorerTenants"/>
-    /// for you, so it carries the same ordering requirement: register the
-    /// platform-operator gate provider (<c>AddExplorerAccess()</c>) first.
+    /// Registers the tenant administration area plugin, so the shell enumerates
+    /// it from the container and renders its panel. Calls
+    /// <see cref="AddExplorerTenants"/> for you, so it carries the same ordering
+    /// requirement: register the platform-operator gate provider
+    /// (<c>AddExplorerAccess()</c>) first.
     /// <para>
     /// The head is also responsible for registering the host-side plugin
     /// adapters (<c>AddExplorerPluginAdapters</c>), which live on the shell's
     /// side of the seam and are shared by every plugin. A head that calls
-    /// neither helper ships no Tenants area at all, which is the whole of the
-    /// opt-out.
+    /// neither helper ships no tenant administration area at all, which is the
+    /// whole of the opt-out.
     /// </para>
     /// </summary>
     /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>

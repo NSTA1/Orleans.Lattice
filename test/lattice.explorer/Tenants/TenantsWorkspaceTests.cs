@@ -387,7 +387,7 @@ public sealed class TenantsWorkspaceTests
 
         await workspace.InitializeAsync();
 
-        Assert.That(workspace.ActiveSurfaceId, Is.EqualTo(TenantsSurfaces.Tenants));
+        Assert.That(workspace.ActiveSurfaceId, Is.EqualTo(TenantsSurfaces.Overview));
     }
 
     [Test]
@@ -436,7 +436,7 @@ public sealed class TenantsWorkspaceTests
         await workspace.InitializeAsync();
         var before = domain.Service.Calls.Count;
 
-        await workspace.SelectSurfaceAsync(TenantsSurfaces.Tenants);
+        await workspace.SelectSurfaceAsync(TenantsSurfaces.Overview);
 
         Assert.That(domain.Service.Calls, Has.Count.EqualTo(before));
     }

@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Plugins.MyTenant.Components;
 using Orleans.Lattice.Explorer.Plugins;
@@ -30,7 +31,12 @@ public sealed class MyTenantAreaPluginTests
         Assert.Multiple(() =>
         {
             Assert.That(descriptor.PluginId, Is.EqualTo(MyTenantPluginKeys.PluginId));
-            Assert.That(descriptor.Label, Is.EqualTo("My Tenant"));
+
+            // The settled name, sentence case, so it does not read as a proper
+            // noun beside "Tenant administration" - and so the pair says which
+            // administers whose tenants at a glance.
+            Assert.That(descriptor.Label, Is.EqualTo(ExplorerVocabulary.MyTenantArea));
+            Assert.That(descriptor.Label, Is.EqualTo("My tenant"));
             Assert.That(descriptor.Surface, Is.EqualTo(ExplorerPluginSurface.Area));
         });
     }

@@ -1,28 +1,29 @@
 @implements IDisposable
 @inject IExplorerPluginHostContextFactory HostContexts
 @inject IExplorerPluginAccessStore AccessStore
+@inject IServiceProvider Services
 
 @*
-    The Tenants plugin's panel: the surface the shell renders through
-    DynamicComponent for this plugin.
+    The tenant administration plugin's panel: the surface the shell renders
+    through DynamicComponent for this plugin.
 
     It reaches the cluster only through its declared domain contract
     (ITenancyDomain), resolved for it by the host from its own plugin id, so it
     holds no connection and no container (epic decision D3).
 
-    Its four sub-surfaces - Tenants, Quotas, Regions and Tenant access - are
-    internal to the plugin and are rendered through the design system's single
-    tab primitive over the shared LatticeTabItem vocabulary. The strip carries
-    the WAI-ARIA tabs keyboard pattern and overflows rather than scrolling off a
-    narrow window.
+    Its four sub-surfaces - Overview, Quotas, Regions and Tenant access - are
+    internal to the plugin and render through the design system's single tab
+    primitive in its SUBORDINATE variant: the fourth navigation tier is
+    deliberately the quietest control in the shell, so it reads as sitting below
+    the rail that selected the area rather than competing with it. None of them
+    repeats the area's own name; "Tenants" appeared in two adjacent tiers at once
+    before this issue and is retired as a label.
 
-    The plugin's own gate decides whether any of it is reachable. On a cluster
-    without the tenancy add-on the shell renders no entry at all, so this panel
-    is not normally reached in that state; it still degrades to a single
-    explanatory line rather than an empty surface if a head renders it directly
-    (epic decision D9). A denial greys the surface out and says why; an
-    unauthenticated connection instead prompts a sign-in, because that is
-    recoverable.
+    The plugin's own gate decides whether any of it is reachable. A refusal is
+    rendered from the four-state contract, never from a guess: an anonymous
+    caller is told to sign in, an authenticated one is told which permission they
+    are missing and who issues it, and a cluster without the tenancy add-on says
+    the surface does not exist here (epic decision D9).
 *@
 
 @if (AdaptiveContext is null)
@@ -43,6 +44,13 @@ else
 }
 
 @code {
+    /// <summary>
+    /// The element-id prefix for the sub-surface strip and the panel it controls.
+    /// A tab that names no panel leaves a screen-reader caller with nothing to
+    /// move into, so the strip is always given one.
+    /// </summary>
+    private const string SurfaceStripId = "lxt-surfaces";
+
     private readonly Action _render;
 
     private TenantsWorkspace _state = null!;
@@ -68,11 +76,23 @@ else
         // change, and a fresh template on each would allocate on all of them.
         _panel = Panel;
 
+        // Declared by the area itself rather than by a head, so a deployment
+        // gains the key by rendering the area and the reset-view affordance
+        // discloses and clears it with no further wiring. Registration is
+        // idempotent by reference, and the catalog is resolved optionally so the
+        // panel still renders in a host with no preference contract.
+        (Services.GetService(typeof(IExplorerPreferenceCatalog)) as IExplorerPreferenceCatalog)
+            ?.Register(TenantsPluginKeys.SurfacePreference);
+
         // The host context is bound to this plugin's id, so GetDomain can only
         // ever hand back this plugin's declared contract: there is no parameter
         // through which the panel could name another plugin's domain.
         var context = HostContexts.Create(TenantsPluginKeys.PluginId);
-        _state = new TenantsWorkspace(context.GetDomain<ITenancyDomain>(), AccessStore);
+        _state = new TenantsWorkspace(
+            context.GetDomain<ITenancyDomain>(),
+            AccessStore,
+            Services.GetService(typeof(IExplorerShellPreferences)) as IExplorerShellPreferences,
+            Services.GetService(typeof(IExplorerShellRouter)) as IExplorerShellRouter);
         _state.Changed += OnStateChanged;
         await _state.InitializeAsync();
     }
@@ -91,39 +111,38 @@ else
         _state.Dispose();
     }
 
-    private RenderFragment Panel => @<section class="lxt-panel" aria-label="Tenants">
-        @if (_state.Unavailable)
+    private RenderFragment Panel =>
+        @<section class="lxt-panel" aria-label="@ExplorerVocabulary.TenantAdministrationArea">
+        @if (_state.AccessMessage is { } refusal)
         {
-            <p class="lxt-status is-unavailable" role="status">
-                This cluster does not serve tenant administration, so there is nothing to manage here.
+            @*
+                One refusal shape for all three unhappy states, driven by the
+                contract rather than by the surface's own guess. A sign-in
+                requirement is something to act on now, so it is assertive; a
+                denial or an absent capability is not.
+            *@
+            <div class="lxt-status @_state.AccessStatusClass"
+                 role="@(_state.AuthenticationRequired ? "alert" : "status")">
+                <p class="lxt-status-headline">@refusal.Headline</p>
+                <p class="lxt-status-detail">@refusal.Explanation</p>
+                @if (_state.AccessRemedyText is { Length: > 0 } remedy)
+                {
+                    <p class="lxt-status-remedy">
+                        <strong>@refusal.RemedyLabel</strong> @remedy
+                    </p>
+                }
                 @if (_state.AccessReason is { Length: > 0 } reason)
                 {
-                    <span class="lxt-status-detail">@reason</span>
+                    <p class="lxt-status-detail">@reason</p>
                 }
-            </p>
+            </div>
         }
-        else
+
+        @if (!_state.Unavailable)
         {
-            @if (!_state.Allowed)
+            @if (_state.SurfaceRestoreNotice is { Length: > 0 } restoreNotice)
             {
-                @if (_state.AuthenticationRequired)
-                {
-                    <p class="lxt-status is-denied" role="alert">
-                        You are not signed in to the cluster, so tenant administration is unavailable.
-                        The connection is unauthenticated - sign in as a platform operator to manage tenants.
-                    </p>
-                }
-                else
-                {
-                    <p class="lxt-status is-denied" role="status">
-                        Tenant administration is reserved for platform operators, and your account is
-                        not authorized as an administrator on this cluster.
-                        @if (_state.AccessReason is { Length: > 0 } reason)
-                        {
-                            <span class="lxt-status-detail">@reason</span>
-                        }
-                    </p>
-                }
+                <p class="lxt-status" role="status">@restoreNotice</p>
             }
 
             @if (_state.LastMessage is { Length: > 0 } message)
@@ -134,8 +153,17 @@ else
             <LatticeAdaptiveTabs Tabs="TenantsSurfaces.Tabs"
                                  ActiveId="@_state.ActiveSurfaceId"
                                  OnSelect="_state.SelectSurfaceAsync"
-                                 Label="Tenant administration sub-surfaces">
+                                 Label="@SurfaceStripLabel"
+                                 Variant="LatticeTabsVariant.Subordinate"
+                                 Id="@SurfaceStripId"
+                                 Class="lxt-surfaces">
                 <TrailingContent>
+                    @if (TenantsSurfaces.TermFor(_state.ActiveSurfaceId) is { } term)
+                    {
+                        <LatticeHelp Id="@TenantsSurfaces.HelpIdFor(_state.ActiveSurfaceId)"
+                                     Term="@term.Label"
+                                     Explanation="@term.Explanation" />
+                    }
                     <button type="button" class="lx-btn lxt-refresh-action"
                             disabled="@(_state.Busy || !_state.Allowed)"
                             @onclick="_state.ReloadAsync">Refresh</button>
@@ -144,7 +172,7 @@ else
                     @if (TenantsSurfaces.RequiresTenant(_state.ActiveSurfaceId) && _state.SelectedTenantId is null)
                     {
                         <p class="lxt-empty" role="status">
-                            Select a tenant on the Tenants surface to administer it.
+                            Select a tenant on the Overview surface to administer it.
                         </p>
                     }
                     else if (_state.ActiveSurfaceId == TenantsSurfaces.Quotas)
@@ -169,4 +197,9 @@ else
             <TenantConfirmDialog State="_state" />
         }
     </section>;
+
+    // Composed once as a constant rather than per render: the strip re-renders on
+    // every sub-surface activation.
+    private const string SurfaceStripLabel =
+        ExplorerVocabulary.TenantAdministrationArea + " surfaces";
 }

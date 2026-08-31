@@ -81,12 +81,7 @@
         var allowed = new LatticeTableColumn<TenantRegionRow>
         {
             Header = "Allowed",
-            Cell = row =>@<span class="@(row.IsAllowed ? "lxm-badge is-ok" : "lxm-badge is-off")"
-                                title="@(row.IsAllowed
-                                    ? "A platform operator has authorized this region for your tenant."
-                                    : "Outside the operator-authorized allowed set, so you cannot become resident in it.")">
-                @(row.IsAllowed ? "Allowed" : "Not allowed")
-            </span>,
+            Cell = row =>@<span class="@(row.IsAllowed ? "lxm-badge is-ok" : "lxm-badge is-off")">@(row.IsAllowed ? "Allowed" : "Not allowed")<span class="lx-visually-hidden">@(row.IsAllowed ? AllowedRule : NotAllowedRule)</span></span>,
         };
 
         var residency = new LatticeTableColumn<TenantRegionRow>
@@ -110,10 +105,7 @@
             Cell = row =>@<button type="button"
                                  class="lx-btn"
                                  disabled="@(State.Busy || !State.Allowed || !row.CanToggle)"
-                                 title="@RefusalText(row.Refusal)"
-                                 @onclick="Toggle(row.RegionId)">
-                @(row.IsPlannedResident ? "Remove" : "Add")
-            </button>,
+                                 @onclick="Toggle(row.RegionId)">@(row.IsPlannedResident ? "Remove" : "Add")<span class="lx-visually-hidden">@RefusalSuffix(row.Refusal)</span></button>,
         };
 
         return [region, allowed, residency, status, action];
@@ -121,12 +113,33 @@
 
     // The refusal is put on the disabled control itself, so the reason is
     // available at the moment the caller reaches for it rather than only after
-    // a rejected apply.
-    private static string? RefusalText(TenantResidencyRefusal refusal) => refusal switch
+    // a rejected apply. It rides in the control's own accessible name, because a
+    // title attribute is unreachable by keyboard and by touch.
+    //
+    // Composed once per distinct refusal rather than per row per render: the
+    // residency table re-renders on every busy transition and every applied plan.
+    private const string AllowedRule =
+        " - a platform operator has authorized this region for your tenant.";
+
+    private const string NotAllowedRule =
+        " - outside the operator-authorized allowed set, so you cannot become resident in it.";
+
+    private const string NotAllowedSuffix = " - " + MyTenantWorkspace.RegionNotAllowedRefusal;
+
+    private const string NoLongerAllowedSuffix = " - " + MyTenantWorkspace.RegionNoLongerAllowedRefusal;
+
+    private const string LastRegionSuffix = " - " + MyTenantWorkspace.LastRegionRefusal;
+
+    /// <summary>
+    /// The refusal as a phrase that reads on from the control's label, or
+    /// <see langword="null"/> when the control is not refused. Constants, so a
+    /// page of regions allocates nothing for them.
+    /// </summary>
+    private static string? RefusalSuffix(TenantResidencyRefusal refusal) => refusal switch
     {
-        TenantResidencyRefusal.NotAllowed => MyTenantWorkspace.RegionNotAllowedRefusal,
-        TenantResidencyRefusal.ResidentButNoLongerAllowed => MyTenantWorkspace.RegionNoLongerAllowedRefusal,
-        TenantResidencyRefusal.LastRegion => MyTenantWorkspace.LastRegionRefusal,
+        TenantResidencyRefusal.NotAllowed => NotAllowedSuffix,
+        TenantResidencyRefusal.ResidentButNoLongerAllowed => NoLongerAllowedSuffix,
+        TenantResidencyRefusal.LastRegion => LastRegionSuffix,
         _ => null,
     };
 

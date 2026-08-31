@@ -1,3 +1,7 @@
+using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Tenancy;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
 
@@ -46,6 +50,9 @@ public sealed partial class TenantsWorkspace : IDisposable
 
     private readonly ITenancyDomain _domain;
     private readonly IExplorerPluginAccessStore _store;
+    private readonly IExplorerShellPreferences? _preferences;
+    private readonly IExplorerShellRouter? _router;
+    private readonly Action<ExplorerRoute>? _routeChanged;
 
     // Reused across page changes and reloads: the list re-renders on every gate
     // change and every busy transition, and rebuilding a fresh collection each
@@ -60,6 +67,16 @@ public sealed partial class TenantsWorkspace : IDisposable
 
     private IReadOnlyList<ExplorerTenantSummary> _tenants = NoTenants;
 
+    // The status the last listing read returned, or null before the first read.
+    // What lets an empty list say whether the cluster refused, failed, or simply
+    // had nothing to report.
+    private TenantOperationStatus? _listStatus;
+
+    // The state message's inputs as last composed, so a busy transition that
+    // does not change the answer recomposes nothing.
+    private ExplorerStateKind? _listKind;
+    private string? _listDetail;
+
     /// <summary>
     /// Creates the workspace over the plugin's domain contract and the keyed
     /// access store its gate publishes into. Reads the current gate decision
@@ -68,17 +85,43 @@ public sealed partial class TenantsWorkspace : IDisposable
     /// </summary>
     /// <param name="domain">The plugin's controlled domain contract. Must not be <see langword="null"/>.</param>
     /// <param name="store">The keyed plugin access store. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
-    public TenantsWorkspace(ITenancyDomain domain, IExplorerPluginAccessStore store)
+    /// <param name="preferences">
+    /// The shell's preference contract, through which the open sub-surface is
+    /// remembered between sessions. Optional: a head composed without it keeps
+    /// the surface for the life of the circuit and no longer.
+    /// </param>
+    /// <param name="router">
+    /// The shell's router, through which the open sub-surface is addressable.
+    /// Optional: a head composed without it keeps the surface out of the URL.
+    /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="domain"/> or <paramref name="store"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    public TenantsWorkspace(
+        ITenancyDomain domain,
+        IExplorerPluginAccessStore store,
+        IExplorerShellPreferences? preferences = null,
+        IExplorerShellRouter? router = null)
     {
         ArgumentNullException.ThrowIfNull(domain);
         ArgumentNullException.ThrowIfNull(store);
 
         _domain = domain;
         _store = store;
+        _preferences = preferences;
+        _router = router;
 
         ReadAccess();
         _store.Changed += OnAccessChanged;
+
+        if (_router is not null)
+        {
+            // Bound once rather than per subscription, so unsubscribing in
+            // Dispose removes the same delegate instance that was added.
+            _routeChanged = OnRouteChanged;
+            _router.RouteChanged += _routeChanged;
+        }
     }
 
     /// <summary>Raised whenever the observable state changes, so the views re-render.</summary>
@@ -108,6 +151,40 @@ public sealed partial class TenantsWorkspace : IDisposable
     /// </summary>
     public string? AccessReason { get; private set; }
 
+    /// <summary>
+    /// What a refused caller is missing and who issues it, exactly as the gate
+    /// declared it. The panel renders a denial's remedy from this rather than
+    /// from the area's own label, so the reader is told which permission to ask
+    /// for and whom to ask.
+    /// </summary>
+    public ExplorerAccessRemedy AccessRemedy { get; private set; }
+
+    /// <summary>
+    /// The refusal to render, or <see langword="null"/> when the gate admits the
+    /// caller. Composed when the gate's answer changes rather than per render,
+    /// and never composed at all for an allowed caller.
+    /// </summary>
+    public ExplorerStateMessage? AccessMessage { get; private set; }
+
+    /// <summary>
+    /// What to do about a refusal, in one sentence: the gate's own remedy when it
+    /// declared one - which names the missing permission and who issues it - and
+    /// the copy layer's general remedy when it did not. Never
+    /// <see langword="null"/> while <see cref="AccessMessage"/> is non-null,
+    /// because a refusal with no remedy is the defect this path exists to
+    /// prevent.
+    /// </summary>
+    public string? AccessRemedyText { get; private set; }
+
+    /// <summary>
+    /// Why the tenant list has nothing to show - loading, genuinely empty, cut
+    /// down by the tenant scope in force, refused, or failed - or
+    /// <see langword="null"/> when it has rows. The distinction is the point: an
+    /// empty list that cannot say <em>why</em> it is empty is the defect this
+    /// replaces.
+    /// </summary>
+    public ExplorerStateMessage? ListMessage { get; private set; }
+
     /// <summary>Whether a request is in flight, so every action renders disabled.</summary>
     public bool Busy { get; private set; }
 
@@ -124,12 +201,37 @@ public sealed partial class TenantsWorkspace : IDisposable
     /// </summary>
     public string? LastMessage { get; private set; }
 
-    /// <summary>The status-banner modifier class for <see cref="LastStatus"/>.</summary>
+    /// <summary>
+    /// The status-banner modifier class for <see cref="LastStatus"/>.
+    /// </summary>
     public string LastResultClass =>
         LastStatus is { } status ? TenantRefusal.ResultClass(status) : string.Empty;
 
+    /// <summary>
+    /// The banner modifier class for <see cref="AccessMessage"/>: an absent
+    /// capability is a statement about the cluster, everything else is a
+    /// statement about the caller.
+    /// </summary>
+    public string AccessStatusClass => Unavailable ? "is-unavailable" : "is-denied";
+
     /// <summary>The active internal sub-surface, one of <see cref="TenantsSurfaces"/>'s ids.</summary>
-    public string ActiveSurfaceId { get; private set; } = TenantsSurfaces.Tenants;
+    public string ActiveSurfaceId { get; private set; } = TenantsSurfaces.Overview;
+
+    /// <summary>
+    /// The tenant the whole Explorer is currently scoped to, or
+    /// <see langword="null"/> when none is established. Read from the same seam
+    /// the shell's tenant picker reads, so the list and the picker cannot
+    /// disagree about which tenant is active.
+    /// </summary>
+    public string? ActiveTenantId => _domain.ActiveTenant?.Value;
+
+    /// <summary>
+    /// Whether the caller has asked to see every reachable tenant rather than
+    /// only the active one. Distinguishes an empty list that is genuinely empty
+    /// from one the tenant scope emptied.
+    /// </summary>
+    public bool IsAllTenantsScope =>
+        _domain.RequestedVisibility == ExplorerTenantVisibility.AllTenants;
 
     /// <summary>
     /// The current page of the tenant list, in the order the cluster returned.
@@ -181,7 +283,16 @@ public sealed partial class TenantsWorkspace : IDisposable
     /// Loads the surface: the tenant list and the first page's headline usage. A
     /// no-op beyond the gate read when the gate does not admit the caller.
     /// </summary>
-    public Task InitializeAsync() => ReloadAsync();
+    /// <remarks>
+    /// Restores the sub-surface first - from the address if one names a surface,
+    /// otherwise from what the caller last had open - so the load that follows is
+    /// the load the restored surface needs rather than the default one's.
+    /// </remarks>
+    public async Task InitializeAsync()
+    {
+        await RestoreSurfaceAsync().ConfigureAwait(false);
+        await ReloadAsync().ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Reloads the tenant list from the cluster, discarding cached headline
@@ -192,6 +303,7 @@ public sealed partial class TenantsWorkspace : IDisposable
         ClearResult();
         if (!Allowed || Busy)
         {
+            UpdateListState();
             RaiseChanged();
             return;
         }
@@ -200,6 +312,7 @@ public sealed partial class TenantsWorkspace : IDisposable
         try
         {
             var listed = await _domain.Tenants.ListAccessibleTenantsAsync().ConfigureAwait(false);
+            _listStatus = listed.Status;
             if (!listed.IsSuccess)
             {
                 _tenants = NoTenants;
@@ -236,16 +349,35 @@ public sealed partial class TenantsWorkspace : IDisposable
 
     /// <summary>
     /// Activates <paramref name="surfaceId"/> and loads its data if it has not
-    /// been loaded for the selected tenant yet.
+    /// been loaded for the selected tenant yet, then remembers it and puts it in
+    /// the address.
     /// </summary>
     /// <param name="surfaceId">The sub-surface id to activate.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="surfaceId"/> is <see langword="null"/>.</exception>
     public async Task SelectSurfaceAsync(string surfaceId)
     {
         ArgumentNullException.ThrowIfNull(surfaceId);
 
-        if (Busy || string.Equals(ActiveSurfaceId, surfaceId, StringComparison.Ordinal))
+        if (!await ActivateSurfaceAsync(surfaceId).ConfigureAwait(false))
         {
             return;
+        }
+
+        await RememberSurfaceAsync(surfaceId, replaceHistoryEntry: false).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Activates <paramref name="surfaceId"/> without persisting or addressing
+    /// it, and reports whether it actually changed. The half a restore and a
+    /// browser Back share with an explicit tab click.
+    /// </summary>
+    private async Task<bool> ActivateSurfaceAsync(string surfaceId)
+    {
+        if (Busy
+            || !TenantsSurfaces.IsKnown(surfaceId)
+            || string.Equals(ActiveSurfaceId, surfaceId, StringComparison.Ordinal))
+        {
+            return false;
         }
 
         ActiveSurfaceId = surfaceId;
@@ -267,6 +399,8 @@ public sealed partial class TenantsWorkspace : IDisposable
         {
             EndBusy();
         }
+
+        return true;
     }
 
     /// <summary>
@@ -304,7 +438,15 @@ public sealed partial class TenantsWorkspace : IDisposable
     public Task PreviousPageAsync() => GoToPageAsync(PageIndex - 1);
 
     /// <inheritdoc />
-    public void Dispose() => _store.Changed -= OnAccessChanged;
+    public void Dispose()
+    {
+        _store.Changed -= OnAccessChanged;
+
+        if (_router is not null && _routeChanged is not null)
+        {
+            _router.RouteChanged -= _routeChanged;
+        }
+    }
 
     private async Task GoToPageAsync(int pageIndex)
     {
@@ -350,7 +492,6 @@ public sealed partial class TenantsWorkspace : IDisposable
         TenantsSurfaces.Access => LoadAccessAsync(force),
         _ => Task.CompletedTask,
     };
-
     /// <summary>
     /// Reads headline usage for the tenants on the page in view, skipping any
     /// already cached. Bounded by the page, so the cluster is asked for at most
@@ -437,6 +578,124 @@ public sealed partial class TenantsWorkspace : IDisposable
         AuthenticationRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
         Unavailable = access.State == ExplorerPluginAccessState.Unavailable;
         AccessReason = access.Reason;
+        AccessRemedy = access.Remedy;
+
+        // Composed here, when the gate's answer changes, rather than on the
+        // render path: the panel re-renders on every load and every busy
+        // transition, and an allowed caller composes nothing at all.
+        AccessMessage = ExplorerAccessCopy.For(
+            ExplorerVocabulary.TenantAdministrationArea,
+            access.IsAllowed,
+            requiresSignIn: AuthenticationRequired,
+            isUnavailable: Unavailable);
+
+        // The gate names the missing permission and its audience; the copy layer
+        // knows only the surface label. Prefer the gate, and fall back to the
+        // copy layer's general remedy rather than to nothing.
+        AccessRemedyText = AccessMessage is null
+            ? null
+            : access.Remedy.Describe() ?? AccessMessage.Remedy;
+
+        UpdateListState();
+    }
+
+    /// <summary>
+    /// Recomputes why the tenant list has nothing to show. Called whenever the
+    /// gate decision, the busy flag, or the listing itself changes, so the answer
+    /// is a cached field rather than something composed per render.
+    /// </summary>
+    /// <remarks>
+    /// The kind is <em>picked</em>, never defaulted to
+    /// <see cref="ExplorerStateKind.Empty"/>: "empty" explicitly asserts that
+    /// nothing is being hidden or filtered, which is a claim this surface can
+    /// only make once it knows the caller is admitted, the read succeeded, and no
+    /// tenant scope is narrowing the answer.
+    /// </remarks>
+    private void UpdateListState()
+    {
+        var subject = ExplorerSubjects.Tenants;
+
+        // The kind and the one runtime value that specialises it, decided first.
+        // Composing is then skipped entirely when the answer has not moved, which
+        // matters because this runs on every busy transition and two of the
+        // composed forms (a named tenant, a named grant, a cluster's own error
+        // text) allocate.
+        var kind = ExplorerStateKind.Loading;
+        string? detail = null;
+
+        if (Unavailable)
+        {
+            kind = ExplorerStateKind.Unavailable;
+        }
+        else if (AuthenticationRequired)
+        {
+            kind = ExplorerStateKind.SignInRequired;
+        }
+        else if (!Allowed)
+        {
+            kind = ExplorerStateKind.NotPermitted;
+            detail = AccessRemedy.Permission;
+        }
+        else if (_listStatus is { } status && status != TenantOperationStatus.Succeeded)
+        {
+            switch (status)
+            {
+                case TenantOperationStatus.Denied:
+                    kind = ExplorerStateKind.NotPermitted;
+                    detail = AccessRemedy.Permission;
+                    break;
+                case TenantOperationStatus.AuthenticationRequired:
+                    kind = ExplorerStateKind.SignInRequired;
+                    break;
+                case TenantOperationStatus.Unavailable:
+                    kind = ExplorerStateKind.Unavailable;
+                    break;
+                default:
+                    kind = ExplorerStateKind.Failed;
+                    detail = LastMessage;
+                    break;
+            }
+        }
+        else if (_tenants.Count != 0)
+        {
+            // There is something to show, so there is nothing to explain.
+            _listKind = null;
+            _listDetail = null;
+            ListMessage = null;
+            return;
+        }
+        else if (!Busy && _listStatus is not null)
+        {
+            // The cluster answered, and answered with nothing. Only now can the
+            // surface say whether that is genuine absence or the tenant scope.
+            if (!IsAllTenantsScope && ActiveTenantId is { Length: > 0 } tenant)
+            {
+                kind = ExplorerStateKind.ScopedOut;
+                detail = tenant;
+            }
+            else
+            {
+                kind = ExplorerStateKind.Empty;
+            }
+        }
+
+        if (_listKind == kind && string.Equals(_listDetail, detail, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _listKind = kind;
+        _listDetail = detail;
+        ListMessage = kind switch
+        {
+            ExplorerStateKind.Unavailable => ExplorerStateCopy.Unavailable(subject),
+            ExplorerStateKind.SignInRequired => ExplorerStateCopy.SignInRequired(subject),
+            ExplorerStateKind.NotPermitted => ExplorerStateCopy.NotPermitted(subject, detail),
+            ExplorerStateKind.Failed => ExplorerStateCopy.Failed(subject, detail),
+            ExplorerStateKind.ScopedOut => ExplorerStateCopy.ScopedOut(subject, detail),
+            ExplorerStateKind.Empty => ExplorerStateCopy.Empty(subject),
+            _ => ExplorerStateCopy.Loading(subject),
+        };
     }
 
     private void OnAccessChanged(ExplorerPluginAccessChange change)
@@ -466,12 +725,14 @@ public sealed partial class TenantsWorkspace : IDisposable
     private void BeginBusy()
     {
         Busy = true;
+        UpdateListState();
         RaiseChanged();
     }
 
     private void EndBusy()
     {
         Busy = false;
+        UpdateListState();
         RaiseChanged();
     }
 

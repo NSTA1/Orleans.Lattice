@@ -138,7 +138,7 @@ public sealed class MyTenantCompactReflowRenderTests
             AdaptiveReflowAssert.ControlSurvivesTheReflow(
                 expanded, compact, "lxm-destructive-action", MembersSurface);
             AdaptiveReflowAssert.ControlSurvivesTheReflow(
-                expanded, compact, ">Remove</button>", MembersSurface);
+                expanded, compact, ">Remove<", MembersSurface);
         });
     }
 
@@ -204,9 +204,9 @@ public sealed class MyTenantCompactReflowRenderTests
         Assert.Multiple(() =>
         {
             AdaptiveReflowAssert.ControlSurvivesTheReflow(
-                expanded, compact, ">Add</button>", RegionsSurface);
+                expanded, compact, ">Add<", RegionsSurface);
             AdaptiveReflowAssert.ControlSurvivesTheReflow(
-                expanded, compact, ">Remove</button>", RegionsSurface);
+                expanded, compact, ">Remove<", RegionsSurface);
         });
     }
 

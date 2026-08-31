@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
@@ -6,9 +7,10 @@ using Orleans.Lattice.Explorer.Plugins.Tenants;
 namespace Orleans.Lattice.Explorer.Tests.Tenants;
 
 /// <summary>
-/// What the Tenants panel actually renders: the gate states an operator sees,
-/// the tenant list at each breakpoint, and - the point of the fixture - that
-/// no quota figure and no grant can reach the screen without saying what it is.
+/// What the tenant administration panel actually renders: the gate states an
+/// operator sees, the tenant list at each breakpoint, and - the point of the
+/// fixture - that no quota figure and no grant can reach the screen without
+/// saying what it is.
 /// </summary>
 [TestFixture]
 public sealed class TenantsPanelRenderTests
@@ -35,14 +37,47 @@ public sealed class TenantsPanelRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("reserved for platform operators"));
+            // The refusal comes from the shared copy layer, so it names the
+            // surface the settled way rather than inventing a second wording.
+            Assert.That(html, Does.Contain("is not available to your account"));
             Assert.That(html, Does.Contain("not an administrator"));
 
             // Disabled, not hidden: the surface still renders so a caller can see
             // it exists and is not theirs.
             Assert.That(html, Does.Contain("lxt-panel"));
-            Assert.That(html, Does.Contain("Tenants"));
+            Assert.That(html, Does.Contain(ExplorerVocabulary.TenantAdministrationArea));
         });
+    }
+
+    [Test]
+    public async Task A_denial_states_the_remedy_the_gate_declared_and_not_the_area_label()
+    {
+        var html = await TenantsRenderHarness.RenderPanelAsync(
+            TenantsRenderHarness.SeededDomain(),
+            ExplorerPluginAccess.Deny(
+                "not an administrator",
+                ExplorerAccessRemedy.Requiring("Admin", "a platform administrator")));
+
+        Assert.Multiple(() =>
+        {
+            // The missing permission and who issues it - the two facts a denial
+            // that says only "not available for your account" leaves out.
+            Assert.That(html, Does.Contain("Requires the Admin permission"));
+            Assert.That(html, Does.Contain("a platform administrator"));
+            Assert.That(html, Does.Contain(ExplorerVocabulary.RemedyLabel));
+        });
+    }
+
+    [Test]
+    public async Task A_denial_that_declares_no_remedy_still_states_one()
+    {
+        var html = await TenantsRenderHarness.RenderPanelAsync(
+            TenantsRenderHarness.SeededDomain(),
+            ExplorerPluginAccess.Deny("not an administrator"));
+
+        // Falls back to the copy layer's general remedy rather than to nothing:
+        // a refusal with no remedy is the defect this path exists to prevent.
+        Assert.That(html, Does.Contain("Ask an operator to grant your account access"));
     }
 
     [Test]
@@ -64,9 +99,12 @@ public sealed class TenantsPanelRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("not signed in"));
-            Assert.That(html, Does.Contain("sign in"));
-            Assert.That(html, Does.Not.Contain("reserved for platform operators"));
+            Assert.That(html, Does.Contain("Sign in to use " + ExplorerVocabulary.TenantAdministrationArea));
+            Assert.That(html, Does.Contain("only to a signed-in identity"));
+
+            // An anonymous caller is never told the grant was withheld: that is
+            // the measured defect this area was one of.
+            Assert.That(html, Does.Not.Contain("is not available to your account"));
         });
     }
 
@@ -79,7 +117,7 @@ public sealed class TenantsPanelRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("does not serve tenant administration"));
+            Assert.That(html, Does.Contain("is not enabled on this cluster"));
             Assert.That(html, Does.Contain("no tenancy add-on here"));
 
             // Nothing else at all: no tabs, no list, no actions.
@@ -116,9 +154,16 @@ public sealed class TenantsPanelRenderTests
             Assert.That(html, Does.Contain("lx-cardlist"));
             Assert.That(html, Does.Not.Contain("<table"));
 
-            // The row-action column opts out of the card presentation, so a card
-            // stays readable rather than growing a button row.
-            Assert.That(html, Does.Not.Contain("lxt-row-actions"));
+            // The lifecycle-action column opts out of the card presentation, so a
+            // card stays readable rather than growing a button row.
+            Assert.That(html, Does.Not.Contain("Manage"));
+            Assert.That(html, Does.Not.Contain("Suspend"));
+            Assert.That(html, Does.Not.Contain("lxt-danger"));
+
+            // Scoping the Explorer to a tenant is how a caller reaches the rest
+            // of the product, so unlike the lifecycle actions it survives the
+            // reflow.
+            Assert.That(html, Does.Contain("Set as active tenant"));
         });
     }
 
@@ -141,11 +186,19 @@ public sealed class TenantsPanelRenderTests
     }
 
     [Test]
-    public async Task An_empty_cluster_says_so_rather_than_rendering_a_bare_table()
+    public async Task An_empty_cluster_says_which_kind_of_empty_it_is()
     {
         var html = await TenantsRenderHarness.RenderPanelAsync(new FakeTenancyDomain());
 
-        Assert.That(html, Does.Contain("No tenants are visible to your account."));
+        Assert.Multiple(() =>
+        {
+            // Genuine absence, and it says so explicitly rather than leaving the
+            // reader to guess between absent, scoped out and not permitted.
+            Assert.That(html, Does.Contain("No tenants yet"));
+            Assert.That(html, Does.Contain("Nothing is being hidden from you"));
+            Assert.That(html, Does.Not.Contain("You cannot see tenants here"));
+            Assert.That(html, Does.Not.Contain("No tenants in this tenant"));
+        });
     }
 
     [Test]
@@ -160,8 +213,13 @@ public sealed class TenantsPanelRenderTests
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("Default"));
-            Assert.That(html, Does.Contain("cannot be deleted"));
-            Assert.That(html, Does.Contain("cannot be suspended"));
+
+            // The rule is reachable rather than sitting in a title attribute:
+            // once as the badge's own visually-hidden expansion, and once as the
+            // description the inert controls point at.
+            Assert.That(html, Does.Contain("cannot be suspended, deleted"));
+            Assert.That(html, Does.Contain("aria-describedby=\"lxt-default-tenant-rule\""));
+            Assert.That(html, Does.Not.Contain("title=\"The reserved default tenant"));
         });
     }
 

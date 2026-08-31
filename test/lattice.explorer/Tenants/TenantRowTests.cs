@@ -36,6 +36,29 @@ public sealed class TenantRowTests
         {
             Assert.That(row.IsSuspended, Is.True);
             Assert.That(row.StatusLabel, Is.EqualTo("Suspended"));
+            Assert.That(row.StatusExplanation, Is.EqualTo(TenantRow.SuspendedExplanation));
+        });
+    }
+
+    [Test]
+    public void A_lifecycle_state_carries_the_sentence_that_explains_it()
+    {
+        // The two tenant lifecycle states have no glossary term of their own, so
+        // the badge carries the meaning as its own visually-hidden expansion
+        // rather than in a title attribute a keyboard or touch caller cannot
+        // reach.
+        var active = TenantRow.From(SampleTenants.Summary(), SampleTenants.Usage());
+        var suspended = TenantRow.From(
+            SampleTenants.Summary(status: ExplorerTenantLifecycle.Suspended),
+            SampleTenants.Usage());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(active.StatusExplanation, Is.EqualTo(TenantRow.ActiveExplanation));
+            Assert.That(suspended.StatusExplanation, Is.EqualTo(TenantRow.SuspendedExplanation));
+            Assert.That(active.StatusExplanation, Is.Not.EqualTo(suspended.StatusExplanation));
+            Assert.That(TenantRow.ActiveExplanation, Is.Not.Empty);
+            Assert.That(TenantRow.SuspendedExplanation, Is.Not.Empty);
         });
     }
 

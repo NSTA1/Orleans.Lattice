@@ -1,7 +1,12 @@
 @*
-    The tenant list and its lifecycle operations: one row per tenant with its
-    state, the reserved-default marker, and its headline usage, plus the create
-    form and the per-row lifecycle actions.
+    The Overview surface: one row per tenant with its state, the reserved-default
+    marker, its headline usage, and the action that makes it the tenant the whole
+    Explorer reads as - plus the create form and the per-row lifecycle actions.
+
+    "Set as active tenant" drives the shell's own tenant picker through the
+    shared switcher, so the list and the picker are two views of one value rather
+    than two disconnected lists. It is gated and fails closed; a refusal is
+    stated, never swallowed.
 
     The list renders through the design system's adaptive table, so it is a
     table at medium and wider and reflows to a card list at compact rather than
@@ -10,6 +15,11 @@
 
     Suspend and delete never fire from the click that asks for them: both build
     a confirmation the dialog renders.
+
+    Nothing here explains itself in a title attribute. A title is unreachable by
+    keyboard and by touch, so a rule that governs whether a control works is
+    either visible text, a visually-hidden expansion beside the badge it
+    qualifies, or a real help disclosure.
 *@
 
 <div class="lxt-list">
@@ -56,12 +66,39 @@
         </form>
     }
 
-    <LatticeAdaptiveTable TItem="TenantRow"
-                          Items="State.Page"
-                          Columns="_columns"
-                          KeySelector="_key"
-                          Label="Tenants"
-                          EmptyText="No tenants are visible to your account." />
+    @*
+        Referenced by aria-describedby from every control the reserved default
+        tenant makes inert. Rendered once rather than per row, and in the DOM
+        whether or not a default tenant is on this page, so a description a
+        control points at always resolves.
+    *@
+    <span id="@DefaultTenantRuleId" class="lx-visually-hidden">@DefaultTenantRule</span>
+
+    @if (State.Page.Count == 0 && State.ListMessage is { } state)
+    {
+        @*
+            The kind is picked, never defaulted: this says whether the list is
+            empty because nothing is there, because the tenant scope narrowed it,
+            because the caller may not read it, or because the read failed.
+        *@
+        <div class="lxt-empty-state" role="status">
+            <p class="lxt-status-headline">@state.Headline</p>
+            <p class="lxt-status-detail">@state.Explanation</p>
+            @if (state.Remedy is { Length: > 0 } remedy)
+            {
+                <p class="lxt-status-remedy"><strong>@state.RemedyLabel</strong> @remedy</p>
+            }
+        </div>
+    }
+    else
+    {
+        <LatticeAdaptiveTable TItem="TenantRow"
+                              Items="State.Page"
+                              Columns="_columns"
+                              KeySelector="_key"
+                              Label="Tenants on this cluster"
+                              EmptyText="@EmptyTableText" />
+    }
 
     @if (State.PageCount > 1)
     {
@@ -77,6 +114,18 @@
 </div>
 
 @code {
+    /// <summary>
+    /// The id of the single visually-hidden element every control the reserved
+    /// default tenant makes inert points at.
+    /// </summary>
+    private const string DefaultTenantRuleId = "lxt-default-tenant-rule";
+
+    private const string DefaultTenantRule =
+        "The reserved default tenant owns un-prefixed trees. It cannot be suspended, deleted, "
+        + "or have its admin subjects or grants edited.";
+
+    private const string OverQuotaRule = " - at least one quota dimension is over its ceiling.";
+
     // The row identity is the tenant id, a reference, so diffing a page costs no
     // boxing per row per render.
     private static readonly Func<TenantRow, object> _key = static row => row.TenantId;
@@ -87,6 +136,11 @@
 
     /// <summary>The workspace this view renders.</summary>
     [Parameter, EditorRequired] public TenantsWorkspace State { get; set; } = default!;
+
+    // The table renders its own empty text only in the window between a page
+    // clearing and the state message settling, so it says the same thing the
+    // state block does rather than a second, vaguer wording.
+    private string EmptyTableText => State.ListMessage?.Headline ?? string.Empty;
 
     /// <inheritdoc />
     protected override void OnInitialized() =>
@@ -105,14 +159,37 @@
                     @row.TenantId
                     @if (row.IsDefault)
                     {
-                        <span class="lxt-badge is-default" title="The reserved default tenant, which owns un-prefixed trees. It cannot be suspended, deleted, or have its admin subjects or grants edited.">@row.DefaultLabel</span>
+                        <span class="lxt-badge is-default">
+                            @row.DefaultLabel<span class="lx-visually-hidden"> - @DefaultTenantRule</span>
+                        </span>
                     }
                 </span>,
             },
             new LatticeTableColumn<TenantRow>
             {
                 Header = "Status",
-                Cell = row => @<span class="lxt-badge @(row.IsSuspended ? "is-suspended" : "is-active")">@row.StatusLabel</span>,
+                Cell = row => @<span class="lxt-badge @(row.IsSuspended ? "is-suspended" : "is-active")">
+                    @row.StatusLabel<span class="lx-visually-hidden"> - @row.StatusExplanation</span>
+                </span>,
+            },
+            new LatticeTableColumn<TenantRow>
+            {
+                // Kept on every presentation, unlike the lifecycle actions:
+                // scoping the Explorer to a tenant is how a caller reaches the
+                // rest of the product, so it must not disappear on a phone.
+                Header = "Scope",
+                Cell = row => @<span class="lxt-row-actions">
+                    @if (State.IsActiveTenant(row.TenantId))
+                    {
+                        <span class="lxt-badge is-active-scope">@ExplorerVocabulary.ActiveTenantLabel</span>
+                    }
+                    else
+                    {
+                        <button type="button" class="lx-btn lxt-row-action"
+                                disabled="@(!State.CanSetActiveTenant(row.TenantId))"
+                                @onclick="Actions(row.TenantId).SetActive">Set as active tenant</button>
+                    }
+                </span>,
             },
             new LatticeTableColumn<TenantRow>
             {
@@ -134,7 +211,9 @@
                     @row.TreesText
                     @if (row.IsOverQuota)
                     {
-                        <span class="lxt-badge is-over" title="At least one quota dimension is over its ceiling.">Over quota</span>
+                        <span class="lxt-badge is-over">
+                            Over quota<span class="lx-visually-hidden">@OverQuotaRule</span>
+                        </span>
                     }
                 </span>,
             },
@@ -142,8 +221,8 @@
             {
                 Header = "Actions",
                 // A row of buttons is unreadable inside a card, and every action
-                // is reachable from the selected tenant's own surfaces, so the
-                // column stays on the table presentation only.
+                // here is reachable from the selected tenant's own surfaces, so
+                // the column stays on the table presentation only.
                 ShowOnCompact = false,
                 Cell = row => @<span class="lxt-row-actions">
                     <button type="button" class="lx-btn lxt-row-action"
@@ -153,26 +232,27 @@
                     {
                         <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@(State.Busy || row.IsDefault)"
+                                aria-describedby="@(row.IsDefault ? DefaultTenantRuleId : null)"
                                 @onclick="Actions(row.TenantId).Resume">Resume</button>
                     }
                     else
                     {
                         <button type="button" class="lx-btn lxt-row-action"
                                 disabled="@(State.Busy || row.IsDefault)"
-                                title="@(row.IsDefault ? "The reserved default tenant cannot be suspended." : null)"
+                                aria-describedby="@(row.IsDefault ? DefaultTenantRuleId : null)"
                                 @onclick="Actions(row.TenantId).Suspend">Suspend</button>
                     }
                     <button type="button" class="lx-btn lxt-row-action lxt-danger"
                             disabled="@(State.Busy || row.IsDefault)"
-                            title="@(row.IsDefault ? "The reserved default tenant cannot be deleted." : null)"
+                            aria-describedby="@(row.IsDefault ? DefaultTenantRuleId : null)"
                             @onclick="Actions(row.TenantId).Delete">Delete</button>
                 </span>,
             },
         ];
 
     /// <summary>
-    /// The four lifecycle callbacks for one tenant, bound once and reused on
-    /// every later render of that row.
+    /// The five callbacks for one tenant, bound once and reused on every later
+    /// render of that row.
     /// </summary>
     /// <remarks>
     /// Writing the lambdas inline in the cell template allocated a closure and an
@@ -203,7 +283,7 @@
         return actions;
     }
 
-    /// <summary>One tenant row's pre-bound lifecycle callbacks.</summary>
+    /// <summary>One tenant row's pre-bound callbacks.</summary>
     private sealed class RowActions
     {
         public RowActions(TenantListView view, string tenantId)
@@ -212,6 +292,7 @@
             Resume = EventCallback.Factory.Create(view, () => view.State.ResumeTenantAsync(tenantId));
             Suspend = EventCallback.Factory.Create(view, () => view.State.RequestSuspend(tenantId));
             Delete = EventCallback.Factory.Create(view, () => view.State.RequestDeleteAsync(tenantId));
+            SetActive = EventCallback.Factory.Create(view, () => view.State.SetActiveTenantAsync(tenantId));
         }
 
         public EventCallback Manage { get; }
@@ -221,5 +302,7 @@
         public EventCallback Suspend { get; }
 
         public EventCallback Delete { get; }
+
+        public EventCallback SetActive { get; }
     }
 }

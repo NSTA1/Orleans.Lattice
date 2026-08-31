@@ -17,7 +17,12 @@
     else
     {
         <div class="lxm-quota-head">
-            <span class="@ScopeBadgeClass" title="@State.Caption">
+            @*
+                The caption is rendered in full immediately below, so repeating
+                it in a title here would only duplicate it somewhere a keyboard
+                or touch caller cannot reach.
+            *@
+            <span class="@ScopeBadgeClass">
                 @(State.EnforcementScope is { } scope ? TenantQuotaLabels.EnforcementLabel(scope) : null)
             </span>
             <button type="button"
