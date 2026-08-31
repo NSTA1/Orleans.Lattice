@@ -89,7 +89,8 @@ is the only entry point; `loadMode` selects a full load or a lazy partial one.
 | `UpsertAsync`, `RemoveAsync` | Incremental maintenance. |
 | `TryGetId`, `TryGetKey` | Resolve between an external string identifier and the index's `long` key. |
 | `FlushAsync` | Persist the partitions whose stamps moved. |
-| `Search`, `SearchAsync` | Query, returning a `VectorSearchOutcome`. |
+| `Search` | Synchronous and allocation-free, into a caller-owned span. Returns the number of hits written and reports the path through an `out` parameter. Under a lazy load it answers from whatever cells are already resident. |
+| `SearchAsync` | Query, returning a `VectorSearchOutcome`. Under a lazy load it fetches any cell the query would probe. |
 | `ReconcileAsync` | Bounded sweep against the store of record, always settling in the source's favour. |
 | `RebuildAsync`, `RetrainAsync` | Full rebuild, and re-partition in place after distribution drift. |
 
