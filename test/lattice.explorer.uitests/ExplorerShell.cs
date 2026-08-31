@@ -196,8 +196,15 @@ internal static class ExplorerShell
 
     /// <summary>Asserts a credential is applied, so the shell renders the signed-in identity.</summary>
     /// <param name="page">The page to check.</param>
-    internal static Task AssertSignedInAsync(IPage page) =>
-        Assertions.Expect(page.Locator(SignedInNameSelector)).ToHaveTextAsync(TestUsername);
+    internal static Task AssertSignedInAsync(IPage page) => AssertSignedInAsync(page, TestUsername);
+
+    /// <summary>
+    /// Asserts the shell renders <paramref name="username"/> as the signed-in identity.
+    /// </summary>
+    /// <param name="page">The page to check.</param>
+    /// <param name="username">The identity expected to be in effect.</param>
+    internal static Task AssertSignedInAsync(IPage page, string username) =>
+        Assertions.Expect(page.Locator(SignedInNameSelector)).ToHaveTextAsync(username);
 
     /// <summary>
     /// Signs in through the shell's own affordance - open the dialog, fill the form,
@@ -211,7 +218,21 @@ internal static class ExplorerShell
     /// </para>
     /// </summary>
     /// <param name="page">The page to sign in on.</param>
-    internal static async Task SignInAsync(IPage page)
+    internal static Task SignInAsync(IPage page) => SignInAsync(page, TestUsername);
+
+    /// <summary>
+    /// Signs in as <paramref name="username"/> through the shell's own affordance, and
+    /// proves the shell rendered that identity before returning.
+    /// <para>
+    /// The endpoint is deliberately unreachable so nothing validates the pair against a
+    /// server; the username is what the head's own seams key their answers off, which
+    /// is how the journey suite tells a platform operator from a restricted reader
+    /// without a cluster.
+    /// </para>
+    /// </summary>
+    /// <param name="page">The page to sign in on.</param>
+    /// <param name="username">The identity to sign in as.</param>
+    internal static async Task SignInAsync(IPage page, string username)
     {
         await Assertions.Expect(page.Locator(SignInButtonSelector)).ToBeVisibleAsync();
         await page.Locator(SignInButtonSelector).ClickAsync();
@@ -219,7 +240,7 @@ internal static class ExplorerShell
         var form = page.Locator(LoginFormSelector);
         await Assertions.Expect(form).ToBeVisibleAsync();
 
-        await form.Locator("input[name='username']").FillAsync(TestUsername);
+        await form.Locator("input[name='username']").FillAsync(username);
         await form.Locator("input[name='password']").FillAsync(TestPassword);
         await form.Locator("button[type='submit']").ClickAsync();
 
@@ -228,7 +249,7 @@ internal static class ExplorerShell
         // assert the identity actually rendered - a sign-in that silently failed would
         // otherwise hand every "signed in" test case a signed-out surface.
         await WaitForShellReadyAsync(page);
-        await AssertSignedInAsync(page);
+        await AssertSignedInAsync(page, username);
     }
 
     /// <summary>

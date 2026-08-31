@@ -28,8 +28,13 @@ public abstract class UiTestBase
     private readonly List<IBrowserContext> _contexts = [];
     private readonly List<IPage> _pages = [];
 
-    /// <summary>The base address of the running Explorer web head.</summary>
-    protected static Uri BaseUri => ExplorerAppHostSetup.Host.BaseUri;
+    /// <summary>
+    /// The base address of the running Explorer web head this fixture drives.
+    /// Defaults to the shared disconnected, signed-out head every accessibility
+    /// fixture measures; the end-to-end journey suite overrides it to point at its own
+    /// head, which composes the same shell over a demo cluster's facts.
+    /// </summary>
+    protected virtual Uri BaseUri => ExplorerAppHostSetup.Host.BaseUri;
 
     /// <summary>
     /// Opens a fresh browser context sized to <paramref name="width"/> x
@@ -97,7 +102,7 @@ public abstract class UiTestBase
         return page;
     }
 
-    private static async Task NavigateHomeAsync(IPage page)
+    private async Task NavigateHomeAsync(IPage page)
     {
         await page.GotoAsync(BaseUri.ToString());
 

@@ -63,7 +63,21 @@ public sealed class ExplorerAppHost : IAsyncDisposable
     /// broken static-asset content root fails here with a clear message rather than as
     /// an opaque locator timeout deep inside a test.
     /// </summary>
-    public static async Task<ExplorerAppHost> StartAsync()
+    /// <param name="configureServices">
+    /// An optional hook run <b>before</b> <c>AddLatticeExplorerWeb</c>, so a
+    /// registration it makes wins the head's own <c>TryAdd</c> for the same contract.
+    /// This is the seam the end-to-end journey suite composes its world through -
+    /// a catalog reader, the tenancy seams, an extra area plugin - without a second
+    /// copy of the hosting code and without perturbing the default head every other
+    /// fixture measures. Omit it for the default disconnected, signed-out head.
+    /// </param>
+    /// <param name="configureApp">
+    /// An optional hook run after <c>MapLatticeExplorer</c>, for a test-only endpoint
+    /// the harness drives world state through.
+    /// </param>
+    public static async Task<ExplorerAppHost> StartAsync(
+        Action<IServiceCollection>? configureServices = null,
+        Action<WebApplication>? configureApp = null)
     {
         var publishRoot = await ExplorerPublishedAssets.EnsureAsync();
 
@@ -100,12 +114,19 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         // Bind port 0 and read back what the OS assigned.
         builder.WebHost.UseUrls("http://127.0.0.1:0");
 
+        // Before AddLatticeExplorerWeb, deliberately: every contract the head
+        // supplies is registered with TryAdd, so a journey's own catalog reader or
+        // tenancy seam only wins if it is already in the collection when the head
+        // registers its default.
+        configureServices?.Invoke(builder.Services);
+
         builder.Services.AddLatticeExplorerWeb();
 
         var app = builder.Build();
 
         app.UseAntiforgery();
         app.MapLatticeExplorer();
+        configureApp?.Invoke(app);
 
         await app.StartAsync();
 
