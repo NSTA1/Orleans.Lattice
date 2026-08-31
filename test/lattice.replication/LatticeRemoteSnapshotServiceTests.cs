@@ -28,7 +28,10 @@ public class LatticeRemoteSnapshotServiceTests
         => new() { Key = key, Value = value, Timestamp = ts };
 
     private static LatticeRemoteSnapshotService CreateService(ISnapshotProvider provider)
-        => new(provider, NullLogger<LatticeRemoteSnapshotService>.Instance);
+        => new(
+            provider,
+            new StubReplicationContext(Source, LatticeMergeMode.LwwRegister),
+            NullLogger<LatticeRemoteSnapshotService>.Instance);
 
     private static async IAsyncEnumerable<SnapshotEntry> EmptyEntries()
     {

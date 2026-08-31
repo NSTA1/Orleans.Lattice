@@ -88,6 +88,7 @@ public class GrpcPushTransportClientIntegrationTests
                         new CompressionDictionaryTrainingOptions { Enabled = true });
                     dictionaryProvider.TryInstall(8u, PulledDictionaryBytes);
                     services.AddSingleton<ILatticeCompressionDictionaryProvider>(dictionaryProvider);
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
                 });

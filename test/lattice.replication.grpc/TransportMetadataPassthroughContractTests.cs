@@ -86,6 +86,7 @@ public class TransportMetadataPassthroughContractTests
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     // This contract fixture validates the transport metadata
                     // pass-through round-trip rather than the shared-secret

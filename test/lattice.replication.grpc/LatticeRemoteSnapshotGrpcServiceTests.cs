@@ -1,4 +1,5 @@
 using Grpc.Core;
+using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -35,9 +36,92 @@ public class LatticeRemoteSnapshotGrpcServiceTests
     }
 
     private static LatticeRemoteSnapshotGrpcService CreateService(StubSenderSnapshotProvider sender)
+        => CreateService(sender, new AllEnrolledContext());
+
+    /// <summary>
+    /// Enrollment context reporting a merge mode for every tree, so the
+    /// sender-side export gate admits the trees the pass-through tests use.
+    /// </summary>
+    private sealed class AllEnrolledContext : ILatticeReplicationContext
     {
-        var inner = new LatticeRemoteSnapshotService(sender, NullLogger<LatticeRemoteSnapshotService>.Instance);
+        public bool IsReplicationEnabled => true;
+
+        public string LocalReplicaId => Source;
+
+        public LatticeMergeMode? ResolveMergeMode(string treeId) => LatticeMergeMode.LwwRegister;
+    }
+
+    private static LatticeRemoteSnapshotGrpcService CreateService(
+        StubSenderSnapshotProvider sender,
+        ILatticeReplicationContext replicationContext)
+    {
+        var inner = new LatticeRemoteSnapshotService(sender, replicationContext, NullLogger<LatticeRemoteSnapshotService>.Instance);
         return new LatticeRemoteSnapshotGrpcService(CreateMethods(), inner, NullLogger<LatticeRemoteSnapshotGrpcService>.Instance);
+    }
+
+    /// <summary>
+    /// Enrollment context that reports a merge mode for no tree at all, so the
+    /// sender-side export gate refuses every tree. Used to prove the refusal
+    /// reaches the wire as <see cref="StatusCode.PermissionDenied"/> rather
+    /// than being flattened into <see cref="StatusCode.Internal"/> by the
+    /// generic exception arm.
+    /// </summary>
+    private sealed class NothingEnrolledContext : ILatticeReplicationContext
+    {
+        public bool IsReplicationEnabled => true;
+
+        public string LocalReplicaId => Source;
+
+        public LatticeMergeMode? ResolveMergeMode(string treeId) => null;
+    }
+
+    [Test]
+    public void GetMetadata_maps_an_unenrolled_tree_to_permission_denied()
+    {
+        var sender = new StubSenderSnapshotProvider();
+        var service = CreateService(sender, new NothingEnrolledContext());
+        var context = new FakeServerCallContext();
+
+        var rpc = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.GetMetadata(
+                new RemoteSnapshotMetadataRequestBox { Value = new RemoteSnapshotMetadataRequest { TreeName = "sys-auth-policy", SourceClusterId = Source } },
+                context));
+
+        Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
+    public void RequestSnapshot_maps_an_unenrolled_tree_to_permission_denied()
+    {
+        var sender = new StubSenderSnapshotProvider();
+        var service = CreateService(sender, new NothingEnrolledContext());
+        var context = new FakeServerCallContext();
+        var writer = new CapturingStreamWriter<RemoteSnapshotStreamItemBox>();
+
+        var rpc = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.RequestSnapshot(
+                new RemoteSnapshotMetadataRequestBox { Value = new RemoteSnapshotMetadataRequest { TreeName = "sys-auth-policy", SourceClusterId = Source } },
+                writer,
+                context));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rpc!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(writer.Written, Is.Empty);
+        });
+    }
+
+    private sealed class CapturingStreamWriter<T> : IServerStreamWriter<T>
+    {
+        public List<T> Written { get; } = [];
+
+        public WriteOptions? WriteOptions { get; set; }
+
+        public Task WriteAsync(T message)
+        {
+            Written.Add(message);
+            return Task.CompletedTask;
+        }
     }
 
     private static async IAsyncEnumerable<SnapshotEntry> EmptyEntries()

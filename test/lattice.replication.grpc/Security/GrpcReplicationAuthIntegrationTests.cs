@@ -86,6 +86,7 @@ public class GrpcReplicationAuthIntegrationTests
                         new TestEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
 
                     // Replace the default env-var source with a fixed in-memory
