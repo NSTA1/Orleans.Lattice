@@ -1,4 +1,28 @@
 @page "/"
+@page "/{*shellPath}"
+
+@*
+    The Explorer's routable shell surface, and the one place the shell's route
+    model is bound to the browser.
+
+    Two templates, both landing here. "/" is the bare address, which means
+    "restore where I was"; the catch-all takes every addressable view the shell
+    can show - /explore/trees/orders/data, /tenants?tenant=acme, and anything a
+    future area contributes - without this file having to enumerate them. The
+    literal /not-found route still wins over the catch-all, because Blazor
+    matches a literal segment ahead of a catch-all.
+
+    Deliberately a catch-all rather than a fixed set of templates: an address is
+    parsed here by ExplorerRoutePath, not by Blazor route-parameter binding,
+    because a selection id is cluster-owned and may contain a slash (a
+    tenant-owned tree is t/acme/orders). Escaping it and parsing it ourselves is
+    what keeps such an id addressable at all. It also means an unrecognised
+    address renders the shell rather than a dead end, which is the graceful
+    degradation a stale bookmark is owed.
+
+    The markup is unchanged: the chrome around it belongs to the layout and the
+    app shell, and this page contributes only the detail surface it always did.
+*@
 
 <PageTitle>@ExplorerInfo.DisplayName</PageTitle>
 
