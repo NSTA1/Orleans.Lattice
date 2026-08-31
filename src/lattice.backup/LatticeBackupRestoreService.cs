@@ -264,6 +264,24 @@ internal sealed class LatticeBackupRestoreService(
         await authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+
+        // Authorization above gates the TARGET tree, but the alias swap below is
+        // driven by the physical tree ids carried on the caller-supplied result.
+        // Both are re-validated against server-derived registry provenance, at
+        // this seam every facade funnels through, so a caller authorized to
+        // restore one tree cannot point that tree's alias at a physical tree it
+        // does not own - which would then serve every subsequent read and write
+        // under the authorized tree's own policy.
+        await AssertPhysicalBelongsToTargetAsync(
+            registry, restore.PreviousPhysicalTreeId, restore.TargetTreeId,
+            nameof(restore.PreviousPhysicalTreeId), cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId))
+        {
+            await AssertPhysicalBelongsToTargetAsync(
+                registry, restore.ShadowPhysicalTreeId, restore.TargetTreeId,
+                nameof(restore.ShadowPhysicalTreeId), cancellationToken).ConfigureAwait(false);
+        }
+
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             if (string.Equals(restore.PreviousPhysicalTreeId, restore.TargetTreeId, StringComparison.Ordinal))
@@ -589,6 +607,22 @@ internal sealed class LatticeBackupRestoreService(
         var scope = BackupScopeSelector.WholeTree(shadow.TargetTreeId);
         await authorizer.AuthorizeRestoreAsync(scope, cancellationToken).ConfigureAwait(false);
 
+        // As on the revert path: the commit swaps the target's alias onto the
+        // physical tree named by the caller-supplied result, so that id is an
+        // assertion to check against registry provenance, never a fact to act
+        // on. A genuine build always passes - BuildShadowCoreAsync stamps the
+        // shadow it registers with this very target.
+        var commitRegistry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await AssertPhysicalBelongsToTargetAsync(
+            commitRegistry, shadow.ShadowPhysicalTreeId, shadow.TargetTreeId,
+            nameof(shadow.ShadowPhysicalTreeId), cancellationToken).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(shadow.PreviousPhysicalTreeId))
+        {
+            await AssertPhysicalBelongsToTargetAsync(
+                commitRegistry, shadow.PreviousPhysicalTreeId, shadow.TargetTreeId,
+                nameof(shadow.PreviousPhysicalTreeId), cancellationToken).ConfigureAwait(false);
+        }
+
         await CommitShadowCoreAsync(
             shadow.TargetTreeId, shadow.ShadowPhysicalTreeId,
             shadow.PreviousPhysicalTreeId, shadow.OperationId, cancellationToken)
@@ -619,6 +653,28 @@ internal sealed class LatticeBackupRestoreService(
             return;
         }
 
+        // Deleting a shadow purges every one of its shards, so it is a
+        // destructive verb and needs the same authority as restoring the tree
+        // the shadow was built for. The owning tree is taken from the shadow's
+        // own registry provenance - never from the caller-supplied id - so this
+        // seam can only ever destroy a tree the engine itself stamped as a
+        // restore shadow, and only for a caller authorized over its owner.
+        TreeRegistryEntry? shadowEntry;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            shadowEntry = await registry.GetEntryAsync(shadowPhysicalTreeId).ConfigureAwait(false);
+        }
+
+        if (shadowEntry?.RestoreShadowOfTreeId is not { } shadowOfTreeId)
+        {
+            throw new LatticeRestoreValidationException(
+                $"Tree '{shadowPhysicalTreeId}' is not a restore shadow, so it cannot be deleted through the "
+                + "coordinated-restore garbage-collection seam.");
+        }
+
+        await authorizer.AuthorizeRestoreAsync(
+            BackupScopeSelector.WholeTree(shadowOfTreeId), cancellationToken).ConfigureAwait(false);
+
         RoutingInfo routing;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
@@ -643,6 +699,61 @@ internal sealed class LatticeBackupRestoreService(
 
         logger.LogInformation("Garbage-collected orphan restore shadow physical tree {ShadowTreeId}.",
             shadowPhysicalTreeId);
+    }
+
+    /// <summary>
+    /// Fail-closed ownership check for a physical tree id that arrived on a
+    /// caller-supplied <see cref="LatticeRestoreResult"/>. A shadow-cutover
+    /// commit or revert authorizes the <b>logical</b> target tree and then
+    /// repoints that tree's registry alias at a <b>physical</b> tree named on the
+    /// result, so the physical id is peer-supplied classification: it is
+    /// re-resolved against authoritative local registry state here rather than
+    /// trusted. Without it, a caller authorized to restore one tree could point
+    /// that tree's alias at any other registered tree and then read and write the
+    /// other tree's shards under their own tree's policy, because the data-plane
+    /// access gate is bound to the logical tree id and never sees the alias.
+    /// </summary>
+    /// <remarks>
+    /// Exactly three physical ids are accepted, each established from server-side
+    /// state rather than from the request: the target itself (the un-aliased
+    /// case a revert returns to), a tree the engine stamped
+    /// <see cref="TreeRegistryEntry.RestoreShadowOfTreeId"/> for this same target
+    /// when it built it, and the target's current physical tree (honouring which
+    /// is a no-op and so cannot move the target anywhere new). Anything else is
+    /// ambiguous and therefore denied.
+    /// </remarks>
+    private async Task AssertPhysicalBelongsToTargetAsync(
+        ILatticeRegistry registry,
+        string physicalTreeId,
+        string targetTreeId,
+        string field,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.Equals(physicalTreeId, targetTreeId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        TreeRegistryEntry? entry;
+        string currentPhysical;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            entry = await registry.GetEntryAsync(physicalTreeId).ConfigureAwait(false);
+            currentPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
+        }
+
+        if (string.Equals(entry?.RestoreShadowOfTreeId, targetTreeId, StringComparison.Ordinal)
+            || string.Equals(currentPhysical, physicalTreeId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new LatticeRestoreValidationException(
+            $"Physical tree '{physicalTreeId}' supplied as '{field}' is neither a restore shadow of tree "
+            + $"'{targetTreeId}' nor that tree's current physical tree, so it cannot take part in a "
+            + "shadow-cutover commit or revert of it.");
     }
 
     /// <inheritdoc />
