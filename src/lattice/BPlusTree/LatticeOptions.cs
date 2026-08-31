@@ -1150,6 +1150,35 @@ public class LatticeOptions
     public const int DefaultLeafSnapshotReClassifyEveryNCheckpoints = 64;
 
     /// <summary>
+    /// When <c>true</c> (the default), a leaf snapshot capture encodes its
+    /// rows into the compact binary frame
+    /// (<c>LeafSnapshotBlob.EncodedRows</c>) instead of persisting them as the
+    /// legacy row object graph. The legacy shape costs a serializer property
+    /// envelope plus a base64 string for every row under the default JSON
+    /// grain-storage serializer, and its decode path allocates a string, a
+    /// scratch buffer, and a fresh array per row; the frame carries raw value
+    /// bytes and decodes straight into the entry cache.
+    /// <para>
+    /// This switch controls the <b>write</b> side only. Reading is always
+    /// dual: a blob is decoded from whichever encoding it carries, so turning
+    /// the switch off does not orphan blobs already written as frames, and
+    /// turning it on does not require any migration of blobs already written
+    /// as row lists - each is simply re-encoded on its next natural capture.
+    /// Both directions are therefore safe to flip on a running deployment.
+    /// </para>
+    /// <para>
+    /// Set to <c>false</c> only to pin the persisted shape to the legacy
+    /// encoding, for example while a rollback to a build that predates the
+    /// frame is still possible: such a build has no dual-read and would see a
+    /// frame-carrying blob as an empty row set.
+    /// </para>
+    /// </summary>
+    public bool LeafSnapshotBinaryEncodingEnabled { get; set; } = DefaultLeafSnapshotBinaryEncodingEnabled;
+
+    /// <summary>Default value for <see cref="LeafSnapshotBinaryEncodingEnabled"/> (<c>true</c>).</summary>
+    public const bool DefaultLeafSnapshotBinaryEncodingEnabled = true;
+
+    /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of
     /// the fall-off-log triggers fires at activation time
     /// (WAL trimmed past checkpoint, replay budget exceeded, projection
