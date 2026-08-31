@@ -305,6 +305,7 @@ internal sealed partial class LatticeGrain(
 
     private bool _compactionEnsured;
     private bool _monitorEnsured;
+    private bool _healingEnsured;
 
     /// <summary>
     /// Sticky per-activation memo that the tree carries a catalogue registration.
@@ -3248,20 +3249,37 @@ internal sealed partial class LatticeGrain(
     }
 
     /// <summary>
-    /// Lazily activates the per-tree autonomic <c>HotShardMonitorGrain</c> on
-    /// the first write to this tree. Subsequent writes are no-ops. The monitor
-    /// itself is a no-op when <see cref="LatticeOptions.AutoSplitEnabled"/> is
-    /// <c>false</c>.
+    /// Lazily activates the per-tree autonomic loops on the first write to
+    /// this tree: the <c>HotShardMonitorGrain</c> that splits hot shards, and
+    /// the <c>ShardHealingOrchestratorGrain</c> that consolidates over-split
+    /// ones. Subsequent writes are no-ops.
+    /// <para>
+    /// The two are bootstrapped independently rather than under one flag,
+    /// because disabling adaptive splitting on a deployment whose trees are
+    /// already shattered is exactly the configuration that most needs healing:
+    /// gating healing on <see cref="LatticeOptions.AutoSplitEnabled"/> would
+    /// leave that tree damaged forever. Each loop is a no-op when its own
+    /// switch (<see cref="LatticeOptions.AutoSplitEnabled"/> and
+    /// <see cref="LatticeOptions.ShardHealingEnabled"/>) is <c>false</c>.
+    /// </para>
     /// </summary>
     private async Task EnsureMonitorAsync()
     {
-        if (_monitorEnsured) return;
-        if (!Options.AutoSplitEnabled) { _monitorEnsured = true; return; }
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             _monitorEnsured = true;
+            _healingEnsured = true;
             return;
         }
+
+        await EnsureHotShardMonitorAsync();
+        await EnsureShardHealingAsync();
+    }
+
+    private async Task EnsureHotShardMonitorAsync()
+    {
+        if (_monitorEnsured) return;
+        if (!Options.AutoSplitEnabled) { _monitorEnsured = true; return; }
 
         var monitor = grainFactory.GetGrain<IHotShardMonitorGrain>(TreeId);
         try
@@ -3281,6 +3299,36 @@ internal sealed partial class LatticeGrain(
             return;
         }
         _monitorEnsured = true;
+    }
+
+    /// <summary>
+    /// Lazily activates the per-tree automatic over-split healing orchestrator.
+    /// <para>
+    /// The bootstrap is attempted regardless of
+    /// <see cref="LatticeOptions.ShardHealingEnabled"/> and the orchestrator
+    /// itself no-ops when healing is off, so turning the kill switch back on
+    /// takes effect without a redeploy. Turning it <em>off</em> takes effect
+    /// immediately, because every sweep re-reads the option - which is the
+    /// direction that matters for a kill switch.
+    /// </para>
+    /// </summary>
+    private async Task EnsureShardHealingAsync()
+    {
+        if (_healingEnsured) return;
+
+        var orchestrator = grainFactory.GetGrain<IShardHealingOrchestratorGrain>(TreeId);
+        try
+        {
+            await orchestrator.EnsureRunningAsync();
+        }
+        catch (Exception ex) when (ReminderServiceReadiness.IsStillInitializing(ex))
+        {
+            logger.LogDebug(
+                "Deferred shard-healing activation for tree {TreeId}: reminder service still initializing; will retry on a subsequent write.",
+                TreeId);
+            return;
+        }
+        _healingEnsured = true;
     }
 
     private async ValueTask<string> GetPhysicalTreeIdAsync()

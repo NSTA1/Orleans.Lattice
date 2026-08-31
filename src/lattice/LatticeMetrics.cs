@@ -98,6 +98,16 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the decision a control loop reached on one observation
+    /// pass (e.g. <c>admitted</c>, <c>not_over_split</c>, <c>backpressure</c>
+    /// on <see cref="ShardHealingDecisions"/>). Distinct from
+    /// <see cref="TagReason"/>, which names only why something was refused:
+    /// a decision dimension carries the admitting value too, so the series is
+    /// a complete account of every pass rather than of the failures.
+    /// </summary>
+    public const string TagDecision = "decision";
+
+    /// <summary>
     /// Tag key for a configuration dimension name (e.g.
     /// <c>publish_events</c> on <see cref="ConfigChanged"/>).
     /// </summary>
@@ -367,6 +377,79 @@ public static class LatticeMetrics
     public static readonly Counter<long> ShardConsolidationsCommitted =
         Meter.CreateCounter<long>("orleans.lattice.shard.consolidations_committed", unit: "{consolidation}",
             description: "Online shard-consolidation commits (donor shard retired from the ShardMap).");
+
+    /// <summary>
+    /// Per-tree count of physical shards above the tree's configured base
+    /// shard count, sampled once every healing-orchestrator sweep. The healing
+    /// <em>work outstanding</em>: how many folds separate the tree from its
+    /// intended shape.
+    /// <para>
+    /// A tree is healed exactly when this reaches zero, so "trees healed" is
+    /// read off this instrument directly (<c>count</c> of series at zero) with
+    /// no second instrument to keep consistent. Plotted alongside
+    /// <see cref="ShardConsolidationsCommitted"/> - the reclaimed-shard rate -
+    /// it answers both halves of the question: how much damage is left, and is
+    /// it going down. Tagged <see cref="TagTree"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> ShardHealingBacklog =
+        Meter.CreateHistogram<int>("orleans.lattice.shard.healing.backlog", unit: "{shard}",
+            description: "Per-tree physical shards above the configured base count, sampled every healing sweep.");
+
+    /// <summary>
+    /// Counter incremented exactly once per healing-orchestrator sweep with
+    /// the decision that sweep reached, tagged <see cref="TagTree"/> and
+    /// <see cref="TagDecision"/>.
+    /// <para>
+    /// The series whose rate is currently non-zero for a tree <em>is</em> that
+    /// tree's current healing decision, so an operator can tell a tree that
+    /// needs no healing (<c>not_over_split</c>) from one that needs healing and
+    /// is being held back (<c>skewed_load</c>, <c>backpressure</c>,
+    /// <c>cooldown</c>, <c>split_in_flight</c>, <c>at_capacity</c>) from one
+    /// where the mechanism is off (<c>disabled</c>, <c>admission_closed</c>).
+    /// Without it, a tree that never heals is indistinguishable from a tree
+    /// that never needed to.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardHealingDecisions =
+        Meter.CreateCounter<long>("orleans.lattice.shard.healing.decisions", unit: "{decision}",
+            description: "Healing-orchestrator sweeps by decision (one increment per tree per sweep).");
+
+    /// <summary><see cref="TagDecision"/> = <c>admitted</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingAdmittedDecisionTag = new(TagDecision, "admitted");
+
+    /// <summary><see cref="TagDecision"/> = <c>disabled</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingDisabledDecisionTag = new(TagDecision, "disabled");
+
+    /// <summary><see cref="TagDecision"/> = <c>admission_closed</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingAdmissionClosedDecisionTag = new(TagDecision, "admission_closed");
+
+    /// <summary><see cref="TagDecision"/> = <c>not_over_split</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingNotOverSplitDecisionTag = new(TagDecision, "not_over_split");
+
+    /// <summary><see cref="TagDecision"/> = <c>skewed_load</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingSkewedLoadDecisionTag = new(TagDecision, "skewed_load");
+
+    /// <summary><see cref="TagDecision"/> = <c>split_in_flight</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingSplitInFlightDecisionTag = new(TagDecision, "split_in_flight");
+
+    /// <summary><see cref="TagDecision"/> = <c>tree_maintenance</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingTreeMaintenanceDecisionTag = new(TagDecision, "tree_maintenance");
+
+    /// <summary><see cref="TagDecision"/> = <c>cooldown</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingCooldownDecisionTag = new(TagDecision, "cooldown");
+
+    /// <summary><see cref="TagDecision"/> = <c>backpressure</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingBackpressureDecisionTag = new(TagDecision, "backpressure");
+
+    /// <summary><see cref="TagDecision"/> = <c>at_capacity</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingAtCapacityDecisionTag = new(TagDecision, "at_capacity");
+
+    /// <summary><see cref="TagDecision"/> = <c>no_foldable_pair</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingNoFoldablePairDecisionTag = new(TagDecision, "no_foldable_pair");
+
+    /// <summary><see cref="TagDecision"/> = <c>not_observed</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingNotObservedDecisionTag = new(TagDecision, "not_observed");
 
     // --- Leaf-level instruments (BPlusLeafGrain) ---------------------------------
 

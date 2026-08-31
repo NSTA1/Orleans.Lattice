@@ -110,6 +110,32 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "shard healing off; a positive value caps how many folds a driver may run concurrently against "
                 + "one tree).");
         }
+        if (options.ShardHealingInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ShardHealingInterval)} must be greater than zero "
+                + "(it is the cadence at which the healing orchestrator observes a tree's shape and admits at most "
+                + "one consolidation; a non-positive interval could never schedule an observation, so it is rejected "
+                + $"rather than treated as disabled - set {nameof(LatticeOptions.ShardHealingEnabled)} to false to "
+                + "switch automatic over-split healing off).");
+        }
+        if (options.ShardHealingCooldown < TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ShardHealingCooldown)} must be greater than or equal to zero "
+                + "(zero disables the post-split stand-off window, leaving only the skew dead band between the split "
+                + "and consolidation triggers; a positive value is how long healing waits after observing a split "
+                + "before consolidating the same tree).");
+        }
+        if (double.IsNaN(options.ShardHealingBackpressureOpsPerSecond)
+            || options.ShardHealingBackpressureOpsPerSecond < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ShardHealingBackpressureOpsPerSecond)} must be a non-negative number "
+                + "(0 disables backpressure so healing proceeds regardless of load; a positive value is the tree's "
+                + "median shard rate in operations per second at or above which healing yields to foreground "
+                + "traffic).");
+        }
         if (options.MaxLiveKeys is { } maxLiveKeys && maxLiveKeys < 1)
         {
             return ValidateOptionsResult.Fail(

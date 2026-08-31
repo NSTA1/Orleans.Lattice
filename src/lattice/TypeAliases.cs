@@ -132,6 +132,11 @@ internal static class TypeAliases
     internal const string ShardConsolidationProgress = "ol.cnr";
     internal const string ShardConsolidationPlan = "ol.cnl";
 
+    // Automatic over-split healing (the orchestrator that drives consolidation).
+    internal const string ShardHealingOrchestratorState = "ol.hls";
+    internal const string ShardHealingDecision = "ol.hld";
+    internal const string ShardHealingReport = "ol.hlr";
+
     // Leaf projection staleness surface. Thrown by BPlusLeafGrain during
     // activation (ReplayWalSinceCheckpointAsync) when the durable projection
     // checkpoint has fallen off / diverged from the per-shard WAL and the
@@ -410,6 +415,7 @@ internal static class TypeAliases
     internal const string ITreeResizeGrain = "ol.gtr";
     internal const string ITreeShardSplitGrain = "ol.gss";
     internal const string ITreeShardConsolidationGrain = "ol.gcn";
+    internal const string IShardHealingOrchestratorGrain = "ol.gho";
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ITagIndexReconcileGrain = "ol.gti";
