@@ -42,14 +42,25 @@ public partial class Home : IDisposable
     private ExplorerNavigationRequest? _pendingNavigation;
 
     /// <summary>
-    /// The catch-all route value. Never read: the address is parsed from
-    /// <see cref="NavigationManager.Uri"/> by
+    /// The area route value. Declared because the templates name it, but never
+    /// read: the address is parsed from <see cref="NavigationManager.Uri"/> by
     /// <see cref="ExplorerRoutePath.Parse"/> so an escaped selection id survives,
-    /// which Blazor's own segment binding would split. The parameter exists
-    /// because the catch-all template declares it.
+    /// which Blazor's own segment binding would split.
     /// </summary>
     [Parameter]
-    public string? ShellPath { get; set; }
+    public string? Area { get; set; }
+
+    /// <summary>The selection-kind route value. Declared, not read - see <see cref="Area"/>.</summary>
+    [Parameter]
+    public string? Kind { get; set; }
+
+    /// <summary>The selection-id route value. Declared, not read - see <see cref="Area"/>.</summary>
+    [Parameter]
+    public string? Id { get; set; }
+
+    /// <summary>The detail-surface route value. Declared, not read - see <see cref="Area"/>.</summary>
+    [Parameter]
+    public string? Surface { get; set; }
 
     [Inject]
     private NavigationManager Navigation { get; set; } = default!;

@@ -18,7 +18,9 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// </para>
 /// <para>
 /// <b>The grammar.</b> Formatted by <see cref="ExplorerRoutePath"/> as
-/// <c>/{area}/{kind}/{id}/{surface}</c> with the tenant scope in the query
+/// <c>/explore/{kind}/{id}/{surface}</c> for the home area and
+/// <c>/area/{area}/{kind}/{id}/{surface}</c> for a contributed one, with the
+/// tenant scope in the query
 /// string, for example <c>/explore/trees/orders/data?tenant=acme</c>. The
 /// segments nest: a selection needs an area, an id needs a kind, and a surface
 /// needs an id, so dropping an outer segment drops the inner ones with it. That

@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The grammar is <c>/{area}/{kind}/{id}/{surface}</c> with tenant scope and any
-/// extra surface state in the query string:
+/// The grammar puts a <b>literal</b> first segment on every address but the bare
+/// one, with tenant scope and any extra surface state in the query string:
 /// </para>
 /// <list type="bullet">
 /// <item><c>/</c> - the bare address; restore the remembered view.</item>
@@ -18,13 +18,26 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// <item><c>/explore/trees</c> - the home area browsing trees.</item>
 /// <item><c>/explore/trees/orders</c> - the <c>orders</c> tree selected.</item>
 /// <item><c>/explore/trees/orders/data</c> - open on its data surface.</item>
-/// <item><c>/tenants?tenant=acme</c> - a plugin area, scoped to one tenant.</item>
+/// <item><c>/area/tenants?tenant=acme</c> - a contributed area, scoped to one tenant.</item>
 /// </list>
+/// <para>
+/// <b>Why a contributed area is namespaced under <c>/area/</c>.</b> The Explorer
+/// is an embeddable library that shares its mount with framework and static
+/// assets (<c>_framework/**</c>, <c>_content/**</c>, published files). A template
+/// whose first segment is a parameter matches those too, and an asset request
+/// that reaches the shell renders the whole admin console at an asset URL and
+/// leaves the response carrying two <c>Content-Security-Policy</c> headers -
+/// which browsers resolve as the intersection of both policies. The home area
+/// owns the literal <c>explore</c>; a contributed slug is only known at run time,
+/// so it cannot own a literal and is namespaced instead. That keeps the approved
+/// <c>/explore/trees/orders/data</c> shape while making asset shadowing
+/// impossible by construction rather than by precedence.
+/// </para>
 /// <para>
 /// <b>Emission is strict, parsing is forgiving.</b> <see cref="Format"/> only
 /// ever produces canonical lower-case segments, because the route type refuses
 /// to hold anything else. <see cref="Parse"/> accepts an upper-case segment, a
-/// trailing slash and a stray query spelling, reports
+/// trailing slash, a stray query spelling and an un-namespaced area, reports
 /// <see cref="ExplorerRouteStatus.Normalized"/>, and lets the shell rewrite the
 /// address bar - so a hand-typed link still lands somewhere sensible instead of
 /// erroring.
@@ -43,7 +56,11 @@ public static class ExplorerRoutePath
     /// <summary>The bare address, <c>/</c>.</summary>
     public const string RootPath = "/";
 
-    private const int MaxPathSegments = 4;
+    // area, kind, id, surface - plus the '/area/' prefix segment a contributed
+    // area carries, and one more so an over-long address is detectable rather
+    // than silently truncated by the splitter.
+    private const int MaxShellSegments = 4;
+    private const int MaxPathSegments = MaxShellSegments + 1;
 
     /// <summary>
     /// Renders <paramref name="route"/> as a root-relative URL. Deterministic:
@@ -70,6 +87,14 @@ public static class ExplorerRoutePath
         {
             if (route.Area.Length != 0)
             {
+                // The home area owns a literal route; every contributed area is
+                // namespaced, so no area slug can ever occupy the first segment
+                // and shadow an asset path.
+                if (!string.Equals(route.Area, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
+                {
+                    writer.AppendSegment(ExplorerRouteSegments.AreaPathPrefix);
+                }
+
                 writer.AppendSegment(route.Area);
 
                 if (route.Kind.Length != 0)
@@ -126,7 +151,8 @@ public static class ExplorerRoutePath
     /// A root-relative address such as <c>/explore/trees/orders?tenant=acme</c>,
     /// or the base-relative form Blazor hands back (no leading slash). An
     /// absolute URI is accepted and reduced to its path and query. A fragment is
-    /// ignored.
+    /// ignored. An area written without its <c>/area/</c> namespace is accepted
+    /// and reported <see cref="ExplorerRouteStatus.Normalized"/>.
     /// </param>
     public static ExplorerRouteParseResult Parse(string? address)
     {
@@ -168,11 +194,26 @@ public static class ExplorerRoutePath
             ? 0
             : trimmed.Split(segments, '/', StringSplitOptions.RemoveEmptyEntries);
 
-        if (segmentCount > MaxPathSegments)
+        // A contributed area is namespaced under the '/area/' literal; the home
+        // area is not. Consuming the prefix here is what lets everything below
+        // read the same four positions either way.
+        var first = 0;
+        if (segmentCount > 0 &&
+            trimmed[segments[0]].Equals(ExplorerRouteSegments.AreaPathPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            first = 1;
+            if (segmentCount == 1)
+            {
+                // '/area' names no area at all.
+                malformed = true;
+            }
+        }
+
+        if (segmentCount - first > MaxShellSegments)
         {
             // More depth than the grammar has. Keep what is addressable and say
             // the address was not fully understood.
-            segmentCount = MaxPathSegments;
+            segmentCount = first + MaxShellSegments;
             malformed = true;
         }
 
@@ -181,10 +222,12 @@ public static class ExplorerRoutePath
         var id = string.Empty;
         var surface = string.Empty;
 
-        for (var i = 0; i < segmentCount; i++)
+        for (var i = first; i < segmentCount; i++)
         {
             var raw = trimmed[segments[i]];
-            if (i == 2)
+            var position = i - first;
+
+            if (position == 2)
             {
                 // The id is a value, not a slug: unescape it and keep its case.
                 if (!TryUnescape(raw, out id))
@@ -204,7 +247,7 @@ public static class ExplorerRoutePath
                 break;
             }
 
-            switch (i)
+            switch (position)
             {
                 case 0:
                     area = slug;

@@ -24,9 +24,35 @@ public static class ExplorerRouteSegments
     /// <summary>
     /// The area slug of the shell's built-in home surface, the catalog plus
     /// detail pairing that <c>/</c> resolves to. Reserved: a plugin area must
-    /// choose a different slug.
+    /// choose a different slug. It owns the literal route <c>/explore</c>.
     /// </summary>
     public const string Explore = "explore";
+
+    /// <summary>
+    /// The literal first segment every contributed area's address is namespaced
+    /// under, as in <c>/area/tenants</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The Explorer is an embeddable library mounted under a caller-chosen prefix,
+    /// and it shares that mount with framework and static assets
+    /// (<c>_framework/**</c>, <c>_content/**</c>, published files). A route whose
+    /// <em>first</em> segment is a parameter can shadow any of them, which is not
+    /// a cosmetic problem: an asset request that reaches the shell renders the
+    /// whole admin console at an asset URL and picks up a second
+    /// <c>Content-Security-Policy</c> header, and browsers apply the intersection
+    /// of duplicated policies.
+    /// </para>
+    /// <para>
+    /// So every declared route except the bare <c>/</c> begins with a literal
+    /// segment. The home area owns <see cref="Explore"/> because it is the
+    /// shell's own surface; a contributed area cannot own a literal (its slug is
+    /// only known at run time), so it is namespaced here instead. The cost is one
+    /// segment in a plugin area's URL; the benefit is that no contributed slug,
+    /// present or future, can collide with an asset path.
+    /// </para>
+    /// </remarks>
+    public const string AreaPathPrefix = "area";
 
     /// <summary>The selection-kind slug for a tree selection.</summary>
     public const string Trees = "trees";

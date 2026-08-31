@@ -13,18 +13,24 @@ namespace Orleans.Lattice.Explorer.Tests.Navigation;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The catch-all is load-bearing twice over. It is what lets
-/// <c>/explore/trees/orders/data</c> render the shell at all rather than a dead
-/// end, and it is what makes a stale bookmark degrade into an explained fallback
-/// instead of a 404. Equally load-bearing is that it does <em>not</em> swallow
-/// <c>/reset-view</c>, because the reset escape exists precisely for the user
-/// whose remembered state is broken.
+/// Two facts are load-bearing and neither is under this repository's control, so
+/// both are measured here rather than assumed. Every addressable shell view must
+/// resolve to the shell page, or a deep link is a dead end. And no framework or
+/// static-asset path may resolve to it, because an asset request that renders the
+/// admin console also comes back carrying a second
+/// <c>Content-Security-Policy</c> header - which browsers resolve as the
+/// intersection of both policies.
 /// </para>
 /// <para>
-/// Both facts rest on Blazor's route precedence rather than on anything this
-/// repository controls, so they are measured here rather than assumed. The
-/// router is rendered with a <c>Found</c> fragment that records the matched page
-/// type and renders nothing, so the resolution is observed without standing up
+/// The second fact is why every declared template but the bare <c>/</c> begins
+/// with a literal segment, and why a contributed area is namespaced under
+/// <c>/area/</c>. A root catch-all matched everything, including
+/// <c>_framework/**</c>, and additionally could not be rebased under a base-path
+/// mount at all.
+/// </para>
+/// <para>
+/// The router is rendered with a <c>Found</c> fragment that records the matched
+/// page type and renders nothing, so resolution is observed without standing up
 /// any page's own service graph - this stays a pure unit test.
 /// </para>
 /// </remarks>
@@ -40,7 +46,8 @@ public sealed class ShellRouteResolutionBunitTests : BunitContext
     [TestCase("/explore/trees/orders")]
     [TestCase("/explore/trees/orders/data")]
     [TestCase("/explore/trees/t%2Facme%2Forders/data")]
-    [TestCase("/tenants")]
+    [TestCase("/area/tenants")]
+    [TestCase("/area/tenants/detail/acme/quotas")]
     [TestCase("/explore/trees/orders/data?tenant=acme")]
     public void Every_addressable_view_resolves_to_the_shell_page(string address)
     {
@@ -48,26 +55,50 @@ public sealed class ShellRouteResolutionBunitTests : BunitContext
     }
 
     [Test]
-    public void An_unrecognised_address_still_lands_on_the_shell_rather_than_a_dead_end()
+    public void An_unrecognised_address_under_the_area_namespace_still_lands_on_the_shell()
     {
-        // A stale bookmark degrades into a shell that can explain itself, which is
-        // what the graceful-degradation requirement asks for.
-        Assert.That(Resolve("/no-such-area/at-all"), Is.EqualTo(typeof(Home)));
+        // A stale bookmark for an area that no longer exists degrades into a
+        // shell that can explain itself, which is what the graceful-degradation
+        // requirement asks for.
+        Assert.That(Resolve("/area/no-such-area"), Is.EqualTo(typeof(Home)));
+    }
+
+    [TestCase("/_framework/blazor.web.js")]
+    [TestCase("/_content/Orleans.Lattice.Explorer.UI/lattice-shell.css")]
+    [TestCase("/favicon.ico")]
+    [TestCase("/_blazor")]
+    public void An_asset_path_is_never_routed_to_the_shell(string address)
+    {
+        // The regression this fixture exists for. A root catch-all - or any
+        // template with a parameter in its first segment - matches these, so an
+        // asset request renders the whole admin console at an asset URL and comes
+        // back carrying a second Content-Security-Policy header. Literal-first
+        // templates make that impossible rather than merely unlikely.
+        Assert.That(
+            Resolves(address),
+            Is.False,
+            $"'{address}' must not be claimed by a shell route");
     }
 
     [Test]
-    public void The_reset_escape_wins_over_the_catch_all()
+    public void The_reset_escape_wins_over_the_shell_routes()
     {
         Assert.That(Resolve("/reset-view"), Is.EqualTo(typeof(ResetView)));
     }
 
     [Test]
-    public void The_not_found_page_wins_over_the_catch_all()
+    public void The_not_found_page_wins_over_the_shell_routes()
     {
         Assert.That(Resolve("/not-found"), Is.EqualTo(typeof(NotFound)));
     }
 
     private Type Resolve(string address)
+    {
+        Assert.That(Resolves(address), Is.True, $"'{address}' did not match any route");
+        return _matched[^1];
+    }
+
+    private bool Resolves(string address)
     {
         JSInterop.Mode = JSRuntimeMode.Loose;
 
@@ -75,9 +106,9 @@ public sealed class ShellRouteResolutionBunitTests : BunitContext
             .Add(router => router.AppAssembly, typeof(Home).Assembly)
             .Add(router => router.Found, Record));
 
+        var before = _matched.Count;
         Services.GetRequiredService<NavigationManager>().NavigateTo(address);
-
-        return _matched[^1];
+        return _matched.Count > before;
     }
 
     private RenderFragment Record(RouteData routeData)

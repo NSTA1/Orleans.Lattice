@@ -80,6 +80,48 @@ public sealed class RouteCaseHygieneTests
     }
 
     [Test]
+    public void Every_declared_page_route_starts_with_a_literal_segment()
+    {
+        // The pin for the asset-shadowing regression. A template whose first
+        // segment is a parameter - a root catch-all worst of all - matches
+        // '_framework/**', '_content/**' and every published static asset, so an
+        // asset request renders the admin console at an asset URL and returns two
+        // Content-Security-Policy headers. A root catch-all additionally cannot
+        // be rebased under a base-path mount at all: Blazor's RouteTableFactory
+        // throws "Unable to find the provided template '/explorer/{*shellPath}'".
+        var repoRoot = HygieneRepository.FindRepoRoot();
+
+        var violations = new List<string>();
+        var templates = 0;
+
+        foreach (var file in EnumerateRazorFiles(repoRoot))
+        {
+            var text = File.ReadAllText(file);
+            foreach (Match match in PageDirective.Matches(text))
+            {
+                templates++;
+                var template = match.Groups["template"].Value;
+                if (!StartsWithLiteralSegment(template))
+                {
+                    violations.Add($"{Relative(repoRoot, file)}: @page \"{template}\"");
+                }
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(templates, Is.GreaterThan(0), "the scan found no @page routes, so it proved nothing");
+            Assert.That(
+                violations,
+                Is.Empty,
+                "Every Explorer route but the bare '/' must begin with a literal segment, so it cannot shadow "
+                + "'_framework/**', '_content/**' or a published static asset, and so it survives a base-path "
+                + "mount. Namespace a dynamic area segment under a literal (see ExplorerRouteSegments.AreaPathPrefix).\n"
+                + string.Join('\n', violations));
+        });
+    }
+
+    [Test]
     public void Every_reserved_route_segment_constant_is_canonical()
     {
         var constants = typeof(ExplorerRouteSegments)
@@ -141,6 +183,23 @@ public sealed class RouteCaseHygieneTests
     }
 
     [Test]
+    public void Scanner_detects_a_route_that_does_not_start_with_a_literal()
+    {
+        // The battery test for the literal-first gate above.
+        Assert.Multiple(() =>
+        {
+            Assert.That(StartsWithLiteralSegment("/"), Is.True, "the bare address is the one exemption");
+            Assert.That(StartsWithLiteralSegment("/explore/{kind}"), Is.True);
+            Assert.That(StartsWithLiteralSegment("/area/{area}/{kind}"), Is.True);
+            Assert.That(StartsWithLiteralSegment("/reset-view"), Is.True);
+
+            Assert.That(StartsWithLiteralSegment("/{*shellPath}"), Is.False, "a root catch-all is the regression");
+            Assert.That(StartsWithLiteralSegment("/{area}"), Is.False);
+            Assert.That(StartsWithLiteralSegment("/{area}/{kind}"), Is.False);
+        });
+    }
+
+    [Test]
     public void Scanner_finds_the_pages_this_issue_declared()
     {
         var repoRoot = HygieneRepository.FindRepoRoot();
@@ -159,13 +218,35 @@ public sealed class RouteCaseHygieneTests
             Assert.That(templates, Does.Contain("/"), "the bare address must stay routable");
             Assert.That(
                 templates,
-                Does.Contain("/{*shellPath}"),
-                "the shell's catch-all is what makes every view addressable");
+                Does.Contain("/explore/{kind}/{id}/{surface}"),
+                "the deepest home-area view must be addressable");
+            Assert.That(
+                templates,
+                Does.Contain("/area/{area}/{kind}/{id}/{surface}"),
+                "the deepest contributed-area view must be addressable");
             Assert.That(
                 templates,
                 Does.Contain("/reset-view"),
                 "the reset-view escape must stay reachable by address");
+            Assert.That(
+                templates.Any(static t => t.Contains("{*", StringComparison.Ordinal)),
+                Is.False,
+                "a catch-all shadows framework and static assets and cannot be rebased under a base path");
         });
+    }
+
+    private static bool StartsWithLiteralSegment(string template)
+    {
+        var trimmed = template.AsSpan().Trim('/');
+        if (trimmed.IsEmpty)
+        {
+            // The bare address. It names the app root, so it shadows nothing.
+            return true;
+        }
+
+        var end = trimmed.IndexOf('/');
+        var first = end < 0 ? trimmed : trimmed[..end];
+        return !first.StartsWith("{", StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> NonCanonicalSegments(string template)

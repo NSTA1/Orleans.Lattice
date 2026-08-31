@@ -100,6 +100,115 @@ public sealed class ExplorerRoutePathTests
         Assert.That(ExplorerRoutePath.Format(route), Is.EqualTo("/explore/trees/" + id));
     }
 
+    [Test]
+    public void Format_ContributedArea_IsNamespacedUnderTheAreaLiteral()
+    {
+        Assert.That(
+            ExplorerRoutePath.Format(ExplorerRoute.Root.WithArea("tenants")),
+            Is.EqualTo("/area/tenants"));
+    }
+
+    [Test]
+    public void Format_HomeArea_KeepsTheApprovedShortShape()
+    {
+        Assert.That(ExplorerRoutePath.Format(ExplorerRoute.Home), Is.EqualTo("/explore"));
+    }
+
+    [Test]
+    public void Format_ContributedAreaWithFullSelection_NamespacesOnlyTheArea()
+    {
+        var route = ExplorerRoute.Root
+            .WithArea("tenants")
+            .WithSelection("detail", "acme")
+            .WithSurface("quotas");
+
+        Assert.That(ExplorerRoutePath.Format(route), Is.EqualTo("/area/tenants/detail/acme/quotas"));
+    }
+
+    [Test]
+    public void Format_AnAreaCalledArea_StillRoundTrips()
+    {
+        // The namespace literal is consumed positionally, so a contributed slug
+        // that happens to be 'area' is not a special case.
+        var route = ExplorerRoute.Root.WithArea(ExplorerRouteSegments.AreaPathPrefix);
+        var address = ExplorerRoutePath.Format(route);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(address, Is.EqualTo("/area/area"));
+            Assert.That(ExplorerRoutePath.Parse(address).Route, Is.EqualTo(route));
+        });
+    }
+
+    [Test]
+    public void Parse_ContributedArea_ReadsPastTheNamespace()
+    {
+        var parsed = ExplorerRoutePath.Parse("/area/tenants/detail/acme/quotas");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Route.Area, Is.EqualTo("tenants"));
+            Assert.That(parsed.Route.Kind, Is.EqualTo("detail"));
+            Assert.That(parsed.Route.Id, Is.EqualTo("acme"));
+            Assert.That(parsed.Route.Surface, Is.EqualTo("quotas"));
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Canonical));
+        });
+    }
+
+    [Test]
+    public void Parse_AnUnNamespacedArea_IsAcceptedAndReportedNormalized()
+    {
+        // Forgiving on the way in, strict on the way out: a hand-typed
+        // '/tenants' still lands, and the shell rewrites the address bar.
+        var parsed = ExplorerRoutePath.Parse("/tenants");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Route.Area, Is.EqualTo("tenants"));
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Normalized));
+            Assert.That(ExplorerRoutePath.Format(parsed.Route), Is.EqualTo("/area/tenants"));
+        });
+    }
+
+    [Test]
+    public void Parse_TheNamespaceWithNoArea_IsMalformedAndDegradesToTheBareRoute()
+    {
+        var parsed = ExplorerRoutePath.Parse("/area");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Malformed));
+            Assert.That(parsed.Route.IsBare, Is.True);
+            Assert.That(parsed.ShouldCanonicalize, Is.True);
+        });
+    }
+
+    [Test]
+    public void Parse_TheHomeAreaWrittenUnderTheNamespace_NormalizesToTheShortShape()
+    {
+        var parsed = ExplorerRoutePath.Parse("/area/explore/trees");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Route.Area, Is.EqualTo(ExplorerRouteSegments.Explore));
+            Assert.That(parsed.Route.Kind, Is.EqualTo(ExplorerRouteSegments.Trees));
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Normalized));
+            Assert.That(ExplorerRoutePath.Format(parsed.Route), Is.EqualTo("/explore/trees"));
+        });
+    }
+
+    [Test]
+    public void Parse_ANamespacedAddressOneSegmentTooDeep_IsMalformed()
+    {
+        var parsed = ExplorerRoutePath.Parse("/area/tenants/detail/acme/quotas/extra");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Malformed));
+            Assert.That(parsed.Route.Surface, Is.EqualTo("quotas"));
+        });
+    }
+
     [TestCase(null)]
     [TestCase("")]
     [TestCase("/")]
@@ -368,7 +477,7 @@ public sealed class ExplorerRoutePathTests
             "/explore/trees/orders",
             "/explore/trees/orders/data",
             "/explore/trees/t%2Facme%2Forders/data",
-            "/tenants?tenant=acme",
+            "/area/tenants?tenant=acme",
             "/explore?all-tenants=true",
             "/explore?all-tenants=true&tenant=acme&alpha=2&zeta=1",
             "/?tenant=acme",
