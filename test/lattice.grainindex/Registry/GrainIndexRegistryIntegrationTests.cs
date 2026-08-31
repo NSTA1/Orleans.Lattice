@@ -271,7 +271,7 @@ public sealed class GrainIndexRegistryIntegrationTests
         // The resolver the core registers when no replication package is
         // present. Reconciling against it must behave exactly as reconciling
         // against no resolver at all.
-        var coreDefault = _fixture.Cluster.ServiceProvider.GetService<ILatticeMergeModeResolver>();
+        var coreDefault = _fixture.SiloServices.GetService<ILatticeMergeModeResolver>();
 
         await ReconcileAsync(
             static builder => builder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(

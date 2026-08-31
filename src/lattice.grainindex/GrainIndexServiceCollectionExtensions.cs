@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice.GrainIndex.Registry;
+using Orleans.Lattice.GrainIndex.Query;
 
 namespace Orleans.Lattice.GrainIndex;
 
@@ -93,6 +94,7 @@ public static class GrainIndexServiceCollectionExtensions
         services.TryAddSingleton(typeof(OrleansGrainIndexSerializer<>));
         services.TryAddSingleton<IGrainIndexRegistryStore, GrainIndexRegistryStore>();
         services.TryAddSingleton<GrainIndexRegistryReconciler>();
+        services.TryAddSingleton<IGrainIndexProvider, GrainIndexProvider>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, GrainIndexRegistryHostedService>());
 
