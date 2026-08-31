@@ -202,6 +202,124 @@ public sealed class DurableVectorIndexCorruptionTests
         });
 
     [Test]
+    public async Task Flushing_mid_build_does_not_leave_a_manifest_the_next_load_would_refuse()
+    {
+        // A flush during ingest must not claim the in-memory count when only a
+        // prefix of the cell is committed. Getting this wrong turns a routine
+        // flush into a spurious rebuild on the next start: every record verifies,
+        // and only the total disagrees.
+        var store = new InMemoryVectorIndexStore();
+        var source = DurableIndexHarness.Source(600);
+        var options = DurableIndexHarness.Options(ingestBatchSize: 100, maxItemsPerChunk: 64);
+
+        var index = await DurableIndexHarness.OpenAsync(store, source, options);
+        await index.BuildStepAsync();
+        await index.BuildStepAsync();
+        Assert.That(index.Progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ingesting));
+
+        await index.FlushAsync();
+
+        var reopened = await DurableIndexHarness.OpenAsync(store, source, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reopened.Progress.RestoredFromDurableState, Is.True,
+                "A flush mid-build must leave state the next load can verify, not trigger a rebuild.");
+            Assert.That(reopened.Count, Is.GreaterThan(0));
+            Assert.That(reopened.Progress.Phase, Is.EqualTo(VectorIndexBuildPhase.Ingesting));
+        });
+
+        await reopened.RunBuildAsync();
+        Assert.That(reopened.Count, Is.EqualTo(600));
+    }
+
+    [Test]
+    public async Task Repeated_mid_build_flushes_stay_loadable()
+    {
+        var store = new InMemoryVectorIndexStore();
+        var source = DurableIndexHarness.Source(600);
+        var options = DurableIndexHarness.Options(ingestBatchSize: 100, maxItemsPerChunk: 64);
+
+        var index = await DurableIndexHarness.OpenAsync(store, source, options);
+        while (index.Progress.Phase is VectorIndexBuildPhase.NotStarted or VectorIndexBuildPhase.Ingesting)
+        {
+            await index.BuildStepAsync();
+            await index.FlushAsync();
+
+            var reopened = await DurableIndexHarness.OpenAsync(store, source, options);
+            Assert.That(reopened.Progress.RestoredFromDurableState, Is.True,
+                "Every intermediate state a flush leaves behind must be loadable.");
+        }
+    }
+
+    [Test]
+    public async Task A_lazy_open_of_an_unverifiable_index_serves_nothing_and_repairs_nothing()
+    {
+        // A reader must not repair what it cannot maintain. Discarding from a
+        // lazy handle would delete an index a writer elsewhere may be part-way
+        // through building, from a handle whose contract is that it does not
+        // write at all.
+        var store = new InMemoryVectorIndexStore();
+        var source = DurableIndexHarness.Source(Corpus);
+        var options = DurableIndexHarness.Options();
+
+        await DurableIndexHarness.BuiltAsync(store, source, options);
+        store.Corrupt(
+            VectorIndexStorageKeys.Manifest(Prefix), VectorIndexPersistenceFormat.RecordHeaderSize + 4);
+
+        var records = store.RecordCount;
+        var writes = store.Writes;
+        var lazy = await DurableIndexHarness.OpenAsync(store, source, options, VectorIndexLoadMode.Lazy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lazy.Count, Is.Zero, "An unverifiable index must not be served.");
+            Assert.That(lazy.Progress.RestoredFromDurableState, Is.False);
+            Assert.That(store.Writes, Is.EqualTo(writes), "A lazy open must not write.");
+            Assert.That(store.RecordCount, Is.EqualTo(records), "A lazy open must not delete.");
+        });
+    }
+
+    [Test]
+    public async Task A_lazy_open_over_an_interrupted_deletion_writes_nothing()
+    {
+        // The exact crash state: the tombstone is durable and the mapping has not
+        // been dropped yet, which is the window in which a load has real repair
+        // work to do. A fully resident index completes that repair; a lazy one
+        // must apply the journal in memory and write nothing.
+        var store = new InMemoryVectorIndexStore();
+        var source = DurableIndexHarness.Source(Corpus);
+        var options = DurableIndexHarness.Options();
+
+        var index = await DurableIndexHarness.BuiltAsync(store, source, options);
+        var id = DurableIndexHarness.Id(11);
+        Assert.That(index.TryGetKey(id, out var key), Is.True);
+
+        store.Overwrite(VectorIndexStorageKeys.Retirement(Prefix, key), VectorIndexRecord.Wrap([]));
+        Assert.That(store.Keys, Does.Contain(VectorIndexStorageKeys.KeyMap(Prefix, id)),
+            "The fixture must leave the mapping in place, or there is no repair to suppress.");
+
+        var writes = store.Writes;
+        var lazy = await DurableIndexHarness.OpenAsync(store, source, options, VectorIndexLoadMode.Lazy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.Writes, Is.EqualTo(writes),
+                "Replaying the journal into memory is a read; sweeping the mapping would be a write.");
+            Assert.That(store.Keys, Does.Contain(VectorIndexStorageKeys.KeyMap(Prefix, id)));
+        });
+
+        // The same state opened for maintenance does complete the repair.
+        var resident = await DurableIndexHarness.OpenAsync(store, source, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resident.TryGetKey(id, out _), Is.False);
+            Assert.That(store.Keys, Does.Not.Contain(VectorIndexStorageKeys.KeyMap(Prefix, id)));
+        });
+    }
+
+    [Test]
     public async Task A_corrupt_identifier_mapping_is_dropped_and_reassigned_rather_than_guessed_at()
     {
         var store = new InMemoryVectorIndexStore();

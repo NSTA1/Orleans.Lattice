@@ -47,10 +47,13 @@ public sealed partial class DurableVectorIndex
             centroidEpoch = epoch;
             await WriteChunkRangeAsync(
                 snapshot,
+                VectorIndexChunkKind.Centroids,
+                partition: 0,
                 first: 0,
                 count: header.CentroidChunkCount,
-                sequenceOf: index => index,
-                keyOf: sequence => VectorIndexStorageKeys.CentroidChunk(_prefix, generation, epoch, sequence),
+                sequenceBase: 0,
+                generation,
+                epoch,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -70,11 +73,13 @@ public sealed partial class DurableVectorIndex
             var previousEpoch = _persistedEpoch[partition];
             await WriteChunkRangeAsync(
                 snapshot,
+                VectorIndexChunkKind.Vectors,
+                partition,
                 first: chunkIndex,
                 count: chunks,
-                sequenceOf: index => index - chunkIndex,
-                keyOf: sequence =>
-                    VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, epoch, sequence),
+                sequenceBase: chunkIndex,
+                generation,
+                epoch,
                 cancellationToken).ConfigureAwait(false);
 
             await CommitPartitionAsync(
@@ -137,10 +142,13 @@ public sealed partial class DurableVectorIndex
         {
             await WriteChunkRangeAsync(
                 snapshot,
+                VectorIndexChunkKind.Vectors,
+                partition: 0,
                 first: _persistedChunkCount[0],
                 count: chunks - _persistedChunkCount[0],
-                sequenceOf: index => index,
-                keyOf: sequence => VectorIndexStorageKeys.VectorChunk(_prefix, _generation, 0, epoch, sequence),
+                sequenceBase: 0,
+                _generation,
+                epoch,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -162,6 +170,16 @@ public sealed partial class DurableVectorIndex
             .ConfigureAwait(false);
 
         _persistedPartitions = 1;
+
+        if (!complete)
+        {
+            // Only a prefix of the cell is committed, so the partition must stay
+            // dirty even though nothing has mutated since. Marking it clean here
+            // would let a later ordinary flush skip it and then write a manifest
+            // claiming the whole in-memory count, which a loader would correctly
+            // refuse - turning a routine flush into a spurious rebuild.
+            _persistedPartitionVersion[0] = -1;
+        }
 
         // The durable cursor names the committed prefix, never the in-memory
         // one: it may only ever be behind what is persisted, so a resume
@@ -213,12 +231,25 @@ public sealed partial class DurableVectorIndex
             cancellationToken);
     }
 
+    /// <summary>
+    /// Renders a run of chunks and writes them in batches bounded by bytes rather
+    /// than by count.
+    /// <para>
+    /// The chunk's identity is passed as plain values rather than as a pair of
+    /// key-building delegates, so a flush over several hundred partitions does
+    /// not allocate a closure per partition for work that is already fully
+    /// described by four integers.
+    /// </para>
+    /// </summary>
     private async Task WriteChunkRangeAsync(
         VectorIndexSnapshot snapshot,
+        VectorIndexChunkKind kind,
+        int partition,
         int first,
         int count,
-        Func<int, int> sequenceOf,
-        Func<int, string> keyOf,
+        int sequenceBase,
+        long generation,
+        long epoch,
         CancellationToken cancellationToken)
     {
         var batch = new List<KeyValuePair<string, byte[]>>();
@@ -228,10 +259,22 @@ public sealed partial class DurableVectorIndex
         {
             var payloadLength = snapshot.MeasureChunk(index);
             var record = new byte[VectorIndexRecord.Measure(payloadLength)];
+
+            // Rendered straight into the record's payload region and sealed in
+            // place, so a chunk is never built into a temporary and copied.
             snapshot.WriteChunk(index, record.AsSpan(VectorIndexPersistenceFormat.RecordHeaderSize));
             VectorIndexRecord.Seal(record, payloadLength);
 
-            batch.Add(new KeyValuePair<string, byte[]>(keyOf(sequenceOf(index)), record));
+            // The sequence is the chunk's position within its own partition, which
+            // is not the position within the snapshot: an append resumes at a
+            // non-zero snapshot index but must keep numbering from where the
+            // committed chunks left off.
+            var sequence = index - sequenceBase;
+            var key = kind == VectorIndexChunkKind.Centroids
+                ? VectorIndexStorageKeys.CentroidChunk(_prefix, generation, epoch, sequence)
+                : VectorIndexStorageKeys.VectorChunk(_prefix, generation, partition, epoch, sequence);
+
+            batch.Add(new KeyValuePair<string, byte[]>(key, record));
             batchBytes += record.Length;
 
             if (batchBytes >= WriteBatchBytes)

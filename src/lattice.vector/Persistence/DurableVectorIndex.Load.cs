@@ -42,7 +42,11 @@ public sealed partial class DurableVectorIndex
             if (_keys.Count >= manifest.IndexedCount - outstanding)
             {
                 ApplyRetirements();
-                await SweepRetiredMappingsAsync(cancellationToken).ConfigureAwait(false);
+                if (_loadMode == VectorIndexLoadMode.Full)
+                {
+                    await SweepRetiredMappingsAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 return;
             }
         }
@@ -51,6 +55,18 @@ public sealed partial class DurableVectorIndex
         {
             // A store with nothing on it. Not a fault, and nothing to sweep: the
             // index simply has not been built yet.
+            ResetInMemory();
+            return;
+        }
+
+        if (_loadMode == VectorIndexLoadMode.Lazy)
+        {
+            // A lazily loaded index is a reader, and a reader must not repair
+            // what it cannot maintain: discarding here would delete an index a
+            // writer elsewhere may be part-way through building, and would do it
+            // from a handle whose whole contract is that it does not write. It
+            // refuses to serve the unverifiable state instead, and leaves the
+            // repair to the writer that owns the index.
             ResetInMemory();
             return;
         }
@@ -284,7 +300,9 @@ public sealed partial class DurableVectorIndex
     /// <summary>
     /// Drops the identifier mapping of anything the journal retired. A crash
     /// between the removal and the mapping delete would otherwise leave an
-    /// identifier pointing at a key the index no longer holds.
+    /// identifier pointing at a key the index no longer holds. Only a fully
+    /// resident index does this, because it is a write and a lazily loaded index
+    /// does not make any.
     /// </summary>
     private async Task SweepRetiredMappingsAsync(CancellationToken cancellationToken)
     {
