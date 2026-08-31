@@ -185,6 +185,14 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.atomic_write.cross_tree.completed` | counter (`{saga}`) | `outcome`, `tree_count` | AtomicWrites | Cross-tree atomic write outcomes (rate); Cross-tree failure rate (%) |
 | `orleans.lattice.atomic_write.cross_tree.duration` | histogram (ms) | `outcome` | AtomicWrites | Cross-tree coordinator duration (p50/p95/p99 ms) |
 | `orleans.lattice.atomic_write.cross_tree.participants` | histogram (`{tree}`) | `outcome` | AtomicWrites | Cross-tree participant fan-out (trees per saga) |
+| `orleans.lattice.grainindex.grains_enrolled` | counter (`{grain}`) | `index`, `path` | GrainIndex | Grains enrolled per second, by route |
+| `orleans.lattice.grainindex.entries` | up-down counter (`{entry}`) | `index` | GrainIndex | Index entries held |
+| `orleans.lattice.grainindex.write_failures` | counter (`{failure}`) | `index`, `path` | GrainIndex | Index write failures per second, by route |
+| `orleans.lattice.grainindex.projection.duration` | histogram (ms) | `index` | GrainIndex | Projection latency percentiles |
+| `orleans.lattice.grainindex.backfill.processed` | observable gauge (`{grain}`) | `index` | GrainIndex | Backfill progress (processed vs total) |
+| `orleans.lattice.grainindex.backfill.total` | observable gauge (`{grain}`) | `index` | GrainIndex | Backfill progress (processed vs total) |
+| `orleans.lattice.grainindex.backfill.percent_complete` | observable gauge (`%`) | `index` | GrainIndex | Backfill percent complete |
+| `orleans.lattice.grainindex.backfill.state` | observable gauge (`{state}`) | `index` | GrainIndex | Backfill state |
 
 ## `orleans.lattice.replication` meter
 

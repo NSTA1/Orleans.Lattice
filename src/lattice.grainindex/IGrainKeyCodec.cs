@@ -22,7 +22,7 @@ namespace Orleans.Lattice.GrainIndex;
 /// the supplied <see cref="GrainId"/>: it is invoked once per indexed grain per
 /// mutation. It must also round-trip, so that
 /// <c>Resolve(factory, Encode(grainId))</c> addresses the grain
-/// <paramref name="grainId"/> named.
+/// <c>grainId</c> named.
 /// </remarks>
 public interface IGrainKeyCodec
 {
