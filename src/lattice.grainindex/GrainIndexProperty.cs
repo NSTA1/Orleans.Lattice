@@ -40,6 +40,7 @@ public abstract class GrainIndexProperty<TState>
         ArgumentNullException.ThrowIfNull(propertyType);
         Name = name;
         PropertyType = propertyType;
+        EncodedName = System.Text.Json.JsonEncodedText.Encode(name);
         Descriptor = new GrainIndexPropertyDescriptor(
             name,
             propertyType.FullName ?? propertyType.Name);
@@ -68,4 +69,26 @@ public abstract class GrainIndexProperty<TState>
     /// <param name="state">The grain state to read from.</param>
     /// <returns>The property's current value.</returns>
     public abstract object? GetValue(TState state);
+
+    /// <summary>
+    /// The property's name, pre-escaped for JSON at declaration time so the
+    /// projection path never re-escapes it per entry.
+    /// </summary>
+    internal System.Text.Json.JsonEncodedText EncodedName { get; }
+
+    /// <summary>
+    /// Appends this property's index entry for <paramref name="state"/> to
+    /// <paramref name="writer"/>.
+    /// <para>
+    /// This is the projection path's only route into a property's value, and it
+    /// exists so that route stays strongly typed: the override lives on the
+    /// typed subclass, which knows the property's CLR type statically and can
+    /// hand it to the writer without boxing. Reading through
+    /// <see cref="GetValue(TState)"/> instead would box every value-type
+    /// property once per grain mutation.
+    /// </para>
+    /// </summary>
+    /// <param name="writer">The entry writer to append to.</param>
+    /// <param name="state">The grain state to project.</param>
+    internal abstract void AppendEntry(GrainIndexEntryWriter writer, TState state);
 }
