@@ -1,0 +1,294 @@
+@namespace Orleans.Lattice.Explorer.UI.Appearance
+@implements IDisposable
+@inject IExplorerAppearance Appearance
+
+@*
+    The Explorer's appearance control: palette, contrast and density, offered as
+    three plain radio groups behind one labelled disclosure.
+
+    Three deliberate choices.
+
+    1. IT IS LABELLED, not a bare glyph. The one job this affordance has is to be
+       findable by somebody who has never opened the Explorer before. An icon
+       tucked beside "Sign out" is exactly how the tenant control became
+       unfindable, so this one says what it is.
+
+    2. IT IS BUILT FROM NATIVE CONTROLS. A real <button>, real <fieldset>/<legend>
+       and real <input type="radio">, so the keyboard behaviour an operator
+       expects - Tab to the group, arrows within it, Space to choose - is the
+       platform's own rather than a re-implementation, and it works before any
+       script has run.
+
+    3. CONTRAST IS ITS OWN GROUP. High contrast is not a fourth palette: the token
+       layer layers it over whichever palette is active, so the two axes compose
+       instead of multiplying. Offering it as a theme would create a set of
+       palettes to keep in step that the token layer deliberately avoided.
+
+    The control owns no chrome placement. A shell slots it wherever it belongs and
+    may render it in place - with no trigger - on a settings surface of its own.
+
+    Everything a render needs is composed once and cached, because this component
+    is a child of the shell chrome and therefore re-renders whenever the chrome
+    does: a string or a lambda written inline in the markup below would be a
+    per-render allocation in the shell's own render path.
+*@
+
+<div class="@_rootClass"
+     id="@Id"
+     @onkeydown="OnKeyDownAsync">
+
+    @if (ShowTrigger)
+    {
+        <button type="button"
+                class="lx-appearance-trigger"
+                id="@_triggerId"
+                aria-expanded="@(IsOpen ? "true" : "false")"
+                aria-controls="@_panelId"
+                @ref="_trigger"
+                @onclick="ToggleAsync">@Label</button>
+    }
+
+    <div class="lx-appearance-panel"
+         id="@_panelId"
+         role="group"
+         aria-label="@Label"
+         hidden="@(!IsPanelVisible)">
+
+        <fieldset class="lx-appearance-group">
+            <legend class="lx-appearance-legend">Theme</legend>
+            @for (var i = 0; i < ThemeOptions.Length; i++)
+            {
+                var option = ThemeOptions[i];
+                var selected = Appearance.Theme == option.Choice;
+                <label class="@OptionClass(selected)">
+                    <input class="lx-appearance-radio"
+                           type="radio"
+                           name="@_themeGroup"
+                           value="@ExplorerAppearanceNames.ThemeName(option.Choice)"
+                           checked="@selected"
+                           @onchange="_themeHandlers[i]" />
+                    <span class="lx-appearance-option-label">@option.Label</span>
+                </label>
+            }
+        </fieldset>
+
+        <fieldset class="lx-appearance-group">
+            <legend class="lx-appearance-legend">Contrast</legend>
+            @for (var i = 0; i < ContrastOptions.Length; i++)
+            {
+                var option = ContrastOptions[i];
+                var selected = Appearance.Contrast == option.Choice;
+                <label class="@OptionClass(selected)">
+                    <input class="lx-appearance-radio"
+                           type="radio"
+                           name="@_contrastGroup"
+                           value="@ExplorerAppearanceNames.ContrastName(option.Choice)"
+                           checked="@selected"
+                           @onchange="_contrastHandlers[i]" />
+                    <span class="lx-appearance-option-label">@option.Label</span>
+                </label>
+            }
+        </fieldset>
+
+        <fieldset class="lx-appearance-group">
+            <legend class="lx-appearance-legend">Density</legend>
+            @for (var i = 0; i < DensityOptions.Length; i++)
+            {
+                var option = DensityOptions[i];
+                var selected = Appearance.Density == option.Choice;
+                <label class="@OptionClass(selected)">
+                    <input class="lx-appearance-radio"
+                           type="radio"
+                           name="@_densityGroup"
+                           value="@ExplorerAppearanceNames.DensityName(option.Choice)"
+                           checked="@selected"
+                           @onchange="_densityHandlers[i]" />
+                    <span class="lx-appearance-option-label">@option.Label</span>
+                </label>
+            }
+        </fieldset>
+
+        @if (!string.IsNullOrEmpty(Appearance.Notice))
+        {
+            <p class="lx-appearance-notice" role="status">@Appearance.Notice</p>
+        }
+    </div>
+</div>
+
+@code {
+    // Declared once rather than rebuilt per render: the option sets are fixed
+    // properties of the product, not of any instance.
+    private static readonly (ExplorerThemeChoice Choice, string Label)[] ThemeOptions =
+    [
+        (ExplorerThemeChoice.FollowSystem, "Match my system"),
+        (ExplorerThemeChoice.Light, "Light"),
+        (ExplorerThemeChoice.Dark, "Dark"),
+    ];
+
+    private static readonly (ExplorerContrastChoice Choice, string Label)[] ContrastOptions =
+    [
+        (ExplorerContrastChoice.FollowSystem, "Match my system"),
+        (ExplorerContrastChoice.Standard, "Standard"),
+        (ExplorerContrastChoice.More, "High contrast"),
+    ];
+
+    private static readonly (ExplorerDensityChoice Choice, string Label)[] DensityOptions =
+    [
+        (ExplorerDensityChoice.FollowLayout, "Match the layout"),
+        (ExplorerDensityChoice.Comfortable, "Comfortable"),
+        (ExplorerDensityChoice.Cosy, "Cosy"),
+        (ExplorerDensityChoice.Compact, "Compact"),
+    ];
+
+    // Bound once per instance. A lambda written inline in the markup would be a
+    // fresh closure and a fresh delegate on every render - ten of them - for
+    // handlers whose target never changes.
+    private EventCallback<ChangeEventArgs>[] _themeHandlers = [];
+    private EventCallback<ChangeEventArgs>[] _contrastHandlers = [];
+    private EventCallback<ChangeEventArgs>[] _densityHandlers = [];
+
+    // Composed in OnParametersSet, because parameters are the only thing they
+    // depend on.
+    private string _rootClass = "lx-appearance";
+    private string _triggerId = string.Empty;
+    private string _panelId = string.Empty;
+    private string _themeGroup = string.Empty;
+    private string _contrastGroup = string.Empty;
+    private string _densityGroup = string.Empty;
+
+    private ElementReference _trigger;
+
+    /// <summary>
+    /// The element-id prefix. The trigger is <c>{Id}-trigger</c>, the panel
+    /// <c>{Id}-panel</c>, and each radio group is named <c>{Id}-theme</c>,
+    /// <c>{Id}-contrast</c> or <c>{Id}-density</c>, so two instances on one page
+    /// do not share a group.
+    /// </summary>
+    [Parameter] public string Id { get; set; } = "lx-appearance";
+
+    /// <summary>Additional CSS classes appended to the control's root element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <summary>
+    /// The trigger's text and the panel's accessible name. Keep it a plain noun a
+    /// first-time reader recognises.
+    /// </summary>
+    [Parameter] public string Label { get; set; } = "Appearance";
+
+    /// <summary>
+    /// Whether to render the disclosure trigger. Set <see langword="false"/> to
+    /// render the groups in place on a settings surface that supplies its own
+    /// heading; the panel is then always visible and <see cref="IsOpen"/> is
+    /// ignored.
+    /// </summary>
+    [Parameter] public bool ShowTrigger { get; set; } = true;
+
+    /// <summary>Whether the panel is open. Two-way bindable.</summary>
+    [Parameter] public bool IsOpen { get; set; }
+
+    /// <summary>Raised when the panel opens or closes.</summary>
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+
+    private bool IsPanelVisible => !ShowTrigger || IsOpen;
+
+    private static string OptionClass(bool selected) =>
+        selected ? "lx-appearance-option is-selected" : "lx-appearance-option";
+
+    /// <inheritdoc />
+    protected override async Task OnInitializedAsync()
+    {
+        _themeHandlers = new EventCallback<ChangeEventArgs>[ThemeOptions.Length];
+        for (var i = 0; i < ThemeOptions.Length; i++)
+        {
+            var choice = ThemeOptions[i].Choice;
+            _themeHandlers[i] = EventCallback.Factory.Create<ChangeEventArgs>(
+                this,
+                _ => Appearance.SetThemeAsync(choice));
+        }
+
+        _contrastHandlers = new EventCallback<ChangeEventArgs>[ContrastOptions.Length];
+        for (var i = 0; i < ContrastOptions.Length; i++)
+        {
+            var choice = ContrastOptions[i].Choice;
+            _contrastHandlers[i] = EventCallback.Factory.Create<ChangeEventArgs>(
+                this,
+                _ => Appearance.SetContrastAsync(choice));
+        }
+
+        _densityHandlers = new EventCallback<ChangeEventArgs>[DensityOptions.Length];
+        for (var i = 0; i < DensityOptions.Length; i++)
+        {
+            var choice = DensityOptions[i].Choice;
+            _densityHandlers[i] = EventCallback.Factory.Create<ChangeEventArgs>(
+                this,
+                _ => Appearance.SetDensityAsync(choice));
+        }
+
+        Appearance.Changed += OnAppearanceChanged;
+        await Appearance.EnsureLoadedAsync();
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        var presentation = ShowTrigger ? "lx-appearance" : "lx-appearance lx-appearance-inline";
+        _rootClass = string.IsNullOrEmpty(Class) ? presentation : presentation + " " + Class;
+
+        _triggerId = Id + "-trigger";
+        _panelId = Id + "-panel";
+        _themeGroup = Id + "-theme";
+        _contrastGroup = Id + "-contrast";
+        _densityGroup = Id + "-density";
+    }
+
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // A prerender pass cannot reach browser storage, so the hydration
+            // attempted during initialization may have been a no-op. The contract
+            // makes this idempotent.
+            await Appearance.EnsureLoadedAsync();
+        }
+    }
+
+    private void OnAppearanceChanged() => InvokeAsync(StateHasChanged);
+
+    private Task ToggleAsync() => SetOpenAsync(!IsOpen);
+
+    private async Task SetOpenAsync(bool open)
+    {
+        if (IsOpen == open)
+        {
+            return;
+        }
+
+        IsOpen = open;
+        await IsOpenChanged.InvokeAsync(open);
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (!ShowTrigger || !IsOpen || !string.Equals(args.Key, "Escape", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await SetOpenAsync(false);
+
+        // Dismissing must not strand focus on an element that has just been
+        // hidden, so it returns to the control that opened the panel.
+        try
+        {
+            await _trigger.FocusAsync();
+        }
+        catch (InvalidOperationException)
+        {
+            // No interop to focus through (a prerender pass or a static render).
+        }
+    }
+
+    /// <summary>Detaches from the appearance state.</summary>
+    public void Dispose() => Appearance.Changed -= OnAppearanceChanged;
+}
