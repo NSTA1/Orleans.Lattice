@@ -158,6 +158,20 @@ public sealed class FileWalStorageProviderTests
         Assert.That(read, Is.Empty);
     }
 
+    [Test]
+    public async Task ReadAsync_yields_nothing_from_an_exclusive_lower_bound_at_long_max_value()
+    {
+        using var sut = CreateProvider();
+        await sut.AppendBatchAsync(TreeId, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+
+        // No entry can sit above long.MaxValue, so an exclusive lower bound there
+        // selects nothing. The naive fromOffsetExclusive + 1 overflows to
+        // long.MinValue and would wrongly snapshot the whole log from the head.
+        var read = await ReadAllAsync(sut, TreeId, 0, fromOffsetExclusive: long.MaxValue);
+
+        Assert.That(read, Is.Empty);
+    }
+
     // --- monotonic tail / highest / lowest -------------------------------
 
     [Test]

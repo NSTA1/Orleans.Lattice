@@ -1,3 +1,5 @@
+using System.Collections.ObjectModel;
+
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
@@ -73,7 +75,7 @@ public readonly struct ChangeFeedCursor : IEquatable<ChangeFeedCursor>
             }
             snapshot[kv.Key] = kv.Value;
         }
-        _partitionOffsets = snapshot;
+        _partitionOffsets = new ReadOnlyDictionary<int, long>(snapshot);
     }
 
     /// <summary>
@@ -104,7 +106,7 @@ public readonly struct ChangeFeedCursor : IEquatable<ChangeFeedCursor>
         => _partitionOffsets ?? EmptyMap;
 
     private static readonly IReadOnlyDictionary<int, long> EmptyMap
-        = new Dictionary<int, long>();
+        = ReadOnlyDictionary<int, long>.Empty;
 
     /// <summary>
     /// Structural equality over the partition map. Two cursors are

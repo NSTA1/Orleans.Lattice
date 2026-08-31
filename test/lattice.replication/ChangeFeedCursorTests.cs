@@ -76,6 +76,43 @@ public sealed class ChangeFeedCursorTests
     }
 
     [Test]
+    public void PartitionOffsets_cannot_be_mutated_through_a_downcast()
+    {
+        var cursor = new ChangeFeedCursor(new Dictionary<int, long> { [0] = 10 });
+
+        // The doc promises a defensive snapshot owned by the cursor, but the
+        // getter previously handed back the mutable backing dictionary boxed as
+        // IReadOnlyDictionary. A caller could downcast to IDictionary and mutate
+        // the cursor's state from underneath it. The snapshot must reject writes.
+        var view = (IDictionary<int, long>)cursor.PartitionOffsets;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => view[0] = 999, Throws.InstanceOf<NotSupportedException>());
+            Assert.That(() => view.Add(1, 5), Throws.InstanceOf<NotSupportedException>());
+            Assert.That(cursor.GetOffsetForPartition(0), Is.EqualTo(10L));
+            Assert.That(cursor.GetOffsetForPartition(1), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void Initial_PartitionOffsets_is_an_immutable_shared_empty_map()
+    {
+        // Initial and empty cursors previously returned a shared mutable static
+        // dictionary. A caller that downcast and mutated it would poison every
+        // future Initial cursor process-wide. The shared empty map must be
+        // immutable so no such cross-cursor leak is possible.
+        var view = (IDictionary<int, long>)ChangeFeedCursor.Initial.PartitionOffsets;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => view[0] = 99, Throws.InstanceOf<NotSupportedException>());
+            Assert.That(ChangeFeedCursor.Initial.PartitionOffsets, Is.Empty);
+            Assert.That(new ChangeFeedCursor(null).PartitionOffsets, Is.Empty);
+        });
+    }
+
+    [Test]
     public void Constructor_defensively_snapshots_the_supplied_map()
     {
         var source = new Dictionary<int, long> { [0] = 10 };

@@ -31,7 +31,7 @@ internal static class ComputePressureMath
     /// <returns>The clamped value in the range 0..1.</returns>
     internal static double Clamp01(double value)
     {
-        if (double.IsNaN(value) || value < 0d)
+        if (!double.IsFinite(value) || value < 0d)
         {
             return 0d;
         }
