@@ -125,10 +125,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // First terminal: freeze the wait set and identity. The wait set is
             // canonicalized (ordinal-sorted, de-duplicated) so the exact-match
             // validation below is order-insensitive.
-            state.State.WaitSet = terminal.WaitSet
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(t => t, StringComparer.Ordinal)
-                .ToList();
+            state.State.WaitSet = CanonicalStringSet.SortedDistinct(terminal.WaitSet);
             state.State.OriginClusterId = terminal.OriginClusterId;
             state.State.OperationId = terminal.OperationId;
             state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
