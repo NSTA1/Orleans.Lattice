@@ -81,6 +81,14 @@ internal sealed class FileWalShard : IDisposable
         try
         {
             EnsureLoaded();
+            if (fromOffsetExclusive == long.MaxValue)
+            {
+                // No entry can have an offset greater than long.MaxValue;
+                // fromOffsetExclusive + 1 would overflow to long.MinValue
+                // and wrongly snapshot the whole log from the head.
+                return (Array.Empty<long>(), Array.Empty<byte[]>());
+            }
+
             var startIndex = LowerBound(fromOffsetExclusive + 1);
             var available = _entries.Count - startIndex;
             if (available <= 0)

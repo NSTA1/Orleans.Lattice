@@ -268,6 +268,24 @@ public class InMemoryWalStorageProviderTests
     }
 
     [Test]
+    public async Task ReadAsync_yields_nothing_from_an_exclusive_lower_bound_at_long_max_value()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, new[] { Entry(0), Entry(1), Entry(2) }, CancellationToken.None);
+
+        // No entry can sit above long.MaxValue, so an exclusive lower bound there
+        // selects nothing. The naive fromOffsetExclusive + 1 overflows to
+        // long.MinValue and would wrongly replay the whole log from the head.
+        var collected = new List<WalEntry>();
+        await foreach (var w in sut.ReadAsync(Tree, 0, fromOffsetExclusive: long.MaxValue, maxEntries: 10, CancellationToken.None))
+        {
+            collected.Add(w);
+        }
+
+        Assert.That(collected, Is.Empty);
+    }
+
+    [Test]
     public void ReadAsync_throws_on_zero_max_entries()
     {
         var sut = new InMemoryWalStorageProvider();

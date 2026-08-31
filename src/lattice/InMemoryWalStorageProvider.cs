@@ -189,6 +189,15 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
             yield break;
         }
 
+        if (fromOffsetExclusive == long.MaxValue)
+        {
+            // No entry can have an offset greater than long.MaxValue, so an
+            // exclusive lower bound there selects nothing. Falling through
+            // would compute fromOffsetExclusive + 1, overflowing to
+            // long.MinValue and wrongly replaying the whole log from head.
+            yield break;
+        }
+
         // Snapshot only the relevant suffix under the gate. Offsets are
         // dense, so the first surviving index is computable in O(1) from
         // the head offset; we then copy at most `maxEntries` entries.

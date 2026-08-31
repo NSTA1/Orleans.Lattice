@@ -34,6 +34,22 @@ public sealed class ComputePressureMathTests
     }
 
     [Test]
+    public void Clamp01_maps_positive_infinity_to_zero()
+    {
+        // The documented contract is that non-finite inputs clamp to 0.0 (the
+        // safe floor). A NaN-only guard let positive infinity slip through and
+        // clamp to 1.0 - a spurious maximum-pressure spike that could trigger a
+        // bogus scale-out.
+        Assert.That(ComputePressureMath.Clamp01(double.PositiveInfinity), Is.Zero);
+    }
+
+    [Test]
+    public void Clamp01_maps_negative_infinity_to_zero()
+    {
+        Assert.That(ComputePressureMath.Clamp01(double.NegativeInfinity), Is.Zero);
+    }
+
+    [Test]
     public void NormaliseResource_uses_cpu_when_cpu_is_the_worse_dimension()
     {
         var sample = new SiloResourceSample

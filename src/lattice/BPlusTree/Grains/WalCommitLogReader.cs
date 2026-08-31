@@ -36,14 +36,19 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
 
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
 
+        // No entry can have an offset greater than long.MaxValue, so an
+        // exclusive lower bound there selects nothing. Computing
+        // fromOffsetExclusive + 1 would overflow to long.MinValue and,
+        // once clamped to 0, wrongly replay the whole log from the head.
+        if (fromOffsetExclusive == long.MaxValue)
+        {
+            yield break;
+        }
+
         // fromOffsetExclusive == -1 means "start at offset 0 inclusive".
         // The WAL grain's ReadAsync takes an inclusive sequence cursor,
         // so the inclusive cursor is fromOffsetExclusive + 1.
         var nextSequence = fromOffsetExclusive + 1;
-        if (nextSequence < 0)
-        {
-            nextSequence = 0;
-        }
 
         while (true)
         {
