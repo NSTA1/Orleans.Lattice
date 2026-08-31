@@ -510,6 +510,105 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultHotShardSplitCooldown = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// How disproportionately loaded the hottest shard must be, relative to the
+    /// tree's own median shard load, before any autonomic split is admitted.
+    /// <para>
+    /// <see cref="HotShardOpsPerSecondThreshold"/> measures how <em>fast</em> a
+    /// shard is; this measures the <em>shape</em> of the load. A bulk ingest
+    /// streams writes uniformly across the whole key space, so every shard sits
+    /// far above the rate threshold while none is disproportionately loaded:
+    /// splitting cannot relieve it (each half is equally hot) and the only
+    /// durable effect is a permanent multiplication of grain activations. The
+    /// monitor therefore computes <c>maxShardRate / medianShardRate</c> across
+    /// the tree's physical shards each pass and admits splits only when that
+    /// ratio reaches this value. A uniformly loaded tree sits at approximately
+    /// <c>1.0</c> and is never a split candidate; a genuinely skewed read
+    /// workload sits well above it and still splits exactly as before.
+    /// </para>
+    /// <para>
+    /// The median (rather than the mean) is used because it is robust: one hot
+    /// shard among many barely moves it, so the ratio reflects true
+    /// concentration rather than being diluted by the shard count.
+    /// </para>
+    /// <para>
+    /// Must be strictly greater than
+    /// <see cref="HotShardConsolidationSkewRatio"/>: the gap between the two is
+    /// the hysteresis dead band in which neither the split trigger nor the
+    /// consolidation trigger fires, which is what stops the two control loops
+    /// oscillating against each other. A value at or below <c>1.0</c> disables
+    /// the skew gate entirely and restores pure rate-based admission.
+    /// </para>
+    /// </summary>
+    public double HotShardMinSkewRatio { get; set; } = DefaultHotShardMinSkewRatio;
+
+    /// <summary>Default value for <see cref="HotShardMinSkewRatio"/> (1.5).</summary>
+    public const double DefaultHotShardMinSkewRatio = 1.5;
+
+    /// <summary>
+    /// The load-skew ratio at or below which a tree counts as uniformly loaded,
+    /// and is therefore a candidate for shard <em>consolidation</em> rather than
+    /// splitting. Measured on exactly the same statistic as
+    /// <see cref="HotShardMinSkewRatio"/> (<c>maxShardRate / medianShardRate</c>).
+    /// <para>
+    /// The split trigger fires at or above <see cref="HotShardMinSkewRatio"/>;
+    /// the consolidation trigger fires at or below this value. The interval
+    /// between them is a dead band in which neither acts, so a tree that has
+    /// just been split cannot immediately qualify for consolidation and a tree
+    /// that has just been consolidated cannot immediately qualify for a split.
+    /// This value must therefore be strictly less than
+    /// <see cref="HotShardMinSkewRatio"/>.
+    /// </para>
+    /// </summary>
+    public double HotShardConsolidationSkewRatio { get; set; } = DefaultHotShardConsolidationSkewRatio;
+
+    /// <summary>Default value for <see cref="HotShardConsolidationSkewRatio"/> (1.15).</summary>
+    public const double DefaultHotShardConsolidationSkewRatio = 1.15;
+
+    /// <summary>
+    /// Minimum number of live entries a physical shard must hold before it is
+    /// eligible for an autonomic split, whatever its operation rate.
+    /// <para>
+    /// A split relieves a hot shard by moving half of its virtual slots to a
+    /// newly allocated physical shard. That can only help when there is enough
+    /// data to redistribute: splitting a shard holding a few dozen records
+    /// relieves nothing and permanently doubles the tree's activation
+    /// footprint. This floor makes an under-occupied shard structurally
+    /// ineligible so a pathological hotness signal cannot shatter a small tree.
+    /// </para>
+    /// <para>
+    /// Occupancy is sampled with a single
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CountAsync()"/> per
+    /// candidate, and only for shards that already cleared every cheaper gate,
+    /// so a tree under uniform load pays nothing for it. Set to <c>0</c> to
+    /// disable the occupancy floor (and its probe) entirely.
+    /// </para>
+    /// </summary>
+    public int HotShardMinShardEntries { get; set; } = DefaultHotShardMinShardEntries;
+
+    /// <summary>Default value for <see cref="HotShardMinShardEntries"/> (1024).</summary>
+    public const int DefaultHotShardMinShardEntries = 1024;
+
+    /// <summary>
+    /// Absolute ceiling on the number of physical shards a tree may reach
+    /// through autonomic splitting. Once the tree's physical shard count
+    /// reaches this value the monitor admits no further splits, whatever the
+    /// observed load, so a pathological or mis-calibrated hotness signal cannot
+    /// run a tree away into thousands of shards.
+    /// <para>
+    /// The ceiling bounds <em>autonomic</em> growth only: an explicit
+    /// <see cref="ILattice.ReshardAsync"/> is an operator decision and is not
+    /// gated by it. A tree deliberately configured with more physical shards
+    /// than this ceiling simply never splits autonomically; raise the ceiling
+    /// to re-enable growth for such a tree. Set to <c>0</c> (or less) for no
+    /// ceiling.
+    /// </para>
+    /// </summary>
+    public int MaxPhysicalShardsPerTree { get; set; } = DefaultMaxPhysicalShardsPerTree;
+
+    /// <summary>Default value for <see cref="MaxPhysicalShardsPerTree"/> (256).</summary>
+    public const int DefaultMaxPhysicalShardsPerTree = 256;
+
+    /// <summary>
     /// Maximum number of autonomic splits that can be in flight concurrently
     /// for a single tree. The monitor refuses to start a new split while this
     /// many are already active. Defaults to 2 - splits are I/O-bounded by the

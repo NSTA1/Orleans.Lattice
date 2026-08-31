@@ -2489,6 +2489,29 @@ public static class LatticeMetrics
     /// <summary><see cref="TagReason"/> = <c>cluster_cap</c> on <see cref="SplitAdmissionDeferred"/>.</summary>
     public static readonly KeyValuePair<string, object?> SplitDeferredClusterCapReasonTag = new(TagReason, "cluster_cap");
 
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>uniform_load</c> on <see cref="SplitAdmissionDeferred"/>.
+    /// Emitted for a shard that is above the ops/sec threshold but whose tree is
+    /// uniformly loaded, so a split would relieve nothing. Sustained non-zero
+    /// values are the signature of a bulk ingest, not of a hot spot.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredUniformLoadReasonTag = new(TagReason, "uniform_load");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>low_occupancy</c> on <see cref="SplitAdmissionDeferred"/>.
+    /// Emitted for a hot, skewed shard that holds too few live entries for a
+    /// split to redistribute anything.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredLowOccupancyReasonTag = new(TagReason, "low_occupancy");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>shard_ceiling</c> on <see cref="SplitAdmissionDeferred"/>.
+    /// Emitted for a hot shard held back because the tree has reached its
+    /// per-tree physical shard ceiling. Sustained non-zero means the ceiling is
+    /// binding and should be reviewed alongside the tree's shard count.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredShardCeilingReasonTag = new(TagReason, "shard_ceiling");
+
     // --- Compaction policy instruments (TombstoneCompactionGrain) -----------
 
     /// <summary>
