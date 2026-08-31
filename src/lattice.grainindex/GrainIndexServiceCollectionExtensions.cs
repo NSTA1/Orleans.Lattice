@@ -1,0 +1,270 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using Orleans.Hosting;
+using Orleans.Lattice.GrainIndex.Backfill;
+using Orleans.Lattice.GrainIndex.Enrollment;
+using Orleans.Lattice.GrainIndex.Observability;
+using Orleans.Lattice.GrainIndex.Registry;
+using Orleans.Lattice.GrainIndex.Query;
+using Orleans.Runtime;
+
+namespace Orleans.Lattice.GrainIndex;
+
+/// <summary>
+/// Extension methods for declaring grain indexes on an Orleans silo, following
+/// the same shape as the core <c>AddLattice</c> / <c>ConfigureLattice</c> pair:
+/// <c>AddGrainIndex</c> declares an index, <c>ConfigureGrainIndex</c> overrides
+/// its settings.
+/// </summary>
+public static class GrainIndexServiceCollectionExtensions
+{
+    /// <summary>
+    /// Declares a grain index over <typeparamref name="TGrain"/>, projecting the
+    /// properties of <typeparamref name="TState"/> that
+    /// <paramref name="configure"/> opts in.
+    /// <para>Example:</para>
+    /// <code>
+    /// silo.AddGrainIndex&lt;IUserGrain, UserState&gt;(cfg =&gt; cfg
+    ///     .WithName("users")
+    ///     .Include(x =&gt; x.Age)
+    ///     .Include(x =&gt; x.Country));
+    /// </code>
+    /// </summary>
+    /// <typeparam name="TGrain">The indexed grain interface type.</typeparam>
+    /// <typeparam name="TState">The grain-state type the index projects from.</typeparam>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="configure">Declares the index. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    /// <exception cref="GrainIndexKeyEncodingException">
+    /// The declaration supplied no key codec and no built-in codec can encode
+    /// <typeparamref name="TGrain"/>'s key, so the grain is not indexable.
+    /// </exception>
+    public static ISiloBuilder AddGrainIndex<TGrain, TState>(
+        this ISiloBuilder builder,
+        Action<GrainIndexBuilder<TGrain, TState>> configure)
+        where TGrain : IGrain
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        var indexBuilder = new GrainIndexBuilder<TGrain, TState>();
+        configure(indexBuilder);
+
+        var definition = indexBuilder.Build();
+        var indexName = definition.Name;
+        var treeName = indexBuilder.TreeNameOverride ?? GrainIndexTreeNames.ForIndex(indexName);
+        var allowReplication = indexBuilder.AllowReplicationValue;
+        var backfillBatchSize = indexBuilder.BackfillBatchSizeOverride;
+        var backfillInterval = indexBuilder.BackfillIntervalOverride;
+
+        var services = builder.Services;
+
+        // Seed the named options from the declaration. A later
+        // ConfigureGrainIndex call is registered after this one and therefore
+        // wins, which is what makes the mirror an override rather than a
+        // suggestion. Knobs the declaration did not set are left alone so a
+        // global ConfigureGrainIndex applied first is not silently undone.
+        services.Configure<GrainIndexOptions>(indexName, options =>
+        {
+            options.TreeName = treeName;
+            options.AllowReplication = allowReplication;
+            if (backfillBatchSize is { } batchSize)
+            {
+                options.BackfillBatchSize = batchSize;
+            }
+
+            if (backfillInterval is { } interval)
+            {
+                options.BackfillInterval = interval;
+            }
+        });
+
+        services.Configure<GrainIndexDeclarationOptions>(
+            declarations => declarations.Definitions.Add(definition));
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<GrainIndexOptions>, GrainIndexOptionsValidator>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<GrainIndexDeclarationOptions>, GrainIndexDeclarationOptionsValidator>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexStartupValidator>());
+
+        // The registry is one store and one reconciler for the whole silo
+        // regardless of how many indexes are declared, so every registration
+        // below is idempotent.
+        services.TryAddSingleton(typeof(OrleansGrainIndexSerializer<>));
+        services.TryAddSingleton<IGrainIndexRegistryStore, GrainIndexRegistryStore>();
+        services.TryAddSingleton<GrainIndexRegistryReconciler>();
+        services.TryAddSingleton<IGrainIndexProvider, GrainIndexProvider>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexRegistryHostedService>());
+
+        // The enrolment path. The attribute mapper is what makes [Indexed] bind
+        // to the index-aware state object; the enrolment set is resolved per
+        // state type, so it is registered open and closed on demand.
+        services.TryAddSingleton<IGrainIndexEnrollmentStore, GrainIndexEnrollmentStore>();
+        services.TryAddSingleton(typeof(GrainIndexEnrollmentSet<>));
+        services.TryAddSingleton<IAttributeToFactoryMapper<IndexedAttribute>, IndexedAttributeMapper>();
+        services.TryAddSingleton<GrainIndexOutboxDrainer>();
+        services.AddOptions<GrainIndexOutboxOptions>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexOutboxHostedService>());
+
+        // The background backfill. Registered after the registry reconciler so
+        // its start-up pass sees the needs-backfill flag that reconciliation
+        // raises, and idempotently so a silo declaring several indexes wires it
+        // once.
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IGrainIndexBackfillStore, GrainIndexBackfillStore>();
+        services.TryAddSingleton<IGrainIndexBackfillActivator, GrainIndexBackfillActivator>();
+        services.TryAddSingleton<IGrainKeySourceResolver, GrainKeySourceResolver>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GrainIndexBackfillHostedService>());
+
+        // The operator surface. It reads the registry and drives the backfill
+        // activations, so it registers after both and, like them, exactly once
+        // however many indexes a silo declares.
+        services.TryAddSingleton<IGrainIndexAdmin, GrainIndexAdmin>();
+
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers the <see cref="IGrainKeySource"/> that describes the grain
+    /// population the index named <paramref name="indexName"/> backfills, as a
+    /// singleton resolved from the container.
+    /// <para>Example:</para>
+    /// <code>
+    /// silo.AddGrainIndexKeySource&lt;UserKeySource&gt;("users");
+    /// </code>
+    /// </summary>
+    /// <remarks>
+    /// Without a key source an index is still perfectly usable: every grain that
+    /// activates indexes itself. What the source adds is the crawl that onboards
+    /// grains which existed before the index did and never activate on their own.
+    /// </remarks>
+    /// <typeparam name="TSource">The key source implementation.</typeparam>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index the source describes. Must not be <c>null</c>, empty, or white space.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder AddGrainIndexKeySource<TSource>(this ISiloBuilder builder, string indexName)
+        where TSource : class, IGrainKeySource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+
+        builder.Services.AddKeyedSingleton<IGrainKeySource, TSource>(indexName);
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers an already-constructed <see cref="IGrainKeySource"/> for the
+    /// index named <paramref name="indexName"/>.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index the source describes. Must not be <c>null</c>, empty, or white space.</param>
+    /// <param name="source">The key source. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder AddGrainIndexKeySource(
+        this ISiloBuilder builder,
+        string indexName,
+        IGrainKeySource source)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        ArgumentNullException.ThrowIfNull(source);
+
+        builder.Services.AddKeyedSingleton(indexName, source);
+        return builder;
+    }
+
+    /// <summary>
+    /// Registers an <see cref="IGrainKeySource"/> for the index named
+    /// <paramref name="indexName"/>, built from the container when it is first
+    /// needed.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index the source describes. Must not be <c>null</c>, empty, or white space.</param>
+    /// <param name="factory">Builds the key source. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder AddGrainIndexKeySource(
+        this ISiloBuilder builder,
+        string indexName,
+        Func<IServiceProvider, IGrainKeySource> factory)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        ArgumentNullException.ThrowIfNull(factory);
+
+        builder.Services.AddKeyedSingleton<IGrainKeySource>(indexName, (services, _) => factory(services));
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the silo-wide pending-projection outbox: whether this host
+    /// runs the background drain, how often, and how much it does per pass.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="configure">Mutates the outbox settings. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureGrainIndexOutbox(
+        this ISiloBuilder builder,
+        Action<GrainIndexOutboxOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures global <see cref="GrainIndexOptions"/> that apply to every
+    /// declared index unless a per-index override is registered afterwards.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="configure">Mutates every named options instance. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureGrainIndex(
+        this ISiloBuilder builder,
+        Action<GrainIndexOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.ConfigureAll(configure);
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures <see cref="GrainIndexOptions"/> for the single index named
+    /// <paramref name="indexName"/>, overriding both the declaration's seeded
+    /// values and any global defaults.
+    /// </summary>
+    /// <param name="builder">The silo builder. Must not be <c>null</c>.</param>
+    /// <param name="indexName">The index to configure. Must not be <c>null</c>, empty, or white space.</param>
+    /// <param name="configure">Mutates that index's options. Must not be <c>null</c>.</param>
+    /// <returns>The silo builder, for chaining.</returns>
+    /// <exception cref="ArgumentException"><paramref name="indexName"/> is empty or white space.</exception>
+    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    public static ISiloBuilder ConfigureGrainIndex(
+        this ISiloBuilder builder,
+        string indexName,
+        Action<GrainIndexOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
+        ArgumentNullException.ThrowIfNull(configure);
+        builder.Services.Configure(indexName, configure);
+        return builder;
+    }
+}

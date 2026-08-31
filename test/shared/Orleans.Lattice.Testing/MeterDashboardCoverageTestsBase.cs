@@ -70,6 +70,22 @@ public abstract class MeterDashboardCoverageTestsBase
         new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
+    /// Whether an instrument published on <see cref="Meter"/> is in scope for
+    /// this fixture. The default includes every instrument on the meter, which
+    /// is right for a package that owns its meter outright.
+    /// </summary>
+    /// <remarks>
+    /// Override it when a package publishes its instruments on a <em>shared</em>
+    /// meter it does not own - the grain-index package adds its series to the
+    /// core <c>orleans.lattice</c> meter, for instance - so the guard covers the
+    /// package's own instruments without demanding that its dashboard also chart
+    /// every instrument the meter's owner publishes.
+    /// </remarks>
+    /// <param name="instrumentName">The instrument's canonical dotted name.</param>
+    /// <returns><c>true</c> when the instrument is this fixture's to cover.</returns>
+    protected virtual bool IncludeInstrument(string instrumentName) => true;
+
+    /// <summary>
     /// Forward guard: every instrument published on <see cref="Meter"/> exposes
     /// at least one canonical Prometheus token that appears in some supplied
     /// dashboard, so a new instrument cannot ship without a panel.
@@ -160,7 +176,7 @@ public abstract class MeterDashboardCoverageTestsBase
         {
             listener.InstrumentPublished = (instrument, _) =>
             {
-                if (ReferenceEquals(instrument.Meter, meter))
+                if (ReferenceEquals(instrument.Meter, meter) && IncludeInstrument(instrument.Name))
                 {
                     names.Add(instrument.Name);
                 }

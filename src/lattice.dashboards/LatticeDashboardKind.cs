@@ -138,4 +138,18 @@ public enum LatticeDashboardKind
     /// tenancy package is registered on the silo.
     /// </summary>
     Tenancy = 9,
+
+    /// <summary>
+    /// Grain-index operator view for the <c>Orleans.Lattice.GrainIndex</c>
+    /// package. Charts each index's backfill lifecycle state and percent
+    /// complete, its processed-versus-total crawl progress, its live entry
+    /// count, onboarding throughput split by route (activation versus backfill),
+    /// projection-latency percentiles, and index-write failure rates by route. A
+    /// templated <c>index</c> variable scopes every panel to one index or to all
+    /// of them. Sources the shared <c>orleans.lattice</c> meter - the grain-index
+    /// package publishes no meter of its own - so the series appear under an
+    /// existing lattice subscription, but only once the grain-index package is
+    /// registered on the silo.
+    /// </summary>
+    GrainIndex = 10,
 }
