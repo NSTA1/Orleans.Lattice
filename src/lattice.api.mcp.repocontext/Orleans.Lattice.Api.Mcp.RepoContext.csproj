@@ -46,6 +46,7 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\lattice.api.mcp\Orleans.Lattice.Api.Mcp.csproj" />
+    <ProjectReference Include="..\lattice.vector\Orleans.Lattice.Vector.csproj" />
   </ItemGroup>
 
 </Project>

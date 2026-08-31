@@ -16,6 +16,7 @@ public sealed class RepoContextIndexingOptionsTests
         RepoContextIndexingOptions.FullWalkIntervalSecondsKey,
         RepoContextIndexingOptions.TokenizerProfileKey,
         RepoContextIndexingOptions.IndexingRoleKey,
+        RepoContextIndexingOptions.SemanticRetrievalKey,
     ];
 
     [SetUp]
