@@ -28,6 +28,19 @@ public sealed record RepoContextSearchResult
     /// </summary>
     public required string Mode { get; init; }
 
+    /// <summary>
+    /// The precise retrieval path that answered, from the closed
+    /// <see cref="RepoContextRetrievalPath"/> vocabulary. It rides <b>alongside</b>
+    /// <see cref="Mode"/> without changing it, and disambiguates what <see cref="Mode"/>
+    /// cannot: whether a semantic answer had complete or bounded recall, and - when the
+    /// answer was a keyword scan - whether that is an intended keyword-only deployment
+    /// (<see cref="RepoContextRetrievalPath.KeywordNoEmbedder"/>) or a real capability
+    /// loss (<see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/> or
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>). Always server-derived
+    /// and never <see langword="null"/>.
+    /// </summary>
+    public required string RetrievalPath { get; init; }
+
     /// <summary>The ranked hits in descending score order; empty when nothing matched.</summary>
     public required IReadOnlyList<RepoContextSearchHit> Hits { get; init; }
 }

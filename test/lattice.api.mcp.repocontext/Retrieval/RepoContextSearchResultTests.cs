@@ -73,6 +73,7 @@ public sealed class RepoContextSearchResultTests
             RepoId = "acme",
             Query = "order service",
             Mode = "semantic",
+            RetrievalPath = RepoContextRetrievalPath.SemanticExact,
             Hits = hits,
         };
 
@@ -81,6 +82,7 @@ public sealed class RepoContextSearchResultTests
             Assert.That(result.RepoId, Is.EqualTo("acme"));
             Assert.That(result.Query, Is.EqualTo("order service"));
             Assert.That(result.Mode, Is.EqualTo("semantic"));
+            Assert.That(result.RetrievalPath, Is.EqualTo("semantic.exact"));
             Assert.That(result.Hits, Is.SameAs(hits));
         });
     }
