@@ -39,8 +39,15 @@ namespace Orleans.Lattice.Explorer.Core.Navigation;
 /// to hold anything else. <see cref="Parse"/> accepts an upper-case segment, a
 /// trailing slash, a stray query spelling and an un-namespaced area, reports
 /// <see cref="ExplorerRouteStatus.Normalized"/>, and lets the shell rewrite the
-/// address bar - so a hand-typed link still lands somewhere sensible instead of
-/// erroring.
+/// address bar.
+/// </para>
+/// <para>
+/// That tolerance is <b>parser-level, not endpoint-level</b>. Every declared
+/// route begins with a literal segment and the head maps no fallback, so an
+/// address this parser would normalise is not necessarily one the server will
+/// route: a bare <c>/tenants</c> typed cold matches no endpoint and 404s. The
+/// forgiveness applies to an address the shell is already handling - one it
+/// parses in-circuit and canonicalises - not to an arbitrary hand-typed URL.
 /// </para>
 /// <para>
 /// <b>The id is escaped, not slugged.</b> A tree id is cluster-owned and may
