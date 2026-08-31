@@ -35,6 +35,7 @@
   <Project Path="src/lattice.replication/Orleans.Lattice.Replication.csproj" />
   <Project Path="src/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.csproj" />
   <Project Path="src/lattice.scaling/Orleans.Lattice.Scaling.csproj" />
+  <Project Path="src/lattice.vector/Orleans.Lattice.Vector.csproj" />
   <Project Path="src/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.csproj" />
   <Project Path="src/lattice.storage.file/Orleans.Lattice.Storage.File.csproj" />
   <Project Path="src/lattice.backup.azureblob/Orleans.Lattice.Backup.AzureBlob.csproj" />
@@ -98,6 +99,7 @@
   <Project Path="test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj" />
   <Project Path="test/lattice.replication.grpc/Orleans.Lattice.Replication.Grpc.Tests.csproj" />
   <Project Path="test/lattice.scaling/Orleans.Lattice.Scaling.Tests.csproj" />
+  <Project Path="test/lattice.vector/Orleans.Lattice.Vector.Tests.csproj" />
   <Project Path="test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.Tests.csproj" />
   <Project Path="test/lattice.integration/Orleans.Lattice.Integration.Tests.csproj" />
   <Project Path="test/lattice.storage.file/Orleans.Lattice.Storage.File.Tests.csproj" />
