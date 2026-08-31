@@ -63,6 +63,30 @@ public class ShardHealingDecisionCoreAllocationTests
     /// observed difference in allocated bytes across <see cref="Repeats"/>
     /// rounds. A per-iteration allocation shows up as a growth proportional to
     /// the extra iterations; a one-off cost cancels.
+    /// <para>
+    /// Every round is measured and the <b>minimum</b> is kept - the helper never
+    /// short-circuits on the first non-positive sample. Short-circuiting is the
+    /// third way an allocation probe silently fails: on a loop that genuinely
+    /// allocates, one noisy round where the small window absorbed more noise
+    /// than the large one would be reported as allocation-free.
+    /// </para>
+    /// <para>
+    /// The minimum is deliberately <i>not</i> clamped at zero. Noise can only
+    /// add allocation, so the minimum is the closest estimate of the true
+    /// per-iteration term, and a genuine allocation appears in every round and
+    /// survives it. Leaving the raw value makes a failure message report what
+    /// was actually measured; clamping would be behaviour-neutral for both
+    /// assertion directions used here (a negative growth satisfies
+    /// <c>&lt;= 0</c> and fails <c>&gt; 0</c> either way).
+    /// </para>
+    /// <para>
+    /// The warm-up is deliberately at the <b>full</b> loop size, not a token
+    /// one. That matters twice: it moves tiered-JIT and on-stack-replacement
+    /// costs outside every measured window, and it forces tier-1 promotion
+    /// before the first measurement - so a loop whose allocation escape
+    /// analysis can remove is caught even in a single-test run, rather than
+    /// only in a batch large enough to have promoted the method by luck.
+    /// </para>
     /// </summary>
     private static long MeasureGrowth(Action<int> body)
     {
@@ -163,10 +187,15 @@ public class ShardHealingDecisionCoreAllocationTests
     [Test]
     public void Rate_statistics_do_not_allocate_per_shard()
     {
-        // The healer recomputes the tree's skew with the splitter's own
-        // functions over every physical shard. On the measured damage shape
-        // that is 1,110 rates per sweep, so a per-shard allocation here would
-        // be a per-sweep allocation multiplied by the very damage being healed.
+        // Not a re-proof of ShardSplitAdmissionCore, which S4 already covers in
+        // isolation. This measures the ORCHESTRATOR'S use of those functions -
+        // a caller-owned heap scratch buffer copied and sorted once per sweep at
+        // the measured damage scale - which is a different claim from "the
+        // function is pure": it is the copy and the in-place sort over 1,110
+        // rates that must not allocate, because the healer recomputes the tree's
+        // skew on every sweep for as long as the damage exists. A per-shard
+        // allocation here would be a per-sweep allocation multiplied by the very
+        // damage being healed.
         var rates = new double[1_110];
         for (var i = 0; i < rates.Length; i++) rates[i] = 0.2d + (i % 7) * 0.01d;
         var scratch = new double[rates.Length];
@@ -225,11 +254,17 @@ public class ShardHealingDecisionCoreAllocationTests
     {
         // The battery test for the probe itself. Its allocation must PROVABLY
         // ESCAPE: assigning a fresh object to a static field of reference type
-        // is an escape the JIT cannot optimise away, whereas a non-escaping
-        // `new byte[1]` whose only use is `.Length` is stack-allocated or
-        // elided at tier 1 - which would make this test pass at tier 0, fail in
-        // a larger batch, and quietly turn the guard into the false negative it
-        // exists to prevent.
+        // is a definite escape at every JIT tier with no constant-folding
+        // surface, whereas a non-escaping `new long[1]` whose only use is
+        // `.Length` is stack-allocated or elided outright - which would make
+        // this test quietly become the false negative it exists to prevent.
+        //
+        // VERIFIED BY DELIBERATE FAILURE, not by assumption. Substituting the
+        // non-escaping `sink += new long[1].Length` body makes this test fail
+        // with "Expected: greater than 0, But was: 0" under BOTH
+        // DOTNET_TieredCompilation=0 and default tiering, and restoring the
+        // escape below returns it to green under both. Do not "simplify" the
+        // static-field store away: the escape is load-bearing.
         var growth = MeasureGrowth(iterations =>
         {
             for (var i = 0; i < iterations; i++)
