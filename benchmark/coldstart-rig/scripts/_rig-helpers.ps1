@@ -431,6 +431,107 @@ function Get-RigMemberNames {
 	return @($Object.PSObject.Properties.Name)
 }
 
+<#
+.SYNOPSIS
+	Decides whether an extracted staging copy still matches the backup tarball,
+	so prepare-master.ps1 can skip re-extracting 1.8 GB.
+
+.DESCRIPTION
+	A staging directory carries a `.rig-manifest.json` recording the tarball's
+	size and last-write time. The copy is current only when BOTH still match.
+
+	FAILS SAFE ON AN UNRECOGNISED MANIFEST. A manifest written by an older
+	revision of the rig can be missing a field this comparison needs, and the
+	scripts run under `Set-StrictMode -Version Latest`, where reading an absent
+	property is a TERMINATING ERROR rather than a null. Reading the manifest
+	directly therefore turned an old staging directory into a crash
+	("The property 'tarballLastWriteTicks' cannot be found on this object")
+	instead of the cache miss it should have been. Every field is read through
+	Get-RigMember, which yields $null for an absent one, and a missing or
+	unparseable field reports NOT current - so the rig re-extracts, which is
+	always safe, rather than trusting a manifest it cannot fully read.
+#>
+function Test-RigStagingManifestCurrent {
+	[CmdletBinding()]
+	param(
+		$Manifest,
+		[Parameter(Mandatory)] [long] $TarballSizeBytes,
+		[Parameter(Mandatory)] [long] $TarballLastWriteTicks
+	)
+
+	if ($null -eq $Manifest) { return $false }
+
+	$size = Get-RigMember -Object $Manifest -Name 'tarballSizeBytes'
+	$ticks = Get-RigMember -Object $Manifest -Name 'tarballLastWriteTicks'
+	if ($null -eq $size -or $null -eq $ticks) { return $false }
+
+	$parsedSize = [long] 0
+	$parsedTicks = [long] 0
+	if (-not [long]::TryParse("$size", [ref] $parsedSize)) { return $false }
+	if (-not [long]::TryParse("$ticks", [ref] $parsedTicks)) { return $false }
+
+	return ($parsedSize -eq $TarballSizeBytes) -and ($parsedTicks -eq $TarballLastWriteTicks)
+}
+
+# ---------------------------------------------------------------------------
+# Retrieval response readers
+# ---------------------------------------------------------------------------
+
+<#
+.SYNOPSIS
+	Reads the `mode` a retrieval response answered in ("semantic", "keyword" or
+	"empty"), or $null when the body carried none.
+
+.DESCRIPTION
+	Shared by every script that asks the box a question - the cohort, the
+	healing observer and the corpus verifier - because "which path answered"
+	is the one field that distinguishes a working box from a silently degraded
+	one, and three private copies of that reader would be three chances to
+	disagree about it.
+
+	Parses as JSON first and falls back to a textual probe, so a response
+	wrapped in extra framing still yields its mode rather than being reported
+	as no answer at all.
+#>
+function Get-RigRetrievalMode {
+	[CmdletBinding()]
+	param([AllowNull()] [string] $Text)
+
+	if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+	try {
+		$parsed = $Text | ConvertFrom-Json
+		$mode = $parsed.PSObject.Properties['mode']
+		if ($null -ne $mode) { return "$($mode.Value)" }
+	}
+	catch {
+		# Not JSON; fall through to the textual probe below.
+	}
+	if ($Text -match '"mode"\s*:\s*"(?<mode>[A-Za-z]+)"') { return $Matches['mode'] }
+	return $null
+}
+
+<#
+.SYNOPSIS
+	Reads the `retrievalPath` a retrieval response declared alongside its
+	unchanged `mode`, or 'none' when the body carried none.
+
+.DESCRIPTION
+	The vocabulary is S7's: semantic.exact, semantic.approximate,
+	keyword.no_embedder, keyword.vector_plane_unavailable,
+	keyword.index_degraded. `mode` says WHETHER the semantic plane answered;
+	`retrievalPath` says WHICH path did, which is what makes an approximate
+	answer distinguishable from an exact one instead of silently substituted.
+#>
+function Get-RigRetrievalPath {
+	[CmdletBinding()]
+	param([AllowNull()] [string] $Text)
+
+	if ([string]::IsNullOrWhiteSpace($Text)) { return 'none' }
+	$match = [regex]::Match($Text, '"retrievalPath"\s*:\s*"([^"]+)"')
+	if ($match.Success) { return $match.Groups[1].Value }
+	return 'none'
+}
+
 # ---------------------------------------------------------------------------
 # Offline file-WAL framing walk
 # ---------------------------------------------------------------------------

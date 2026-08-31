@@ -72,6 +72,7 @@ param(
 	[string] $ParametersFile,
 	[switch] $SkipClone,
 	[switch] $SkipWarmup,
+	[switch] $QueryFromLive,
 	[switch] $KeepUp
 )
 
@@ -89,6 +90,11 @@ foreach ($key in @('MasterVolume', 'RepoId', 'SemanticQuery', 'WarmQueryCount'))
 	if ($PSBoundParameters.ContainsKey($key)) { $override[$key] = $PSBoundParameters[$key] }
 }
 $config = Get-RigConfig -ParametersFile $ParametersFile -ScriptRoot $here -Override $override
+# A switch is not a parameters-file setting, so it is projected onto the config
+# after load: Measure-RigScenario reads only the config, and threading a second
+# argument through it purely for this would make the scenario signature depend
+# on how the cohort was invoked.
+$config['QueryFromLive'] = [bool] $QueryFromLive
 
 # --- Both halves of the fail-closed guard, before anything is started ----
 Assert-RigIsolation -Config $config | Out-Null
@@ -160,7 +166,46 @@ function Measure-RigScenario {
 
 	try {
 		$liveSeconds = Wait-RigHttpOk -Uri $liveUri -ZeroUtc $zero -TimeoutSec $Config.LiveTimeoutSec -IntervalMs $Config.ProbeIntervalMs
-		$readySeconds = Wait-RigHttpOk -Uri $readyUri -ZeroUtc $zero -TimeoutSec $Config.ReadyTimeoutSec -IntervalMs $Config.ProbeIntervalMs
+
+		# WHETHER THE FIRST QUERY WAITS FOR READINESS IS NOW A CHOICE, AND IT
+		# MATTERS FOR ANY CROSS-IMAGE COMPARISON.
+		#
+		# `/health/ready` used to be the lifecycle check alone, and returned 200
+		# within a few seconds. It is now the CONJUNCTION of the lifecycle check
+		# and vector-plane retrieval readiness, which is a deliberate honesty
+		# improvement: a box that cannot serve semantic retrieval must not claim
+		# to be ready. But it means a rig that gates its first query on
+		# readiness is measuring "readiness plus a query" on one image and
+		# "a query" on the other, and would report the honesty improvement as a
+		# cold-start REGRESSION.
+		#
+		# -QueryFromLive starts querying as soon as the process is listening and
+		# discovers readiness by probing for it alongside, so the headline is
+		# time-to-first-answer on both images and `readySeconds` is still
+		# recorded. The default keeps the original gated behaviour so cohorts
+		# taken before this option remain comparable with each other.
+		$readySeconds = $null
+		if (-not $Config.QueryFromLive) {
+			$readySeconds = Wait-RigHttpOk -Uri $readyUri -ZeroUtc $zero -TimeoutSec $Config.ReadyTimeoutSec -IntervalMs $Config.ProbeIntervalMs
+		}
+
+		# Records the first instant readiness returned 200, when the first query
+		# was not gated on it. Called from every polling loop below so readiness
+		# is still observed even if it lands long after the first answer.
+		$readyProbe = {
+			if ($Config.QueryFromLive -and $null -eq $readySeconds) {
+				try {
+					$probe = Invoke-WebRequest -Uri $readyUri -Method Get -TimeoutSec 5 -SkipHttpErrorCheck -ErrorAction Stop
+					if ($probe.StatusCode -eq 200) {
+						$script:RigReadySeconds = [Math]::Round(([datetime]::UtcNow - $zero).TotalSeconds, 3)
+					}
+				}
+				catch {
+					# Not listening yet, or refused. Readiness stays unobserved.
+				}
+			}
+		}
+		$script:RigReadySeconds = $null
 
 		# The headline: the FIRST tool call issued against this activation is
 		# the semantic search, so nothing else has warmed the retrieval path.
@@ -186,6 +231,7 @@ function Measure-RigScenario {
 		$deadline = (Get-Date).AddSeconds($Config.QueryTimeoutSec)
 		while ((Get-Date) -lt $deadline) {
 			$attempts++
+			& $readyProbe
 			$first = Invoke-RigMcpTool -BaseUri $baseUri -Name 'repocontext_search' -Arguments $arguments -TimeoutSec $Config.QueryTimeoutSec
 			if ($first.Ok) {
 				$firstQuerySeconds = [Math]::Round(([datetime]::UtcNow - $zero).TotalSeconds, 3)
@@ -199,6 +245,7 @@ function Measure-RigScenario {
 		# Phase 2: warm samples on the same activation.
 		if ($null -ne $first -and $first.Ok) {
 			for ($i = 0; $i -lt [int] $Config.WarmQueryCount; $i++) {
+				& $readyProbe
 				$sample = Invoke-RigMcpTool -BaseUri $baseUri -Name 'repocontext_search' -Arguments $arguments -TimeoutSec $Config.QueryTimeoutSec
 				if (-not $sample.Ok) { continue }
 				$warm.Add([double] $sample.DurationMs)
@@ -217,6 +264,7 @@ function Measure-RigScenario {
 			$semanticDeadline = (Get-Date).AddSeconds($Config.SemanticRetryBudgetSec)
 			while ((Get-Date) -lt $semanticDeadline) {
 				$attempts++
+				& $readyProbe
 				$sample = Invoke-RigMcpTool -BaseUri $baseUri -Name 'repocontext_search' -Arguments $arguments -TimeoutSec $Config.QueryTimeoutSec
 				if ($sample.Ok -and (Get-RigRetrievalMode -Text $sample.Text) -eq 'semantic') {
 					$semanticSeconds = [Math]::Round(([datetime]::UtcNow - $zero).TotalSeconds, 3)
@@ -241,6 +289,7 @@ function Measure-RigScenario {
 			$consecutive = 0
 			$quiesceDeadline = (Get-Date).AddSeconds($Config.QuiesceTimeoutSec)
 			while ((Get-Date) -lt $quiesceDeadline) {
+				& $readyProbe
 				$sample = Invoke-RigMcpTool -BaseUri $baseUri -Name 'repocontext_search' -Arguments $arguments -TimeoutSec $Config.QueryTimeoutSec
 				if ($sample.Ok -and $sample.DurationMs -le [double] $Config.QuiesceThresholdMs) { $consecutive++ } else { $consecutive = 0 }
 				if ($consecutive -ge [int] $Config.QuiesceSamples) { $quiesced = $true; break }
@@ -252,6 +301,8 @@ function Measure-RigScenario {
 		# One list_repos call for completeness. Deliberately AFTER the headline
 		# so it cannot warm the retrieval path being measured.
 		$listRepos = Invoke-RigMcpTool -BaseUri $baseUri -Name 'repocontext_list_repos' -Arguments @{} -TimeoutSec $Config.QueryTimeoutSec
+		& $readyProbe
+		if ($Config.QueryFromLive) { $readySeconds = $script:RigReadySeconds }
 	}
 	finally {
 		$resources = Stop-RigStatsSampler -Process $sampler -CsvPath $statsPath
@@ -299,26 +350,6 @@ function Measure-RigScenario {
 		logPath                   = $logPath
 		statsPath                 = $statsPath
 	}
-}
-
-<#
-.SYNOPSIS
-	Reads the retrieval path a search answered on out of the tool's JSON text.
-#>
-function Get-RigRetrievalMode {
-	param([AllowNull()] [string] $Text)
-
-	if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
-	try {
-		$parsed = $Text | ConvertFrom-Json
-		$mode = $parsed.PSObject.Properties['mode']
-		if ($null -ne $mode) { return "$($mode.Value)" }
-	}
-	catch {
-		# Not JSON; fall through to the textual probe below.
-	}
-	if ($Text -match '"mode"\s*:\s*"(?<mode>[A-Za-z]+)"') { return $Matches['mode'] }
-	return $null
 }
 
 <#
@@ -386,7 +417,19 @@ if (-not $SkipWarmup) {
 	Write-Host 'Warm-up (discarded): loading the embedding model outside the measured window ...' -ForegroundColor DarkGray
 	Invoke-RigCompose -Config $config -ComposeArgs @('down', '--remove-orphans') -AllowFailure | Out-Null
 	New-RigVolume -Config $config -Name "$($config.HfCacheVolume)" | Out-Null
-	Copy-RigVolume -Config $config -Source "$($config.MasterVolume)" -Destination "$($config.WorkVolume)" | Out-Null
+	# -SkipClone means "measure the durable state the working volume ALREADY
+	# holds". Cloning here would silently destroy it before a single number was
+	# taken, which is the opposite of what the flag promises - and is a real
+	# footgun for a measurement taken after a long heal, where the working
+	# volume is the whole point and cannot be regenerated in minutes. The
+	# warm-up's job is to make the EMBEDDER resident; it does not need a fresh
+	# volume to do that.
+	if (-not $SkipClone) {
+		Copy-RigVolume -Config $config -Source "$($config.MasterVolume)" -Destination "$($config.WorkVolume)" | Out-Null
+	}
+	elseif (-not (Test-RigVolumeExists -Name "$($config.WorkVolume)")) {
+		throw "-SkipClone was given but working volume '$($config.WorkVolume)' does not exist. Run a cohort without -SkipClone first."
+	}
 	Invoke-RigCompose -Config $config -ComposeArgs @('up', '-d') | Out-Null
 
 	$warmupContainer = Wait-RigContainerRunning -Config $config
@@ -498,6 +541,9 @@ $cohort = [ordered] @{
 		warmQueryCount = [int] $config.WarmQueryCount
 		scenarios      = @($Scenarios)
 		runs           = $Runs
+		queryFromLive  = [bool] $QueryFromLive
+		skipClone      = [bool] $SkipClone
+		skipWarmup     = [bool] $SkipWarmup
 	}
 	runs          = @($runResults)
 	summary       = @($summary)

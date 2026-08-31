@@ -407,8 +407,34 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         // is the cheapest honest way to learn whether the persisted index is behind.
         // In a repository holding more than one embedding space the count is an upper
         // bound, which makes the repair run when it need not - never the reverse.
-        var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
-        if (expected <= index.Count)
+        //
+        // AND IF THE COUNT CANNOT BE OBTAINED AT ALL, THE SAME REASONING APPLIES.
+        // The count is a hint that decides whether to SKIP the repair, so failing to
+        // get it must mean "repair", not "give up". Letting the abort propagate is
+        // what made a whole index build fail on a real deployment (#1844): the walk
+        // covers the repository's entire vector prefix, activating every leaf of a
+        // cold metadata tree, and on a large enough tree it can outrun even a
+        // generous reconnect budget. Treating exhaustion as "unknown, therefore
+        // possibly behind" keeps the build going down the path that repairs, which
+        // is the safe direction and the one the upper-bound case already takes.
+        var behind = true;
+        try
+        {
+            var expected = await _source.CountAsync(cancellationToken).ConfigureAwait(false);
+            behind = expected > index.Count;
+        }
+        catch (EnumerationAbortedException ex)
+        {
+            _logger.LogInformation(
+                ex,
+                "Repository-context approximate index for {RepoId} in space {ModelId}/{Dimension} could not count the "
+                + "source within its reconnect budget; treating the persisted index as possibly behind and repairing.",
+                _repoId,
+                _space.ModelId,
+                _space.Dimension);
+        }
+
+        if (!behind)
         {
             await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
             return;

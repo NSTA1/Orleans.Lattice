@@ -90,8 +90,10 @@ $manifest = [ordered] @{
 $stagingCurrent = $false
 if (-not $Force -and (Test-Path -LiteralPath $manifestPath)) {
 	$existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-	$stagingCurrent = ([long] $existing.tarballSizeBytes -eq [long] $tarballItem.Length) -and
-	([long] $existing.tarballLastWriteTicks -eq [long] $tarballItem.LastWriteTimeUtc.Ticks)
+	$stagingCurrent = Test-RigStagingManifestCurrent `
+		-Manifest $existing `
+		-TarballSizeBytes $tarballItem.Length `
+		-TarballLastWriteTicks $tarballItem.LastWriteTimeUtc.Ticks
 }
 
 if ($stagingCurrent) {

@@ -149,6 +149,31 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
     /// figure is an upper bound rather than an exact count, which the seam
     /// explicitly permits: it sizes the index's initial reservation and reports
     /// progress, and nothing depends on it for correctness.
+    /// <para>
+    /// Walked through <see cref="LatticeExtensions.ScanKeysAsync"/> rather than the
+    /// raw <see cref="ILattice.KeysAsync"/> stream. The raw stream surfaces
+    /// <c>EnumerationAbortedException</c> when the remote enumerator is reclaimed
+    /// mid-scan, and this walk covers the repository's ENTIRE vector prefix, which
+    /// activates every leaf of the metadata tree and takes long enough on a real
+    /// corpus to outlive the enumerator. Because a build calls this before it
+    /// streams, that abort took down the WHOLE index build - the one call in it
+    /// whose own contract says nothing depends on it for correctness - and the
+    /// build then retried and aborted again on every subsequent query, so no index
+    /// was ever persisted. Measured on a restored copy of the live deployment
+    /// (#1844); the resilient wrapper resumes deterministically with no duplicates
+    /// and no gaps, which is exactly what a count needs.
+    /// </para>
+    /// <para>
+    /// The reconnect budget is raised well above
+    /// <see cref="LatticeExtensions.DefaultScanReconnectAttempts"/> because the
+    /// default was ALSO measured to be too small here. Every abort on this walk is
+    /// a cold leaf activation outrunning the enumerator's idle expiry, and a tree
+    /// holding a repository's whole vector corpus has far more than eight of them
+    /// to activate on a cold start. The budget bounds retries, not work: each
+    /// reopen resumes strictly after the last key seen, so a larger budget cannot
+    /// re-walk ground already covered. The caller tolerates exhaustion anyway, so
+    /// this only decides how often the cheap path is taken.
+    /// </para>
     /// </remarks>
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
@@ -158,7 +183,7 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
 
         var count = 0;
         await foreach (var _ in tree
-            .KeysAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ScanKeysAsync(prefix, endExclusive, maxAttempts: CountReconnectAttempts, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -167,6 +192,12 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
 
         return count;
     }
+
+    /// <summary>
+    /// Reconnect budget for the whole-prefix count walk. Deliberately far above
+    /// the shared default: see <see cref="CountAsync"/>.
+    /// </summary>
+    private const int CountReconnectAttempts = 64;
 
     /// <inheritdoc />
     public Task<bool> ContainsAsync(string id, CancellationToken cancellationToken = default)

@@ -77,6 +77,8 @@ pwsh -File ./scripts/Test-RigHelpers.ps1
 | `scripts/prepare-master.ps1` | Restores a backup tarball into the pristine master volume and applies the rig image tags. |
 | `scripts/run-cohort.ps1` | **The one-command run.** Clones the master, runs the restart scenarios, emits `cohort.json`. |
 | `scripts/inspect-state.ps1` | Offline durable-state census, with known-answer validation. |
+| `scripts/snapshot-volume.ps1` | Extracts a rig volume to a staging directory so the census can walk a volume that has moved on (a healed working volume, say). |
+| `scripts/observe-healing.ps1` | Attaches to a running box and records, on a cadence, whether it keeps serving while it heals itself. |
 | `scripts/generate-corpus.ps1` | Synthetic scale mode: generate, index and promote a corpus well beyond live size. |
 | `scripts/rig.ps1` | Day-to-day helper: `guard`, `tag`, `up`, `down`, `status`, `logs`, `mcp`, `clean`. |
 
@@ -141,8 +143,20 @@ Useful flags:
   synthetic scale master).
 - `-RepoId` / `-SemanticQuery` change the workload.
 - `-SkipClone` reuses the existing working volume (fast smoke test; **not**
-  comparable between runs, because the durable state has moved on).
+  comparable between runs, because the durable state has moved on). It also
+  stops the warm-up from cloning, so a working volume you have spent hours
+  ageing or healing survives the run - measuring that volume is the only reason
+  the flag exists.
 - `-SkipWarmup` skips the discarded warm-up activation (see below).
+- `-QueryFromLive` starts querying as soon as the process is listening, instead
+  of waiting for `/health/ready` first. **Use it for any comparison that spans
+  the epic-#1830 change**, because readiness there stopped being the lifecycle
+  check alone and became the conjunction of the lifecycle check and vector-plane
+  retrieval readiness. That is an honesty improvement - a box that cannot serve
+  semantic retrieval no longer claims to be ready - but a rig that gates on it
+  measures "readiness plus a query" on one image and "a query" on the other, and
+  would report the improvement as a cold-start regression. `readySeconds` is
+  still recorded either way, by probing for readiness alongside the query.
 - `-KeepUp` leaves the stack running afterwards.
 
 ### The warm-up phase, and why it exists
@@ -308,7 +322,56 @@ trees.
 `-SqliteSource staging|volume|auto` selects where the grain-state database is
 read from; the default prefers the master volume, because a Docker volume lives
 inside the VM's filesystem and scans far faster than a host bind mount of the
-same bytes.
+same bytes. `-SqliteVolume <name>` chooses *which* rig volume that is, so a
+census can read the **working** volume (a box that has healed itself, say) while
+still walking a host staging copy for the WAL half.
+
+## Censusing a volume that has moved on
+
+The census defaults to the pristine restore, which is the "before" state and
+must stay that way. To census a volume that has since changed - most usefully
+the working volume after a box has been left running long enough to heal itself:
+
+```powershell
+./snapshot-volume.ps1 -Name after-heal
+./inspect-state.ps1 -StagingPath <printed path> -SqliteSource staging -SkipExpectations
+```
+
+`snapshot-volume.ps1` tars the volume inside a throwaway container (read-only on
+the source) and extracts it to its own staging directory, leaving the pristine
+master untouched. Pass `-SkipExpectations`: `census-expectations.json` pins the
+pre-change figures from a specific backup, so a healed volume is *supposed* to
+differ from them.
+
+## Watching a box heal while it serves
+
+A cohort answers "how long to the first semantic query". The other half of the
+question is whether an upgraded box repairs its own durable state, on its own,
+*while still answering*, and whether it describes its own state honestly while
+it does. `observe-healing.ps1` attaches to an already-running stack (leave one up
+with `run-cohort.ps1 -KeepUp`, or `rig.ps1 up`) and samples on a cadence:
+
+```powershell
+./observe-healing.ps1 -DurationMinutes 120 -IntervalSeconds 30 -Label after-upgrade
+```
+
+Each sample records both health probes, a real query with its `mode` and
+`retrievalPath`, the file and vector counts from `repocontext_list_repos` (so
+data loss during a heal would appear as a step down rather than having to be
+inferred from a before/after pair), and the healing / index / replay counters
+tallied from the container's own log lines since the previous sample. It writes
+`benchmark/.run/coldstart-rig/observations/observation-<stamp>.json`.
+
+It reads the log rather than a metric on purpose: the RepoContext container
+exposes no metrics endpoint, deliberately, so healing progress is read from the
+orchestrator's own Information lines and the durable outcome from
+`inspect-state.ps1`. Both are properties of what the box actually did.
+
+One number in the summary is a contract check rather than a measurement:
+`readyButNotSemantic` counts samples where `/health/ready` returned 200 while a
+query answered in a non-semantic mode. Readiness is the conjunction of the
+lifecycle check and vector-plane retrieval readiness, so that count should be
+zero.
 
 ## Synthetic scale mode
 
