@@ -1278,6 +1278,64 @@ public class LatticeOptions
     public const bool DefaultLeafSnapshotBinaryEncodingEnabled = true;
 
     /// <summary>
+    /// When <c>true</c> (the default), a leaf that rehydrates from a binary
+    /// snapshot frame brings itself online without decoding the frame, and
+    /// materialises entry ranges out of it only as reads actually require them.
+    /// A leaf activation therefore costs what the caller reads rather than what
+    /// the leaf happens to hold: a point read seeks the frame's index table and
+    /// decodes one block, and a ranged scan decodes only the blocks its range
+    /// spans.
+    /// <para>
+    /// Nothing observable changes. The cache reports the whole snapshot's row
+    /// count, footprint and live-key count from the moment it attaches, every
+    /// key-addressed accessor materialises what it needs before answering, and
+    /// every whole-cache walk (digest, canonical hash, capture, split)
+    /// materialises the snapshot in full first - so reads, scans, digests and
+    /// the canonical hash are identical either way. Snapshot coverage is
+    /// likewise unaffected: it is stamped from the loaded blob's offsets, and a
+    /// capture materialises every row before it writes, so a partially hydrated
+    /// leaf can never claim coverage it does not hold.
+    /// </para>
+    /// <para>
+    /// Set to <c>false</c> to restore the previous behaviour, where a rehydrate
+    /// decodes every row of the snapshot into the cache up front. The switch is
+    /// read once per rehydrate and touches no persisted shape, so it is safe to
+    /// flip in either direction on a running deployment.
+    /// </para>
+    /// </summary>
+    public bool LeafPartialHydrationEnabled { get; set; } = DefaultLeafPartialHydrationEnabled;
+
+    /// <summary>Default value for <see cref="LeafPartialHydrationEnabled"/> (<c>true</c>).</summary>
+    public const bool DefaultLeafPartialHydrationEnabled = true;
+
+    /// <summary>
+    /// Maximum snapshot payload, in bytes, a single leaf keeps resident while
+    /// <see cref="LeafPartialHydrationEnabled"/> is on. Once a leaf's
+    /// materialised rows exceed this, the least recently used hydrated ranges
+    /// are evicted and re-materialised from the snapshot the next time a read
+    /// needs them, so a large tree does not have to be wholly resident to be
+    /// queryable.
+    /// <para>
+    /// Only ranges that are still byte-identical to the snapshot are ever
+    /// evicted: a range that has taken a write is pinned for the rest of the
+    /// activation, because re-reading it would resurrect the value the write
+    /// replaced. Eviction is therefore incapable of losing a mutation, and the
+    /// budget is a bound on resident footprint rather than on correctness.
+    /// </para>
+    /// <para>
+    /// Set to <c>0</c> to leave the resident footprint unbounded, keeping
+    /// on-demand hydration but never evicting. The default of 1 MiB sits well
+    /// above the ordinary leaf shape, so a typical leaf hydrates on demand and
+    /// never evicts, and the bound bites only on leaves materially larger than
+    /// that.
+    /// </para>
+    /// </summary>
+    public long LeafHydrationResidentBytes { get; set; } = DefaultLeafHydrationResidentBytes;
+
+    /// <summary>Default value for <see cref="LeafHydrationResidentBytes"/> (1 MiB).</summary>
+    public const long DefaultLeafHydrationResidentBytes = 1L * 1024 * 1024;
+
+    /// <summary>
     /// Selects the recovery strategy a leaf grain takes when one of
     /// the fall-off-log triggers fires at activation time
     /// (WAL trimmed past checkpoint, replay budget exceeded, projection

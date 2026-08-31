@@ -280,7 +280,7 @@ internal static class LeafSnapshotCodec
         long total = 0;
         for (var i = 0; i < rowCount; i++)
         {
-            if (!TryMeasureRowFootprint(frame, indexOffset, ref pos, out var rowBytes))
+            if (!TryMeasureRowFootprint(frame, indexOffset, ref pos, out var rowBytes, out _))
             {
                 return false;
             }
@@ -298,6 +298,140 @@ internal static class LeafSnapshotCodec
     }
 
     /// <summary>
+    /// Totals, in one linear metadata pass, the two aggregates a lazily
+    /// hydrated leaf entry cache must report for rows it has not materialised:
+    /// the summed logical payload footprint (as
+    /// <see cref="TryComputeStateBytes"/> defines it) and the number of live
+    /// (non-tombstone) rows. Neither a key string nor a value array is
+    /// allocated, so a cache can answer <c>Count</c>, <c>StateBytes</c> and
+    /// <c>LiveCount</c> for the whole snapshot while holding none of it.
+    /// Returns <see langword="false"/> when the frame is not structurally
+    /// readable.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="stateBytes">Receives the summed logical footprint on success.</param>
+    /// <param name="liveRows">Receives the number of non-tombstone rows on success.</param>
+    internal static bool TryComputeCacheAggregates(ReadOnlySpan<byte> frame, out long stateBytes, out long liveRows)
+    {
+        stateBytes = 0;
+        liveRows = 0;
+        if (!TryReadHeader(frame, out var rowCount, out var indexOffset))
+        {
+            return false;
+        }
+
+        var pos = HeaderLength;
+        long totalBytes = 0;
+        long totalLive = 0;
+        for (var i = 0; i < rowCount; i++)
+        {
+            if (!TryMeasureRowFootprint(frame, indexOffset, ref pos, out var rowBytes, out var isTombstone))
+            {
+                return false;
+            }
+
+            totalBytes += rowBytes;
+            if (!isTombstone)
+            {
+                totalLive++;
+            }
+        }
+
+        if (pos != indexOffset)
+        {
+            return false;
+        }
+
+        stateBytes = totalBytes;
+        liveRows = totalLive;
+        return true;
+    }
+
+    /// <summary>
+    /// Reports the byte extent of the row record at <paramref name="index"/> -
+    /// its absolute start offset and its length - by reading the index table
+    /// only, without decoding the row. A bounded hydration uses this to account
+    /// exactly how many frame bytes a partial read actually consumed, which is
+    /// what makes "cost scales with the requested key range" a measurable
+    /// property rather than an assertion.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="start">Receives the row's absolute start offset on success.</param>
+    /// <param name="length">Receives the row record's byte length on success.</param>
+    internal static bool TryGetRowExtent(ReadOnlySpan<byte> frame, int index, out int start, out int length)
+    {
+        start = 0;
+        length = 0;
+        if (!TryReadHeader(frame, out var rowCount, out var indexOffset)
+            || (uint)index >= (uint)rowCount
+            || !TryGetRowStart(frame, index, out start, out _))
+        {
+            return false;
+        }
+
+        var end = indexOffset;
+        if (index + 1 < rowCount)
+        {
+            if (!TryGetRowStart(frame, index + 1, out var next, out _))
+            {
+                return false;
+            }
+
+            end = next;
+        }
+
+        if (end < start)
+        {
+            return false;
+        }
+
+        length = end - start;
+        return true;
+    }
+
+    /// <summary>
+    /// Verifies that the frame's rows are in <em>strictly</em> ascending
+    /// ordinal key order, probing keys through the index table without
+    /// allocating. The index table is only a meaningful seek structure for such
+    /// a frame: a binary search over an unsorted or duplicate-bearing frame
+    /// would silently fail to find rows that are present, so a bounded
+    /// hydration must confirm this before it trusts a seek instead of a full
+    /// decode.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    internal static bool IsAscendingByKey(ReadOnlySpan<byte> frame)
+    {
+        if (!TryReadHeader(frame, out var rowCount, out _))
+        {
+            return false;
+        }
+
+        if (rowCount <= 1)
+        {
+            return true;
+        }
+
+        if (!TryReadRowKeyUtf8At(frame, 0, out var previous))
+        {
+            return false;
+        }
+
+        for (var i = 1; i < rowCount; i++)
+        {
+            if (!TryReadRowKeyUtf8At(frame, i, out var current)
+                || CompareKeysUtf8(previous, current) >= 0)
+            {
+                return false;
+            }
+
+            previous = current;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Decodes the row at <paramref name="index"/> directly, seeking through
     /// the index table rather than walking the rows before it. This is the
     /// bounded random-access primitive a partial, key-range-scoped hydration
@@ -307,14 +441,37 @@ internal static class LeafSnapshotCodec
     /// <param name="index">Zero-based row index.</param>
     /// <param name="row">Receives the decoded row on success.</param>
     internal static bool TryReadRowAt(ReadOnlySpan<byte> frame, int index, out LeafSnapshotRow row)
+        => TryReadRowAt(frame, index, out row, out _);
+
+    /// <summary>
+    /// Decodes the row at <paramref name="index"/> and reports how many frame
+    /// bytes the decode consumed, taken from the parser's own advance rather
+    /// than from a second pass over the index table. A bounded hydration uses
+    /// the figure to account exactly what a partial read cost, which is what
+    /// makes "cost scales with the requested key range" measurable.
+    /// </summary>
+    /// <param name="frame">Frame bytes.</param>
+    /// <param name="index">Zero-based row index.</param>
+    /// <param name="row">Receives the decoded row on success.</param>
+    /// <param name="bytesConsumed">Receives the row record's byte length on success.</param>
+    internal static bool TryReadRowAt(
+        ReadOnlySpan<byte> frame, int index, out LeafSnapshotRow row, out int bytesConsumed)
     {
         row = default;
+        bytesConsumed = 0;
         if (!TryGetRowStart(frame, index, out var start, out var indexOffset))
         {
             return false;
         }
 
-        return TryReadRow(frame, indexOffset, ref start, out row);
+        var position = start;
+        if (!TryReadRow(frame, indexOffset, ref position, out row))
+        {
+            return false;
+        }
+
+        bytesConsumed = position - start;
+        return true;
     }
 
     /// <summary>
@@ -615,10 +772,13 @@ internal static class LeafSnapshotCodec
     }
 
     // Walks a row far enough to total its logical footprint, skipping every
-    // field that does not contribute to it.
-    private static bool TryMeasureRowFootprint(ReadOnlySpan<byte> frame, int limit, ref int pos, out long rowBytes)
+    // field that does not contribute to it, and reports its tombstone flag so
+    // one pass can serve both the footprint and the live-row aggregate.
+    private static bool TryMeasureRowFootprint(
+        ReadOnlySpan<byte> frame, int limit, ref int pos, out long rowBytes, out bool isTombstone)
     {
         rowBytes = 0;
+        isTombstone = false;
 
         if (!TryReadSpan(frame, limit, ref pos, out var keyUtf8)
             || !TryReadByte(frame, limit, ref pos, out var flags)
@@ -669,6 +829,7 @@ internal static class LeafSnapshotCodec
         }
 
         rowBytes = keyUtf8.Length + ((flags & RowFlagTombstone) != 0 ? 0 : valueBytes);
+        isTombstone = (flags & RowFlagTombstone) != 0;
         return true;
     }
 
