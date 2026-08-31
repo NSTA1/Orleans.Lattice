@@ -376,6 +376,12 @@ internal sealed partial class ViewMaintainerGrain(
         // (highest applied plus the staging blocked-floor) after the flush.
         var collected = new List<ViewWrite>();
         var completedTransactions = new List<Guid>();
+        // Classify while folding: the drain loop already visits every projected
+        // write, so record the range-kind classifications here instead of
+        // re-walking the whole buffer with separate .Exists passes after the drain
+        // (one for RangeReconcile below, one for RangeDelete in ApplySurvivorsAsync).
+        var hasRangeReconcile = false;
+        var hasRangeDelete = false;
         var handler = new ViewDrainHandler(
             this,
             mutation =>
@@ -383,6 +389,14 @@ internal sealed partial class ViewMaintainerGrain(
                 foreach (var write in registration.Projection!.Project(mutation))
                 {
                     collected.Add(write);
+                    if (write.Kind == ViewWriteKind.RangeReconcile)
+                    {
+                        hasRangeReconcile = true;
+                    }
+                    else if (write.Kind == ViewWriteKind.RangeDelete)
+                    {
+                        hasRangeDelete = true;
+                    }
                 }
             },
             completedTransactions);
@@ -428,7 +442,7 @@ internal sealed partial class ViewMaintainerGrain(
         // view never auto-rebuilds: in an append-only log a range delete does not
         // erase the fact that prior values existed, so each RangeReconcile is
         // recorded as a range-tombstone marker row and draining continues.
-        if (collected.Exists(static w => w.Kind == ViewWriteKind.RangeReconcile))
+        if (hasRangeReconcile)
         {
             if (registration.Accumulative)
             {
@@ -456,7 +470,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
         DetectAndReportCollisions(collected);
-        var appliedCount = await ApplySurvivorsAsync(viewTree, collected, cancellationToken);
+        var appliedCount = await ApplySurvivorsAsync(viewTree, collected, hasRangeDelete, cancellationToken);
 
         // Flush every atomic batch that completed this pass through the view
         // tree's atomic primitive, after the ordinary survivors so a committed
@@ -1040,12 +1054,14 @@ internal sealed partial class ViewMaintainerGrain(
         return lag;
     }
 
-    private async Task<int> ApplySurvivorsAsync(ILattice viewTree, List<ViewWrite> collected, CancellationToken cancellationToken)
+    private async Task<int> ApplySurvivorsAsync(ILattice viewTree, List<ViewWrite> collected, bool hasRangeDelete, CancellationToken cancellationToken)
     {
-        if (!collected.Exists(static w => w.Kind == ViewWriteKind.RangeDelete))
+        if (!hasRangeDelete)
         {
             // Fast path: only point writes. Coalesce by view key (LWW on the
-            // source HLC) and apply each survivor.
+            // source HLC) and apply each survivor. The caller classified the batch
+            // during the drain fold, so this no longer re-scans the buffer for a
+            // range delete.
             var applied = 0;
             foreach (var write in ViewWriteCoalescer.Coalesce(collected))
             {
