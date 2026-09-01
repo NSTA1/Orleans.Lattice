@@ -60,17 +60,55 @@ public sealed class VectorIndexAllocationTests
     /// twice that, and returns the difference - the bytes attributable to the
     /// extra <paramref name="iterations"/> runs, with any one-off cost cancelled.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="warmup"/> is a floor, not the warm-up actually used: the
+    /// warm-up runs at the LARGER measured size. Warming at a small constant
+    /// against a much larger measured window leaves the method at tier-0 when the
+    /// measurement starts, so a tier-1-only effect - an elided non-escaping
+    /// allocation, or an on-stack-replacement cost landing inside the window -
+    /// either hides or is attributed to the loop. Sizing the warm-up to the
+    /// measurement is what makes such an effect reproducible in an ordinary test
+    /// lane rather than only under <c>DOTNET_TieredCompilation=0</c>.
+    /// </para>
+    /// <para>
+    /// The measurement is repeated and the SMALLEST growth kept. Allocation noise
+    /// is strictly additive, so the minimum is the closest estimate of the true
+    /// per-iteration cost; a single sample pair lets one noisy window decide the
+    /// result outright.
+    /// </para>
+    /// </remarks>
     private static long PerIterationDelta(Action action, int warmup, int iterations)
     {
-        for (var i = 0; i < warmup; i++)
+        var doubledIterations = iterations * 2;
+
+        // Warm at the larger measured size so tiering has settled before the
+        // first sample, whatever order the surrounding batch compiled things in.
+        for (var i = 0; i < Math.Max(warmup, doubledIterations); i++)
         {
             action();
         }
 
-        var single = AllocatedOverLoop(action, iterations);
-        var doubled = AllocatedOverLoop(action, iterations * 2);
-        return doubled - single;
+        var smallest = long.MaxValue;
+        for (var attempt = 0; attempt < MeasurementAttempts; attempt++)
+        {
+            var single = AllocatedOverLoop(action, iterations);
+            var doubled = AllocatedOverLoop(action, doubledIterations);
+            var growth = doubled - single;
+            if (growth < smallest)
+            {
+                smallest = growth;
+            }
+        }
+
+        return smallest < 0 ? 0 : smallest;
     }
+
+    /// <summary>
+    /// How many times each differential measurement is repeated before the
+    /// smallest growth is taken.
+    /// </summary>
+    private const int MeasurementAttempts = 5;
 
     private static long AllocatedOverLoop(Action action, int iterations)
     {
