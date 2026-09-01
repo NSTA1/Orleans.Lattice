@@ -93,10 +93,19 @@ public class ShardHealingDecisionCoreTests
     [Test]
     public void IsUnderBackpressure_ignores_an_idle_thousand_shard_tree()
     {
-        // The measured damage shape: 1,110 physical shards each carrying a few
-        // tens of entries and almost no traffic. A summed tree rate would make
-        // this the busiest tree on the box and it would never heal; the median
-        // correctly reports it idle.
+        // A hypothetical badly over-split tree: on the order of a thousand
+        // physical shards each carrying a few tens of entries and almost no
+        // traffic. A summed tree rate would make this the busiest tree on the
+        // box and it would never heal; the median correctly reports it idle.
+        //
+        // Deliberately NOT described as a measured production shape. The figure
+        // that founded this epic (1,110 / 1,073 / 454 against a base of 64)
+        // counts LEAF GRAINS - B+ tree nodes inside a shard - not physical
+        // shards, and S14 measured the real deployment at exactly its base 64
+        // physical shards on every tree. A count far above
+        // MaxPhysicalShardsPerTree (default 256) cannot be a physical shard
+        // count, because the ceiling would have stopped it. The numbers below
+        // remain good test data; they are simply not an observation.
         Assert.That(ShardHealingDecisionCore.IsUnderBackpressure(0.2d, 200d), Is.False,
             "a badly over-split but idle tree is exactly the tree that must heal");
     }

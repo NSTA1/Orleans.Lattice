@@ -190,12 +190,13 @@ public class ShardHealingDecisionCoreAllocationTests
         // Not a re-proof of ShardSplitAdmissionCore, which S4 already covers in
         // isolation. This measures the ORCHESTRATOR'S use of those functions -
         // a caller-owned heap scratch buffer copied and sorted once per sweep at
-        // the measured damage scale - which is a different claim from "the
+        // a severely over-split scale - which is a different claim from "the
         // function is pure": it is the copy and the in-place sort over 1,110
         // rates that must not allocate, because the healer recomputes the tree's
         // skew on every sweep for as long as the damage exists. A per-shard
         // allocation here would be a per-sweep allocation multiplied by the very
-        // damage being healed.
+        // damage being healed. The 1,110 figure is a stress scale, not an
+        // observed one - see the note in ShardHealingDecisionCoreTests.
         var rates = new double[1_110];
         for (var i = 0; i < rates.Length; i++) rates[i] = 0.2d + (i % 7) * 0.01d;
         var scratch = new double[rates.Length];

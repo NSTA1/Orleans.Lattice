@@ -78,10 +78,12 @@ public partial class ShardHealingOrchestratorGrainTests
     [Test]
     public async Task Backpressure_measures_the_median_shard_not_the_summed_tree()
     {
-        // The distinction that decides whether the measured deployment ever
-        // heals. A thousand near-idle shards sum to a large tree rate, so a
-        // summed threshold would report the most damaged tree on the box as the
-        // busiest and refuse to heal it forever. The median reports it idle.
+        // The distinction that decides whether a badly over-split tree could
+        // ever heal at all. A thousand near-idle shards sum to a large tree
+        // rate, so a summed threshold would report the most damaged tree on the
+        // box as the busiest and refuse to heal it forever. The median reports
+        // it idle. (Hypothetical: no production tree was found in this shape -
+        // see the note in ShardHealingDecisionCoreTests.)
         var h = CreateGrain(physicalShardCount: 256, baseShardCount: 16, virtualShardCount: 1024);
         LoadForeground(h, 256, opsPerShard: 1);
 
