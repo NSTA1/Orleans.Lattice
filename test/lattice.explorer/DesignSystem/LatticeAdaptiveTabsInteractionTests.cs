@@ -284,15 +284,24 @@ public sealed class LatticeAdaptiveTabsInteractionTests
     }
 
     [Test]
-    public async Task KeyDown_withNothingActive_arrowRightActivatesTheFirstTab()
+    public async Task KeyDown_withNothingActive_arrowRightMovesOffTheFirstTab()
     {
+        // With nothing selected the roving tabindex puts keyboard focus on the first
+        // enabled tab, so ArrowRight has to move to the SECOND one. This used to expect
+        // the first tab, which reads as reasonable until you notice focus is already
+        // there: the key then appeared to do nothing.
+        //
+        // That is not hypothetical. It is why the area rail - which is ordinarily in
+        // exactly this state, because a signed-out shell has no active area - failed
+        // its keyboard-operability check while the horizontal strips passed: an arrow
+        // resolved to the tab focus was already on, so focus never moved.
         var selected = new List<string>();
         await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(
             Parameters(LatticeBreakpoint.Expanded, null, selected));
 
         await harness.KeyDownAsync(Tablist, "ArrowRight");
 
-        Assert.That(selected, Is.EqualTo(new[] { "metrics" }));
+        Assert.That(selected, Is.EqualTo(new[] { "topology" }));
     }
 
     [Test]

@@ -593,7 +593,11 @@
             _ => ArrowTarget(args.Key),
         };
 
-        if (target < 0 || target == _activeIndex)
+        // Compared against the roving index - the tab focus is on - rather than the
+        // active one, because that is the origin the arrow moved from. Comparing
+        // against the selection would swallow a legitimate move back onto the selected
+        // tab whenever focus had roamed off it.
+        if (target < 0 || target == _rovingIndex)
         {
             return Task.CompletedTask;
         }
@@ -621,9 +625,16 @@
                 _ => -1,
             };
 
-    // Walks outward from the current tab in `step` direction, wrapping once, and
-    // returns the first enabled tab. Bounded by the tab count, so a strip of
-    // entirely disabled tabs terminates rather than spinning.
+    // Walks outward from the tab that currently HOLDS FOCUS in `step` direction,
+    // wrapping once, and returns the first enabled tab. Bounded by the tab count, so a
+    // strip of entirely disabled tabs terminates rather than spinning.
+    //
+    // The origin is the roving index, not the active index, because the two diverge
+    // whenever nothing is selected - which is the ordinary state of the area rail on a
+    // signed-out shell. Starting from the active index in that state resolved to -1,
+    // and a forward step from -1 lands on index 0, which is where focus already was:
+    // the arrow key appeared to do nothing at all. Focus, not selection, is what an
+    // arrow key moves relative to in the tabs pattern.
     private int NextEnabled(int step)
     {
         if (_tabs.Count == 0)
@@ -631,7 +642,7 @@
             return -1;
         }
 
-        var start = _activeIndex >= 0 ? _activeIndex : (step > 0 ? -1 : 0);
+        var start = _rovingIndex >= 0 ? _rovingIndex : (step > 0 ? -1 : 0);
         for (var offset = 1; offset <= _tabs.Count; offset++)
         {
             var candidate = ((start + (step * offset)) % _tabs.Count + _tabs.Count) % _tabs.Count;
