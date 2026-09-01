@@ -298,4 +298,52 @@ public sealed class TenantRegionResidencyAuthorizerTests
             async () => await authorizer.AuthorizeTenantAdminAsync(Acme, null!, CancellationToken.None),
             Throws.ArgumentNullException);
     }
+
+    // ---- the non-throwing (either-tenant) probe -------------------------
+
+    [Test]
+    public async Task TryAuthorizeTenantAdminAsync_under_system_origin_returns_the_record()
+    {
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record());
+        // Even a denying gate and an ignored caller are bypassed under system origin:
+        // trusted co-hosted infrastructure reads the record directly.
+        var authorizer = Authorizer(new FixedGate(allow: false), registry, new LatticeSubject("ignored"));
+
+        TenantRecord? record;
+        using (LatticeSystemOrigin.Enter())
+        {
+            record = await authorizer.TryAuthorizeTenantAdminAsync(Acme);
+        }
+
+        Assert.That(record, Is.Not.Null);
+        Assert.That(record!.Id, Is.EqualTo(Acme));
+    }
+
+    // ---- cache-miss subject resolution ----------------------------------
+
+    [Test]
+    public async Task AuthorizeTenantAdminAsync_resolves_an_uncached_tenant_admin_subject_under_system_origin()
+    {
+        // A cache miss forces the asynchronous resolve path, which must run under a
+        // gate-bypassing system-origin scope. The uncached-resolved subject is a live
+        // admin on the record, so it is authorized even though the gate denies the
+        // platform-operator tier.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record(adminSubject: "tenant-admin"));
+        var membership = new CacheMissMembershipContext(new LatticeSubject("tenant-admin"));
+        var authorizer = new TenantRegionResidencyAuthorizer(new FixedGate(allow: false), registry, membership);
+
+        var record = await authorizer.AuthorizeTenantAdminAsync(Acme);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(record.Id, Is.EqualTo(Acme));
+            Assert.That(membership.ResolveCurrentCalled, Is.True);
+            Assert.That(
+                membership.ResolvedUnderSystemOrigin,
+                Is.True,
+                "cache-miss resolution reads the gated membership trees under a system-origin scope.");
+        });
+    }
 }

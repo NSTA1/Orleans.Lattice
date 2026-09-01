@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.Tenancy;
@@ -72,6 +73,21 @@ public sealed class LatticeApiTenantAdminServiceCollectionExtensionsTests
         builder.Services.AddSingleton<ITenantRegistry>(new FakeTenantRegistry());
 
         Assert.That(builder.AddLatticeTenantAdminApi(), Is.SameAs(builder));
+    }
+
+    [Test]
+    public void AddLatticeTenantAdminApi_with_a_configure_delegate_runs_it_when_options_resolve()
+    {
+        var builder = new FakeSiloBuilder();
+        builder.Services.AddSingleton<ITenantRegistry>(new FakeTenantRegistry());
+        var configured = false;
+
+        builder.AddLatticeTenantAdminApi(_ => configured = true);
+
+        using var provider = builder.Services.BuildServiceProvider();
+        _ = provider.GetRequiredService<IOptions<LatticeApiTenantAdminOptions>>().Value;
+
+        Assert.That(configured, Is.True, "a supplied configure delegate must be bound and run when the options resolve.");
     }
 
     /// <summary>A minimal <see cref="ISiloBuilder"/> backed by a plain service collection.</summary>
