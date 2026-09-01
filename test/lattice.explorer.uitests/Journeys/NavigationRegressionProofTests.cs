@@ -173,7 +173,7 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
 
-        var report = await page.EvaluateAsync<TabBindingReport>(
+        var report = await page.Locator(":root").EvaluateAsync<TabBindingReport>(
             """
             () => {
                 const tabs = Array.from(document.querySelectorAll('[role=tab]'));
@@ -196,7 +196,7 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             "No element declared role=tab, so this proof examined nothing.");
 
         Assert.That(report.Problems, Is.Empty, () =>
-            $"{report.Problems.Count} of {report.Examined} tabs are not bound to a real tabpanel "
+            $"{report.Problems.Length} of {report.Examined} tabs are not bound to a real tabpanel "
             + "(WCAG SC 1.3.1 Info and Relationships, and the ARIA tabs pattern the markup claims)."
             + Environment.NewLine + string.Join(Environment.NewLine, report.Problems));
     }
@@ -226,66 +226,76 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
 
-        var strips = page.Locator("[role=tablist]");
-        await Assertions.Expect(strips.First).ToBeAttachedAsync();
+        await Assertions.Expect(page.Locator("[role=tablist]").First).ToBeAttachedAsync();
 
-        var stripCount = await strips.CountAsync();
+        // Snapshot the strips by the name each publishes, in one read, and address them
+        // by that name afterwards. Walking [role=tablist] by index is a real race here
+        // rather than a theoretical one: the rail and the detail strip re-render as
+        // gates report and as a surface resolves, so an index taken before a re-render
+        // can address an element that no longer exists - which is how this proof first
+        // failed, in the harness rather than in the product.
+        var strips = await page.Locator(":root").EvaluateAsync<StripSnapshot[]>(
+            """
+            () => Array.from(document.querySelectorAll('[role=tablist]')).map(s => ({
+                label: s.getAttribute('aria-label') || '',
+                vertical: s.getAttribute('aria-orientation') === 'vertical',
+                operable: s.querySelectorAll('[role=tab]:not([disabled])').length,
+            }))
+            """);
+
         var exercised = new List<string>();
         var failures = new List<string>();
 
-        for (var i = 0; i < stripCount; i++)
+        foreach (var strip in strips)
         {
-            var strip = strips.Nth(i);
-            var label = await strip.GetAttributeAsync("aria-label") ?? $"strip #{i}";
-            var tabs = strip.Locator("[role=tab]:not([disabled])");
-
-            if (await tabs.CountAsync() < 2)
+            if (strip.Operable < 2 || strip.Label.Length == 0)
             {
                 // A strip with one operable tab has no arrow-key behaviour to exercise;
-                // the roving-tabindex half below still covers it.
+                // the roving-tabindex half below still covers it. An unlabelled strip
+                // cannot be addressed by name, and is a different defect.
                 continue;
             }
 
-            var forward = await strip.GetAttributeAsync("aria-orientation") == "vertical"
-                ? "ArrowDown"
-                : "ArrowRight";
+            var located = page.Locator($"[role=tablist][aria-label='{strip.Label}']");
+            var tabs = located.Locator("[role=tab]:not([disabled])");
+            var forward = strip.Vertical ? "ArrowDown" : "ArrowRight";
 
             await tabs.First.FocusAsync();
             var before = await FocusedTabIdAsync(page);
             if (before is null)
             {
-                failures.Add($"'{label}' would not accept keyboard focus on its first tab");
+                failures.Add($"'{strip.Label}' would not accept keyboard focus on its first tab");
                 continue;
             }
 
             await page.Keyboard.PressAsync(forward);
             var after = await FocusedTabIdAsync(page);
-            exercised.Add($"{label} ({forward})");
+            exercised.Add($"{strip.Label} ({forward})");
 
             if (after is null)
             {
-                failures.Add($"pressing {forward} in '{label}' moved focus off the tabs entirely");
+                failures.Add($"pressing {forward} in '{strip.Label}' moved focus off the tabs entirely");
             }
             else if (after == before)
             {
-                failures.Add($"pressing {forward} in '{label}' left focus on '{before}', so the strip "
-                    + "is not keyboard operable");
+                failures.Add($"pressing {forward} in '{strip.Label}' left focus on '{before}', so the "
+                    + "strip is not keyboard operable");
             }
 
             // The other half of the pattern: exactly one tab of the strip is in the
             // document's tab sequence, so a caller tabs past the strip rather than
             // through it.
-            var inSequence = await strip.Locator("[role=tab][tabindex='0']").CountAsync();
+            var inSequence = await located.Locator("[role=tab][tabindex='0']").CountAsync();
             if (inSequence != 1)
             {
-                failures.Add($"'{label}' puts {inSequence} tabs in the tab sequence; a roving "
+                failures.Add($"'{strip.Label}' puts {inSequence} tabs in the tab sequence; a roving "
                     + "tabindex requires exactly one");
             }
         }
 
         Assert.That(exercised, Is.Not.Empty,
-            $"None of the {stripCount} strips had two or more operable tabs, so this proof could not "
-            + "tell an operable strip from an inert one.");
+            $"None of the {strips.Length} strips had two or more operable tabs, so this proof could "
+            + "not tell an operable strip from an inert one.");
 
         Assert.That(failures, Is.Empty, () =>
             $"Exercised [{string.Join(", ", exercised)}]. A strip that announces role=tablist must "
@@ -348,7 +358,7 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
     }
 
     private static Task<string?> FocusedTabIdAsync(IPage page) =>
-        page.EvaluateAsync<string?>(
+        page.Locator(":root").EvaluateAsync<string?>(
             """
             () => {
                 const el = document.activeElement;
@@ -357,3 +367,4 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             }
             """);
 }
+

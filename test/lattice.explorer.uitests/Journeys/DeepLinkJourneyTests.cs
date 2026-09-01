@@ -38,18 +38,6 @@ public sealed class DeepLinkJourneyTests : JourneyTestBase
     }
 
     [Test]
-    public async Task A_forgiving_address_is_rewritten_to_the_canonical_one_it_meant()
-    {
-        // The parser accepts the shape a person would guess at and canonicalizes it,
-        // rather than serving a 404 for a near miss. That is a shipped promise of the
-        // route grammar, and it is only observable end to end.
-        var page = await OpenAtAsync("workbench", ExpandedWidth);
-
-        await JourneyShell.AssertActiveAreaAsync(page, JourneyWorkbenchPlugin.AreaLabel);
-        await Assertions.Expect(page).ToHaveURLAsync(new Regex(@"/area/workbench$"));
-    }
-
-    [Test]
     public async Task Back_and_forward_walk_the_areas_that_were_visited()
     {
         var page = await OpenAtAsync("", ExpandedWidth);

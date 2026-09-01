@@ -71,15 +71,25 @@ internal static class JourneyShell
     /// <summary>
     /// Opens the catalog if the current band hides it behind a drawer, then returns
     /// once at least one catalog row is genuinely visible.
+    /// <para>
+    /// The drawer's own <c>aria-expanded</c> is waited on rather than assumed, because
+    /// the compact frame renders the catalog only while the drawer is open - so a click
+    /// that has not yet round-tripped the circuit leaves nothing to find, and a bare
+    /// wait on the rows cannot tell that from an empty catalog.
+    /// </para>
     /// </summary>
     /// <param name="page">The page to act on.</param>
     internal static async Task RevealCatalogAsync(IPage page)
     {
         var toggle = page.Locator(CatalogDrawerToggleSelector);
-        if (await toggle.CountAsync() > 0 &&
-            await toggle.First.GetAttributeAsync("aria-expanded") == "false")
+        if (await toggle.CountAsync() > 0)
         {
-            await toggle.First.ClickAsync();
+            if (await toggle.First.GetAttributeAsync("aria-expanded") != "true")
+            {
+                await toggle.First.ClickAsync();
+            }
+
+            await Assertions.Expect(toggle.First).ToHaveAttributeAsync("aria-expanded", "true");
         }
 
         await Assertions.Expect(page.Locator(CatalogRowSelector).First).ToBeVisibleAsync();
@@ -128,17 +138,78 @@ internal static class JourneyShell
     /// <summary>
     /// Asserts <paramref name="label"/> is the active area, by both signals the shell
     /// publishes: the rail's selected tab and the surface's single heading.
+    /// <para>
+    /// On failure it reports the address and the whole rail, because "the wrong area is
+    /// active" is almost never diagnosable from the expected/actual pair alone - what
+    /// distinguishes a click that did not land from a navigation that was reverted is
+    /// whether the address moved.
+    /// </para>
     /// </summary>
     /// <param name="page">The page to check.</param>
     /// <param name="label">The exact area label.</param>
     internal static async Task AssertActiveAreaAsync(IPage page, string label)
     {
-        await Assertions
-            .Expect(page.Locator(RailTabSelector + "[aria-selected='true']"))
-            .ToHaveTextAsync(label);
+        var selected = page.Locator(RailTabSelector + "[aria-selected='true']");
+
+        try
+        {
+            await Assertions.Expect(selected).ToHaveTextAsync(label);
+        }
+        catch (PlaywrightException ex)
+        {
+            Assert.Fail(
+                $"'{label}' did not become the active area." + Environment.NewLine
+                + await DescribeNavigationStateAsync(page) + Environment.NewLine
+                + ex.Message);
+        }
 
         await Assertions.Expect(page.Locator(SurfaceTitleSelector)).ToHaveTextAsync(label);
     }
+
+    /// <summary>
+    /// A one-line description of where the shell currently thinks it is: the address,
+    /// the surface heading, and every rail tab with its selected state. Attached to a
+    /// navigation failure so the transcript carries the evidence.
+    /// </summary>
+    /// <remarks>
+    /// Read through a locator with an explicit timeout, and never allowed to throw.
+    /// <see cref="IPage.EvaluateAsync{T}(string, object?)"/> has <b>no timeout</b>, so a
+    /// page whose circuit has wedged blocks it forever - and a diagnostic that hangs the
+    /// run is worse than no diagnostic at all. This one is best-effort by construction.
+    /// </remarks>
+    /// <param name="page">The page to describe.</param>
+    internal static async Task<string> DescribeNavigationStateAsync(IPage page)
+    {
+        try
+        {
+            return await page.Locator(":root").EvaluateAsync<string>(
+                """
+                () => {
+                    const tabs = Array.from(document.querySelectorAll('.lx-shell-areastrip [role=tab]'))
+                        .map(t => (t.textContent || '').trim()
+                            + '[selected=' + t.getAttribute('aria-selected')
+                            + ',tabindex=' + t.getAttribute('tabindex')
+                            + (t.hasAttribute('disabled') ? ',disabled' : '') + ']');
+                    const h1 = document.querySelector('h1.lx-shell-surface-title');
+                    return 'address=' + location.pathname + location.search
+                        + ' heading=' + (h1 ? (h1.textContent || '').trim() : '<none>')
+                        + ' rail=[' + tabs.join(' ') + ']';
+                }
+                """,
+                new LocatorEvaluateOptions { Timeout = DiagnosticTimeoutMs });
+        }
+        catch (PlaywrightException ex)
+        {
+            return "navigation state could not be read: " + ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// How long a best-effort diagnostic read may take. Short: it runs only on a path
+    /// that has already failed, and its job is to add evidence to that failure, never to
+    /// become a second failure or to hold the run open.
+    /// </summary>
+    private const float DiagnosticTimeoutMs = 5_000;
 
     /// <summary>The demoted entry for <paramref name="label"/>, refused areas only.</summary>
     /// <param name="page">The page to read.</param>
