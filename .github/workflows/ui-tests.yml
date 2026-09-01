@@ -50,24 +50,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    # Two shards, run in parallel, split on the one boundary that matters: the
+    # Three shards, run in parallel. The first split is the one that matters: the
     # journeys drive their own web head with a mutable demo world, the structure
-    # and accessibility fixtures drive the shared disconnected head. Splitting
-    # there keeps each shard to one head and roughly halves wall-clock.
+    # and accessibility fixtures drive the shared disconnected head, so splitting
+    # there keeps each shard to one head.
     #
-    # The lane used to fit one 20-minute job only because most of its cases
-    # failed within a second - a page that had lost the browser focus target
-    # ends its keyboard walk after two stops. With that fixed the walks and the
-    # journeys run to completion, and the whole suite in one job exceeds the
-    # budget. Sharding buys the headroom without weakening any assertion.
+    # The journeys are then split again, because forty cases against a single
+    # in-process head is enough load that a later case can wait out a thirty-second
+    # circuit-ready timeout and fail with the shell never reporting itself
+    # measured. That failure rotated between cases from run to run, which is the
+    # signature of contention rather than of any one case being wrong. Halving the
+    # head's workload is the honest fix; raising the timeout would only hide it.
+    #
+    # The second journey shard is defined as the COMPLEMENT of the first, so the
+    # three filters cannot leave a case unrun however the fixtures are renamed or
+    # added to.
     strategy:
       fail-fast: false
       matrix:
         include:
           - shard: structure
             filter: 'TestCategory=UI&FullyQualifiedName!~Journeys'
-          - shard: journeys
-            filter: 'TestCategory=UI&FullyQualifiedName~Journeys'
+          - shard: journeys-a
+            filter: 'TestCategory=UI&FullyQualifiedName~Journeys&(FullyQualifiedName~AdaptiveTenant|FullyQualifiedName~AreaContinuity|FullyQualifiedName~DeepLink|FullyQualifiedName~FailClosedRestore|FullyQualifiedName~FirstRun)'
+          - shard: journeys-b
+            filter: 'TestCategory=UI&FullyQualifiedName~Journeys&FullyQualifiedName!~AdaptiveTenant&FullyQualifiedName!~AreaContinuity&FullyQualifiedName!~DeepLink&FullyQualifiedName!~FailClosedRestore&FullyQualifiedName!~FirstRun'
 
     steps:
       - uses: actions/checkout@v5
