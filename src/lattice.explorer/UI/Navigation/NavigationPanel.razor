@@ -251,6 +251,12 @@
 
     private string? _nextToken;
     private bool _hasMore;
+
+    // Carried from the catalog page so an empty list can say WHY it is empty.
+    // Accumulated across pages and cleared only on a reload, because a stale
+    // count would assert a filter that this read did not perform.
+    private string? _scopedToTenantId;
+    private int _scopeFilteredCount;
     private bool _loading = true;
     private string? _error;
     private bool _showConfig;
@@ -450,6 +456,8 @@
         _deadLetterCounts.Clear();
         _nextToken = null;
         _hasMore = false;
+        _scopedToTenantId = null;
+        _scopeFilteredCount = 0;
         await LoadPageAsync(reset: true);
     }
 
@@ -477,6 +485,12 @@
             _items.AddRange(page.Items.Where(item => !item.IsRestoreShadow));
             _nextToken = page.NextPageToken;
             _hasMore = page.HasMore;
+
+            // Carried so Announce can tell a list that was FILTERED from one that
+            // was empty already. Accumulated across pages, because a first page
+            // that filtered nothing does not mean the scope filtered nothing.
+            _scopedToTenantId = page.ScopedToTenantId;
+            _scopeFilteredCount += page.ScopeFilteredCount;
 
             // Rebuilt here, in the same synchronous step that appended the rows,
             // because the render path indexes these buffers BY ROW. Leaving them
@@ -633,10 +647,17 @@
         // Pick the kind rather than defaulting to Empty: a list that is empty
         // because the read failed is a different thing from one that is empty
         // because there is nothing there, and only one of them has a remedy.
+        //
+        // ScopedOut is judged on the scope having actually removed something, not
+        // on a scope merely being active: a tenant-scoped cluster that genuinely
+        // holds nothing must still say it is empty. Claiming a filter that removed
+        // nothing would be the same class of untruth as hiding one that did.
         var subject = ExplorerSubjects.ForCatalogKind(_kind);
         _state = _error is not null
             ? ExplorerStateCopy.Failed(subject, _error)
-            : ExplorerStateCopy.Empty(subject);
+            : _scopeFilteredCount > 0
+                ? ExplorerStateCopy.ScopedOut(subject, _scopedToTenantId)
+                : ExplorerStateCopy.Empty(subject);
 
         if (_error is not null)
         {

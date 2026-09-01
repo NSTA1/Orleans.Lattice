@@ -59,6 +59,19 @@ A non-operator cannot switch tenant, and cannot elevate themselves into the
 all-tenant view. That is enforced on the server; the console simply reports the
 refusal honestly.
 
+## An emptied catalog says the scope emptied it
+
+When the active tenant scope filters every entry out of a catalog, the console
+says so and names the tenant responsible, rather than reporting the cluster as
+empty. Those are different situations with different remedies: an empty cluster
+has nothing to do about it, while a scoped-out catalog is undone by switching
+tenant or listing across every tenant you can reach.
+
+The distinction is drawn on whether the scope actually removed anything, not on
+whether a scope is active. A tenant that genuinely holds no trees still reports
+an empty catalog, because claiming a filter that removed nothing would be as
+misleading as concealing one that did.
+
 ## Remembered, and re-validated on restore
 
 The last selected tenant is remembered per user and per cluster, and is
