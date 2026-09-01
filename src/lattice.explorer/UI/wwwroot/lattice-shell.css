@@ -696,6 +696,21 @@ code {
     gap: var(--lx-space-6);
     padding: 0 var(--lx-space-7);
     border-bottom: 1px solid var(--lx-color-border);
+
+    /*
+    A flex item's default min-width is auto, so without this the header refuses to
+    shrink below the intrinsic width of its content and grows wider than the pane
+    that holds it. At a phone width that pushes the tab strip's overflow control
+    past the right edge of the viewport, where it cannot be scrolled into view and
+    so cannot be operated at all - the strip offers a menu holding every surface
+    that did not fit, and the one control that opens it is off-screen.
+
+    It depends on text metrics, so it reproduces on some platforms and not others,
+    which is exactly how it survived: the surfaces fit on the machine it was
+    authored on. The strip itself already clips and shrinks; this lets the header
+    around it do the same.
+    */
+    min-width: 0;
 }
 
 .lx-shell-detail-tabs {
@@ -712,7 +727,22 @@ code {
   by - a heading is structure, not size.
 */
 .lx-shell-detail-heading {
-    flex-shrink: 0;
+    /*
+    Allowed to shrink, and to truncate when it must.
+
+    It used to refuse (flex-shrink: 0), which reads as protecting the heading and
+    actually spends the header's whole width on it: at a phone width a long
+    selection name pushed the surface strip's overflow control past the right edge
+    of the viewport, where it cannot be scrolled to and so cannot be opened. That
+    trades a readable caption for an unreachable control, which is the wrong way
+    round - the caption is decoration and repeats the title below it, while the
+    control is the only way to reach the surfaces that did not fit.
+    */
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     margin: 0;
     color: var(--lx-color-text-dim);
     font-size: var(--lx-text-micro);
