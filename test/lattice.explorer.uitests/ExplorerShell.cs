@@ -1,5 +1,6 @@
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
+using Orleans.Lattice.Explorer.UI.Appearance;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 
@@ -114,6 +115,41 @@ internal static class ExplorerShell
         }
         """;
 
+    /// <summary>
+    /// Writes (or clears) <c>data-contrast</c> and reports the colour tokens the
+    /// browser resolves under it.
+    /// </summary>
+    /// <remarks>
+    /// Three tokens rather than one, joined into a single reading. The two overlays
+    /// differ in every colour token they set, but they do not differ by much in all
+    /// of them - the light palette's canvas moves only from <c>#f2f5f9</c> to
+    /// <c>#f0f3f8</c> - so a probe reading canvas alone would be one palette tweak
+    /// away from being unable to tell the overlays apart, and would then pass while
+    /// proving nothing. Border and text move furthest, so reading all three keeps
+    /// the discrimination well clear of any single token's margin.
+    /// <para>
+    /// The empty string clears the attribute rather than writing an empty one:
+    /// following the environment is the absence of the attribute, and an empty
+    /// <c>data-contrast=""</c> would match neither overlay while still suppressing
+    /// nothing.
+    /// </para>
+    /// </remarks>
+    private const string ApplyContrastScript =
+        """
+        (element, value) => {
+            const root = document.documentElement;
+            if (value === '') {
+                root.removeAttribute('data-contrast');
+            } else {
+                root.setAttribute('data-contrast', value);
+            }
+            const style = getComputedStyle(root);
+            return ['--lx-color-canvas', '--lx-color-border', '--lx-color-text']
+                .map(token => style.getPropertyValue(token).trim())
+                .join(' / ');
+        }
+        """;
+
     /// <summary>Reads every area-strip tab label and the demoted-entry count in one DOM snapshot.</summary>
     private const string AreaLabelsScript =
         """
@@ -201,6 +237,56 @@ internal static class ExplorerShell
         Assert.That(applied, Is.EqualTo(expected), () =>
             $"Selecting the {theme} theme did not put its palette in effect: the document resolved "
             + $"'{applied}' where the {theme} palette resolves '{expected}'.");
+    }
+
+    /// <summary>
+    /// Applies <paramref name="contrast"/> and proves the overlay genuinely took
+    /// effect by measuring what the browser resolved, not by trusting the attribute
+    /// written.
+    /// <para>
+    /// The same trap as the theme, and a sharper one. High contrast is an overlay
+    /// of colour tokens selected by <c>data-contrast</c> alongside
+    /// <c>data-theme</c>, so a selector that failed to match - a mis-spelled
+    /// attribute, a specificity collision between the two overlays, an overlay that
+    /// forgot a token the other sets - would leave the standard palette rendering
+    /// while the run reported itself as high-contrast coverage. Every
+    /// high-contrast result in the suite would then be a duplicate standard result.
+    /// Both overlays are therefore resolved and required to differ before the
+    /// requested one is asserted to be the one in effect.
+    /// </para>
+    /// <para>
+    /// <see cref="ExplorerContrastChoice.FollowSystem"/> writes nothing and proves
+    /// nothing: it is the absence of a choice, and the token layer's own
+    /// <c>prefers-contrast</c> handling applies only while the attribute is absent.
+    /// Writing "standard" to represent it would silently opt the cell out of that
+    /// query and change what the standard cells sweep.
+    /// </para>
+    /// </summary>
+    /// <param name="page">The page to apply the overlay to.</param>
+    /// <param name="contrast">The contrast overlay to apply.</param>
+    internal static async Task ApplyContrastAsync(IPage page, ExplorerContrastChoice contrast)
+    {
+        if (contrast == ExplorerContrastChoice.FollowSystem)
+        {
+            return;
+        }
+
+        var standard = await ResolveContrastAsync(page, ExplorerAppearanceNames.StandardName);
+        var more = await ResolveContrastAsync(page, ExplorerAppearanceNames.MoreName);
+
+        Assert.That(more, Is.Not.EqualTo(standard), () =>
+            "The standard and high-contrast overlays resolved the same colour tokens "
+            + $"('{standard}'), so asking for high contrast changes nothing that renders. Every "
+            + "high-contrast result in this suite would be a duplicate standard-contrast result "
+            + "reported as high-contrast coverage.");
+
+        var value = ExplorerAppearanceNames.ContrastAttribute(contrast);
+        var expected = contrast == ExplorerContrastChoice.More ? more : standard;
+        var applied = await ResolveContrastAsync(page, value);
+
+        Assert.That(applied, Is.EqualTo(expected), () =>
+            $"Selecting the {contrast} contrast overlay did not put it in effect: the document "
+            + $"resolved '{applied}' where that overlay resolves '{expected}'.");
     }
 
     /// <summary>
@@ -423,6 +509,15 @@ internal static class ExplorerShell
         return await page.Locator(":root").EvaluateAsync<string>(
             ApplyThemeScript,
             ThemeAttributeValue(theme),
+            new LocatorEvaluateOptions { Timeout = RailReadTimeoutMs });
+    }
+
+    private static async Task<string> ResolveContrastAsync(IPage page, string? attributeValue)
+    {
+        await Assertions.Expect(page.Locator(ShellSelector)).ToBeAttachedAsync();
+        return await page.Locator(":root").EvaluateAsync<string>(
+            ApplyContrastScript,
+            attributeValue ?? string.Empty,
             new LocatorEvaluateOptions { Timeout = RailReadTimeoutMs });
     }
 }

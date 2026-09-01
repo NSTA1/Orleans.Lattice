@@ -2,6 +2,7 @@ using System.Text;
 using Deque.AxeCore.Playwright;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
+using Orleans.Lattice.Explorer.UI.Appearance;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 
@@ -254,6 +255,12 @@ public sealed class AccessibilitySweepTests : UiTestBase
         // about the one that is about to be swept.
         await ExplorerShell.AssertShellRenderedAsync(page);
         await ExplorerShell.ApplyThemeAsync(page, scenario.Theme);
+
+        // After the theme, because the overlay is selected by data-contrast
+        // ALONGSIDE data-theme: proving it took effect means resolving it against
+        // the palette this cell actually sweeps, not against whichever one the
+        // theme probe happened to leave behind.
+        await ExplorerShell.ApplyContrastAsync(page, scenario.Contrast);
         return page;
     }
 

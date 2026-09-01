@@ -125,32 +125,114 @@ public sealed class ShellRouteAssetShadowingTests
     }
 
     [Test]
-    public async Task Under_a_base_path_rendering_a_page_is_a_pre_existing_framework_limitation()
+    public async Task Under_a_base_path_a_deep_link_renders_the_shell()
     {
-        // Documented, not asserted as desirable. Blazor's route table matches an
-        // endpoint's route pattern against the component's declared [Route]
-        // template by exact text, so mounting MapRazorComponents inside a
-        // MapGroup prefix leaves every template unresolvable
-        // (dotnet/aspnetcore#64965). Measured on this branch with the pre-#1847
-        // route set - a lone '@page "/"' - a request for '/explorer/' already
-        // failed with "Unable to find the provided template '/explorer/'", so
-        // this predates the shell's routing and is a defect in the mount itself
-        // rather than in the route grammar.
+        // Was pinned as a known-broken framework limitation and is now the
+        // assertion it was written to become. Mounting MapRazorComponents inside
+        // MapGroup(prefix) left every declared @page template unresolvable
+        // ("Unable to find the provided template '/explorer/'",
+        // dotnet/aspnetcore#64965), so a head under a base path served no page at
+        // all - only assets, which 404 in endpoint routing and never reach the
+        // renderer, which is why every earlier base-path test passed while the
+        // mount was wholly broken.
         //
-        // It is pinned here so the day the mount is fixed (or the framework
-        // changes) this test fails and someone promotes it to the assertion it
-        // should be: a deep link working under a base path exactly as it does at
-        // the root.
+        // The components are now mapped at the root and the prefix is stripped
+        // into PathBase ahead of routing, so a deep link under the mount renders
+        // exactly as it does at the root.
         await using var app = await CreateHostAsync(basePath: "/explorer");
         using var client = app.GetTestServer().CreateClient();
 
+        var response = await client.GetAsync("/explorer/explore/trees/orders/data");
+
         Assert.That(
-            async () => await client.GetAsync("/explorer/explore/trees/orders/data"),
-            Throws.InvalidOperationException.With.Message.Contains("Unable to find the provided template"),
-            "if this no longer throws, the base-path mount has been fixed - assert the 200 instead");
+            response.StatusCode,
+            Is.EqualTo(HttpStatusCode.OK),
+            "a deep link must render the shell under a base path exactly as it does at the root");
     }
 
-    private static async Task<WebApplication> CreateHostAsync(string? basePath)
+    [Test]
+    public async Task Under_a_base_path_the_root_of_the_mount_renders_the_shell()
+    {
+        // The plainest request there is, and the one the original report made:
+        // GET the mount point itself. It failed on the pre-#1847 route set too - a
+        // lone '@page "/"' - so this is the case that proves the defect was in the
+        // mount rather than in the shell's route grammar.
+        await using var app = await CreateHostAsync(basePath: "/explorer");
+        using var client = app.GetTestServer().CreateClient();
+
+        var response = await client.GetAsync("/explorer/");
+
+        Assert.That(
+            response.StatusCode,
+            Is.EqualTo(HttpStatusCode.OK),
+            "the mount point itself must render");
+    }
+
+    [Test]
+    public async Task Under_a_base_path_the_rendered_document_carries_the_mounted_base_href()
+    {
+        // Rendering is necessary but not sufficient: every relative asset and
+        // every framework request the document makes is resolved against
+        // <base href>, so a page that renders under the mount while claiming the
+        // root would send the browser back outside it for its own scripts.
+        await using var app = await CreateHostAsync(basePath: "/explorer");
+        using var client = app.GetTestServer().CreateClient();
+
+        var html = await client.GetStringAsync("/explorer/");
+
+        Assert.That(html, Does.Contain("<base href=\"/explorer/\""));
+    }
+
+    [Test]
+    public async Task A_host_route_outside_the_mount_is_untouched_by_the_base_path()
+    {
+        // The path base is applied at the front of the pipeline, so this proves it
+        // is scoped rather than global: a co-hosting application's own routes must
+        // keep working unchanged next to a mounted explorer.
+        await using var app = await CreateHostAsync(basePath: "/explorer", mapHostRoute: true);
+        using var client = app.GetTestServer().CreateClient();
+
+        var response = await client.GetAsync("/host");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(response.Content.ReadAsStringAsync().Result, Is.EqualTo("host"));
+        });
+    }
+
+    [Test]
+    public async Task A_host_home_page_survives_an_explorer_mounted_under_a_base_path()
+    {
+        // The reason the mount has to be an isolated branch and not a path
+        // rewrite. The shell declares '@page "/"', so an explorer whose endpoints
+        // also sat in the host's own endpoint table would collide with the host's
+        // home page - the most common route there is in an application that
+        // co-hosts the console, and the whole point of offering a base path.
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddLatticeExplorerWeb(options => options.BasePath = "/explorer");
+        builder.Services.AddSingleton(Substitute.For<IExplorerAuthSession>());
+
+        await using var app = builder.Build();
+        app.UseAntiforgery();
+        app.MapGet("/", () => "the host's own home page");
+        app.MapLatticeExplorer();
+        await app.StartAsync();
+
+        using var client = app.GetTestServer().CreateClient();
+
+        var host = await client.GetStringAsync("/");
+        var explorer = await client.GetAsync("/explorer/");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host, Is.EqualTo("the host's own home page"));
+            Assert.That(explorer.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        });
+    }
+
+    private static async Task<WebApplication> CreateHostAsync(string? basePath, bool mapHostRoute = false)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -167,6 +249,12 @@ public sealed class ShellRouteAssetShadowingTests
 
         var app = builder.Build();
         app.UseAntiforgery();
+
+        if (mapHostRoute)
+        {
+            app.MapGet("/host", () => "host");
+        }
+
         app.MapLatticeExplorer();
 
         await app.StartAsync();

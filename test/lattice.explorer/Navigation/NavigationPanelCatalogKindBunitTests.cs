@@ -172,7 +172,7 @@ public sealed class NavigationPanelCatalogKindBunitTests : LatticeComponentTestC
         Assert.Multiple(() =>
         {
             Assert.That(
-                state.QuerySelector(".lx-shell-nav-state-headline")!.TextContent.Trim(),
+                state.QuerySelector(".lx-selection-message-headline")!.TextContent.Trim(),
                 Is.EqualTo(ExplorerStateCopy.Empty(ExplorerSubjects.Trees).Headline));
             Assert.That(
                 state.TextContent,
