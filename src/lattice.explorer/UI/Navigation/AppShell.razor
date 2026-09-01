@@ -128,7 +128,7 @@
             heading and the controls beneath it are what a caller then tabs
             through.
         *@
-        <main class="lx-shell-main" id="@ExplorerShellRegions.Main" tabindex="-1">
+        <main class="lx-shell-main" id="@ExplorerShellRegions.Main" tabindex="-1" @ref="_main">
             <h1 class="lx-shell-surface-title">@_activeLabel</h1>
 
             @if (_unreachableNotice is not null)
@@ -205,6 +205,25 @@
     private const string AreaRailLandmarkLabel = "Areas";
 
     private readonly string _instanceId = ExplorerShellRegions.Prefix + Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// The main landmark, held so the shell's skip link can put focus in it
+    /// directly. See <see cref="FocusMainAsync"/> for why the anchor alone is not
+    /// enough.
+    /// </summary>
+    private ElementReference _main;
+
+    /// <summary>
+    /// Moves keyboard focus into the main landmark. The skip link's
+    /// <c>href="#..."</c> stays in the markup - it is what makes the control a
+    /// real link and what still works with no script - but the framework
+    /// intercepts a same-document anchor and updates the address itself rather
+    /// than letting the browser perform a fragment navigation. Only a real
+    /// fragment navigation moves the sequential focus navigation starting point,
+    /// so without this the caller lands back at the top of the chrome and the
+    /// bypass silently does nothing (WCAG SC 2.4.1 Bypass Blocks, level A).
+    /// </summary>
+    public ValueTask FocusMainAsync() => _main.FocusAsync();
 
     private AreaEntry[] _entries = NoEntries;
     private AreaEntry? _homeEntry;

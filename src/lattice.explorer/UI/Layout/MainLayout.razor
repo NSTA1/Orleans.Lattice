@@ -37,9 +37,22 @@
         <div class="lx-shell">
             <ConfigurationGate>
                 <div class="lx-shell-body">
-                    <a class="lx-shell-skip" href="@_skipTarget">Skip to main content</a>
+                    @*
+                        The href is load-bearing and stays: it makes this a real
+                        link, gives it the right role and name for free, and is
+                        what works when script has not started. The click handler
+                        beside it is what actually performs the bypass - the
+                        framework intercepts a same-document anchor and updates
+                        the address itself instead of letting the browser perform
+                        a fragment navigation, and only a real fragment
+                        navigation moves the sequential focus navigation starting
+                        point. Without the handler the link announces a bypass
+                        and does not perform one, which is a documented way of
+                        failing SC 2.4.1 while appearing to satisfy it.
+                    *@
+                    <a class="lx-shell-skip" href="@_skipTarget" @onclick="_focusMain">Skip to main content</a>
                     <ClusterBadge />
-                    <AppShell>
+                    <AppShell @ref="_shell">
                         <Catalog>
                             <NavigationPanel />
                         </Catalog>
@@ -68,6 +81,25 @@
     private const string _skipTarget = "#" + ExplorerShellRegions.Main;
 
     private readonly LoginDialogState _login = new();
+
+    private AppShell? _shell;
+
+    // Bound once rather than per render: the layout re-renders on every sign-in
+    // dialog transition, and a method group in the markup would allocate a
+    // delegate on each of them.
+    private readonly EventCallback<MouseEventArgs> _focusMain;
+
+    /// <summary>Creates the layout, caching the delegate the skip link binds.</summary>
+    public MainLayout() =>
+        _focusMain = EventCallback.Factory.Create<MouseEventArgs>(this, FocusMainAsync);
+
+    /// <summary>
+    /// Performs the bypass the skip link advertises. Tolerant of a shell that is
+    /// not mounted (the configuration gate can withhold it), in which case the
+    /// anchor's own fragment behaviour is all there is - and there is no main
+    /// landmark to land in either.
+    /// </summary>
+    private Task FocusMainAsync() => _shell?.FocusMainAsync().AsTask() ?? Task.CompletedTask;
 
     protected override void OnInitialized() => _login.Changed += OnLoginChanged;
 
