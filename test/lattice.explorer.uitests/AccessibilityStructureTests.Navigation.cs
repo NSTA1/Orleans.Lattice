@@ -186,7 +186,7 @@ public sealed partial class AccessibilityStructureTests
             }
 
             await page.Keyboard.PressAsync(forward);
-            var after = await FocusedTabIdAsync(page);
+            var after = await WaitForFocusedTabChangeAsync(page, before);
             exercised.Add($"{strip.Label} ({forward})");
 
             if (after is null)
@@ -228,6 +228,41 @@ public sealed partial class AccessibilityStructureTests
                 return el.id || (el.textContent || '').trim();
             }
             """);
+
+    /// <summary>
+    /// Reads the focused tab once the strip has had a chance to move focus, returning
+    /// as soon as it changes rather than after a fixed wait.
+    /// </summary>
+    /// <remarks>
+    /// The strips are Blazor Server components, so an arrow key is handled over the
+    /// circuit: the key press, a server round trip, a re-render and only then the focus
+    /// move. Reading focus immediately after the press therefore samples before the
+    /// move on any machine slow enough to lose that race, and reports a strip that
+    /// works as "not keyboard operable". Polling for the change removes the race
+    /// without weakening the assertion - a strip that genuinely never moves focus still
+    /// returns the original id when the window elapses, and still fails.
+    /// </remarks>
+    /// <param name="page">The page to read focus from.</param>
+    /// <param name="before">The tab id focused before the key was pressed.</param>
+    private static async Task<string?> WaitForFocusedTabChangeAsync(IPage page, string? before)
+    {
+        const int budgetMs = 5000;
+        const int intervalMs = 50;
+
+        var current = before;
+        for (var waited = 0; waited < budgetMs; waited += intervalMs)
+        {
+            current = await FocusedTabIdAsync(page);
+            if (current != before)
+            {
+                return current;
+            }
+
+            await Task.Delay(intervalMs);
+        }
+
+        return current;
+    }
 
     /// <summary>
     /// Every control a keyboard user can reach must paint something while focused.
@@ -348,17 +383,23 @@ public sealed partial class AccessibilityStructureTests
     }
 
     /// <summary>
-    /// Clears focus so the next Tab press starts a fresh sequential walk from the top of
-    /// the document. Blurring is how a browser's sequential focus navigation starting
-    /// point is reset without clicking, which would itself move focus somewhere.
+    /// Moves focus to the very start of the document, so the next Tab press begins a
+    /// fresh sequential walk at the first focusable element.
     /// <para>
-    /// The page is brought to the front first. Every fixture shares one browser, so by
-    /// the time a keyboard walk runs, later pages have been created and this page may
-    /// no longer be the focused target. A page without browser focus reports
-    /// <c>document.hasFocus() === false</c> and its sequential navigation does not
-    /// advance, so the walk finds one or two stops and stops - which reads as "the
-    /// shell has almost nothing focusable" rather than as a lost focus target. That is
-    /// why these cases pass alone and fail in the full lane.
+    /// This deliberately does not blur. Blurring looks like it should reset the walk
+    /// and does not: the HTML sequential focus navigation starting point stays where
+    /// the blurred element was, so the next Tab continues from the middle of the page.
+    /// The shell moves focus onto its active tab while initialising, so a walk that
+    /// began after that had already skipped the chrome - and reported the first stop as
+    /// the catalog-kind tab rather than the skip link, or found two stops where there
+    /// are dozens. It is a race against initialisation, which is why it passed on a
+    /// quiet machine and failed on a loaded CI runner.
+    /// </para>
+    /// <para>
+    /// Focusing the body element is what actually moves the starting point back to the
+    /// top. The temporary tabindex is required because body is not focusable by
+    /// default, and it is removed immediately so the walk does not count body itself as
+    /// a stop.
     /// </para>
     /// </summary>
     private static async Task ResetFocusAsync(IPage page)
@@ -369,6 +410,18 @@ public sealed partial class AccessibilityStructureTests
             () => {
                 if (document.activeElement instanceof HTMLElement) {
                     document.activeElement.blur();
+                }
+
+                const body = document.body;
+                const had = body.hasAttribute('tabindex');
+                if (!had) {
+                    body.setAttribute('tabindex', '-1');
+                }
+
+                body.focus();
+
+                if (!had) {
+                    body.removeAttribute('tabindex');
                 }
             }
             """);
