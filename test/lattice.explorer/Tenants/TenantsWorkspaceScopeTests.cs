@@ -235,15 +235,15 @@ public sealed class TenantsWorkspaceAccessCopyTests
     {
         using var workspace = Workspace(ExplorerPluginAccess.Deny(
             "not an administrator",
-            ExplorerAccessRemedy.Requiring("Admin", "a platform administrator")));
+            ExplorerAccessRemedy.Requiring("Admin", "an operator")));
 
         Assert.Multiple(() =>
         {
             Assert.That(workspace.AccessRemedy.Permission, Is.EqualTo("Admin"));
-            Assert.That(workspace.AccessRemedy.Audience, Is.EqualTo("a platform administrator"));
+            Assert.That(workspace.AccessRemedy.Audience, Is.EqualTo("an operator"));
             Assert.That(
                 workspace.AccessRemedyText,
-                Is.EqualTo("Requires the Admin permission - ask a platform administrator."));
+                Is.EqualTo("Requires the Admin permission - ask an operator."));
         });
     }
 

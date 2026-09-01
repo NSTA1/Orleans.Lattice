@@ -2,6 +2,7 @@ using System.Reflection;
 using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Tests.Plugins;
 
@@ -138,6 +139,53 @@ public sealed class ExplorerPluginAccessGateConformanceTests
             + "reader nothing they can act on: which permission is missing, and who issues it. "
             + "Declare a cached ExplorerAccessRemedy.Requiring(permission, audience) on the gate "
             + "so the shell can render an actionable denial."
+            + Environment.NewLine
+            + Describe(violations));
+    }
+
+    [Test]
+    public void Every_plugin_access_gate_names_a_declared_audience()
+    {
+        // One concept, one name (an acceptance criterion of #1853). The audience
+        // was a literal on each gate, so the gates drifted from the copy layer
+        // and the console said "ask a platform administrator" in the rail and
+        // "ask an operator" in the panel, for the same grant in the same
+        // session.
+        //
+        // The invariant is that an audience is DECLARED in the vocabulary, not
+        // that every gate names the same one: a self-service tenant surface is
+        // administered by the tenant's own administrator, who is genuinely not
+        // the platform operator. Flattening those two would replace a wording
+        // inconsistency with a wrong instruction.
+        var declared = new[]
+        {
+            ExplorerVocabulary.GrantAudience,
+            ExplorerVocabulary.TenantGrantAudience,
+        };
+
+        var violations = new List<string>();
+
+        foreach (var gate in DiscoveredGates)
+        {
+            if (Construct(gate, authenticated: true) is not ExplorerPluginAccessGate instance)
+            {
+                violations.Add($"{gate.Name}: could not be constructed from substituted dependencies");
+                continue;
+            }
+
+            var audience = instance.Remedy.Audience;
+            if (!declared.Contains(audience, StringComparer.Ordinal))
+            {
+                violations.Add($"{gate.Name}: audience \"{audience}\" is not declared in ExplorerVocabulary");
+            }
+        }
+
+        Assert.That(
+            violations,
+            Is.Empty,
+            "A gate must name its audience with a term declared in ExplorerVocabulary rather than "
+            + "its own literal, so the rail and the panel cannot describe the same remedy in two "
+            + "registers. If a gate genuinely addresses a new audience, declare it there first."
             + Environment.NewLine
             + Describe(violations));
     }
@@ -358,7 +406,7 @@ public sealed class ExplorerPluginAccessGateConformanceTests
     [Test]
     public void The_contract_orders_capability_before_credential_before_grant()
     {
-        var remedy = ExplorerAccessRemedy.Requiring("Backup", "a platform administrator");
+        var remedy = ExplorerAccessRemedy.Requiring("Backup", "an operator");
 
         Assert.Multiple(() =>
         {
@@ -393,8 +441,8 @@ public sealed class ExplorerPluginAccessGateConformanceTests
             var denial = ExplorerPluginAccessContract
                 .Resolve(ExplorerPluginAccessFacts.Withheld, remedy, isCallerAuthenticated: true);
             Assert.That(denial.Remedy.Permission, Is.EqualTo("Backup"));
-            Assert.That(denial.Remedy.Audience, Is.EqualTo("a platform administrator"));
-            Assert.That(denial.Remedy.Describe(), Is.EqualTo("Requires the Backup permission - ask a platform administrator."));
+            Assert.That(denial.Remedy.Audience, Is.EqualTo("an operator"));
+            Assert.That(denial.Remedy.Describe(), Is.EqualTo("Requires the Backup permission - ask an operator."));
 
             // An admission never carries one - there is nothing to remedy.
             Assert.That(

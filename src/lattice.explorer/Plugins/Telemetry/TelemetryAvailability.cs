@@ -1,5 +1,6 @@
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Plugins.Telemetry;
 
@@ -56,7 +57,7 @@ public sealed class TelemetryAvailability(
     /// attaching it to a denial costs nothing per probe.
     /// </summary>
     private static readonly ExplorerAccessRemedy MissingGrant =
-        ExplorerAccessRemedy.Requiring("Telemetry", "a platform administrator");
+        ExplorerAccessRemedy.Requiring("Telemetry", ExplorerVocabulary.GrantAudience);
 
     private readonly ITelemetryQueryService _queries = queries ?? throw new ArgumentNullException(nameof(queries));
 

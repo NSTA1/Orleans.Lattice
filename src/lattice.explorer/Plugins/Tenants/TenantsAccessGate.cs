@@ -1,6 +1,7 @@
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
@@ -79,7 +80,7 @@ public sealed class TenantsAccessGate(ITenancyDomain domain, IExplorerAuthSessio
     /// attaching it to a denial costs nothing per probe.
     /// </summary>
     private static readonly ExplorerAccessRemedy MissingGrant =
-        ExplorerAccessRemedy.Requiring("Admin", "a platform administrator");
+        ExplorerAccessRemedy.Requiring("Admin", ExplorerVocabulary.GrantAudience);
 
     private readonly ITenancyDomain _domain = domain ?? throw new ArgumentNullException(nameof(domain));
 

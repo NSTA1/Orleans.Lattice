@@ -143,7 +143,7 @@ public class TenancyAvailabilityTests
 
             // A denial states a remedy rather than only that it is unavailable.
             Assert.That(access.Remedy.Permission, Is.EqualTo("Tenant read"));
-            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("an operator"));
         });
     }
 

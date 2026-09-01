@@ -139,7 +139,7 @@ public sealed class AppShellTests
         // name the caller just clicked tells them nothing. This one names the
         // grant they are missing and who issues it.
         using var harness = ShellHarness.Create(
-            Plugin("a", "Backups", RemedyingGate.Requiring("Backup", "a platform administrator")));
+            Plugin("a", "Backups", RemedyingGate.Requiring("Backup", "an operator")));
         await harness.RenderAsync();
 
         var help = harness.Renderer.FindComponent<LatticeHelp>(harness.ComponentId);
@@ -150,7 +150,7 @@ public sealed class AppShellTests
             Assert.That(help!.Value.Component.Tone, Is.EqualTo(LatticeHelpTone.Denial));
             Assert.That(
                 help.Value.Component.Remedy,
-                Is.EqualTo("Requires the Backup permission - ask a platform administrator."));
+                Is.EqualTo("Requires the Backup permission - ask an operator."));
             Assert.That(
                 help.Value.Component.Explanation,
                 Is.EqualTo(ExplorerAccessCopy.Denied("Backups").Explanation),

@@ -116,7 +116,7 @@ public class BackupCapabilityServiceTests
 
             // The denial states a remedy: which grant, and who issues it.
             Assert.That(access.Remedy.Permission, Is.EqualTo("Backup"));
-            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("an operator"));
         });
     }
 

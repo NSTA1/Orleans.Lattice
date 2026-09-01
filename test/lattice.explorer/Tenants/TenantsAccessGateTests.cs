@@ -78,7 +78,7 @@ public sealed class TenantsAccessGateTests
             // a remedy rather than only that it is unavailable.
             Assert.That(access.IsVisible, Is.True);
             Assert.That(access.Remedy.Permission, Is.EqualTo("Admin"));
-            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("an operator"));
         });
     }
 

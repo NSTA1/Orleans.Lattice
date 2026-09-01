@@ -4,6 +4,7 @@ using Orleans.Lattice.Backup;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Backup;
 
@@ -77,7 +78,7 @@ public sealed class BackupCapabilityService(
     /// attaching it to a denial costs nothing per probe.
     /// </summary>
     private static readonly ExplorerAccessRemedy MissingGrant =
-        ExplorerAccessRemedy.Requiring("Backup", "a platform administrator");
+        ExplorerAccessRemedy.Requiring("Backup", ExplorerVocabulary.GrantAudience);
 
     private readonly IBackupControlClient _client = client ?? throw new ArgumentNullException(nameof(client));
 

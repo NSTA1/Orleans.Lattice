@@ -2,6 +2,7 @@ using Grpc.Core;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Access;
 
@@ -27,7 +28,7 @@ public sealed class AuthAdminCapabilityService(
     /// attaching it to a denial costs nothing per probe.
     /// </summary>
     private static readonly ExplorerAccessRemedy MissingGrant =
-        ExplorerAccessRemedy.Requiring("Admin", "a platform administrator");
+        ExplorerAccessRemedy.Requiring("Admin", ExplorerVocabulary.GrantAudience);
 
     private readonly IAuthAdminClient _client = client ?? throw new ArgumentNullException(nameof(client));
 

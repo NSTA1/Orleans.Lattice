@@ -41,7 +41,7 @@ internal sealed class JourneyLedgerGate(IExplorerAuthSession session) : Explorer
     internal const string Permission = "Ledger";
 
     /// <summary>The audience this area's denial tells the caller to ask.</summary>
-    internal const string Audience = "a platform administrator";
+    internal const string Audience = "an operator";
 
     private static readonly ExplorerAccessRemedy Required =
         ExplorerAccessRemedy.Requiring(Permission, Audience);

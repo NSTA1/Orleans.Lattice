@@ -117,7 +117,7 @@ public sealed partial class SelectionSurfaceMarkupHygieneTests
                 "A strip that declares role=tablist or role=tab announces the tabs pattern, and a "
                 + "caller who hears it expects a roving tabindex, arrow-key movement and a tab "
                 + "panel bound by aria-controls. Use LatticeAdaptiveTabs, which implements all of "
-                + "them, or AreaSubSurfaceTabs for a sub-surface strip - not a row of buttons "
+                + "them, or its Subordinate variant for a sub-surface strip - not a row of buttons "
                 + "wearing the role.");
         });
     }

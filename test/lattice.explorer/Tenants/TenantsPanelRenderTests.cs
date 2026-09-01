@@ -56,14 +56,14 @@ public sealed class TenantsPanelRenderTests
             TenantsRenderHarness.SeededDomain(),
             ExplorerPluginAccess.Deny(
                 "not an administrator",
-                ExplorerAccessRemedy.Requiring("Admin", "a platform administrator")));
+                ExplorerAccessRemedy.Requiring("Admin", "an operator")));
 
         Assert.Multiple(() =>
         {
             // The missing permission and who issues it - the two facts a denial
             // that says only "not available for your account" leaves out.
             Assert.That(html, Does.Contain("Requires the Admin permission"));
-            Assert.That(html, Does.Contain("a platform administrator"));
+            Assert.That(html, Does.Contain("an operator"));
             Assert.That(html, Does.Contain(ExplorerVocabulary.RemedyLabel));
         });
     }

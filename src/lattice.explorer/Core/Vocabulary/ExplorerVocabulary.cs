@@ -101,6 +101,34 @@ public static class ExplorerVocabulary
     /// </summary>
     public const string RemedyLabel = "What to do:";
 
+    /// <summary>
+    /// Who to ask for a grant the caller does not hold, as it appears inside a
+    /// remedy sentence.
+    /// </summary>
+    /// <remarks>
+    /// Declared once because it is one concept and must have one name. The
+    /// access gates each carried this word as their own literal while the copy
+    /// layer composed its own, so the console said "ask a platform
+    /// administrator" in the rail and "ask an operator" in the panel, for the
+    /// same grant in the same session. "Operator" is the register the rest of
+    /// this vocabulary uses - the glossary, the subjects and the term ids all
+    /// name the operator surface - so it is the one that survives.
+    /// </remarks>
+    public const string GrantAudience = "an operator";
+
+    /// <summary>
+    /// Who to ask for a grant within your own tenant, as it appears inside a
+    /// remedy sentence.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately distinct from <see cref="GrantAudience"/>: a self-service
+    /// tenant surface is administered by the tenant's own administrator, who is
+    /// not the platform operator. Sending a tenant member to an operator for a
+    /// grant their own administrator issues would be a wrong instruction, not a
+    /// wording variation, so these two are separate terms rather than one.
+    /// </remarks>
+    public const string TenantGrantAudience = "your tenant's administrator";
+
     /// <summary>The action that clears a filter or a scope and shows everything again.</summary>
     public const string ClearScopeAction = "Show all tenants";
 

@@ -42,7 +42,7 @@ public readonly record struct ExplorerAccessRemedy
 
     /// <summary>
     /// Who can issue <see cref="Permission"/>, as a noun phrase usable mid
-    /// sentence - for example <c>a platform administrator</c>.
+    /// sentence - for example <c>an operator</c>.
     /// <see langword="null"/> when nobody specific can be named.
     /// </summary>
     public string? Audience { get; }

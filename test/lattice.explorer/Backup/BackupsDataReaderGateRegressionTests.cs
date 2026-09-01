@@ -128,8 +128,8 @@ public sealed class BackupsDataReaderGateRegressionTests
         {
             Assert.That(access.Remedy.IsSpecified, Is.True);
             Assert.That(access.Remedy.Permission, Is.EqualTo("Backup"));
-            Assert.That(access.Remedy.Audience, Is.EqualTo("a platform administrator"));
-            Assert.That(access.Remedy.Describe(), Does.Contain("Backup").And.Contain("platform administrator"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("an operator"));
+            Assert.That(access.Remedy.Describe(), Does.Contain("Backup").And.Contain("operator"));
         });
     }
 

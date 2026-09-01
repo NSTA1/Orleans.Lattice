@@ -2,6 +2,7 @@ using Grpc.Core;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
@@ -79,7 +80,7 @@ public sealed class TenancyAvailability(
     /// denial costs nothing per probe.
     /// </summary>
     private static readonly ExplorerAccessRemedy MissingGrant =
-        ExplorerAccessRemedy.Requiring("Tenant read", "a platform administrator");
+        ExplorerAccessRemedy.Requiring("Tenant read", ExplorerVocabulary.GrantAudience);
 
     private readonly ITenantAdminClient _client = client ?? throw new ArgumentNullException(nameof(client));
 
