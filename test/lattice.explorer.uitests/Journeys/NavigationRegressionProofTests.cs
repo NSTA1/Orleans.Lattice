@@ -226,6 +226,15 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
 
+        // Wait for the catalog-kind strip to leave its busy state before snapshotting.
+        // Selecting a tree publishes the selection into the address, which reloads the
+        // catalog, and its tabs are disabled while that is in flight - so a snapshot
+        // taken immediately records a strip that is operable now and inert a moment
+        // later, and the walk then waits out a full action timeout on it.
+        await Assertions
+            .Expect(page.Locator("[role=tablist][aria-label='Catalog kind'] [role=tab]:not([disabled])").First)
+            .ToBeVisibleAsync();
+
         await Assertions.Expect(page.Locator("[role=tablist]").First).ToBeAttachedAsync();
 
         // Snapshot the strips by the name each publishes, in one read, and address them

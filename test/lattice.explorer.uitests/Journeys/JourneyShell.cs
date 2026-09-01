@@ -113,11 +113,68 @@ internal static class JourneyShell
         await Assertions.Expect(row).ToBeVisibleAsync();
         await row.ClickAsync();
 
-        // Both halves matter. The row proves the catalog registered the choice; the
-        // strip proves the detail panel resolved a surface set for it. Asserting only
-        // the first would let a journey continue against an empty detail panel.
-        await Assertions.Expect(page.Locator(SelectedCatalogRowSelector)).ToContainTextAsync(label);
+        // The strip proves the detail panel resolved a surface set for the choice, and
+        // it holds at every width.
         await Assertions.Expect(page.Locator(DetailTabSelector).First).ToBeVisibleAsync();
+
+        // The selected-row marking is only assertable while the catalog is on screen.
+        // In the compact band the catalog is a drawer that the shell deliberately
+        // dismisses once a choice is made - the point of the drawer is to give the
+        // detail surface the viewport back - so the list is gone, not unmarked, and
+        // asserting on it there would fail a shell behaving exactly as designed.
+        if (!await page.Locator("#lx-shell-catalog").IsVisibleAsync())
+        {
+            return;
+        }
+
+        try
+        {
+            await Assertions.Expect(page.Locator(SelectedCatalogRowSelector)).ToContainTextAsync(label);
+        }
+        catch (PlaywrightException ex)
+        {
+            Assert.Fail(
+                $"The detail panel opened, but the catalog does not mark '{label}' as the selected "
+                + "row, so a caller cannot see which tree they are looking at."
+                + Environment.NewLine + await DescribeCatalogStateAsync(page)
+                + Environment.NewLine + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// A one-line description of what the catalog is currently showing: each row, its
+    /// selected marking, and the detail surfaces resolved beside it. Best-effort and
+    /// bounded, so it can never become a second failure or hold the run open.
+    /// </summary>
+    /// <param name="page">The page to describe.</param>
+    internal static async Task<string> DescribeCatalogStateAsync(IPage page)
+    {
+        try
+        {
+            return await page.Locator(":root").EvaluateAsync<string>(
+                """
+                () => {
+                    const rows = Array.from(document.querySelectorAll('#lx-shell-catalog button'))
+                        .map(b => (b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40)
+                            + (b.classList.contains('is-selected') ? ' [selected]' : ''));
+                    const strip = document.querySelector("[role=tablist][aria-label='Detail tabs']");
+                    const tabs = strip
+                        ? Array.from(strip.querySelectorAll('[role=tab]'))
+                            .map(t => (t.textContent || '').trim()
+                                + (t.getAttribute('aria-selected') === 'true' ? '*' : ''))
+                        : [];
+                    return 'address=' + location.pathname + location.search
+                        + ' rows=[' + rows.join(' | ') + ']'
+                        + ' detailTabs=[' + tabs.join(' ') + ']';
+                }
+                """,
+                arg: null,
+                new LocatorEvaluateOptions { Timeout = DiagnosticTimeoutMs });
+        }
+        catch (PlaywrightException ex)
+        {
+            return "catalog state could not be read: " + ex.Message;
+        }
     }
 
     /// <summary>
