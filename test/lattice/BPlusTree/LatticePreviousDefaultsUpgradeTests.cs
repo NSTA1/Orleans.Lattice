@@ -220,10 +220,18 @@ public sealed class LatticePreviousDefaultsUpgradeTests
     [Test]
     public void An_over_split_tree_left_by_the_previous_defaults_is_unattended_and_then_healed()
     {
-        // The measured damage shape: a tree grown far past its base by a bulk
+        // A hypothetical over-split tree: grown far past its base by a bulk
         // ingest under admission rules that had neither a skew gate nor a shard
         // ceiling. Nothing about that durable state changes on upgrade - what
         // changes is that somebody is now looking at it.
+        //
+        // Deliberately not called a measured shape. The figure below echoes the
+        // 1,110 that founded this epic, which counts LEAF GRAINS - B+ tree nodes
+        // inside a shard - not physical shards; S14 measured the real deployment
+        // at exactly its base 64 physical shards on every tree. A count far above
+        // MaxPhysicalShardsPerTree (default 256) cannot be a physical shard count,
+        // because the ceiling would have stopped it. The number is still the right
+        // test input: it exercises the upgrade decision at a severe scale.
         const int Damaged = 1_110;
         var sample = new ShardHealingSample
         {
