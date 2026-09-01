@@ -1082,15 +1082,7 @@ internal sealed partial class ShardRootGrain
         // `ChildrenAreLeaves == ChildIsLeaf` check would false-
         // positive every legitimate depth->=1 root split whose
         // persisted intent legitimately needs to wrap.
-        // Decided by RootIsLeafTyped, not the raw RootIsLeaf flag. When the
-        // persisted flag lies (true over a root that is actually a
-        // BPlusInternalGrain - the issue-899 state, present on ~11% of shard
-        // roots on a real volume, see issue 1883) the raw predicate makes this
-        // guard skip itself and fall through to the wrap below, which then
-        // persists a NEW root whose ChildrenAreLeaves bit lies in the same way.
-        // That is self-perpetuating: each occurrence bakes the state that makes
-        // the next one skip the guard too.
-        if (pending.ChildIsLeaf && !RootIsLeafTyped)
+        if (pending.ChildIsLeaf && !state.State.RootIsLeaf)
         {
             var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
             if (rootSnapshot.ChildrenAreLeaves)
@@ -1140,24 +1132,6 @@ internal sealed partial class ShardRootGrain
         var childrenAreLeaves = pending.ChildIsLeaf
             ? true
             : state.State.PendingPromotionRootWasLeaf;
-
-        // Final authority is the child's actual grain TYPE, never a flag. Both
-        // inputs above are persisted bits that can disagree with reality, and
-        // this is the single seam that MINTS a lying node: whatever we pass here
-        // is durably persisted on the new root and is what SeedChildParentAsync
-        // uses to resolve currentRootId as IBPlusLeafGrain. Forcing it false for
-        // a non-leaf-typed child stops new corruption being created even if a
-        // caller reaches here with a bad flag. IsLeafGrainId returns true under a
-        // non-runtime factory, so this degrades to the historical behaviour for
-        // test fakes rather than changing it.
-        if (childrenAreLeaves && !IsLeafGrainId(currentRootId))
-        {
-            logger.LogWarning(
-                "ShardRootGrain {ShardId} CompletePromotionAsync was about to persist a root claiming leaf children over internal child {ChildId}; forcing childrenAreLeaves=false (see issue 1883).",
-                context.GrainId,
-                currentRootId);
-            childrenAreLeaves = false;
-        }
 
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(
