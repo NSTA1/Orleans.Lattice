@@ -201,15 +201,15 @@ public sealed class NavigationPanelCatalogKindBunitTests : LatticeComponentTestC
                 ],
             }));
 
-        var preferences = Substitute.For<IUiPreferenceStore>();
-        preferences.IsLoaded.Returns(true);
-        preferences.GetOrDefault("nav-kind", CatalogKind.Trees).Returns(CatalogKind.Trees);
-        preferences.GetOrDefault<CatalogItem?>("nav-selected", null).Returns((CatalogItem?)null);
-
         Services.AddSingleton(catalog);
         Services.AddSingleton(Substitute.For<IDeadLetterReader>());
         Services.AddSingleton(Substitute.For<IExplorerSelection>());
         Services.AddSingleton(Substitute.For<IExplorerSession>());
-        Services.AddSingleton(preferences);
+
+        // The panel takes its opening kind and selection from the route and the
+        // declared preference contract, so both are registered for real: the
+        // route model is a pure in-memory type and the preference backing store
+        // defaults to an in-memory one, so neither reaches a browser.
+        Services.AddExplorerSession();
     }
 }

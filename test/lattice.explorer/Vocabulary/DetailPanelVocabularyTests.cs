@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins;
@@ -52,6 +53,7 @@ public sealed class DetailPanelVocabularyTests : BunitContext
         Services.AddSingleton<IExplorerPluginAccessStore>(_access);
         Services.AddSingleton<IExplorerSelection>(_selection);
         Services.AddSingleton<IUiPreferenceStore>(new FakeUiPreferenceStore());
+        Services.AddExplorerNavigation();
 
         JSInterop.Mode = JSRuntimeMode.Loose;
     }

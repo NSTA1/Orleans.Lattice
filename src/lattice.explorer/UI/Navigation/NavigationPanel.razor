@@ -10,7 +10,8 @@
 @inject IExplorerSelection Selection
 @inject IExplorerSession Session
 @inject IServiceProvider Services
-@inject IUiPreferenceStore Preferences
+@inject IExplorerShellRouter Router
+@inject IExplorerShellPreferences Preferences
 
 <nav class="lx-shell-nav" aria-label="Tree and view catalog">
     <header class="lx-shell-nav-header">
@@ -44,7 +45,7 @@
             a toggle between peers rather than as a second copy of the rail.
         *@
         <LatticeAdaptiveTabs Tabs="KindTabs"
-                             ActiveId="@(_preferencesApplied ? _kindId : null)"
+                             ActiveId="@(_restored ? _kindId : null)"
                              OnSelect="_switchKind"
                              Label="Catalog kind"
                              Variant="LatticeTabsVariant.Segmented"
@@ -103,7 +104,7 @@
                     <li role="option" aria-selected="@(isSelected ? "true" : "false")">
                         <button type="button"
                                 class="lx-shell-nav-item @(isSelected ? "is-selected" : null)"
-                                @onclick="@(() => SelectAsync(item))">
+                                @onclick="@(() => Select(item))">
                             <span class="lx-shell-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Label)</span>
                             @*
                                 Badges come from the shared vocabulary, which
@@ -243,20 +244,32 @@
     private bool _loading = true;
     private string? _error;
     private bool _showConfig;
-    private bool _preferencesApplied;
+    private bool _restored;
 
-    // Durable-preference keys for the navigation panel's global UI state: the
-    // catalog-kind toggle and the active catalog selection (the whole item, so
-    // it can be restored without re-discovering it from the catalog).
-    private const string KindStateKey = "nav-kind";
-    private const string SelectionStateKey = "nav-selected";
+    // The selection the route names and the catalog has not yet resolved to an
+    // item. Empty string means "the route names no selection", which is a real
+    // instruction (clear it) and therefore distinct from null ("nothing to do").
+    private string? _pendingSelectionId;
 
-    /// <summary>Creates the panel, caching the delegate the catalog-kind strip binds.</summary>
-    public NavigationPanel() =>
-        // Bound once rather than per render: the strip re-renders on every
-        // selection notification and every load, and a lambda in the markup would
-        // allocate a delegate on each of them.
+    // The plugin host's projected tenant scope, resolved optionally: the catalog
+    // is scoped by tenant, so a switch has to re-read it in place rather than
+    // waiting for a reload. A head with no plugin host simply never re-scopes.
+    private ExplorerPluginHostState? _hostState;
+
+    private readonly Func<Task> _adoptRoute;
+    private readonly Func<Task> _reload;
+
+    /// <summary>Creates the panel, caching the delegates it binds and marshals.</summary>
+    public NavigationPanel()
+    {
+        // Bound once rather than per render or per notification: the strip
+        // re-renders on every selection notification and every load, and the
+        // route and tenant subscriptions fire for the panel's whole lifetime, so
+        // a lambda at either site would allocate a delegate on all of them.
         _switchKind = EventCallback.Factory.Create<string>(this, SwitchKindAsync);
+        _adoptRoute = AdoptRouteAsync;
+        _reload = ReloadAsync;
+    }
 
     /// <summary>The route kind slug naming <paramref name="kind"/>.</summary>
     private static string SlugFor(CatalogKind kind) => kind switch
@@ -318,15 +331,24 @@
             ?? new ExplorerNavigationOptions();
         Selection.SelectionChanged += OnSelectionChanged;
         Session.ConfigurationChanged += OnConfigurationChanged;
+        Router.RouteChanged += OnRouteChanged;
 
-        // Restore the prior kind toggle and active selection before the first
-        // catalog load so the panel opens on the retained kind (and never shows
-        // the default kind selected first). When browser storage is not yet
-        // reachable (server prerender), defer the first load to the first
-        // interactive render so the wrong kind is never shown.
+        // The catalog is read under the caller's tenant scope, so a switch is a
+        // reload occasion. The host state is the seam that publishes it, and it
+        // is optional so a head without the plugin host still renders.
+        _hostState = Services.GetService(typeof(ExplorerPluginHostState)) as ExplorerPluginHostState;
+        if (_hostState is not null)
+        {
+            _hostState.Changed += OnHostChanged;
+        }
+
+        // Adopt the route before the first catalog load so the panel opens on the
+        // addressed kind (and never shows the default kind selected first). When
+        // the route names no kind the remembered one is used, which needs the
+        // durable mirror - unreachable during a server prerender, so the first
+        // load is deferred to the first interactive render.
         await Preferences.EnsureLoadedAsync();
-        ApplyPreferences();
-        if (_preferencesApplied)
+        if (TryRestore())
         {
             await ReloadAsync();
         }
@@ -338,52 +360,78 @@
     // ends up with a selected kind and a loaded list rather than a blank toggle.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _preferencesApplied)
+        if (!firstRender || _restored)
         {
             return;
         }
 
         await Preferences.EnsureLoadedAsync();
-        ApplyPreferences();
-        _preferencesApplied = true;
+        if (!TryRestore())
+        {
+            // Storage is still unreachable. Open on the addressed (or default)
+            // kind anyway rather than holding the toggle blank forever.
+            _restored = true;
+            _pendingSelectionId = Router.Current.Id;
+        }
+
         await ReloadAsync();
         StateHasChanged();
     }
 
-    // Applies the retained kind and selection from durable preferences (once,
-    // and only after the mirror has hydrated).
-    private void ApplyPreferences()
+    /// <summary>
+    /// Takes the panel's opening kind and selection from the route, falling back
+    /// to the remembered catalog kind when the address names none.
+    /// </summary>
+    /// <remarks>
+    /// The route is the authority, not a second one: a bare <c>/</c> has already
+    /// been turned into the remembered route by
+    /// <see cref="ExplorerShellEntryPolicy"/> before this runs. The fallback
+    /// covers only the segment a route cannot carry across sessions - a kind
+    /// browsed with nothing selected is remembered as a preference, and
+    /// <see cref="IExplorerShellPreferences.GetRememberedRoute"/> restores a kind
+    /// only alongside a selection.
+    /// </remarks>
+    private bool TryRestore()
     {
-        if (_preferencesApplied || !Preferences.IsLoaded)
+        if (_restored)
         {
-            return;
+            return false;
         }
 
-        _preferencesApplied = true;
-        _kind = Preferences.GetOrDefault(KindStateKey, CatalogKind.Trees);
+        var route = Router.Current;
+        var kindSlug = route.Kind;
+
+        if (kindSlug.Length == 0)
+        {
+            if (!Preferences.IsLoaded)
+            {
+                return false;
+            }
+
+            kindSlug = Preferences.GetOrDefault(ExplorerPreferenceKeys.CatalogKind, string.Empty);
+        }
+
+        _restored = true;
+        _kind = KindFor(kindSlug);
         SyncKindIdentity();
-
-        var saved = Preferences.GetOrDefault<CatalogItem?>(SelectionStateKey, null);
-        if (saved is not null)
-        {
-            Selection.Select(saved);
-        }
+        _pendingSelectionId = route.Id;
+        return true;
     }
 
-    private async Task SwitchKindAsync(string kindId)
+    private Task SwitchKindAsync(string kindId)
     {
         var kind = KindFor(kindId);
         if (_kind == kind)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        _kind = kind;
-        SyncKindIdentity();
-
-        // Retain the toggle as a durable preference.
-        await Preferences.SetAsync(KindStateKey, kind);
-        await ReloadAsync();
+        // Published rather than applied: the address is where the shell's
+        // navigation state lives, so the toggle asks for a route and adopts the
+        // one that comes back. That is also what makes the change survive a
+        // reload, a bookmark and Back.
+        Router.NavigateTo(Router.Current.WithKind(SlugFor(kind)));
+        return Task.CompletedTask;
     }
 
     private Task RefreshAsync() => ReloadAsync();
@@ -433,8 +481,53 @@
         {
             _loading = false;
             RebuildBadges();
+            ApplyPendingSelection();
             Announce();
             StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Resolves the selection the route names against the rows that have just
+    /// loaded. A remembered or linked id is a hint, not an authority: an id the
+    /// catalog does not hold simply leaves the selection alone rather than
+    /// pointing a surface at something that is not there.
+    /// </summary>
+    private void ApplyPendingSelection()
+    {
+        var id = _pendingSelectionId;
+        if (id is null)
+        {
+            return;
+        }
+
+        _pendingSelectionId = null;
+
+        if (id.Length == 0)
+        {
+            if (Selection.Selected is not null)
+            {
+                Selection.Select(null);
+            }
+
+            return;
+        }
+
+        for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            if (!string.Equals(item.Id, id, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.Equals(Selection.Selected?.Id, id, StringComparison.Ordinal)
+                || Selection.Selected?.Kind != item.Kind)
+            {
+                Selection.Select(item);
+            }
+
+            return;
         }
     }
 
@@ -498,13 +591,10 @@
         }
     }
 
-    // Selects an item and retains it as a durable preference so the selection
-    // is restored when the panel reopens.
-    private async Task SelectAsync(CatalogItem item)
-    {
-        await Preferences.SetAsync(SelectionStateKey, item);
-        Selection.Select(item);
-    }
+    // Selects an item. The route is published from the selection notification
+    // below rather than here, so a selection driven from another surface reaches
+    // the address bar exactly as a click on this list does.
+    private void Select(CatalogItem item) => Selection.Select(item);
 
     private void OpenConfig()
     {
@@ -531,17 +621,19 @@
     // A selection can be driven from outside the navigation list - for example the
     // Data tab's "Go to source table" action on a history view selects the source
     // tree while the Views toggle is active. When the selected item's kind differs
-    // from the kind currently listed, switch the toggle (persisting it like a manual
-    // switch) and reload so the item appears in the list and is highlighted;
-    // otherwise just re-render in place.
+    // from the kind currently listed, switch the toggle and reload so the item
+    // appears in the list and is highlighted; otherwise just re-render in place.
+    // Either way the selection is published to the route, which is what makes it
+    // addressable, bookmarkable and reachable by Back.
     private async Task SyncSelectionKindAsync()
     {
         var selected = Selection.Selected;
-        if (_preferencesApplied && selected is not null && selected.Kind != _kind)
+        PublishSelection(selected);
+
+        if (_restored && selected is not null && selected.Kind != _kind)
         {
             _kind = selected.Kind;
             SyncKindIdentity();
-            await Preferences.SetAsync(KindStateKey, _kind);
             await ReloadAsync();
             return;
         }
@@ -549,12 +641,93 @@
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Puts <paramref name="selected"/> in the address bar. A no-op when the
+    /// route already names it, so adopting a deep link never echoes back as a
+    /// second navigation and no flag or timer is needed to tell the two apart.
+    /// </summary>
+    private void PublishSelection(CatalogItem? selected)
+    {
+        if (!_restored)
+        {
+            // Before the panel has taken its opening state from the route, a
+            // notification is the restore itself; publishing here would overwrite
+            // the very address being adopted.
+            return;
+        }
+
+        var current = Router.Current;
+        if (selected is null)
+        {
+            // Clearing is a correction the user did not ask for (a new cluster
+            // invalidated what was selected), so it replaces rather than pushes.
+            Router.NavigateTo(current.WithKind(SlugFor(_kind)), replace: true);
+            return;
+        }
+
+        Router.NavigateTo(current.WithSelection(SlugFor(selected.Kind), selected.Id));
+    }
+
+    private void OnRouteChanged(ExplorerRoute route) => InvokeAsync(_adoptRoute);
+
+    /// <summary>
+    /// Follows the address when it changes underneath the panel - a deep link,
+    /// Back, Forward, or a restore - so the list and the URL never disagree.
+    /// </summary>
+    private async Task AdoptRouteAsync()
+    {
+        if (!_restored)
+        {
+            // The mount path has not taken its opening state yet, and will read
+            // the current route when it does.
+            return;
+        }
+
+        var route = Router.Current;
+        if (route.Area.Length != 0
+            && !string.Equals(route.Area, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
+        {
+            // Another area owns the working surface; the catalog is not the thing
+            // the address is describing.
+            return;
+        }
+
+        _pendingSelectionId = route.Id;
+
+        var kind = KindFor(route.Kind);
+        if (route.Kind.Length != 0 && kind != _kind)
+        {
+            _kind = kind;
+            SyncKindIdentity();
+            await ReloadAsync();
+            return;
+        }
+
+        ApplyPendingSelection();
+        StateHasChanged();
+    }
+
+    // A tenant switch re-scopes what the catalog is allowed to see, so the list
+    // has to be re-read rather than left describing the tenant the caller just
+    // left. This is the same refresh occasion the shell already re-probes its
+    // gates on; nothing else the host publishes changes the catalog.
+    private void OnHostChanged(ExplorerPluginHostChange change)
+    {
+        if (change != ExplorerPluginHostChange.Tenant)
+        {
+            return;
+        }
+
+        InvokeAsync(_reload);
+    }
+
     private void OnConfigurationChanged() => InvokeAsync(async () =>
     {
-        // A new endpoint invalidates the retained selection (it belongs to the
-        // previous cluster); clear it so it is not restored against the new one.
+        // A new endpoint invalidates the selection (it belongs to the previous
+        // cluster); clear it so it is not restored against the new one. Clearing
+        // the selection publishes the cleared route, so the address bar does not
+        // keep advertising a tree this cluster may not have.
         Selection.Select(null);
-        await Preferences.RemoveAsync(SelectionStateKey);
         await ReloadAsync();
     });
 
@@ -562,5 +735,11 @@
     {
         Selection.SelectionChanged -= OnSelectionChanged;
         Session.ConfigurationChanged -= OnConfigurationChanged;
+        Router.RouteChanged -= OnRouteChanged;
+
+        if (_hostState is not null)
+        {
+            _hostState.Changed -= OnHostChanged;
+        }
     }
 }

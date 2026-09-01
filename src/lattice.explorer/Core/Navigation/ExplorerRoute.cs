@@ -185,6 +185,45 @@ public sealed record ExplorerRoute
     }
 
     /// <summary>
+    /// Returns this route browsing <paramref name="kind"/> with nothing
+    /// selected, as <c>/explore/trees</c>. Browsing inside <see cref="Root"/>
+    /// implies the home area, so a caller does not have to name it.
+    /// </summary>
+    /// <remarks>
+    /// The companion to <see cref="WithSelection"/> for the tier above it: a
+    /// catalog-kind toggle addresses a <em>list</em>, not an item, and without
+    /// this the only way to put a kind in the URL would be to select something
+    /// in it. Changing kind drops the selection and its surface, because an id
+    /// names something inside the kind being left - the same nesting rule
+    /// <see cref="WithArea"/> applies one level up.
+    /// </remarks>
+    /// <param name="kind">
+    /// The canonical lower-case selection-kind slug, or <see langword="null"/> /
+    /// empty to browse the area with no kind chosen.
+    /// </param>
+    /// <exception cref="ArgumentException"><paramref name="kind"/> is non-empty and not canonical lower case.</exception>
+    public ExplorerRoute WithKind(string? kind)
+    {
+        var next = kind ?? string.Empty;
+        if (next.Length != 0)
+        {
+            ExplorerRouteSlug.EnsureCanonical(next);
+        }
+
+        var area = Area.Length == 0 ? ExplorerRouteSegments.Explore : Area;
+
+        if (string.Equals(Area, area, StringComparison.Ordinal)
+            && string.Equals(Kind, next, StringComparison.Ordinal)
+            && Id.Length == 0
+            && Surface.Length == 0)
+        {
+            return this;
+        }
+
+        return new ExplorerRoute(area, next, string.Empty, string.Empty, Tenant, AllTenants, Parameters);
+    }
+
+    /// <summary>
     /// Returns this route with no selection, and therefore no surface, staying in
     /// the current area.
     /// </summary>

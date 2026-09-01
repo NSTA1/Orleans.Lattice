@@ -20,6 +20,18 @@
     send a caller nowhere.
 *@
 
+@*
+    The router-to-browser binding is the FIRST thing the layout renders, and it
+    is deliberately outside the configuration gate and the adaptive root. It
+    renders nothing; what it does is keep the address bar and the route model in
+    step, and it must outlive every surface swap beneath it - the app shell stops
+    rendering its child content when a contributed area takes the working
+    surface, which disposes the routable page. When the binding lived on that
+    page, entering an area silently unbound the shell from the browser: the rail
+    could not get back to Explore and Back out of an area went unnoticed.
+*@
+<ShellRouteBinding />
+
 <CascadingValue Value="_login" IsFixed="true">
     <LatticeAdaptiveRoot>
         <div class="lx-shell">

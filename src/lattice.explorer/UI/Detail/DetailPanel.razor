@@ -1,4 +1,5 @@
 @using Orleans.Lattice.Explorer.Core.Catalog
+@using Orleans.Lattice.Explorer.Core.Navigation
 @using Orleans.Lattice.Explorer.Core.Session
 @using Orleans.Lattice.Explorer.Core.Vocabulary
 @using Orleans.Lattice.Explorer.Plugins
@@ -8,6 +9,7 @@
 @inject IExplorerPluginCatalog Catalog
 @inject IExplorerPluginAccessStore AccessStore
 @inject IExplorerSelection Selection
+@inject IExplorerShellRouter Router
 @inject IUiPreferenceStore Preferences
 
 @*
@@ -111,6 +113,7 @@
     private static readonly SelectionTab[] NoTabSources = [];
     private static readonly LatticeTabItem[] NoTabs = [];
     private static readonly IExplorerPlugin[] NoPlugins = [];
+    private static readonly string[] NoSurfaces = [];
 
     // The two reasons the panel can resolve no surface, written once from the
     // shared vocabulary rather than as prose here: no surface is registered for
@@ -154,6 +157,12 @@
     private SelectionTab[] _tabSources = NoTabSources;
     private LatticeTabItem[] _tabs = NoTabs;
 
+    // Each applicable plugin's route surface slug, derived once with the
+    // applicable set rather than on the resolve path: deriving a slug takes the
+    // tail of a dotted id, which allocates a string, and resolving runs on every
+    // selection change and every access report.
+    private string[] _pluginSurfaces = NoSurfaces;
+
     private IExplorerPlugin? _activePlugin;
     private string? _activePluginId;
 
@@ -180,8 +189,20 @@
     private EventCallback<string> _activate;
     private bool _restored;
 
-    /// <summary>Creates the panel, caching the delegate its subscriptions marshal.</summary>
-    public DetailPanel() => _render = StateHasChanged;
+    // The surface slug the address names, kept in step with the route so the
+    // resolve path compares two strings instead of re-reading the router, and
+    // whether the applicable set actually contained it.
+    private string _routeSurface = string.Empty;
+    private bool _routeMatched;
+
+    private readonly Action _adopt;
+
+    /// <summary>Creates the panel, caching the delegates its subscriptions marshal.</summary>
+    public DetailPanel()
+    {
+        _render = StateHasChanged;
+        _adopt = AdoptRoute;
+    }
 
     /// <summary>Shared dialog state used to offer a sign-in for a surface that requires one.</summary>
     [CascadingParameter] public LoginDialogState? Login { get; set; }
@@ -194,7 +215,9 @@
 
         Selection.SelectionChanged += OnSelectionChanged;
         AccessStore.Changed += OnAccessChanged;
+        Router.RouteChanged += OnRouteChanged;
 
+        _routeSurface = Router.Current.Surface;
         ApplySelection(Selection.Selected);
 
         // Restore the prior active surface so the panel reopens on it. Tolerant
@@ -227,6 +250,17 @@
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Takes the surface the panel should open on from the durable hand-off key.
+    /// </summary>
+    /// <remarks>
+    /// This is the fallback, not the authority. The address is the authority -
+    /// see <see cref="Resolve"/> - and it is what survives a reload, a bookmark
+    /// and Back. The key is still read because it is how a sibling surface hands
+    /// a caller off to a specific surface as it changes the selection (the
+    /// tag-index browser opening a covered tree on its data surface), and how the
+    /// panel reopens on the same tab when the address names no surface at all.
+    /// </remarks>
     private void RestoreRetained()
     {
         if (_restored || !Preferences.IsLoaded)
@@ -255,6 +289,7 @@
             _kindResolved = false;
             _plugins = NoPlugins;
             _tabSources = NoTabSources;
+            _pluginSurfaces = NoSurfaces;
             _tabs = NoTabs;
             return;
         }
@@ -270,6 +305,7 @@
             _kindResolved = true;
             _plugins = Catalog.ForSelection(kind);
             _tabSources = BuildTabSources(_plugins);
+            _pluginSurfaces = BuildSurfaces(_plugins);
             RebuildTabs();
         }
 
@@ -283,17 +319,24 @@
     /// <summary>
     /// Recomputes which surface is active and the key that re-mounts its view.
     /// Called on every input that can change either - a new selection, a new
-    /// access decision, a tab switch - and never from the render path.
+    /// access decision, a tab switch, a new address - and never from the render
+    /// path.
     /// </summary>
+    /// <remarks>
+    /// Three candidates, in order. The address wins when it names a surface this
+    /// selection actually has, because a link someone sent must show what they
+    /// saw. Otherwise the retained surface, which is how the panel reopens on the
+    /// same tab and how a sibling surface hands a caller off to a specific one.
+    /// Otherwise the first reachable surface. A denied surface is never a
+    /// candidate, so its content never renders.
+    /// </remarks>
     private void Resolve()
     {
         var plugins = _plugins;
-        IExplorerPlugin? active = null;
+        IExplorerPlugin? first = null;
+        IExplorerPlugin? routed = null;
+        IExplorerPlugin? retained = null;
 
-        // The retained surface when this selection's set contains it and it is
-        // reachable, otherwise the first reachable one. A denied surface is
-        // skipped rather than activated, so its content never renders - the
-        // per-selection analogue of the shell falling back to its home surface.
         for (var i = 0; i < plugins.Count; i++)
         {
             var descriptor = plugins[i].Descriptor;
@@ -302,15 +345,25 @@
                 continue;
             }
 
-            active ??= plugins[i];
+            first ??= plugins[i];
+
+            if (_routeSurface.Length != 0
+                && i < _pluginSurfaces.Length
+                && string.Equals(_pluginSurfaces[i], _routeSurface, StringComparison.Ordinal))
+            {
+                routed = plugins[i];
+                break;
+            }
 
             if (_retainedPluginId is not null
                 && string.Equals(descriptor.PluginId, _retainedPluginId, StringComparison.Ordinal))
             {
-                active = plugins[i];
-                break;
+                retained ??= plugins[i];
             }
         }
+
+        var active = routed ?? retained ?? first;
+        _routeMatched = routed is not null;
 
         _activePlugin = active;
         _activePluginId = active?.Descriptor.PluginId;
@@ -320,6 +373,47 @@
         _emptyBodyMessage = plugins.Count == 0 ? NoSurfaceRegistered : NoSurfaceAvailable;
 
         RebuildViewKey();
+    }
+
+    /// <summary>
+    /// Rewrites the address when it names a surface this selection does not have
+    /// - a link into a tag-index surface followed to a tree, say. The view is
+    /// already right; the address is not, and leaving it would let the stale
+    /// segment ride along on every later selection and be remembered as the
+    /// surface to reopen on. A correction the caller did not ask for, so it
+    /// replaces the history entry rather than pushing one.
+    /// </summary>
+    private void CorrectUnmatchedAddress()
+    {
+        if (_routeSurface.Length == 0 || _routeMatched || _activePluginId is null)
+        {
+            return;
+        }
+
+        var surface = ExplorerRouteSlug.FromIdentifier(_activePluginId);
+        _routeSurface = surface;
+        Router.NavigateTo(Router.Current.WithSurface(surface), replace: true);
+    }
+
+    /// <summary>
+    /// The route surface slug of every plugin in <paramref name="plugins"/>, in
+    /// the same order, so matching an address against the applicable set is an
+    /// indexed string comparison rather than a per-call derivation.
+    /// </summary>
+    private static string[] BuildSurfaces(IReadOnlyList<IExplorerPlugin> plugins)
+    {
+        if (plugins.Count == 0)
+        {
+            return NoSurfaces;
+        }
+
+        var surfaces = new string[plugins.Count];
+        for (var i = 0; i < plugins.Count; i++)
+        {
+            surfaces[i] = ExplorerRouteSlug.FromIdentifier(plugins[i].Descriptor.PluginId);
+        }
+
+        return surfaces;
     }
 
     /// <summary>
@@ -375,7 +469,8 @@
         // Membership is checked before the decision is read, so an id that does
         // not belong to this selection's set can never reach the sign-in prompt
         // or the retained preference.
-        if (Find(pluginId) is null)
+        var index = IndexOf(pluginId);
+        if (index < 0)
         {
             return;
         }
@@ -396,25 +491,102 @@
         }
 
         _retainedPluginId = pluginId;
+
+        // Published to the address bar, which is what makes the open surface
+        // shareable, bookmarkable and reachable by Back. Retained as well,
+        // because the key is the channel a sibling surface hands off through and
+        // it must not go stale behind a tab the caller has since moved off.
+        PublishSurface(index);
         Resolve();
 
-        // Retain the active surface as a durable preference.
         await Preferences.SetAsync(SelectionPluginKeys.ActivePluginPreferenceKey, pluginId);
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Puts the surface at <paramref name="index"/> in the address bar, reading
+    /// its slug from the set derived with the applicable plugins rather than
+    /// re-deriving it. A no-op when the surface has no slug; the router itself
+    /// suppresses the echo, because a route that equals the current one is
+    /// recognised by value.
+    /// </summary>
+    private void PublishSurface(int index)
+    {
+        var surface = index < _pluginSurfaces.Length ? _pluginSurfaces[index] : string.Empty;
+        if (surface.Length == 0)
+        {
+            return;
+        }
+
+        _routeSurface = surface;
+        Router.NavigateTo(Router.Current.WithSurface(surface));
+    }
+
+    /// <summary>
+    /// Puts the surface <paramref name="pluginId"/> addresses in the address bar.
+    /// A no-op when nothing is selected (a surface addresses a selection, so
+    /// there is nothing for it to qualify) or when the route already names it, so
+    /// adopting an address never echoes back as a second navigation.
+    /// </summary>
+    private void PublishSurface(string pluginId)
+    {
+        var surface = ExplorerRouteSlug.FromIdentifier(pluginId);
+        if (surface.Length == 0)
+        {
+            return;
+        }
+
+        _routeSurface = surface;
+        Router.NavigateTo(Router.Current.WithSurface(surface));
+    }
+
+    private void OnRouteChanged(ExplorerRoute route) => InvokeAsync(_adopt);
+
+    /// <summary>
+    /// Follows the address when it changes underneath the panel - a deep link,
+    /// Back, Forward, or a restore - so the open surface and the URL never
+    /// disagree.
+    /// </summary>
+    private void AdoptRoute()
+    {
+        var surface = Router.Current.Surface;
+        if (string.Equals(surface, _routeSurface, StringComparison.Ordinal))
+        {
+            // The echo of this panel's own navigation, or a route change that did
+            // not touch the surface. Nothing moved, so nothing is re-resolved.
+            return;
+        }
+
+        _routeSurface = surface;
+        Resolve();
+        CorrectUnmatchedAddress();
+        _render();
+    }
+
     private IExplorerPlugin? Find(string pluginId)
+    {
+        var index = IndexOf(pluginId);
+        return index < 0 ? null : _plugins[index];
+    }
+
+    /// <summary>
+    /// The position of <paramref name="pluginId"/> in the applicable set, or
+    /// <c>-1</c>. Indexed rather than looked up: a selection resolves to a
+    /// handful of surfaces, and the index is also the key into the derived slug
+    /// set.
+    /// </summary>
+    private int IndexOf(string pluginId)
     {
         var plugins = _plugins;
         for (var i = 0; i < plugins.Count; i++)
         {
             if (string.Equals(plugins[i].Descriptor.PluginId, pluginId, StringComparison.Ordinal))
             {
-                return plugins[i];
+                return i;
             }
         }
 
-        return null;
+        return -1;
     }
 
     private void OnSelectionChanged()
@@ -435,6 +607,7 @@
         }
 
         Resolve();
+        CorrectUnmatchedAddress();
         InvokeAsync(_render);
     }
 
@@ -457,6 +630,7 @@
     {
         Selection.SelectionChanged -= OnSelectionChanged;
         AccessStore.Changed -= OnAccessChanged;
+        Router.RouteChanged -= OnRouteChanged;
     }
 
     /// <summary>

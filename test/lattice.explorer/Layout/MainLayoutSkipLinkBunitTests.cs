@@ -154,8 +154,6 @@ public sealed class MainLayoutSkipLinkBunitTests : LatticeComponentTestContext
 
         var preferences = Substitute.For<IUiPreferenceStore>();
         preferences.IsLoaded.Returns(true);
-        preferences.GetOrDefault("nav-kind", CatalogKind.Trees).Returns(CatalogKind.Trees);
-        preferences.GetOrDefault<CatalogItem?>("nav-selected", null).Returns((CatalogItem?)null);
 
         var session = Substitute.For<IExplorerSession>();
         session.IsConfigured.Returns(true);

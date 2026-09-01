@@ -172,6 +172,96 @@ public sealed class ExplorerRouteTests
     }
 
     [Test]
+    public void WithKind_BrowsesThatKindWithNothingSelected()
+    {
+        var route = ExplorerRoute.Home.WithKind(ExplorerRouteSegments.Views);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.Area, Is.EqualTo(ExplorerRouteSegments.Explore));
+            Assert.That(route.Kind, Is.EqualTo(ExplorerRouteSegments.Views));
+            Assert.That(route.HasSelection, Is.False);
+            Assert.That(route.ToString(), Is.EqualTo("/explore/views"));
+        });
+    }
+
+    [Test]
+    public void WithKind_OnTheBareRoute_ImpliesTheHomeArea()
+    {
+        Assert.That(
+            ExplorerRoute.Root.WithKind(ExplorerRouteSegments.Trees).Area,
+            Is.EqualTo(ExplorerRouteSegments.Explore));
+    }
+
+    [Test]
+    public void WithKind_DropsTheSelectionAndItsSurface()
+    {
+        // An id names something inside the kind being left, so it goes with it -
+        // the same nesting rule WithArea applies one level up.
+        var route = ExplorerRoute.Home
+            .WithSelection(ExplorerRouteSegments.Trees, "orders")
+            .WithSurface("data")
+            .WithKind(ExplorerRouteSegments.Views);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.Kind, Is.EqualTo(ExplorerRouteSegments.Views));
+            Assert.That(route.Id, Is.EqualTo(string.Empty));
+            Assert.That(route.Surface, Is.EqualTo(string.Empty));
+        });
+    }
+
+    [Test]
+    public void WithKind_KeepsTheContributedAreaItIsCalledOn()
+    {
+        var route = ExplorerRoute.Home.WithArea("tenants").WithKind("detail");
+
+        Assert.That(route.ToString(), Is.EqualTo("/area/tenants/detail"));
+    }
+
+    [Test]
+    public void WithKind_KeepsTheTenantScope()
+    {
+        var route = ExplorerRoute.Home
+            .WithTenant("acme")
+            .WithAllTenants(true)
+            .WithKind(ExplorerRouteSegments.Views);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.Tenant, Is.EqualTo("acme"));
+            Assert.That(route.AllTenants, Is.True);
+        });
+    }
+
+    [Test]
+    public void WithKind_WithNoChange_ReturnsTheSameInstance()
+    {
+        var route = ExplorerRoute.Home.WithKind(ExplorerRouteSegments.Trees);
+
+        Assert.That(route.WithKind(ExplorerRouteSegments.Trees), Is.SameAs(route));
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    public void WithKind_WithNoKind_BrowsesTheAreaAlone(string? kind)
+    {
+        var route = ExplorerRoute.Home.WithSelection(ExplorerRouteSegments.Trees, "orders").WithKind(kind);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(route.Kind, Is.EqualTo(string.Empty));
+            Assert.That(route.ToString(), Is.EqualTo("/explore"));
+        });
+    }
+
+    [Test]
+    public void WithKind_WithANonCanonicalKind_Throws()
+    {
+        Assert.That(() => ExplorerRoute.Home.WithKind("Trees"), Throws.ArgumentException);
+    }
+
+    [Test]
     public void WithSurface_WithNoSelection_IsIgnored()
     {
         var route = ExplorerRoute.Home.WithSurface("data");
