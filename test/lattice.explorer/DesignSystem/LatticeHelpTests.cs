@@ -184,6 +184,53 @@ public sealed class LatticeHelpTests
     }
 
     [Test]
+    public async Task Render_withTriggerText_namesTheTriggerByItsVisibleTextAlone()
+    {
+        // WCAG 2.5.3 Label in Name: the accessible name must contain the visible
+        // text, so a trigger that shows a phrase must not also announce a
+        // different composed one. The rail's capabilities disclosure showed
+        // "Why can I not see everything?" while announcing "Explain missing
+        // areas", which axe reports as a serious label-content-name-mismatch and
+        // which leaves a speech-input user unable to activate it by saying what
+        // they can see. Emitting no aria-label lets the visible text be the name.
+        var html = await RenderAsync(new Dictionary<string, object?>
+        {
+            ["Term"] = "missing areas",
+            ["TriggerText"] = "Why can I not see everything?",
+            ["Explanation"] = "...",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Not.Contain("aria-label"),
+                "a trigger with visible text must not carry a competing aria-label");
+            Assert.That(html, Does.Contain("Why can I not see everything?"));
+        });
+    }
+
+    [Test]
+    public async Task Render_withTriggerText_ignoresAnExplicitTriggerLabelThatWouldMaskIt()
+    {
+        // An explicit TriggerLabel cannot rescue the mismatch either: whatever it
+        // says, it is not the visible text, so it would reintroduce the very
+        // violation. Visible text wins.
+        var html = await RenderAsync(new Dictionary<string, object?>
+        {
+            ["Term"] = "residency",
+            ["TriggerText"] = "What is this?",
+            ["TriggerLabel"] = "About residency",
+            ["Explanation"] = "...",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Not.Contain("aria-label"));
+            Assert.That(html, Does.Not.Contain("About residency"));
+            Assert.That(html, Does.Contain("What is this?"));
+        });
+    }
+
+    [Test]
     public async Task Render_withTriggerText_showsThePhraseBesideTheGlyph()
     {
         var html = await RenderAsync(new Dictionary<string, object?>

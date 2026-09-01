@@ -69,7 +69,7 @@
     private string _glyph = InformationalGlyph;
     private string _triggerElementId = string.Empty;
     private string _explanationElementId = string.Empty;
-    private string _triggerAccessibleName = string.Empty;
+    private string? _triggerAccessibleName;
     private string? _elementIdPrefix;
     private LatticeHelpTone? _hostClassTone;
     private string? _hostClassSuffix;
@@ -165,16 +165,34 @@
     }
 
     /// <summary>
-    /// The trigger's accessible name: <see cref="TriggerLabel"/> when supplied,
-    /// otherwise composed from <see cref="Term"/> and <see cref="Tone"/>.
+    /// The trigger's accessible name, or <see langword="null"/> when the trigger
+    /// carries visible text and should be named by it.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// When <see cref="TriggerText"/> is set the button already has a visible
+    /// label, so no <c>aria-label</c> is emitted at all and the visible text
+    /// becomes the accessible name. Emitting a composed name beside visible text
+    /// breaks WCAG 2.5.3 Label in Name, which requires the accessible name to
+    /// contain the visible text: the rail's capabilities disclosure showed
+    /// "Why can I not see everything?" while announcing "Explain missing areas",
+    /// so speech-input users could not activate it by saying what they saw.
+    /// </para>
+    /// <para>
+    /// Otherwise the name is <see cref="TriggerLabel"/> when supplied, and is
+    /// composed from <see cref="Term"/> and <see cref="Tone"/> when it is not.
     /// Composed once per parameter change rather than read per render, because
     /// the composed form concatenates and a disclosure re-renders every time it
     /// opens or closes.
+    /// </para>
     /// </remarks>
-    private string ComposeTriggerAccessibleName()
+    private string? ComposeTriggerAccessibleName()
     {
+        if (!string.IsNullOrEmpty(TriggerText))
+        {
+            return null;
+        }
+
         if (!string.IsNullOrEmpty(TriggerLabel))
         {
             return TriggerLabel;

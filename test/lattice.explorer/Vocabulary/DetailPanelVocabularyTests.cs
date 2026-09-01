@@ -85,6 +85,27 @@ public sealed class DetailPanelVocabularyTests : BunitContext
         });
     }
 
+    [Test]
+    public void The_scrollable_detail_body_is_reachable_by_keyboard()
+    {
+        // The detail body is a role=tabpanel with overflow:auto, and its content
+        // is frequently not focusable (an empty state is prose). axe reports that
+        // as a serious scrollable-region-focusable violation under WCAG 2.1.1: a
+        // keyboard user cannot scroll a region they cannot reach. tabindex="0"
+        // is also what the WAI-ARIA tabs pattern prescribes for a panel with no
+        // focusable content of its own.
+        Configure(Plugin("a", "Alpha"));
+
+        var body = Render<DetailPanel>().Find(".lx-shell-detail-body");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(body.GetAttribute("role"), Is.EqualTo("tabpanel"));
+            Assert.That(body.GetAttribute("tabindex"), Is.EqualTo("0"),
+                "a scrollable tabpanel must be focusable or a keyboard user cannot scroll it");
+        });
+    }
+
     // ----------------------------------------------------- the two empty states
 
     [Test]
