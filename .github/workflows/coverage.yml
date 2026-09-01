@@ -126,9 +126,21 @@ jobs:
           # Collecting failures and reporting them together keeps a green project's
           # coverage even when a sibling is broken, and still fails the run.
           failed=()
+
+          runSuite() {
+            local proj="$1" name="$2" label="$3" filter="$4"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "$filter" \
+              --collect:"XPlat Code Coverage" \
+              --results-directory "coverage/${name}" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}-${label}.trx"
+          }
+
           for proj in "${testProjs[@]}"; do
             name=$(basename "$proj" .csproj)
             echo "::group::Coverage: $name"
+            ok=true
             # Chaos tests are CI-only fault-injection and excluded here to keep
             # the coverage run deterministic; AzureStorageEmulator tests run
             # against the Azurite service above. Coyote systematic-concurrency
@@ -136,12 +148,34 @@ jobs:
             # cores the deterministic unit tests already exercise, so they are
             # excluded here too. The UI category is deliberately NOT excluded -
             # browsers are installed above precisely so those paths are counted.
-            if ! dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
-              --collect:"XPlat Code Coverage" \
-              --results-directory "coverage/${name}" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}.trx"; then
+            if [ "$name" = "Orleans.Lattice.Explorer.UiTests" ]; then
+              # Shard the browser suite exactly as ui-tests.yml does, reading the
+              # same ui-test-shards.json so the two lanes cannot drift.
+              #
+              # Sharding is not about speed here - the shards run sequentially - it
+              # is about how many cases one in-process Explorer web head serves.
+              # ui-tests.yml gives each shard its own runner, and therefore its own
+              # head, because a single head serving the whole journey suite starts
+              # failing cases with the shell never reporting itself measured: the
+              # interactive circuit stops establishing under the accumulated load.
+              # Running the whole suite in one `dotnet test` process here put every
+              # case back on one head and reproduced exactly that, two cases timing
+              # out after thirty seconds waiting for .lx-root[data-lx-measured].
+              # A separate process per shard restores one head per shard.
+              #
+              # The shard filters all select TestCategory=UI, so the project's own
+              # non-browser hygiene fixtures need their own pass or they would stop
+              # being measured entirely.
+              runSuite "$proj" "$name" "nonui" \
+                "TestCategory!=UI&TestCategory!=Chaos&TestCategory!=Coyote" || ok=false
+              while IFS=$'\t' read -r shard filter; do
+                runSuite "$proj" "$name" "$shard" "$filter" || ok=false
+              done < <(jq -r '.[] | [.shard, .filter] | @tsv' .github/workflows/ui-test-shards.json)
+            else
+              runSuite "$proj" "$name" "all" \
+                "TestCategory!=Chaos&TestCategory!=Coyote" || ok=false
+            fi
+            if [ "$ok" != true ]; then
               failed+=("$name")
               echo "::error::Coverage run failed for ${name}."
             fi

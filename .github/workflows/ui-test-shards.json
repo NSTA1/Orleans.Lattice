@@ -1,0 +1,14 @@
+[
+  {
+    "shard": "structure",
+    "filter": "TestCategory=UI&FullyQualifiedName!~Journeys"
+  },
+  {
+    "shard": "journeys-a",
+    "filter": "TestCategory=UI&FullyQualifiedName~Journeys&(FullyQualifiedName~AdaptiveTenant|FullyQualifiedName~AreaContinuity|FullyQualifiedName~DeepLink|FullyQualifiedName~FailClosedRestore|FullyQualifiedName~FirstRun)"
+  },
+  {
+    "shard": "journeys-b",
+    "filter": "TestCategory=UI&FullyQualifiedName~Journeys&FullyQualifiedName!~AdaptiveTenant&FullyQualifiedName!~AreaContinuity&FullyQualifiedName!~DeepLink&FullyQualifiedName!~FailClosedRestore&FullyQualifiedName!~FirstRun"
+  }
+]
