@@ -484,6 +484,36 @@ internal sealed class RepoContextBootstrapService
                     "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
             }
 
+            // Embed the durable agent-memory entries as their own passages, so a
+            // natural-language search ranks captured decisions, gotchas and
+            // conventions alongside code instead of silently omitting them
+            // (issue #1878). Like symbols, this runs even when the structural
+            // plan was a no-op, and back-fills any entry lacking a live
+            // embedding - which is what converts a store captured entirely
+            // before memory embedding existed, with no re-walk.
+            //
+            // KNOWN BOUND, stated rather than hidden. Memory is written through
+            // the tools, not the walk, so there is no per-pass changed set to
+            // hand in and the back-fill is the whole mechanism. That covers a
+            // NEW entry (it has no embedding yet) but not a REVISED one, whose
+            // vector keeps ranking on the pre-revision text until something
+            // retires it, nor a FORGOTTEN one, whose vector lingers in the
+            // membership count. Neither is a correctness fault: hydration is
+            // always live, so a revised entry still returns its current body,
+            // and a forgotten entry's hit is dropped by the !entry.Exists guard
+            // on the semantic path rather than returned as a dead key. Closing
+            // the gap properly needs a change signal the writer cannot express
+            // today (it tracks presence, not a per-source digest); tracked
+            // separately rather than bodged in here.
+            var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
+                repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
+                .ConfigureAwait(false);
+            if (memoryEmbedded > 0)
+            {
+                _logger.LogInformation(
+                    "Repo {RepoId}: embedded {Entries} memory passage(s).", repoId, memoryEmbedded);
+            }
+
             // The run reconciled and applied cleanly, so publish the walk's directory
             // snapshot as the pruning baseline for the next run. Deferring the publish to
             // the success path means a run that fails during apply leaves the previous

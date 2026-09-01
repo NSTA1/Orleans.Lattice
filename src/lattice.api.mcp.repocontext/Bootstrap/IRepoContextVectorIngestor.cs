@@ -89,4 +89,40 @@ internal interface IRepoContextVectorIngestor
         IReadOnlyCollection<string> changedSymbolKeys,
         IReadOnlyCollection<string> prunedSymbolKeys,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Embeds the repository's durable agent-memory entries (decisions, gotchas,
+    /// conventions, ...) as their own passages, so a natural-language
+    /// <c>repocontext_search</c> ranks captured memory alongside code instead of
+    /// silently omitting it.
+    /// <para>
+    /// <b>Why this exists (issue #1878).</b> Only files and symbols were ever
+    /// embedded, so a healthy semantic index could not return a memory entry at
+    /// all - memory was reachable only through the degraded BM25 keyword path.
+    /// The effect was backwards from every agent's intuition: the better the
+    /// index, the less findable the memory. Worse, a session that searched for an
+    /// entry, found nothing, and concluded it had never been captured would then
+    /// write it again - the observed cost was duplicate capture, not merely a
+    /// failed lookup.
+    /// </para>
+    /// <para>
+    /// An entry changed this pass is re-embedded; one retired this pass has its
+    /// embedding retired; and any entry with no live embedding - including every
+    /// entry captured before memory embedding existed - is back-filled, so an
+    /// existing store converges without a re-walk. Retirement runs even when the
+    /// provider is unavailable; embedding returns zero.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository identity the memory belongs to.</param>
+    /// <param name="changedMemoryKeys">The canonical record keys of the entries
+    /// written this pass, whose embeddings should be refreshed.</param>
+    /// <param name="retiredMemoryKeys">The canonical record keys of the entries
+    /// forgotten or expired this pass, whose embeddings should be retired.</param>
+    /// <param name="cancellationToken">Cancels the ingest.</param>
+    /// <returns>The number of memory entries whose vectors were embedded and stored.</returns>
+    Task<int> IngestMemoryAsync(
+        string repoId,
+        IReadOnlyCollection<string> changedMemoryKeys,
+        IReadOnlyCollection<string> retiredMemoryKeys,
+        CancellationToken cancellationToken);
 }

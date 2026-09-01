@@ -29,10 +29,11 @@ is as obligatory as writing it. The master file opens with **four moments** -
 orient from memory at session start, probe before any discovery, use
 `repocontext_context` (not a `search` + `view` crawl) before reading source you
 intend to change, and capture at each durable finding - and closes the loop with
-a self-check for the symptoms of under-use. When several sessions work one epic
-or workstream, that memory is also their coordination bus: one topic per
-workstream, `author` set, one-week TTL on handoffs, durable findings promoted to
-`gotchas` / `conventions` / `decisions` when it closes.
+a self-check for the symptoms of under-use. It also fixes the order to use the
+memory tools in. When several
+sessions work one epic or workstream, that memory is also their coordination bus:
+one topic per workstream, `author` set, one-week TTL on handoffs, durable findings
+promoted to `gotchas` / `conventions` / `decisions` when it closes.
 
 ## Repository layout
 

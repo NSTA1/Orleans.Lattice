@@ -17,9 +17,9 @@ reading its `mode` / `status`. Full rules live in the **repocontext** skill
 (`.github/instructions/repocontext.instructions.md`).
 
 The same tools are also this repo's **durable cross-session memory**. At the
-start of non-trivial work, recall what earlier sessions already learned
-(`repocontext_search`, or `repocontext_scan` with scope `Memory` /
-`MemoryTopic`) before rediscovering it; and when you reach a decision, hit a
+start of non-trivial work, recall what earlier sessions already learned before
+rediscovering it, using the memory retrieval order the master file sets out; and
+when you reach a decision, hit a
 non-obvious gotcha, or pin down a convention worth keeping, capture it with
 `repocontext_remember` (topics such as `decisions`, `gotchas`, `conventions`,
 `glossary`) so the next session inherits it instead of relearning it.

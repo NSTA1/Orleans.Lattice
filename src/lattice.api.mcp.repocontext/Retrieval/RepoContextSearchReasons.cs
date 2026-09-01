@@ -11,8 +11,10 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <see cref="MaxReasons"/> so the additive output stays cheap in tokens.
 /// <para>
 /// <b>Vocabulary.</b> Semantic hits emit <see cref="Semantic"/>, the matched chunk
-/// kind (<see cref="ChunkSymbol"/> or <see cref="ChunkFile"/>), and, for a symbol
-/// vector, <c>symbol:&lt;fqName&gt;</c>. Keyword hits emit, in a fixed
+/// kind (<see cref="ChunkSymbol"/>, <see cref="ChunkFile"/>, or
+/// <see cref="ChunkMemory"/>), and, for a symbol vector,
+/// <c>symbol:&lt;fqName&gt;</c> or, for a memory vector, <c>topic:&lt;topic&gt;</c>.
+/// Keyword hits emit, in a fixed
 /// high-signal-first order, <see cref="PathNameMatch"/>, <c>symbol:&lt;fqName&gt;</c>,
 /// <c>tag:&lt;tag&gt;</c> (one per matched tag, in ordinal order),
 /// <see cref="TopicMatch"/>, <see cref="ContentMatch"/>, and
@@ -37,6 +39,9 @@ internal static class RepoContextSearchReasons
     /// <summary>Reason marking a semantic hit whose matched vector is a file-chunk vector.</summary>
     internal const string ChunkFile = "chunk:file";
 
+    /// <summary>Reason marking a semantic hit whose matched vector is a memory-entry vector.</summary>
+    internal const string ChunkMemory = "chunk:memory";
+
     /// <summary>Reason marking a keyword hit that matched on the record's file/package path.</summary>
     internal const string PathNameMatch = "path-name-match";
 
@@ -55,9 +60,13 @@ internal static class RepoContextSearchReasons
     /// <summary>Prefix for the reason naming a matched tag.</summary>
     internal const string TagPrefix = "tag:";
 
+    /// <summary>Prefix for the reason naming a matched memory entry's topic.</summary>
+    internal const string TopicPrefix = "topic:";
+
     private static readonly string[] SemanticOnly = { Semantic };
     private static readonly string[] SemanticFile = { Semantic, ChunkFile };
     private static readonly string[] SemanticSymbol = { Semantic, ChunkSymbol };
+    private static readonly string[] SemanticMemory = { Semantic, ChunkMemory };
 
     /// <summary>
     /// Builds the reasons for a semantic hit from the canonical source key of the
@@ -87,6 +96,12 @@ internal static class RepoContextSearchReasons
             case RepoContextRecordKind.File:
             case RepoContextRecordKind.Content:
                 return SemanticFile;
+
+            case RepoContextRecordKind.Memory:
+                var topic = parsed.Topic;
+                return string.IsNullOrEmpty(topic)
+                    ? SemanticMemory
+                    : new[] { Semantic, ChunkMemory, TopicPrefix + topic };
 
             default:
                 return SemanticOnly;

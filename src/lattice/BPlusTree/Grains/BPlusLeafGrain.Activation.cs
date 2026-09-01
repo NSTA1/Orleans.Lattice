@@ -564,6 +564,18 @@ internal sealed partial class BPlusLeafGrain
                         // converges to exactly the same projection. Warn and
                         // meter, then replay: a long activation is
                         // recoverable, refusing to activate is not (#1738).
+                        //
+                        // Convergence is load-bearing on the INCREMENTAL flush
+                        // (#1831), not on the replay fitting in one activation.
+                        // Before that, all durable progress rode on the
+                        // post-pass-2 reconciliation, which only runs when the
+                        // whole replay completes inside the activation window -
+                        // so an overrun large enough to outrun the response
+                        // deadline was torn down before persisting anything and
+                        // replayed the identical window forever (#1819). Do not
+                        // reintroduce a flush ceiling that can be pinned for the
+                        // whole replay; that is what turned this warning's
+                        // "converges" into a livelock at ~42k entries over.
                         LatticeMetrics.LeafActivationOverBudgetReplays.Add(
                             1,
                             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
@@ -581,8 +593,10 @@ internal sealed partial class BPlusLeafGrain
                                 "Leaf projection for tree '{TreeId}' partition {Partition} is replaying beyond "
                                 + "the configured budget (persistedCheckpoint {Checkpoint}, "
                                 + "MaxLeafReplayEntries {Budget}). The write-ahead log still covers the whole "
-                                + "needed window, so the replay converges - it is only longer than the budget "
-                                + "anticipated. Activation may take longer than usual.",
+                                + "needed window, and the replay flushes its checkpoint incrementally, so each "
+                                + "activation makes durable forward progress even if it is torn down early. "
+                                + "Activation may take longer than usual. A checkpoint that does NOT advance "
+                                + "across repeats of this warning is a fault, not a slow replay.",
                                 treeId,
                                 partition,
                                 checkpoint,

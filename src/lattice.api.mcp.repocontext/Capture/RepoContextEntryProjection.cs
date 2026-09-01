@@ -214,7 +214,13 @@ internal static class RepoContextEntryProjection
 
     private static void AddTags(List<string> tags, OrSet set) => tags.AddRange(ReadElements(set));
 
-    private static List<string> ReadElements(OrSet set)
+    /// <summary>
+    /// Decodes an <see cref="OrSet"/>'s live elements as ordinal-sorted UTF-8
+    /// strings. Internal rather than private so the vector ingestor builds a
+    /// memory entry's tag text through the same decode the projection uses,
+    /// instead of hand-rolling a second one that could drift from it.
+    /// </summary>
+    internal static List<string> ReadElements(OrSet set)
     {
         var elements = new List<string>();
         foreach (var element in set.Elements())

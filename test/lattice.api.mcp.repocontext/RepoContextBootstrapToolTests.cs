@@ -356,5 +356,11 @@ public sealed class RepoContextBootstrapToolTests
             IReadOnlyCollection<string> changedSymbolKeys,
             IReadOnlyCollection<string> prunedSymbolKeys,
             CancellationToken cancellationToken) => Task.FromResult(0);
+
+        public Task<int> IngestMemoryAsync(
+            string repoId,
+            IReadOnlyCollection<string> changedMemoryKeys,
+            IReadOnlyCollection<string> retiredMemoryKeys,
+            CancellationToken cancellationToken) => Task.FromResult(0);
     }
 }
