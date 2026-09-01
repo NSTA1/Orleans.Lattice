@@ -35,5 +35,14 @@ internal sealed class ViewCatalog : IViewCatalog
     }
 
     /// <inheritdoc />
-    public IReadOnlyCollection<ViewRegistration> All() => _views.Values.ToArray();
+    public IReadOnlyCollection<ViewRegistration> All() =>
+        // ConcurrentDictionary.Values already returns a moment-in-time snapshot
+        // (a ReadOnlyCollection over a freshly built List), which is exactly the
+        // stable, immutable enumeration this contract promises. Every caller only
+        // enumerates the result, so the previous trailing .ToArray() copied that
+        // snapshot into a second array for nothing; returning the snapshot
+        // directly preserves the semantics and removes one array allocation +
+        // copy per call (the warm caller is ComputeViewWaitSet on the cross-tree
+        // drain path).
+        (IReadOnlyCollection<ViewRegistration>)_views.Values;
 }
