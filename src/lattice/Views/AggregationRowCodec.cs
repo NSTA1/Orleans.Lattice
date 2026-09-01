@@ -153,10 +153,17 @@ internal static class AggregationRowCodec
     /// <summary>Decodes a membership row produced by <see cref="EncodeMembership"/>.</summary>
     internal static MembershipRow DecodeMembership(byte[] bytes)
     {
-        using var stream = new MemoryStream(bytes);
-        using var reader = new BinaryReader(stream, Encoding.UTF8);
+        // Read directly from the row span via RowReader instead of a per-call
+        // MemoryStream + BinaryReader (which allocate a stream, a reader, and a
+        // decode char buffer on every read). This is the exact inverse of the
+        // RowWriter encode path and runs on the view read/drain hot path: every
+        // group-by contribution reads its source key's prior membership row here
+        // to retract it. The byte layout parsed is identical to the BinaryReader
+        // encoding (7-bit length-prefixed UTF-8 strings, a single bool byte,
+        // little-endian double), so persisted rows read back unchanged.
+        var reader = new RowReader(bytes);
         var groupKey = reader.ReadString();
-        var hasMember = reader.ReadBoolean();
+        var hasMember = reader.ReadBool();
         var numeric = reader.ReadDouble();
         string? member = hasMember ? reader.ReadString() : null;
         return new MembershipRow(groupKey, numeric, member);
@@ -215,14 +222,19 @@ internal static class AggregationRowCodec
     /// <summary>Decodes an inverse-contribution row produced by <see cref="EncodeInverse"/>.</summary>
     internal static Dictionary<string, MemberEntry> DecodeInverse(byte[] bytes)
     {
-        using var stream = new MemoryStream(bytes);
-        using var reader = new BinaryReader(stream, Encoding.UTF8);
+        // See DecodeMembership: a RowReader span walk replaces the per-call
+        // MemoryStream + BinaryReader. This is the hottest decode of the three -
+        // every min / max / set-union group-shard update reads its inverse row
+        // here, folds the contribution, and re-encodes it - so it removes a
+        // stream + reader + decode buffer on each such view mutation. The parsed
+        // layout is byte-for-byte the BinaryReader encoding.
+        var reader = new RowReader(bytes);
         var count = reader.ReadInt32();
         var map = new Dictionary<string, MemberEntry>(count, StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
         {
             var sourceKey = reader.ReadString();
-            var hasMember = reader.ReadBoolean();
+            var hasMember = reader.ReadBool();
             var numeric = reader.ReadDouble();
             string? member = hasMember ? reader.ReadString() : null;
             map[sourceKey] = new MemberEntry(numeric, member);
@@ -280,8 +292,11 @@ internal static class AggregationRowCodec
     /// <summary>Decodes a fold-contribution row produced by <see cref="EncodeFoldInverse"/>.</summary>
     internal static Dictionary<string, FoldMember> DecodeFoldInverse(byte[] bytes)
     {
-        using var stream = new MemoryStream(bytes);
-        using var reader = new BinaryReader(stream, Encoding.UTF8);
+        // See DecodeMembership: a RowReader span walk replaces the per-call
+        // MemoryStream + BinaryReader on the custom-fold group-shard read path.
+        // The raw value bytes are read as an exact-length slice copy, matching
+        // BinaryReader.ReadBytes(length) byte-for-byte.
+        var reader = new RowReader(bytes);
         var count = reader.ReadInt32();
         var map = new Dictionary<string, FoldMember>(count, StringComparer.Ordinal);
         for (var i = 0; i < count; i++)
@@ -383,6 +398,83 @@ internal static class AggregationRowCodec
             }
 
             _buffer[_pos++] = (byte)v;
+        }
+    }
+
+    /// <summary>
+    /// A forward-only cursor that reads the same byte layout
+    /// <see cref="RowWriter"/> emits (7-bit length-prefixed UTF-8 strings,
+    /// single-byte bools, little-endian numerics, raw byte slices) directly from
+    /// a caller-owned span, so a row can be decoded with no intermediate
+    /// <see cref="MemoryStream"/> or <see cref="BinaryReader"/> (and no reader
+    /// decode buffer) per call. It is the exact inverse of <see cref="RowWriter"/>
+    /// and parses the identical format <see cref="BinaryReader"/> with
+    /// <see cref="Encoding.UTF8"/> produced, so previously persisted rows read
+    /// back unchanged.
+    /// </summary>
+    private ref struct RowReader(ReadOnlySpan<byte> buffer)
+    {
+        private readonly ReadOnlySpan<byte> _buffer = buffer;
+        private int _pos;
+
+        public bool ReadBool() => _buffer[_pos++] != 0;
+
+        public int ReadInt32()
+        {
+            var value = BinaryPrimitives.ReadInt32LittleEndian(_buffer[_pos..]);
+            _pos += sizeof(int);
+            return value;
+        }
+
+        public long ReadInt64()
+        {
+            var value = BinaryPrimitives.ReadInt64LittleEndian(_buffer[_pos..]);
+            _pos += sizeof(long);
+            return value;
+        }
+
+        public double ReadDouble()
+        {
+            var value = BinaryPrimitives.ReadDoubleLittleEndian(_buffer[_pos..]);
+            _pos += sizeof(double);
+            return value;
+        }
+
+        public byte[] ReadBytes(int count)
+        {
+            var value = _buffer.Slice(_pos, count).ToArray();
+            _pos += count;
+            return value;
+        }
+
+        public string ReadString()
+        {
+            var byteCount = Read7BitEncodedInt();
+            var value = Encoding.UTF8.GetString(_buffer.Slice(_pos, byteCount));
+            _pos += byteCount;
+            return value;
+        }
+
+        private int Read7BitEncodedInt()
+        {
+            // Mirrors BinaryReader.Read7BitEncodedInt: low-order 7 bits per byte,
+            // continuation flag in the high bit, at most five bytes for a 32-bit
+            // value. A malformed prefix is rejected exactly as BinaryReader does.
+            var result = 0;
+            var shift = 0;
+            while (shift < 5 * 7)
+            {
+                var b = _buffer[_pos++];
+                result |= (b & 0x7F) << shift;
+                if ((b & 0x80) == 0)
+                {
+                    return result;
+                }
+
+                shift += 7;
+            }
+
+            throw new FormatException("The 7-bit encoded length prefix is malformed.");
         }
     }
 }
