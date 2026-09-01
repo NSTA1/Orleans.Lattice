@@ -236,17 +236,23 @@ public sealed partial class AccessibilityStructureTests
     /// <remarks>
     /// The strips are Blazor Server components, so an arrow key is handled over the
     /// circuit: the key press, a server round trip, a re-render and only then the focus
-    /// move. Reading focus immediately after the press therefore samples before the
-    /// move on any machine slow enough to lose that race, and reports a strip that
-    /// works as "not keyboard operable". Polling for the change removes the race
-    /// without weakening the assertion - a strip that genuinely never moves focus still
-    /// returns the original id when the window elapses, and still fails.
+    /// move. On the area rail it is longer still, because an arrow selects the next
+    /// area rather than only moving focus, so the chain includes a route change and the
+    /// shell re-rendering around it. Reading focus immediately after the press
+    /// therefore samples before the move on any machine slow enough to lose that race,
+    /// and reports a strip that works as "not keyboard operable".
+    /// <para>
+    /// The budget is generous because it is only ever paid in full by a genuine
+    /// failure: the poll returns as soon as focus moves, so a healthy strip costs one
+    /// interval. A strip that never moves focus still returns the original id when the
+    /// window elapses, and still fails.
+    /// </para>
     /// </remarks>
     /// <param name="page">The page to read focus from.</param>
     /// <param name="before">The tab id focused before the key was pressed.</param>
     private static async Task<string?> WaitForFocusedTabChangeAsync(IPage page, string? before)
     {
-        const int budgetMs = 5000;
+        const int budgetMs = 20_000;
         const int intervalMs = 50;
 
         var current = before;
