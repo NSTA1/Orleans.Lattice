@@ -65,6 +65,20 @@ plugin id `orleans.lattice.tenants` and therefore addresses as `/area/tenants`;
 My tenant addresses as `/area/mytenant`. A contributed area carries the same
 optional kind, id and surface tail as the home area.
 
+An area's sub-surface travels as a query parameter rather than a path segment,
+namespaced to its area:
+
+```
+/area/tenants?tenant-admin-surface=quotas
+/area/mytenant?my-tenant-surface=sharing
+```
+
+It is namespaced because a route keeps its parameters when the area changes, so
+a shared bare `surface` key would let one area clobber the other's. The address
+wins over the remembered value, so a link opens on the surface it names even
+when you last left that area somewhere else - and the addressed surface is then
+remembered, so a later bare visit stays where the link put you.
+
 Two further routes exist: `/reset-view`, which clears remembered state, and
 `/not-found`.
 

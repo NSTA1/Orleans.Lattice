@@ -14,12 +14,20 @@ contract: what is remembered, at what scope, for how long, and how to clear it.
 | `shell.surface` | The active selection surface |
 | `shell.tenant` | The active tenant scope |
 | `shell.all-tenants` | Whether the all-tenant view is requested |
+| `shell.hide-inaccessible` | Whether areas you cannot open are hidden rather than shown demoted (defaults to showing them) |
 | `appearance.theme` | The chosen theme |
 | `appearance.contrast` | The chosen contrast level |
 | `appearance.density` | The chosen density |
+| `tenants.surface` | The active sub-surface of the Tenant administration area |
+| `mytenant.surface` | The active sub-surface of the My tenant area |
 
-Areas contributed by plugins register their own keys on the same catalog, so
-the set is extensible without editing the shell. Every key is declared once and
+The last two are contributed by plugins rather than declared by the shell: an
+area registers its own keys on the same catalog when its panel mounts, so a
+deployment gains them by rendering the area and the reset affordance discloses
+and clears them with no further wiring. The set is therefore extensible without
+editing the shell. Each is namespaced to its own area rather than sharing a bare
+`surface` key, because a route keeps its parameters across an area change and two
+areas sharing a key would overwrite one another. Every key is declared once and
 registered, rather than written through ad hoc calls scattered across
 components. A key that is not registered cannot be read or written at all, which
 is what keeps this list honest.
