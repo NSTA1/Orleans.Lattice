@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Membership.Oidc;
 /// issuer it accepts tokens from, the audiences it trusts, and the claim names
 /// it reads the subject and group membership out of. One authenticator is
 /// registered per issuer, so a silo can trust several OIDC providers at once
-/// alongside the Entra, basic, and anonymous authenticators.
+/// alongside the Entra, JWT, and anonymous authenticators.
 /// </summary>
 public sealed class LatticeOidcAuthenticatorOptions
 {

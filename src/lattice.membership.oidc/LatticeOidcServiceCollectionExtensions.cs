@@ -14,7 +14,7 @@ public static class LatticeOidcServiceCollectionExtensions
     /// Registers an <see cref="OidcCredentialAuthenticator"/> configured by
     /// <paramref name="configure"/> as an <see cref="ILatticeCredentialAuthenticator"/>.
     /// Call once per issuer; several OIDC authenticators coexist - alongside the
-    /// Entra, basic, and anonymous authenticators - and the resolution path
+    /// Entra, JWT, and anonymous authenticators - and the resolution path
     /// selects the first that recognizes a credential. Because selection is an
     /// exact ordinal issuer match, registering two issuers is unambiguous
     /// regardless of registration order.

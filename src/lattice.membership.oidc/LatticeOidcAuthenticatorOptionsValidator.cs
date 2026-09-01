@@ -5,8 +5,9 @@ namespace Orleans.Lattice.Membership.Oidc;
 /// <summary>
 /// Validates <see cref="LatticeOidcAuthenticatorOptions"/>: an authority and an
 /// exact issuer are required, at least one audience and one subject claim type
-/// must be configured, no configured claim type or algorithm may be blank, and
-/// the refresh intervals must be strictly positive.
+/// must be configured, no configured audience, claim type, or algorithm may be
+/// blank, the refresh intervals must be strictly positive, and the clock skew
+/// must not be negative.
 /// </summary>
 internal sealed class LatticeOidcAuthenticatorOptionsValidator : IValidateOptions<LatticeOidcAuthenticatorOptions>
 {
@@ -75,8 +76,10 @@ internal sealed class LatticeOidcAuthenticatorOptionsValidator : IValidateOption
     }
 
     /// <summary>
-    /// Validates <paramref name="options"/> and throws when invalid. Used at
-    /// registration to fail fast with an actionable message.
+    /// Validates <paramref name="options"/> and throws when invalid. Called from
+    /// the authenticator factory the registration extension registers, so an
+    /// invalid configuration fails with an actionable message the first time the
+    /// authenticator is resolved from the container rather than at registration.
     /// </summary>
     /// <param name="options">The options to validate. Must not be <c>null</c>.</param>
     /// <exception cref="OptionsValidationException">The options are invalid.</exception>

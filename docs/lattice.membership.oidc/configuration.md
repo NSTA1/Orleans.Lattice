@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Oidc configuration
 
-The package has one public options type, `LatticeOidcAuthenticatorOptions`, which configures a single generic OpenID Connect credential authenticator: the authority its discovery document is fetched from, the exact issuer and the audiences it accepts, and the claim names it reads the subject and group membership out of. It is bound per issuer by the `AddLatticeOidc` registration extension, so a silo can trust several OIDC providers at once alongside the Entra, basic, and anonymous authenticators.
+The package has one public options type, `LatticeOidcAuthenticatorOptions`, which configures a single generic OpenID Connect credential authenticator: the authority its discovery document is fetched from, the exact issuer and the audiences it accepts, and the claim names it reads the subject and group membership out of. It is bound per issuer by the `AddLatticeOidc` registration extension, so a silo can trust several OIDC providers at once alongside the Entra, JWT, and anonymous authenticators.
 
 ## `LatticeOidcAuthenticatorOptions`
 
@@ -11,7 +11,7 @@ Bind it through `AddLatticeOidc(configure)`.
 | Property | Type | Default | Meaning |
 |---|---|---|---|
 | `Authority` | `string` | `""` (empty) | The OpenID Connect authority the discovery document is fetched from, for example `https://dev-123456.okta.com/oauth2/default` or `https://keycloak.example.com/realms/lattice`. Must be set. When `MetadataAddress` is unset the discovery document address is derived from this value. |
-| `MetadataAddress` | `string?` | `null` | The explicit OIDC discovery document address. When `null` it is derived from `Authority` by appending `/.well-known/openid-configuration`. Set it explicitly for a provider that publishes its metadata somewhere other than the conventional path. |
+| `MetadataAddress` | `string?` | `null` | The explicit OIDC discovery document address. When it is `null` or blank it is derived from `Authority` by appending `/.well-known/openid-configuration`. Set it explicitly for a provider that publishes its metadata somewhere other than the conventional path. |
 | `Issuer` | `string` | `""` (empty) | The exact issuer (the token `iss` claim) this authenticator accepts. Must be set. Matching is ordinal and exact - there is no prefix, wildcard, or catch-all form - so a token from any other issuer is not handled and resolution falls through to the next authenticator. |
 | `Audiences` | `IList<string>` | empty list | The audiences accepted (the token `aud` claim), typically the OAuth client id or an API identifier registered with the provider. Must contain at least one entry: audience validation is always enforced, so an empty list throws at construction rather than silently accepting every audience. Populate the collection in place. |
 | `Algorithms` | `IList<string>` | empty list | The token signature algorithms accepted (the JWT header `alg`). Empty - the default - pins the algorithms the provider advertises in its discovery document's `id_token_signing_alg_values_supported`. Populate it to pin an explicit, narrower set. Pinning is always enforced: an empty list never means "accept any algorithm", and a provider that advertises no algorithms at all rejects every token. Populate the collection in place. |
@@ -27,7 +27,7 @@ Bind it through `AddLatticeOidc(configure)`.
 
 | Method | Returns | Meaning |
 |---|---|---|
-| `ResolveMetadataAddress()` | `string` | The OIDC discovery document address: `MetadataAddress` when set, otherwise `Authority` with `/.well-known/openid-configuration` appended (any trailing `/` on the authority is trimmed first). Returns an empty string when neither value is set, which the authenticator rejects at construction. |
+| `ResolveMetadataAddress()` | `string` | The OIDC discovery document address: `MetadataAddress` when it holds a non-blank value, otherwise `Authority` with `/.well-known/openid-configuration` appended (any trailing `/` characters on the authority are trimmed first). A blank `MetadataAddress` falls through to `Authority` rather than being used verbatim. Returns an empty string when both are blank, which the authenticator rejects at construction. |
 
 ## `OidcClaimNames`
 
