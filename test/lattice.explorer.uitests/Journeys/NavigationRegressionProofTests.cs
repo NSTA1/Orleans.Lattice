@@ -266,7 +266,21 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         var exercised = new List<string>();
         var failures = new List<string>();
 
-        foreach (var strip in strips)
+        // Walked in reverse document order, so a strip is never exercised after
+        // something that has just destroyed it.
+        //
+        // The strips are snapshotted rail, catalog kind, detail tabs. The catalog
+        // kind toggle activates automatically, which is correct for it - an arrow
+        // key both moves and switches the catalog. But switching the catalog drops
+        // the selection, and the detail strip belongs to that selection, so
+        // exercising the catalog kind strip first left the detail strip empty and
+        // the walk then waited out a full action timeout looking for a tab in it.
+        // The product was behaving exactly as designed; the walk was destroying its
+        // own later subject.
+        //
+        // Reversing exercises the detail strip while the selection still exists,
+        // then the catalog kind, then the rail - which nothing above it disturbs.
+        foreach (var strip in strips.Reverse())
         {
             if (strip.Operable < 2 || strip.Label.Length == 0)
             {
