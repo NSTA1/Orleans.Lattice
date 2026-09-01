@@ -20,6 +20,10 @@ contract: what is remembered, at what scope, for how long, and how to clear it.
 | `appearance.density` | The chosen density |
 | `tenants.surface` | The active sub-surface of the Tenant administration area |
 | `mytenant.surface` | The active sub-surface of the My tenant area |
+| `access.surface` | The active sub-surface of the Access area |
+| `backups.surface` | The active sub-surface of the Backups area |
+| `schema.surface` | The active sub-surface of the Schema area |
+| `telemetry.query` | The selected query in the Telemetry area |
 
 The last two are contributed by plugins rather than declared by the shell: an
 area registers its own keys on the same catalog when its panel mounts, so a
