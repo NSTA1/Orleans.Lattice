@@ -167,7 +167,11 @@
     private int _activeIndex = -1;
     private int _rovingIndex = -1;
     private bool _hasDescriptions;
-    private bool _restoreFocusToActiveTab;
+    private bool _restoreFocusToRovingTab;
+
+    // Where an arrow key has moved focus under manual activation, which is not the
+    // selection. -1 means focus has not roamed off the active tab.
+    private int _focusIndex = -1;
 
     /// <summary>The tabs to render, in display order.</summary>
     [Parameter] public IReadOnlyList<LatticeTabItem>? Tabs { get; set; }
@@ -212,6 +216,20 @@
     /// is what a rail does; pin <see cref="InlineCapacity"/> to override that.
     /// </remarks>
     [Parameter] public LatticeTabsOrientation Orientation { get; set; }
+
+    /// <summary>
+    /// Whether an arrow key also selects the tab it moves to.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see cref="LatticeTabsActivation.Automatic"/>, which is right
+    /// for a strip whose tabs are cheap and always selectable. Use
+    /// <see cref="LatticeTabsActivation.Manual"/> when selecting a tab can be
+    /// refused or navigates: under automatic activation an arrow key is a
+    /// selection attempt, so a tab that cannot be selected cannot be reached
+    /// either, and the strip is not keyboard operable for exactly the entries a
+    /// caller most needs to reach.
+    /// </remarks>
+    [Parameter] public LatticeTabsActivation Activation { get; set; }
 
     /// <summary>
     /// Pins the breakpoint this strip renders for, overriding the cascaded
@@ -439,26 +457,29 @@
     /// <inheritdoc />
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_restoreFocusToActiveTab)
+        if (!_restoreFocusToRovingTab)
         {
             return;
         }
 
-        _restoreFocusToActiveTab = false;
+        _restoreFocusToRovingTab = false;
 
-        if (_activeIndex < 0 || _activeIndex >= _tabElements.Length)
+        if (_rovingIndex < 0 || _rovingIndex >= _tabElements.Length)
         {
             return;
         }
 
         try
         {
-            // Keyboard navigation moved the active tab, so move DOM focus with
-            // it. The active tab is guaranteed to be inline (the overflow layout
-            // promotes it), so the reference always points at a rendered
-            // element. Focus is a browser affordance: a host without a JS
-            // runtime simply keeps the caller's focus where it was.
-            await _tabElements[_activeIndex].FocusAsync();
+            // Keyboard navigation moved focus, so move DOM focus with it. Under
+            // automatic activation the roving index is the tab just selected;
+            // under manual activation it is the tab focus moved to without
+            // selecting. Either way it is guaranteed inline (the overflow layout
+            // promotes the active tab, and a manual move only targets inline
+            // tabs), so the reference always points at a rendered element. Focus
+            // is a browser affordance: a host without a JS runtime simply keeps
+            // the caller's focus where it was.
+            await _tabElements[_rovingIndex].FocusAsync();
         }
         catch (InvalidOperationException)
         {
@@ -526,9 +547,15 @@
     }
 
     // Exactly one tab carries tabindex="0" so the strip is a single tab stop:
-    // the active tab when there is one, otherwise the first inline enabled tab.
+    // the tab focus has roamed to under manual activation, otherwise the active
+    // tab when there is one, otherwise the first inline enabled tab.
     private int ResolveRovingIndex()
     {
+        if (_focusIndex >= 0 && _focusIndex < _tabs.Count && _tabs[_focusIndex].IsEnabled)
+        {
+            return _focusIndex;
+        }
+
         if (_activeIndex >= 0 && _tabs[_activeIndex].IsEnabled)
         {
             return _activeIndex;
@@ -551,6 +578,10 @@
         {
             return Task.CompletedTask;
         }
+
+        // A real selection ends any focus excursion: the roving tabindex should
+        // follow the tab that is now active, not wherever the arrows had roamed.
+        _focusIndex = -1;
 
         return OnSelect.HasDelegate ? OnSelect.InvokeAsync(tab.Id) : Task.CompletedTask;
     }
@@ -586,6 +617,17 @@
 
     private Task OnKeyDownAsync(KeyboardEventArgs args)
     {
+        // Under manual activation Enter and Space are what select; the arrows only
+        // move focus. Handled first so a strip that navigates still has a key that
+        // means "open this one".
+        if (Activation == LatticeTabsActivation.Manual
+            && args.Key is "Enter" or " " or "Spacebar")
+        {
+            return _rovingIndex >= 0 && _tabs[_rovingIndex].IsEnabled
+                ? SelectAsync(_tabs[_rovingIndex])
+                : Task.CompletedTask;
+        }
+
         var target = args.Key switch
         {
             "Home" => FirstEnabled(),
@@ -602,7 +644,18 @@
             return Task.CompletedTask;
         }
 
-        _restoreFocusToActiveTab = true;
+        _restoreFocusToRovingTab = true;
+
+        if (Activation == LatticeTabsActivation.Manual)
+        {
+            // Move focus without selecting. The strip re-renders, the roving
+            // tabindex follows _focusIndex, and OnAfterRender puts DOM focus on it.
+            _focusIndex = target;
+            _rovingIndex = target;
+            StateHasChanged();
+            return Task.CompletedTask;
+        }
+
         return SelectAsync(_tabs[target]);
     }
 
