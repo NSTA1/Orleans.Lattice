@@ -55,6 +55,12 @@ Two disciplines make those results mean something:
 
 ## Known limitations
 
+- **High contrast is guarded at the token layer but not swept in a browser.** The
+  browserless contrast guard measures all four palettes, including
+  `dark high contrast` and `light high contrast`, so the arithmetic is covered in
+  the required build. The axe sweep, however, drives `data-theme` and the
+  breakpoint band but not `data-contrast`, so no rendered-DOM conformance run has
+  been made with high contrast in effect. Tracked in #1890.
 - **Automated scanning finds a minority of real barriers.** It cannot tell
   whether a tab is bound to a panel, whether a heading outline is navigable,
   whether a keyboard user can bypass the chrome, or whether a change was
