@@ -84,11 +84,23 @@ internal sealed partial class ViewMaintainerGrain
     /// </summary>
     private List<string> ComputeViewWaitSet(IReadOnlyList<string> participants)
     {
-        var participantSet = new HashSet<string>(participants, StringComparer.Ordinal);
+        // A cross-tree atomic batch typically spans only a handful of participant
+        // source trees, so on the common small path an ordinal linear scan over
+        // the participants list answers the membership test without allocating a
+        // HashSet (and its bucket + entry arrays). Above the threshold the set's
+        // O(1) lookup wins, so keep it. Mirrors the LatticeTagIndexContext
+        // NormalizeTags threshold trim; the membership answer is identical either
+        // way (duplicate participants do not change set membership).
+        HashSet<string>? participantSet = participants.Count > WaitSetParticipantSetThreshold
+            ? new HashSet<string>(participants, StringComparer.Ordinal)
+            : null;
         var waitSet = new List<string>();
         foreach (var registration in catalog.All())
         {
-            if (participantSet.Contains(registration.SourceTreeId))
+            var isParticipant = participantSet is not null
+                ? participantSet.Contains(registration.SourceTreeId)
+                : ContainsOrdinal(participants, registration.SourceTreeId);
+            if (isParticipant)
             {
                 waitSet.Add(registration.ViewName);
             }
@@ -96,6 +108,27 @@ internal sealed partial class ViewMaintainerGrain
 
         waitSet.Sort(StringComparer.Ordinal);
         return waitSet;
+    }
+
+    /// <summary>
+    /// Participant count at or below which <see cref="ComputeViewWaitSet"/> uses an
+    /// ordinal linear scan instead of a <see cref="HashSet{T}"/> for the membership
+    /// test. A cross-tree atomic batch spans a small number of trees in the common
+    /// case, so the scan avoids the set allocation on that path.
+    /// </summary>
+    private const int WaitSetParticipantSetThreshold = 8;
+
+    private static bool ContainsOrdinal(IReadOnlyList<string> items, string value)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (string.Equals(items[i], value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
