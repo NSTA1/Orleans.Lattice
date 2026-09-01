@@ -447,7 +447,16 @@
         for (var i = 0; i < sources.Length; i++)
         {
             var source = sources[i];
-            var item = source.For(AccessStore.Get(source.PluginId).State);
+
+            // A surface nobody has probed yet is not a refused surface. Reading the
+            // store's fail-closed default as a caption renders every tab disabled
+            // under a denial nothing established, and a strip whose tabs are all
+            // disabled is not operable at all - so the surfaces are unreachable
+            // until the probes happen to land.
+            var item = AccessStore.HasReported(source.PluginId)
+                ? source.For(AccessStore.Get(source.PluginId).State)
+                : source.Pending;
+
             if (item is not null)
             {
                 tabs[next++] = item;
@@ -720,6 +729,12 @@
         }
 
         public string PluginId { get; }
+
+        /// <summary>
+        /// The strip entry for a surface whose gate has not reported yet: shown
+        /// plainly, because "not asked" is not "refused".
+        /// </summary>
+        public LatticeTabItem Pending => _allowed;
 
         /// <summary>
         /// The strip entry for <paramref name="state"/>, or <see langword="null"/>

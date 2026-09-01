@@ -667,7 +667,14 @@
     {
         if (string.Equals(slug, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
         {
-            Router.NavigateTo(Router.Current.WithArea(ExplorerRouteSegments.Explore));
+            // Switching area drops the selection, because a selection names
+            // something inside the area being left. Returning to Explore should
+            // therefore find the tree that was open rather than an empty panel the
+            // caller has to choose from again, so the remembered selection is put
+            // back when the address carries none of its own.
+            var target = Router.Current.WithArea(ExplorerRouteSegments.Explore);
+            target = RestoreRememberedSelection(target);
+            Router.NavigateTo(target);
 
             // The compact catalog drawer belongs to the home surface, so leaving
             // and returning must not restore a scrim the caller never reopened.
@@ -699,8 +706,35 @@
         return SetCatalogOpenAsync(false);
     }
 
-    // ---- the compact catalog drawer -----------------------------------------
+    /// <summary>
+    /// Puts the remembered selection back into <paramref name="route"/> when it
+    /// carries none, so returning to the catalog finds what was open.
+    /// </summary>
+    /// <remarks>
+    /// Only ever fills a gap: a route that already names a selection is returned
+    /// untouched, so an explicit address still wins. A remembered selection that
+    /// no longer resolves is handled where every other unresolvable selection is -
+    /// the catalog explains it rather than showing an empty panel.
+    /// </remarks>
+    private ExplorerRoute RestoreRememberedSelection(ExplorerRoute route)
+    {
+        if (route.HasSelection)
+        {
+            return route;
+        }
 
+        if (Services.GetService(typeof(IExplorerShellPreferences)) is not IExplorerShellPreferences preferences)
+        {
+            return route;
+        }
+
+        var remembered = preferences.GetRememberedRoute();
+        return remembered.HasSelection
+            ? route.WithSelection(remembered.Kind, remembered.Id)
+            : route;
+    }
+
+    // ---- the compact catalog drawer -----------------------------------------
     private Task ToggleCatalogAsync() => SetCatalogOpenAsync(!IsCatalogOpen);
 
     private Task CloseCatalogAsync() => SetCatalogOpenAsync(false);

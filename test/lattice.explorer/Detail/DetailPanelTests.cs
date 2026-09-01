@@ -193,19 +193,27 @@ public sealed class DetailPanelTests
     }
 
     [Test]
-    public async Task An_unprobed_surface_is_denied_before_any_gate_answers()
+    public async Task An_unprobed_surface_is_denied_but_is_not_captioned_as_refused()
     {
-        // Nothing has been filed for the plugin yet. The store's fail-closed
-        // default must show through rather than an admission - the per-selection
-        // tier gains exactly the posture the area tier already had.
+        // The decision stays fail-closed; the caption is not entitled to that
+        // default. Rendering it as a refusal disabled every tab under a denial
+        // nothing had established, and a strip whose tabs are all disabled is not
+        // operable at all - so the surfaces were unreachable until the probes
+        // happened to land. This mirrors the area tier, which was corrected first.
         using var harness = Harness(new Surface(Plugin("a", "Alpha", typeof(AlphaProbeView)), Access: null));
         await harness.RenderAsync();
         await harness.SelectAsync(Tree);
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Tab("Alpha").Disabled, Is.True);
-            Assert.That(harness.ActiveView, Is.Null);
+            Assert.That(
+                harness.Tab("Alpha").Disabled,
+                Is.False,
+                "a surface nobody has probed has not been refused");
+            Assert.That(
+                harness.ActiveView,
+                Is.Null,
+                "showing the tab plainly must not activate its view before the gate answers");
         });
     }
 
