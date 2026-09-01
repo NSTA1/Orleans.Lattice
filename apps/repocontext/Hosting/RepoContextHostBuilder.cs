@@ -283,6 +283,25 @@ public static class RepoContextHostBuilder
         // at the source (over and above the size cap). Keep warnings and above; a
         // failed embed still surfaces through our own provider category.
         logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+
+        // Orleans warns per dropped message and per late callback. During the
+        // cold-start replay window the vector trees are legitimately slower than
+        // the 30s response deadline, so every probe against them expires and each
+        // expiry logs twice - once as "Response did not arrive on time"
+        // (CallbackData) and once as "Dropping expired message" (Messaging). On a
+        // real volume that was 1,216 lines in fifteen minutes, 776 of them merely
+        // dropped STATUS RESPONSES (diagnostic probes about an already-late call,
+        // not lost work), which is enough to bury the handful of genuine faults
+        // mixed in among them.
+        //
+        // This is self-clearing back-pressure, not a fault: the replay converges
+        // and the callers retry. The condition stays observable through the
+        // over-budget replay counter, through our own RepoIndexRunner category,
+        // and through Error-level Orleans messaging problems, which these filters
+        // keep. Raise them back to Warning when diagnosing a hang that does NOT
+        // clear on its own.
+        logging.AddFilter("Orleans.Runtime.CallbackData", LogLevel.Error);
+        logging.AddFilter("Orleans.Messaging", LogLevel.Error);
     }
 
     /// <summary>
