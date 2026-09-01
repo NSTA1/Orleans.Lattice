@@ -240,6 +240,10 @@
     private readonly Action _resolveActiveArea;
     private ExplorerPluginConnectionState _lastConnectionState;
 
+    // The selection the shell last saw, so a route change can tell "a different
+    // item was picked" from "the same item's surface changed".
+    private string? _lastSelection;
+
     // The rail's per-render buffers, sized once at mount, so a render pass
     // allocates nothing however many areas are registered and however often the
     // access store changes. The tab list is a reused List rather than an array
@@ -727,7 +731,32 @@
         await AccessRefresher.RefreshAsync();
     }
 
-    private void OnRouteChanged(ExplorerRoute route) => InvokeAsync(_resolveActiveArea);
+    private void OnRouteChanged(ExplorerRoute route) =>
+        InvokeAsync(() => OnRouteChangedAsync(route));
+
+    private async Task OnRouteChangedAsync(ExplorerRoute route)
+    {
+        // Picking an item in the compact drawer is the drawer's whole purpose, and
+        // it reveals a detail surface the drawer is sitting on top of. Leaving it
+        // open hides the thing the caller just asked to see, and its overlay takes
+        // the pointer events meant for the surface beneath - so the controls in
+        // that header cannot be operated at all until the drawer is dismissed by
+        // hand.
+        //
+        // Keyed on the selection changing rather than on any route change, so
+        // moving between surfaces of the SAME selection does not dismiss a drawer
+        // the caller deliberately reopened.
+        var selection = route.HasSelection ? route.Kind + "/" + route.Id : null;
+        var selectionMoved = !string.Equals(selection, _lastSelection, StringComparison.Ordinal);
+        _lastSelection = selection;
+
+        if (selectionMoved && selection is not null && IsCatalogOpen)
+        {
+            await SetCatalogOpenAsync(false);
+        }
+
+        _resolveActiveArea();
+    }
 
     private void OnAccessChanged(ExplorerPluginAccessChange change)
     {
