@@ -230,7 +230,15 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
         return groups;
     }
 
-    /// <summary>Copies non-group, non-subject claims into a flat, last-wins bag.</summary>
+    /// <summary>Copies every claim the identity carries into a flat, last-wins bag keyed by claim type.</summary>
+    /// <remarks>
+    /// No claim is filtered out, so the subject and group claims appear here as
+    /// well as in <see cref="LatticePrincipal.SubjectId"/> and
+    /// <see cref="LatticePrincipal.AssertedGroups"/>. Because the bag is keyed by
+    /// claim type, a claim that appears more than once - which is how a JSON array
+    /// claim such as <c>groups</c> is surfaced - keeps only its last value; read
+    /// repeated claims from the identity itself, not from here.
+    /// </remarks>
     /// <param name="identity">The validated claims identity.</param>
     protected IReadOnlyDictionary<string, string>? ResolveClaims(ClaimsIdentity identity)
     {
