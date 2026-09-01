@@ -475,13 +475,42 @@ internal sealed class RepoContextBootstrapService
             // refreshed or retired, and any symbol still lacking a live embedding - a
             // repository captured before symbol embedding existed - is back-filled, so
             // symbol-level recall converges without a re-walk.
-            var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
-                repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
-                .ConfigureAwait(false);
-            if (symbolsEmbedded > 0)
+            // Each embedding arm is attempted independently. A transient failure
+            // in one - characteristically a response timeout while the vector
+            // trees are still replaying - must not veto the others, because every
+            // arm is idempotent and back-fills whatever it missed on the next
+            // pass. Before this, a symbol-arm timeout aborted the whole run, and
+            // on a large repository that happened on EVERY pass: measured on a
+            // real deployment, 65 runs started, 65 failed, 0 completed, so the
+            // memory arm below never executed once and the feature could not
+            // converge in production at all.
+            //
+            // Failures are collected rather than swallowed. The first is rethrown
+            // once every arm has had its turn, so the run is still reported as
+            // failed and retried - it just no longer costs the other arms their
+            // pass. Silently reporting success here would be the exact
+            // partial-view defect this sweep exists to remove.
+            Exception? armFailure = null;
+
+            try
             {
-                _logger.LogInformation(
-                    "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
+                var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
+                    repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
+                    .ConfigureAwait(false);
+                if (symbolsEmbedded > 0)
+                {
+                    _logger.LogInformation(
+                        "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                armFailure = ex;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: symbol vectorisation did not complete this pass; continuing with the "
+                    + "remaining embedding arms and retrying it on the next reconcile.",
+                    repoId);
             }
 
             // Embed the durable agent-memory entries as their own passages, so a
@@ -513,13 +542,33 @@ internal sealed class RepoContextBootstrapService
             // so it would take a full metadata scan on a path that otherwise
             // touches only what changed. Left for a deliberate sweep rather than
             // paid on every reconcile.
-            var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
-                repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
-                .ConfigureAwait(false);
-            if (memoryEmbedded > 0)
+            try
             {
-                _logger.LogInformation(
-                    "Repo {RepoId}: embedded {Entries} memory passage(s).", repoId, memoryEmbedded);
+                var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
+                    repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
+                    .ConfigureAwait(false);
+                if (memoryEmbedded > 0)
+                {
+                    _logger.LogInformation(
+                        "Repo {RepoId}: embedded {Entries} memory passage(s).", repoId, memoryEmbedded);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                armFailure ??= ex;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: memory vectorisation did not complete this pass; it will be retried on "
+                    + "the next reconcile.",
+                    repoId);
+            }
+
+            // Every arm has had its turn. If any failed, surface the first failure
+            // so the run is reported as failed and re-driven; the arms that did
+            // succeed keep their work either way.
+            if (armFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(armFailure).Throw();
             }
 
             // The run reconciled and applied cleanly, so publish the walk's directory
