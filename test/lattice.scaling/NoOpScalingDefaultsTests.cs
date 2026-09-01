@@ -1,21 +1,21 @@
 namespace Orleans.Lattice.Scaling.Tests;
 
 /// <summary>
-/// Coverage for the two default no-op collaborators registered until a host
-/// supplies real ones: <see cref="NoOpSplitActivityProbe"/> must never suppress
-/// scale-in on split grounds, and <see cref="NoOpStoragePressureCollector"/>
-/// must contribute a zero, not-over-threshold <see cref="StoragePressure"/> so
-/// the storage axis is inert.
+/// Coverage for the two no-op collaborators a host may register to keep an axis
+/// inert: <see cref="NoOpSplitActivityProbe"/> must never suppress scale-in on
+/// split grounds, and <see cref="NoOpStoragePressureCollector"/> must contribute
+/// a zero, not-over-threshold <see cref="StoragePressure"/> so the storage axis
+/// contributes nothing.
 /// </summary>
 [TestFixture]
 public sealed class NoOpScalingDefaultsTests
 {
     [Test]
-    public void Split_probe_reports_no_split_in_flight()
+    public async Task Split_probe_reports_no_split_in_flight()
     {
         ISplitActivityProbe probe = new NoOpSplitActivityProbe();
 
-        Assert.That(probe.AnySplitInFlight(), Is.False);
+        Assert.That(await probe.AnySplitInFlightAsync(CancellationToken.None), Is.False);
     }
 
     [Test]

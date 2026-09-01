@@ -120,6 +120,32 @@ public interface ILatticeAdmin : IGrainWithStringKey
     Task<WalPlacement> GetWalPlacementAsync(string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns a cluster-wide <see cref="SplitActivityReport"/>: how many
+    /// autonomic shard splits are in flight right now, summed across every tree.
+    /// <para>
+    /// This is the readable counterpart to the <c>orleans.lattice.split.in_flight</c>
+    /// histogram. Metrics are write-only in-process, so a component that must
+    /// <em>decide</em> something from split activity - the
+    /// <c>Orleans.Lattice.Scaling</c> scale-in safety gate, an operator tool, a
+    /// deployment guard that should not drain a silo mid-split - cannot consult
+    /// them. This query can be, and it costs a single call to the cluster's
+    /// split-admission singleton: it never fans out across trees or shards.
+    /// </para>
+    /// <para>
+    /// The figure is derived from the per-tree footprints each autonomic monitor
+    /// publishes every sampling pass, so it trails real activity by at most one
+    /// <see cref="LatticeOptions.HotShardSampleInterval"/> and is a lower bound
+    /// rather than an instantaneous truth. Footprints expire, so a silo lost
+    /// mid-split cannot pin the count above zero indefinitely. A deployment with
+    /// autonomic splitting disabled always reports zero.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A point-in-time cluster-wide split-activity snapshot.</returns>
+    [AlwaysInterleave]
+    Task<SplitActivityReport> GetSplitActivityAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Audits <paramref name="treeId"/>'s WAL placement against this silo's
     /// <see cref="IWalStorageProviderCatalog"/>, flagging any partition pinned
     /// to a provider key the silo cannot resolve. Use this to detect

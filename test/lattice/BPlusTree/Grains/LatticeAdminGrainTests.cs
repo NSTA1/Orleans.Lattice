@@ -564,4 +564,69 @@ public sealed class LatticeAdminGrainTests
             Assert.That(report.TotalBytes, Is.EqualTo(6));
         });
     }
+
+    // --- Cluster split activity (#1224) ------------------------------------
+
+    private static (LatticeAdminGrain Grain, IClusterSplitConcurrencyGrain Gate) SetUpSplitGate(SplitActivityReport report)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var gate = Substitute.For<IClusterSplitConcurrencyGrain>();
+        gate.GetActivityAsync().Returns(Task.FromResult(report));
+        factory.GetGrain<IClusterSplitConcurrencyGrain>(0).Returns(gate);
+
+        return (CreateGrain(factory), gate);
+    }
+
+    [Test]
+    public async Task GetSplitActivityAsync_returns_the_cluster_gates_snapshot()
+    {
+        var (grain, _) = SetUpSplitGate(new SplitActivityReport
+        {
+            InFlight = 3,
+            ReportingTrees = 2,
+            ObservedAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+        });
+
+        var activity = await grain.GetSplitActivityAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(activity.InFlight, Is.EqualTo(3));
+            Assert.That(activity.ReportingTrees, Is.EqualTo(2));
+            Assert.That(activity.AnyInFlight, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task GetSplitActivityAsync_reports_an_idle_cluster()
+    {
+        var (grain, _) = SetUpSplitGate(default);
+
+        var activity = await grain.GetSplitActivityAsync(CancellationToken.None);
+
+        Assert.That(activity.AnyInFlight, Is.False);
+    }
+
+    [Test]
+    public async Task GetSplitActivityAsync_never_fans_out_across_trees()
+    {
+        var (grain, gate) = SetUpSplitGate(new SplitActivityReport { InFlight = 1, ReportingTrees = 1 });
+
+        await grain.GetSplitActivityAsync(CancellationToken.None);
+
+        // The autoscaling signal polls this every sample tick, so it must cost a
+        // single call to the singleton gate and touch no registry or tree grain.
+        await gate.Received(1).GetActivityAsync();
+    }
+
+    [Test]
+    public void GetSplitActivityAsync_honours_a_cancelled_token_before_dialing_the_gate()
+    {
+        var (grain, gate) = SetUpSplitGate(default);
+
+        Assert.That(
+            async () => await grain.GetSplitActivityAsync(new CancellationToken(canceled: true)),
+            Throws.InstanceOf<OperationCanceledException>());
+        gate.DidNotReceive().GetActivityAsync();
+    }
 }

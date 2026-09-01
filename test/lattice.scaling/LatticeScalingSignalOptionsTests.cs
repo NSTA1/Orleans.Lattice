@@ -73,4 +73,25 @@ public sealed class LatticeScalingSignalOptionsTests
             Assert.That(options.StorageRecommendationsEnabled, Is.False);
         });
     }
+
+    [Test]
+    public void Split_aware_scale_in_defaults_on()
+    {
+        var options = new LatticeScalingSignalOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.SplitAwareScaleIn, Is.True);
+            Assert.That(options.SplitAwareScaleIn,
+                Is.EqualTo(LatticeScalingSignalOptions.DefaultSplitAwareScaleIn));
+        });
+    }
+
+    [Test]
+    public void Split_aware_scale_in_is_settable()
+    {
+        var options = new LatticeScalingSignalOptions { SplitAwareScaleIn = false };
+
+        Assert.That(options.SplitAwareScaleIn, Is.False);
+    }
 }

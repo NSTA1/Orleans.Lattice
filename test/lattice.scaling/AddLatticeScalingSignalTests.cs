@@ -91,10 +91,23 @@ public sealed class AddLatticeScalingSignalTests
             Assert.That(provider.GetRequiredService<IWalStorageStateSource>(),
                 Is.InstanceOf<LatticeWalStorageStateSource>());
             Assert.That(provider.GetRequiredService<ISplitActivityProbe>(),
-                Is.InstanceOf<NoOpSplitActivityProbe>());
+                Is.InstanceOf<LatticeSplitActivityProbe>());
             Assert.That(provider.GetRequiredService<IComputePressureCollector>(),
                 Is.InstanceOf<ComputePressureCollector>());
         });
+    }
+
+    [Test]
+    public void AddLatticeScalingSignal_substitutes_the_inert_probe_when_split_awareness_is_off()
+    {
+        var services = new ServiceCollection();
+        BuilderWith(services).AddLatticeScalingSignal(o => o.SplitAwareScaleIn = false);
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.That(provider.GetRequiredService<ISplitActivityProbe>(),
+            Is.InstanceOf<NoOpSplitActivityProbe>(),
+            "the kill switch must make the split axis inert, not merely unused");
     }
 
     [Test]

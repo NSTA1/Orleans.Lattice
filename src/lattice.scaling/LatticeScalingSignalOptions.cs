@@ -66,6 +66,12 @@ public sealed class LatticeScalingSignalOptions
     public const int DefaultActivationWorkingSetTarget = 100_000;
 
     /// <summary>
+    /// Default value for <see cref="SplitAwareScaleIn"/>: <see langword="true"/>.
+    /// The scale-in gate is split-aware out of the box.
+    /// </summary>
+    public const bool DefaultSplitAwareScaleIn = true;
+
+    /// <summary>
     /// How often the silo samples cluster-aggregate compute pressure and
     /// recomputes the scaling signal. The per-scrape facade reads the cached
     /// result, so this is the freshness bound, not the scrape cost. Defaults to
@@ -118,6 +124,20 @@ public sealed class LatticeScalingSignalOptions
     /// <see cref="DefaultActivationWorkingSetTarget"/>.
     /// </summary>
     public int ActivationWorkingSetTarget { get; set; } = DefaultActivationWorkingSetTarget;
+
+    /// <summary>
+    /// Whether the scale-in safety gate is split-aware: while any adaptive shard
+    /// split is in flight cluster-wide, scale-in is suppressed. Defaults to
+    /// <see cref="DefaultSplitAwareScaleIn"/> (<see langword="true"/>).
+    /// <para>
+    /// The signal costs one call to the cluster's split-admission singleton per
+    /// sample tick and never fans out. Set to <see langword="false"/> to make the
+    /// split axis inert - appropriate for a deployment with autonomic splitting
+    /// disabled, where the query would be pure overhead. Scale-<em>out</em> is
+    /// never influenced by split activity either way.
+    /// </para>
+    /// </summary>
+    public bool SplitAwareScaleIn { get; set; } = DefaultSplitAwareScaleIn;
 
     // --- Storage axis (#1187) ---------------------------------------------
     // Knobs for the storage-axis pressure collector: the retained-bytes advisory
