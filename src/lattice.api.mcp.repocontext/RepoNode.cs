@@ -46,6 +46,18 @@ internal sealed record RepoNode
     public BoundedRegister FileCount { get; init; } = new();
 
     /// <summary>
+    /// Last-writer-wins commit SHA the last index generation was built from, written
+    /// only by a git-ref-sourced ingestion (see <c>GitRemoteSource</c>). It is the
+    /// verifiable anchor for "which revision am I serving": it is server-derived from
+    /// the configured ref, never patchable through <c>repocontext_update</c>, and it
+    /// merges to spokes with the rest of the node, so a spoke can report the exact
+    /// revision its replicated index corresponds to. Unset for a mounted-workspace
+    /// repository, which has no commit anchor.
+    /// </summary>
+    [Id(6)]
+    public BoundedRegister IndexedCommit { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same repository node. Identity is
     /// preserved from <paramref name="left"/> (both sides share the key-derived
     /// <see cref="RepoId"/>); every mutable field is folded through its CRDT
@@ -64,6 +76,7 @@ internal sealed record RepoNode
             DefaultBranch = BoundedRegister.Merge(left.DefaultBranch, right.DefaultBranch),
             LastIngested = BoundedRegister.Merge(left.LastIngested, right.LastIngested),
             FileCount = BoundedRegister.Merge(left.FileCount, right.FileCount),
+            IndexedCommit = BoundedRegister.Merge(left.IndexedCommit, right.IndexedCommit),
             Tags = OrSet.Merge(left.Tags, right.Tags),
         };
     }

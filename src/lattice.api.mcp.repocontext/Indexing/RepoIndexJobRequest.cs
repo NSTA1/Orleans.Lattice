@@ -73,4 +73,17 @@ public sealed record RepoIndexJobRequest
     /// </summary>
     [Id(6)]
     public bool AllowPrune { get; init; }
+
+    /// <summary>
+    /// The resolved commit SHA this generation is built from, set by the git-ref
+    /// source strategy and <see langword="null"/> for a mounted-workspace run (which
+    /// has no verifiable anchor). It is server-derived - the source strategy resolves
+    /// it from the configured ref, never a caller - and is stamped onto the
+    /// repository node so an operator, and every spoke, can see exactly which
+    /// revision the index serves. A persisted job that predates this field
+    /// deserialises it as <see langword="null"/>, so a resumed pre-upgrade job keeps
+    /// its original mounted-walk behaviour.
+    /// </summary>
+    [Id(7)]
+    public string? CommitSha { get; init; }
 }

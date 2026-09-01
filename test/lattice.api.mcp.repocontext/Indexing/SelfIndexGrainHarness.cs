@@ -181,6 +181,7 @@ internal sealed class SelfIndexGrainHarness
             Options,
             new RepoContextAnnIndexScheduler(
                 GrainFactory, Options, NullLogger<RepoContextAnnIndexScheduler>.Instance, Embedder),
+            Harness.RepoContextSourceTestDoubles.MountedOnlyGate(),
             NullLogger<RepoContextSelfIndexGrain>.Instance,
             State);
     }

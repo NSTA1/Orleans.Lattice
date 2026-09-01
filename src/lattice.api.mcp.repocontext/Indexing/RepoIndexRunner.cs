@@ -158,6 +158,7 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
                 RespectGitignore = request.RespectGitignore,
                 ExcludeBinary = request.ExcludeBinary,
                 AllowPrune = request.AllowPrune,
+                CommitSha = request.CommitSha,
             };
 
             var result = await _bootstrap
