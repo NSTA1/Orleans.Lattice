@@ -104,6 +104,7 @@ internal static class TypeAliases
     internal const string HotShardMonitorState = "ol.hms";
     internal const string ClusterSplitConcurrencyState = "ol.csc";
     internal const string TreeSplitFootprint = "ol.tsf";
+    internal const string SplitActivityReport = "ol.spa";
 
     // BPlusTree
     internal const string SplitResult = "ol.sr";

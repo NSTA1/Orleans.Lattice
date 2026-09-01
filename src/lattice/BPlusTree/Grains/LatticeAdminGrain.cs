@@ -212,4 +212,19 @@ internal sealed partial class LatticeAdminGrain(
         Partial = true,
         SampledAt = DateTimeOffset.UtcNow,
     };
+
+    /// <summary>Well-known singleton key of the cluster-wide split admission gate.</summary>
+    private const long ClusterSplitConcurrencyKey = 0;
+
+    /// <inheritdoc />
+    public async Task<SplitActivityReport> GetSplitActivityAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // A single call to the cluster's split-admission singleton, which already
+        // holds every tree's reported in-flight footprint. Deliberately not a
+        // fan-out: this is polled by the autoscaling signal on every sample tick.
+        var gate = grainFactory.GetGrain<IClusterSplitConcurrencyGrain>(ClusterSplitConcurrencyKey);
+        return await gate.GetActivityAsync();
+    }
 }

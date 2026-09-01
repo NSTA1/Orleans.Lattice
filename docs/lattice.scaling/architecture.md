@@ -114,15 +114,46 @@ WAL-saturation classification, and the storage over-threshold flag (which
 contributes at most `Degraded`, honouring the invariant). See
 [configuration](configuration.md#latticescalinghealthcheckoptions).
 
+## Split-aware scale-in
+
+The scale-in gate is split-aware: while any adaptive shard split is in flight
+anywhere in the cluster, scale-in is suppressed. Relocating load off a silo while
+a shard is mid-split risks stranding the split's in-flight work, so the gate
+holds the previous scalar until every split completes and the window has elapsed
+again. Only scale-**in** is affected - scale-out is never influenced by split
+activity.
+
+The signal comes from the cluster's split-admission singleton, read once per
+sample tick through `ILatticeAdmin.GetSplitActivityAsync`. Each per-tree
+autonomic monitor publishes its authoritative in-flight count (derived from shard
+`IsSplitting` status) to that singleton, so the query costs one call and never
+fans out across trees or shards. Publication is edge-triggered - a tree reports
+only while it actually has splits in flight, plus one call to clear its footprint
+when they finish - so an idle cluster adds no traffic. Footprints carry a
+time-to-live, so a silo lost mid-split has its share reclaimed on expiry rather
+than suppressing scale-in indefinitely.
+
+Because the count is sampled once per monitor pass, it is a lower bound that
+trails reality by at most one `HotShardSampleInterval`; splits a monitor triggers
+are published in the same pass that starts them, so the gate never misses a split
+it caused. A deployment with autonomic splitting disabled always reports zero.
+
+Degradation is deliberately **fail-open**: if the admin surface is unreachable,
+or the package is hosted outside a silo, the probe reports "no split in flight"
+rather than throwing. Reporting the opposite would be fail-closed, but a
+persistently unreachable admin surface would then suppress scale-in forever -
+turning a small, self-correcting risk (a silo drained mid-split, which costs that
+split some rework but no correctness) into an unbounded cost ceiling. The failure
+is logged so the degradation is visible.
+
+Set `SplitAwareScaleIn` to `false` to make the axis inert - appropriate for a
+deployment with autonomic splitting disabled, where the query would be pure
+overhead. The gate then relies on the WAL-healthy and all-dimensions-low
+preconditions plus the window alone, exactly as it did before this signal
+existed.
+
 ## Current limitations
 
-- **Split-activity probe.** The scale-in gate consults a split-in-flight probe so
-  a cluster mid-reshard is never scaled in. The default probe is a no-op
-  (shard-split progress is exposed today only as write-only histogram
-  instrumentation with no readback surface), so in the default configuration the
-  gate relies on the WAL-healthy and all-dimensions-low preconditions plus the
-  gate window rather than an explicit split signal. A host with its own split
-  visibility can supply a real probe.
 - **Storage sampling path.** The default storage source reads retained bytes and
   WAL placement through the public `ILatticeAdmin` surface
   (`GetTotalStorageUsageAsync` and `GetWalPlacementAsync`), which activates each

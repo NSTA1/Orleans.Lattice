@@ -1,14 +1,19 @@
 namespace Orleans.Lattice.Scaling;
 
 /// <summary>
-/// Default <see cref="ISplitActivityProbe"/>: reports no shard splits in flight.
-/// With this probe the scale-in gate is never suppressed on split grounds, which
-/// is the correct behaviour for a deployment that does not surface a
-/// split-activity source. A host that wants split-aware scale-in gating replaces
-/// this registration with a real probe.
+/// Inert <see cref="ISplitActivityProbe"/>: reports no shard splits in flight.
+/// With this probe the scale-in gate is never suppressed on split grounds.
+/// <para>
+/// It is no longer the default - <see cref="LatticeSplitActivityProbe"/> is -
+/// but it is what <c>AddLatticeScalingSignal</c> registers when
+/// <see cref="LatticeScalingSignalOptions.SplitAwareScaleIn"/> is set to
+/// <see langword="false"/>, which is the correct choice for a deployment with
+/// autonomic splitting disabled where the cluster query would be pure overhead.
+/// </para>
 /// </summary>
 internal sealed class NoOpSplitActivityProbe : ISplitActivityProbe
 {
     /// <inheritdoc />
-    public bool AnySplitInFlight() => false;
+    public ValueTask<bool> AnySplitInFlightAsync(CancellationToken cancellationToken)
+        => ValueTask.FromResult(false);
 }
