@@ -20,12 +20,30 @@
 	EmbedderImage           = 'rc-embedder:coldstart-rig'      # additional tag on an existing image
 
 	# ---- Tag sources ----
-	# The rig NEVER builds an image. It applies its own additional tag to an
-	# already-built image, so no live tag is ever moved or rebuilt. A live tag
-	# is legal HERE (it is only ever read); the guard forbids it as a
-	# destination.
+	# A cohort NEVER builds: it applies its own additional tag to an
+	# already-built image, so no live tag is ever moved or rebuilt by a run. A
+	# live tag is legal HERE (it is only ever read); the guard forbids it as a
+	# destination. To measure code that is not what is deployed, build it with
+	# `rig.ps1 build`, which records its own image as the source below.
 	SourceMcpImage          = 'repocontext-mcp:local'
 	SourceEmbedderImage     = 'repocontextcontainer-embedder:latest'
+
+	# ---- Build tag (rig.ps1 build) ----
+	# `rig.ps1 build` is the ONE rig operation that creates an image, so it is
+	# the one place a live tag could be moved. Its destination must carry this
+	# prefix, must not be any ForbiddenImages entry, and must not be the tag
+	# the rig runs (Assert-RigBuildImage enforces all three). It exists so an
+	# operator testing a branch never has to reach for the deploy script, which
+	# promotes to production as a side effect.
+	BuildImageTagPrefix     = 'coldstart-'
+
+	# Behind a private / corporate-proxy / offline NuGet feed, point the build's
+	# restore at your own NuGet.Config. Leave empty to use the SDK default
+	# (public nuget.org). $env:NUGET_CONFIG_FILE overrides this, and
+	# -NuGetConfigFile overrides both, so the same environment variable the
+	# local-dev reference architecture uses works here unchanged. It is passed
+	# as a BuildKit secret and never written into an image layer.
+	NuGetConfigFile         = ''
 
 	# ---- Durable state under test ----
 	# The tarball lives in the MAIN checkout (.deploy/ is untracked and is

@@ -102,6 +102,11 @@ Assert-RigDockerIsolation -Config $config | Out-Null
 Write-Host "Isolation guard passed (configuration and resolved compose document)." -ForegroundColor Green
 Write-Host "  project $($config.ProjectName) | port $($config.HostPort) | work volume $($config.WorkVolume)" -ForegroundColor DarkGray
 
+# The rig cannot move a live tag. Something else on this host can, and if it
+# already has, the live deployment is one restart away from silently running
+# different code - so say so before a cohort buries it under output.
+$livePinBefore = Write-RigLiveImagePin -Report (Get-RigLiveImagePin -Config $config)
+
 if (-not (Test-RigVolumeExists -Name "$($config.MasterVolume)")) {
 	throw "Master volume '$($config.MasterVolume)' does not exist. Run prepare-master.ps1 first."
 }
@@ -398,9 +403,60 @@ function Get-RigHostContext {
 	}
 }
 
+<#
+.SYNOPSIS
+	Records WHICH image produced a cohort's numbers.
+
+.DESCRIPTION
+	Two cohorts are only comparable if you know what each one ran. Recording
+	the tested image's id (and, when the rig built it, the commit behind it)
+	makes a result self-describing instead of resting on operator memory.
+
+	The build record is only credited when its image id still equals the
+	tested image's id: a build that was later superseded by a re-tag from
+	somewhere else must not be able to claim provenance it no longer has.
+#>
+function Get-RigImageProvenance {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Config,
+		[string] $ScriptRoot
+	)
+
+	$mcpImageId = Get-RigDockerImageId -Reference "$($Config.McpImage)"
+	$built = Get-RigBuildSource -ScriptRoot $ScriptRoot
+
+	$builtFrom = $null
+	if ($null -ne $built) {
+		$builtFrom = [ordered] @{
+			image               = "$($built.image)"
+			imageId             = "$($built.imageId)"
+			gitRef              = "$($built.gitRef)"
+			commitSha           = "$($built.commitSha)"
+			builtUtc            = "$($built.builtUtc)"
+			matchesTestedImage  = ($mcpImageId -ne '' -and "$($built.imageId)" -eq $mcpImageId)
+		}
+	}
+
+	return [ordered] @{
+		mcpImage        = "$($Config.McpImage)"
+		mcpImageId      = $mcpImageId
+		embedderImage   = "$($Config.EmbedderImage)"
+		embedderImageId = Get-RigDockerImageId -Reference "$($Config.EmbedderImage)"
+		sourceMcpImage  = "$($Config.SourceMcpImage)"
+		builtFrom       = $builtFrom
+	}
+}
+
 # --- Cohort --------------------------------------------------------------
 $runResults = [System.Collections.Generic.List[object]]::new()
 $hostContext = Get-RigHostContext -Config $config
+$imageProvenance = Get-RigImageProvenance -Config $config -ScriptRoot $here
+Write-Host ("Testing {0} ({1})." -f $imageProvenance.mcpImage, $(if ($imageProvenance.mcpImageId) { $imageProvenance.mcpImageId } else { 'unresolved' })) -ForegroundColor DarkGray
+if ($null -ne $imageProvenance.builtFrom) {
+	Write-Host ("  built by the rig from {0} (commit {1}); matches the tested image: {2}" -f `
+			$imageProvenance.builtFrom.gitRef, $imageProvenance.builtFrom.commitSha, $imageProvenance.builtFrom.matchesTestedImage) -ForegroundColor DarkGray
+}
 if ($hostContext.contended) {
 	Write-Host ("NOTE: {0} unrelated container(s) are running on this host. Cold start is CPU-bound, so the spread this cohort reports is the HOST's floor, not the rig's. RECORD this cohort as contended - do NOT stop the live deployment to quiet the box (see the README): a number bought that way is not reproducible." -f $hostContext.foreignContainers) -ForegroundColor Yellow
 }
@@ -499,6 +555,35 @@ if (-not $KeepUp) {
 	Invoke-RigCompose -Config $config -ComposeArgs @('down', '--remove-orphans') -AllowFailure | Out-Null
 }
 
+# --- Post-condition: the rig did not touch the live deployment -----------
+# "The rig cannot touch the deployment" is a design claim until something
+# checks it. Re-reading the live container's PINNED image id and comparing it
+# with the id read before the cohort turns the claim into a measurement that
+# is taken on every run, for free.
+$livePinAfter = Get-RigLiveImagePin -Config $config
+$livePostCondition = [ordered] @{
+	checked              = ($livePinBefore.checked -and $livePinAfter.checked)
+	container            = "$($livePinAfter.container)"
+	pinnedImageIdBefore  = "$($livePinBefore.pinnedImageId)"
+	pinnedImageIdAfter   = "$($livePinAfter.pinnedImageId)"
+	unchanged            = $true
+	driftBefore          = [bool] $livePinBefore.drifted
+	driftAfter           = [bool] $livePinAfter.drifted
+	message              = ''
+}
+if ($livePostCondition.checked) {
+	$livePostCondition.unchanged = ($livePostCondition.pinnedImageIdBefore -eq $livePostCondition.pinnedImageIdAfter)
+	$livePostCondition.message = if ($livePostCondition.unchanged) {
+		"Live container '$($livePinAfter.container)' is still pinned to $($livePostCondition.pinnedImageIdAfter); the cohort did not touch it."
+	}
+	else {
+		"POST-CONDITION VIOLATED: live container '$($livePinAfter.container)' was pinned to $($livePostCondition.pinnedImageIdBefore) before this cohort and is pinned to $($livePostCondition.pinnedImageIdAfter) now. The live deployment was recreated while the rig ran."
+	}
+}
+else {
+	$livePostCondition.message = 'Live pin post-condition not evaluated: no live deployment was readable on this host.'
+}
+
 # --- Summary -------------------------------------------------------------
 $allScenarios = @($runResults | ForEach-Object { $_.scenarios })
 $summary = foreach ($group in ($allScenarios | Group-Object scenario)) {
@@ -524,11 +609,17 @@ $summary = foreach ($group in ($allScenarios | Group-Object scenario)) {
 }
 
 $cohort = [ordered] @{
-	schemaVersion = 1
+	schemaVersion = 2
 	kind          = 'coldstart-rig/cohort'
 	cohortId      = $CohortId
 	generatedUtc  = [datetime]::UtcNow.ToString('o')
 	hostContext   = $hostContext
+	imageUnderTest = $imageProvenance
+	liveDeployment = [ordered] @{
+		pinBeforeCohort = $livePinBefore
+		pinAfterCohort  = $livePinAfter
+		postCondition   = $livePostCondition
+	}
 	configuration = [ordered] @{
 		project        = "$($config.ProjectName)"
 		hostPort       = [int] $config.HostPort
@@ -564,3 +655,12 @@ foreach ($entry in $summary) {
 }
 Write-Host ''
 Write-Host "Cohort written to $cohortPath" -ForegroundColor Green
+
+# The evidence is on disk before the post-condition is allowed to fail the
+# run, so a violated post-condition never costs the operator the measurements
+# that were already taken.
+if ($livePostCondition.checked -and -not $livePostCondition.unchanged) {
+	throw $livePostCondition.message
+}
+Write-Host $livePostCondition.message -ForegroundColor DarkGray
+if ($livePinAfter.drifted) { Write-RigLiveImagePin -Report $livePinAfter | Out-Null }

@@ -179,6 +179,238 @@ function Add-RigImageTag {
 
 <#
 .SYNOPSIS
+	Names the live deployment's host container, discovered from the compose
+	project the isolation contract already declares forbidden.
+
+.DESCRIPTION
+	Read-only and best effort. The name is DERIVED rather than configured, so
+	the drift check cannot go stale against a second hard-coded copy of the
+	live identity: `ForbiddenProjects` is already the single place the live
+	compose project is named. Stopped containers count - a stopped container
+	still carries a pinned image and its next start is exactly the moment the
+	swap would happen.
+
+	Returns $null when no such container exists (a clean box, or a host that
+	never ran the deployment), which the caller must treat as a skip.
+#>
+function Get-RigLiveContainerName {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)] [hashtable] $Config)
+
+	foreach ($project in @($Config.ForbiddenProjects)) {
+		if ([string]::IsNullOrWhiteSpace("$project")) { continue }
+		$names = @(Invoke-RigDocker -AllowFailure -DockerArgs @(
+				'ps', '-a',
+				'--filter', "label=com.docker.compose.project=$project",
+				'--filter', 'label=com.docker.compose.service=repocontext',
+				'--format', '{{.Names}}') | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and $_ -notmatch '^(Error|error)' })
+		if ($names.Count -gt 0) { return $names[0] }
+	}
+	return $null
+}
+
+<#
+.SYNOPSIS
+	Reads a Docker object's image id, or '' when it does not resolve.
+#>
+function Get-RigDockerImageId {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [AllowEmptyString()] [string] $Reference,
+		[string] $Format = '{{.Id}}'
+	)
+
+	if ([string]::IsNullOrWhiteSpace($Reference)) { return '' }
+	$raw = (Invoke-RigDocker -AllowFailure -DockerArgs @('inspect', $Reference, '--format', $Format) | Out-String).Trim()
+	if ($raw -notmatch '^sha256:[0-9a-fA-F]{8,}$') { return '' }
+	return $raw
+}
+
+<#
+.SYNOPSIS
+	Reports whether the LIVE deployment's running code and its image tag have
+	diverged, so a restart would silently swap what it runs.
+
+.DESCRIPTION
+	Purely read-only: two `docker inspect` calls and a comparison. It touches
+	nothing, and it catches the hazard regardless of who moved the tag - a
+	deploy script, a manual build, or a rig operator - because it asks the
+	daemon what is true now rather than trusting anyone's intent.
+
+	The image reference is read from the live container itself
+	(`.Config.Image`) rather than configured, so the check follows the
+	deployment instead of a second copy of its identity. Every failure to
+	resolve becomes a quiet skip.
+#>
+function Get-RigLiveImagePin {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Config,
+		[string] $Container,
+		[string] $ImageReference
+	)
+
+	if (-not $Container) { $Container = Get-RigLiveContainerName -Config $Config }
+	if ([string]::IsNullOrWhiteSpace($Container)) {
+		return Compare-RigLiveImagePin -Container '' -ImageReference '' -PinnedImageId '' -TagImageId ''
+	}
+
+	$pinned = Get-RigDockerImageId -Reference $Container -Format '{{.Image}}'
+	if (-not $ImageReference) {
+		$ImageReference = (Invoke-RigDocker -AllowFailure -DockerArgs @('inspect', $Container, '--format', '{{.Config.Image}}') | Out-String).Trim()
+	}
+	$tagged = Get-RigDockerImageId -Reference $ImageReference
+
+	return Compare-RigLiveImagePin -Container $Container -ImageReference $ImageReference -PinnedImageId $pinned -TagImageId $tagged
+}
+
+<#
+.SYNOPSIS
+	Prints a live-image-pin report, loudly when it found drift.
+#>
+function Write-RigLiveImagePin {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)] [psobject] $Report)
+
+	switch ($Report.status) {
+		'drift' {
+			Write-Host ''
+			Write-Host '**********************************************************************' -ForegroundColor Red
+			Write-Host $Report.message -ForegroundColor Red
+			Write-Host '**********************************************************************' -ForegroundColor Red
+			Write-Host ''
+		}
+		'clean' { Write-Host $Report.message -ForegroundColor DarkGray }
+		default { Write-Host $Report.message -ForegroundColor DarkGray }
+	}
+	return $Report
+}
+
+<#
+.SYNOPSIS
+	Builds the RepoContext host image from a git ref into the rig's own build
+	tag, so testing new code never requires a tool that promotes to production.
+
+.DESCRIPTION
+	The rig's compose stack still never builds; this is a deliberate,
+	separately-invoked operator command whose destination is validated by
+	Assert-RigBuildImage (which forbids every live tag and requires the rig's
+	build-tag prefix). It builds a DETACHED WORKTREE at the resolved commit,
+	not the dirty working tree, so `coldstart-<sha>` really is that commit.
+
+	The result is recorded as the run's source image, which `rig.ps1 tag` and
+	run-cohort.ps1 then read, so the rig's own additional tag is applied to
+	the image that was just built rather than to whatever `:local` happens to
+	hold.
+#>
+function Invoke-RigBuild {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Config,
+		[string] $Ref = 'HEAD',
+		[string] $NuGetConfigFile,
+		[string] $ScriptRoot
+	)
+
+	Assert-RigIsolation -Config $Config | Out-Null
+	if (-not $ScriptRoot) { $ScriptRoot = $PSScriptRoot }
+
+	# Resolved BEFORE the worktree is created and the build begins, so a
+	# mistyped path costs a second rather than a minutes-long build.
+	$nugetConfig = Resolve-RigNuGetConfigFile -Config $Config -Explicit $NuGetConfigFile -EnvironmentValue $env:NUGET_CONFIG_FILE
+
+	$repoRoot = (& git -C $ScriptRoot rev-parse --show-toplevel 2>&1 | Out-String).Trim()
+	if ($LASTEXITCODE -ne 0 -or -not $repoRoot) { throw "Rig build could not locate the git repository from '$ScriptRoot'." }
+
+	$sha = (& git -C $repoRoot rev-parse --verify "$Ref^{commit}" 2>&1 | Out-String).Trim()
+	if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') { throw "Rig build could not resolve git ref '$Ref' to a commit." }
+
+	$destination = Assert-RigBuildImage -Config $Config -Destination (Get-RigBuildImageReference -Config $Config -Sha $sha)
+
+	$dockerfile = Join-Path $repoRoot 'apps/repocontext/Dockerfile'
+	if (-not (Test-Path -LiteralPath $dockerfile)) { throw "Rig build could not find the host Dockerfile at '$dockerfile'." }
+
+	$worktree = Join-Path (Get-RigRunRoot -ScriptRoot $ScriptRoot) ("build-{0}" -f $sha.Substring(0, 12))
+	if (Test-Path -LiteralPath $worktree) {
+		& git -C $repoRoot worktree remove --force $worktree 2>&1 | Out-Null
+		if (Test-Path -LiteralPath $worktree) { Remove-Item -Recurse -Force -LiteralPath $worktree }
+	}
+
+	Write-Host "Building $destination from $Ref ($($sha.Substring(0, 12))) ..." -ForegroundColor Cyan
+	if ($nugetConfig) { Write-Host "  restoring through $nugetConfig (BuildKit secret 'nugetcfg'; never written to a layer)." -ForegroundColor DarkGray }
+	& git -C $repoRoot worktree add --detach --force $worktree $sha 2>&1 | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw "Rig build could not create a worktree for commit $sha." }
+
+	try {
+		# Streamed, not captured: an image build is minutes long, and a rig
+		# command that prints nothing until it fails is one an operator learns
+		# to run outside the rig.
+		$buildArgs = @('build', '-f', (Join-Path $worktree 'apps/repocontext/Dockerfile'), '-t', $destination)
+		if ($nugetConfig) { $buildArgs += @('--secret', "id=nugetcfg,src=$nugetConfig") }
+		$buildArgs += $worktree
+		& docker @buildArgs
+		if ($LASTEXITCODE -ne 0) { throw "Rig build FAILED: docker build exited with code $LASTEXITCODE (destination $destination). Nothing was tagged." }
+	}
+	finally {
+		& git -C $repoRoot worktree remove --force $worktree 2>&1 | Out-Null
+	}
+
+	$imageId = Get-RigDockerImageId -Reference $destination
+	$record = Set-RigBuildSource -ScriptRoot $ScriptRoot -Record ([ordered] @{
+			image     = $destination
+			imageId   = $imageId
+			gitRef    = "$Ref"
+			commitSha = $sha
+			builtUtc  = [datetime]::UtcNow.ToString('o')
+		})
+
+	Write-Host "Built $destination ($imageId)." -ForegroundColor Green
+	return $record
+}
+
+<#
+.SYNOPSIS
+	Records the image a rig build produced as the run's source image.
+#>
+function Set-RigBuildSource {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [System.Collections.IDictionary] $Record,
+		[string] $ScriptRoot
+	)
+
+	$path = Join-Path (Get-RigRunRoot -ScriptRoot $ScriptRoot) 'build-source.json'
+	Set-Content -LiteralPath $path -Value ($Record | ConvertTo-Json -Depth 5) -Encoding ascii
+	return ([pscustomobject] $Record)
+}
+
+<#
+.SYNOPSIS
+	The image a previous `rig.ps1 build` recorded as the run's source, or
+	$null when no build has been run on this host.
+
+.DESCRIPTION
+	The record is ignored (and reported as absent) when the image it names no
+	longer exists, so a pruned build can never silently send a cohort back to
+	whatever `:local` currently holds while the JSON still claims otherwise.
+#>
+function Get-RigBuildSource {
+	[CmdletBinding()]
+	param([string] $ScriptRoot)
+
+	$path = Join-Path (Get-RigRunRoot -ScriptRoot $ScriptRoot) 'build-source.json'
+	if (-not (Test-Path -LiteralPath $path)) { return $null }
+
+	try { $record = (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json) }
+	catch { return $null }
+
+	if ($null -eq $record -or [string]::IsNullOrWhiteSpace("$($record.image)")) { return $null }
+	if ((Get-RigDockerImageId -Reference "$($record.image)") -eq '') { return $null }
+	return $record
+}
+
+<#
+.SYNOPSIS
 	True when a named Docker volume exists.
 #>
 function Test-RigVolumeExists {

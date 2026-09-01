@@ -12,8 +12,22 @@
 
 	  guard    Run BOTH halves of the isolation guard and print what the rig
 	           would actually bind, as resolved by Docker. Use this to satisfy
-	           yourself that the rig cannot reach the live deployment.
+	           yourself that the rig cannot reach the live deployment. Also
+	           reports LIVE IMAGE DRIFT: whether the live deployment's running
+	           code and its image tag have diverged, so a restart of it would
+	           silently swap what it runs.
+	  build    Build the RepoContext host image from a git ref into the rig's
+	           own build tag (repocontext-mcp:coldstart-<sha>) and record it as
+	           the run's source, e.g.
+	           ./rig.ps1 build feat/my-branch
+	           It NEVER writes a live tag, so testing new code never requires
+	           the deploy script (which promotes to production as a side
+	           effect). Behind a private or corporate NuGet feed, set
+	           $env:NUGET_CONFIG_FILE (or pass -NuGetConfigFile) to your own
+	           NuGet.Config; it is passed as a BuildKit secret and never
+	           written into an image layer.
 	  tag      Apply the rig's additional image tags to already-built images.
+	           Prefers the image the last `build` recorded, when there is one.
 	  clone    Recreate the working volume as a fresh clone of the master.
 	  up       Bring the stack up on the CURRENT working volume.
 	  down     Stop and remove the rig's containers (volumes are kept).
@@ -28,15 +42,20 @@
 	./rig.ps1 guard
 
 .EXAMPLE
+	./rig.ps1 build feat/bounded-cold-start-at-scale
+
+.EXAMPLE
 	./rig.ps1 mcp repocontext_search '{"repoId":"lattice","query":"wal replay","k":3}'
 #>
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory, Position = 0)]
-	[ValidateSet('guard', 'tag', 'clone', 'up', 'down', 'status', 'logs', 'mcp', 'clean')]
+	[ValidateSet('guard', 'build', 'tag', 'clone', 'up', 'down', 'status', 'logs', 'mcp', 'clean')]
 	[string] $Command,
 	[Parameter(Position = 1)] [string] $Argument1,
 	[Parameter(Position = 2)] [string] $Argument2,
+	[string] $Ref,
+	[string] $NuGetConfigFile,
 	[string] $ParametersFile,
 	[switch] $All
 )
@@ -73,10 +92,30 @@ switch ($Command) {
 		}
 		Write-Host ''
 		Write-Host 'Refused by construction: the repocontextcontainer project, any repocontextcontainer_* volume, the repocontext-mcp:local tag, and host port 8080.' -ForegroundColor DarkGray
+
+		# The rig cannot move a live tag, but something else on this host can.
+		# The pin check is read-only and says whether that already happened.
+		Write-Host ''
+		Write-Host 'Live deployment image pin:' -ForegroundColor Cyan
+		Write-RigLiveImagePin -Report (Get-RigLiveImagePin -Config $config) | Out-Null
+	}
+
+	'build' {
+		$reference = if ($Ref) { $Ref } elseif ($Argument1) { $Argument1 } else { 'HEAD' }
+		$record = Invoke-RigBuild -Config $config -Ref $reference -NuGetConfigFile $NuGetConfigFile -ScriptRoot $here
+		Write-Host "Recorded as the run's source image; `./rig.ps1 tag` and run-cohort.ps1 will now tag from $($record.image)." -ForegroundColor Green
 	}
 
 	'tag' {
-		Add-RigImageTag -Config $config -Source "$($config.SourceMcpImage)" -Destination "$($config.McpImage)" | Out-Null
+		# A recorded build is the source when there is one: an operator who
+		# just built a branch means to measure THAT, not whatever the live tag
+		# holds.
+		$built = Get-RigBuildSource -ScriptRoot $here
+		$mcpSource = if ($built) { "$($built.image)" } else { "$($config.SourceMcpImage)" }
+		if ($built) {
+			Write-Host "Using the recorded build source $mcpSource (commit $($built.commitSha))." -ForegroundColor Cyan
+		}
+		Add-RigImageTag -Config $config -Source $mcpSource -Destination "$($config.McpImage)" | Out-Null
 		Add-RigImageTag -Config $config -Source "$($config.SourceEmbedderImage)" -Destination "$($config.EmbedderImage)" | Out-Null
 		Write-Host "Tagged $($config.McpImage) and $($config.EmbedderImage)." -ForegroundColor Green
 	}
