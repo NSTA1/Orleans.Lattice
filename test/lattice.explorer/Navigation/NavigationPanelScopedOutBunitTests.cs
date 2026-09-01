@@ -64,8 +64,9 @@ public sealed class NavigationPanelScopedOutBunitTests : LatticeComponentTestCon
     public void A_catalog_emptied_by_the_tenant_scope_offers_the_way_out_of_it()
     {
         // The panel's state block renders the remedy prose, not the copy's
-        // ActionLabel (which no surface in the repo consumes), so this asserts
-        // what a reader is actually shown.
+        // ActionLabel. The shared SelectionStateView does render it, but the
+        // catalog panel hand-rolls its own state block instead of using it, so
+        // this asserts what a reader of THIS surface is actually shown.
         ConfigureCatalog(scopedToTenantId: "acme", scopeFilteredCount: 3);
 
         var cut = Render<NavigationPanel>();
