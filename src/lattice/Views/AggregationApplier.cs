@@ -179,7 +179,12 @@ internal sealed class AggregationApplier(
         // now keeps storage bounded without needing an atomic delete. Cleanup is
         // driven by the store's actual value (not the computed row), so it is a
         // safe no-op when the flip was deduped by a replay's saga re-attach.
-        foreach (var key in slots.Keys)
+        // Iterate the slots dictionary directly rather than through its `.Keys`
+        // collection: `slots` is a fresh per-contribution map, so each `.Keys`
+        // access otherwise allocates a throwaway KeyCollection wrapper. The
+        // cleanup below only reads the store per key and never mutates `slots`,
+        // so the struct enumerator is safe here.
+        foreach (var (key, _) in slots)
         {
             await CleanupIfEmptyAsync(key, cancellationToken);
         }
@@ -463,9 +468,14 @@ internal sealed class AggregationApplier(
         }
 
         var shards = await store.GetManyAsync(slotKeys, cancellationToken);
-        foreach (var bytes in shards.Values)
+
+        // Walk the freshly-materialised shard map and each decoded inverse map by
+        // their struct enumerators rather than through `.Values`: both dictionaries
+        // are fresh per call (the GetMany result and each per-shard decode), so
+        // every `.Values` access otherwise allocates a throwaway ValueCollection.
+        foreach (var (_, bytes) in shards)
         {
-            foreach (var entry in DecodeInverse(bytes).Values)
+            foreach (var (_, entry) in DecodeInverse(bytes))
             {
                 hasAny = true;
                 if (kind == AggregationKind.Min)
@@ -593,7 +603,11 @@ internal sealed class AggregationApplier(
         }
 
         var shards = await store.GetManyAsync(slotKeys, cancellationToken);
-        foreach (var bytes in shards.Values)
+
+        // Walk the freshly-materialised shard map directly rather than through
+        // `.Values`: `shards` is a fresh GetMany result, so a `.Values` access
+        // otherwise allocates a throwaway ValueCollection wrapper per call.
+        foreach (var (_, bytes) in shards)
         {
             foreach (var (sourceKey, member) in DecodeFoldInverse(bytes))
             {
