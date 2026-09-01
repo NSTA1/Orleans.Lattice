@@ -1,0 +1,70 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Orleans.Lattice.Embedding.Onnx</RootNamespace>
+    <AssemblyName>Orleans.Lattice.Embedding.Onnx.Host</AssemblyName>
+    <!-- An application image, not a published library. It must not pollute the
+         src/<pkg>+test/<pkg>+docs/<pkg> CI package-discovery globs, so it lives
+         under apps/ and is explicitly non-packable. -->
+    <IsPackable>false</IsPackable>
+    <!-- Tokenization is ordinal and the vocabulary is lower-cased with the
+         invariant culture, so no culture-sensitive collation is performed and
+         the ICU-less chiseled runtime image is safe (and smaller). -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Which ONNX Runtime build to bind, selected at BUILD time because the CPU,
+       CUDA, and DirectML packages all ship the same native onnxruntime library
+       and cannot coexist in one output.
+
+         cpu      (default) portable, no accelerator, small image.
+         cuda     NVIDIA. Carries the CUDA/cuDNN native libraries, so the image
+                  is much larger; it still includes the CPU provider, so
+                  EMBED_PROVIDER falls back to the CPU when no GPU is present.
+         directml any DirectX 12 GPU (AMD/Intel included). WINDOWS ONLY - it
+                  cannot be used in the Linux container image, and exists for
+                  running this server natively on a Windows host.
+
+       The runtime accelerator is then chosen by the EMBED_PROVIDER environment
+       variable, so a cuda-flavoured image serves both CPU and GPU hosts from
+       one build with a config change only. -->
+  <PropertyGroup>
+    <OnnxRuntimeFlavor Condition="'$(OnnxRuntimeFlavor)' == ''">cpu</OnnxRuntimeFlavor>
+  </PropertyGroup>
+
+  <!-- The covering test project lives at tests/ under this app directory (CI's
+       apps lane discovers a *.Tests.csproj there). The Web SDK's default globs
+       would otherwise pull those sources into this project as well, so remove
+       the whole subtree from every glob. -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+    <Content Remove="tests/**" />
+    <None Remove="tests/**" />
+    <EmbeddedResource Remove="tests/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FastBertTokenizer" Version="1.0.28" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OnnxRuntimeFlavor)' == 'cpu'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OnnxRuntimeFlavor)' == 'cuda'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.24.1" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OnnxRuntimeFlavor)' == 'directml'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Embedding.Onnx.Host.Tests" />
+  </ItemGroup>
+
+</Project>

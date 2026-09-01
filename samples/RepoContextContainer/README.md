@@ -49,6 +49,24 @@ Every path passed to `repocontext_add_repo` is resolved to its real location - `
 traversal and symlink escape are both defeated - and must resolve under
 `/workspace` (set by `LATTICE_WORKSPACE_ROOT`); a path outside it is refused.
 
+## Choosing an embedding companion
+
+The sample brings up the default Onyx companion
+([`apps/embedding`](../../apps/embedding/README.md)). An alternative ONNX Runtime
+companion ([`apps/embedding-onnx`](../../apps/embedding-onnx/README.md)) is
+available and can be selected with an override file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.onnx.yml up -d
+```
+
+Nothing else changes. It serves the same contract on the same port, so the
+service name and `LATTICE_EMBEDDING_ENDPOINT` are identical, and it produces
+**numerically identical vectors** (same pinned model revision, fp32, same
+tokenizer and pooling), so switching does not invalidate an existing `/data`
+volume. It is roughly an order of magnitude smaller than the default image and
+selects its accelerator - CPU or NVIDIA - from one build via `EMBED_PROVIDER`.
+
 ## Walkthrough
 
 From this directory:

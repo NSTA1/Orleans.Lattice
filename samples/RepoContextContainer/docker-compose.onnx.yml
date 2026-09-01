@@ -1,0 +1,39 @@
+# Optional override: run the sample against the ONNX Runtime embedding companion
+# (apps/embedding-onnx) instead of the default Onyx one (apps/embedding).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.onnx.yml up -d
+#
+# This is opt-in and additive. The base compose file is unchanged, so plain
+# `docker compose up` still brings up the Onyx companion exactly as before.
+#
+# Only the embedder's IMAGE changes. The service name, the port, and therefore
+# the host's LATTICE_EMBEDDING_ENDPOINT (http://embedder:9000) are all identical,
+# because the ONNX image serves the same contract on the same port. The vectors
+# are numerically identical too (fp32, same pinned model revision, same
+# tokenizer and pooling), so switching does NOT require re-indexing an existing
+# volume - see apps/embedding-onnx/README.md.
+#
+# For an NVIDIA host, build the cuda flavour and enable it here:
+#
+#   build.args.ONNX_FLAVOR: cuda
+#   environment.EMBED_PROVIDER: cuda
+#   deploy.resources.reservations.devices: [{capabilities: [gpu]}]
+
+services:
+  embedder:
+    build:
+      context: ../../apps/embedding-onnx
+      dockerfile: Dockerfile
+      args:
+        # cpu (default) or cuda. The cuda flavour also serves CPU hosts, so one
+        # image covers both and EMBED_PROVIDER alone selects the accelerator.
+        ONNX_FLAVOR: cpu
+    environment:
+      # cpu, or cuda on an NVIDIA host started with the device reservation.
+      # An unknown value falls back to the CPU rather than failing to boot.
+      EMBED_PROVIDER: cpu
+    volumes:
+      # The Onyx image caches HuggingFace downloads in a named volume. This
+      # image bakes the weights into an image layer and needs no cache, so the
+      # base file's hf-cache mount is dropped here.
+      !reset []
