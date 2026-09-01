@@ -28,7 +28,12 @@
 	pwsh -File Test-RigHelpers.ps1
 #>
 [CmdletBinding()]
-param()
+param(
+	# The live-image-drift section constructs a REAL divergence out of two
+	# throwaway images in the rig's own namespace, so it needs a Docker daemon.
+	# It skips itself when there is none; pass this to skip it deliberately.
+	[switch] $SkipDockerTests
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -74,6 +79,14 @@ function _AssertRefuses {
 	_Assert -Name $Name -Condition ($message -like "*$Fragment*") -Detail "threw, but the message did not mention '$Fragment': $message"
 }
 
+# Evaluates a scriptblock, returning $null when it throws, so a helper that is
+# missing or broken is reported as a FAILED assertion rather than aborting the
+# suite before it reaches its summary line.
+function _Try {
+	param([Parameter(Mandatory)] [scriptblock] $Action)
+	try { return & $Action } catch { return $null }
+}
+
 # A baseline configuration with the same shape parameters.ps1 produces.
 function New-TestConfig {
 	param([hashtable] $Override = @{})
@@ -89,6 +102,7 @@ function New-TestConfig {
 		EmbedderImage           = 'rc-embedder:coldstart-rig'
 		SourceMcpImage          = 'repocontext-mcp:local'
 		SourceEmbedderImage     = 'repocontextcontainer-embedder:latest'
+		BuildImageTagPrefix     = 'coldstart-'
 		RequiredProjectPrefix   = 'lattice-coldstart'
 		RequiredVolumePrefix    = 'lattice-coldstart'
 		RequiredImageTag        = 'coldstart-rig'
@@ -206,6 +220,160 @@ _Assert -Name 'a clean volume name yields exactly zero violations' -Condition ($
 $dirtyViolations = Test-RigVolumeName -Volume 'repocontextcontainer_repocontext-data' -Config $baseline -Label 'volume'
 _Assert -Name 'a live volume name yields at least one violation' -Condition ($dirtyViolations.Count -ge 1) `
 	-Detail "Count was $($dirtyViolations.Count)"
+
+# ---------------------------------------------------------------------------
+Write-Host 'Assert-RigBuildImage (build destinations)' -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+
+# A build is the ONLY rig operation that creates an image, so it is the one
+# place a live tag could be moved. Its destination guard gets the same
+# treatment as the tagging guard: one test per way it could go wrong.
+
+$buildReference = _Try { Get-RigBuildImageReference -Config $baseline -Sha 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' }
+_Assert -Name 'a build reference is the rig repository plus a build tag for the commit' `
+	-Condition ($buildReference -eq 'repocontext-mcp:coldstart-a1b2c3d4e5f6') -Detail "got '$buildReference'"
+
+$buildAccepted = $true
+$buildError = ''
+try { Assert-RigBuildImage -Config $baseline -Destination $buildReference | Out-Null }
+catch { $buildAccepted = $false; $buildError = $_.Exception.Message }
+_Assert -Name "the rig's own build destination is accepted" -Condition $buildAccepted -Detail $buildError
+
+_AssertRefuses -Name 'REFUSES building the LIVE image tag' -Fragment 'LIVE image tag' `
+	-Action { Assert-RigBuildImage -Config $baseline -Destination 'repocontext-mcp:local' }
+
+_AssertRefuses -Name 'REFUSES building a live embedder tag' -Fragment 'LIVE image tag' `
+	-Action { Assert-RigBuildImage -Config $baseline -Destination 'repocontextcontainer-embedder:latest' }
+
+_AssertRefuses -Name 'REFUSES building an image without the rig build-tag prefix' -Fragment 'build-tag prefix' `
+	-Action { Assert-RigBuildImage -Config $baseline -Destination 'repocontext-mcp:candidate-abc123' }
+
+# An untagged reference means ':latest', which is exactly how a build would
+# clobber a default tag by accident.
+_AssertRefuses -Name 'REFUSES building an untagged reference' -Fragment 'build-tag prefix' `
+	-Action { Assert-RigBuildImage -Config $baseline -Destination 'repocontext-mcp' }
+
+# The build produces a SOURCE the rig then applies its additional run tag to.
+# Building straight into the run tag would overwrite the image a rig may be
+# running and would collapse the two-step layering that keeps the tag additive.
+_AssertRefuses -Name 'REFUSES building into the tag the rig RUNS' -Fragment 'tag the rig RUNS' `
+	-Action { Assert-RigBuildImage -Config $baseline -Destination 'repocontext-mcp:coldstart-rig' }
+
+_AssertRefuses -Name 'REFUSES an empty build destination' -Fragment 'null or empty' `
+	-Action { Assert-RigBuildImage -Config $baseline -Destination '' }
+
+# The prefix is OPTIONAL configuration, so a parameters.local.ps1 written
+# before the build command existed still loads instead of refusing everything.
+$withoutPrefix = New-TestConfig
+$withoutPrefix.Remove('BuildImageTagPrefix') | Out-Null
+_Assert -Name 'an absent build-tag prefix falls back to the rig default' `
+	-Condition ((_Try { Get-RigBuildTagPrefix -Config $withoutPrefix }) -eq 'coldstart-') `
+	-Detail "got '$(_Try { Get-RigBuildTagPrefix -Config $withoutPrefix })'"
+
+# ---------------------------------------------------------------------------
+Write-Host 'Resolve-RigNuGetConfigFile (private / corporate feed)' -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+
+# A build on a host behind a corporate NuGet proxy cannot reach nuget.org, so
+# the rig has to be able to restore through the operator's own NuGet.Config -
+# using the SAME env var the local-dev reference architecture uses, so a proxy
+# is configured once and works in both places.
+
+$nugetRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rig-nuget-{0}" -f [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $nugetRoot | Out-Null
+$nugetExplicit = Join-Path $nugetRoot 'explicit.config'
+$nugetEnv = Join-Path $nugetRoot 'env.config'
+$nugetParam = Join-Path $nugetRoot 'parameters.config'
+foreach ($f in @($nugetExplicit, $nugetEnv, $nugetParam)) { Set-Content -LiteralPath $f -Value '<configuration />' -Encoding ascii }
+
+try {
+	# Nothing configured must stay the SDK default, so the common case (a host
+	# that can reach nuget.org) needs no configuration at all.
+	_Assert -Name 'no configured NuGet.Config resolves to the SDK default' `
+		-Condition ((_Try { Resolve-RigNuGetConfigFile -Config (New-TestConfig) -Explicit '' -EnvironmentValue '' }) -eq '') `
+		-Detail "got '$(_Try { Resolve-RigNuGetConfigFile -Config (New-TestConfig) -Explicit '' -EnvironmentValue '' })'"
+
+	$fromParameters = _Try { Resolve-RigNuGetConfigFile -Config (New-TestConfig @{ NuGetConfigFile = $nugetParam }) -Explicit '' -EnvironmentValue '' }
+	_Assert -Name 'the rig parameters can name a NuGet.Config' -Condition ($fromParameters -eq $nugetParam) -Detail "got '$fromParameters'"
+
+	$fromEnv = _Try { Resolve-RigNuGetConfigFile -Config (New-TestConfig @{ NuGetConfigFile = $nugetParam }) -Explicit '' -EnvironmentValue $nugetEnv }
+	_Assert -Name 'NUGET_CONFIG_FILE overrides the rig parameters' -Condition ($fromEnv -eq $nugetEnv) -Detail "got '$fromEnv'"
+
+	$fromExplicit = _Try { Resolve-RigNuGetConfigFile -Config (New-TestConfig @{ NuGetConfigFile = $nugetParam }) -Explicit $nugetExplicit -EnvironmentValue $nugetEnv }
+	_Assert -Name 'an explicit -NuGetConfigFile overrides both' -Condition ($fromExplicit -eq $nugetExplicit) -Detail "got '$fromExplicit'"
+
+	# Silently falling back to nuget.org here would restore from a feed the host
+	# cannot reach and fail minutes later inside the image build, blaming the
+	# wrong thing entirely.
+	_AssertRefuses -Name 'REFUSES a NuGet.Config path that does not exist' -Fragment 'does not exist' `
+		-Action { Resolve-RigNuGetConfigFile -Config (New-TestConfig) -Explicit (Join-Path $nugetRoot 'absent.config') -EnvironmentValue '' }
+
+	_AssertRefuses -Name 'REFUSES a NUGET_CONFIG_FILE that does not exist' -Fragment 'does not exist' `
+		-Action { Resolve-RigNuGetConfigFile -Config (New-TestConfig) -Explicit '' -EnvironmentValue (Join-Path $nugetRoot 'absent.config') }
+}
+finally { Remove-Item -Recurse -Force -LiteralPath $nugetRoot -ErrorAction SilentlyContinue }
+
+# ---------------------------------------------------------------------------
+Write-Host 'Compare-RigLiveImagePin (live image drift, pure comparison)' -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+
+# A container is pinned to an image ID at create time, so moving its tag leaves
+# it running but arms the NEXT restart to adopt different code. These cases fix
+# the two things that make such a detector worth having: it must fire on a real
+# divergence, and it must stay quiet on everything else - including a box where
+# the live deployment simply is not there.
+
+$pinDrift = _Try {
+	Compare-RigLiveImagePin -Container 'repocontextcontainer-repocontext-1' -ImageReference 'repocontext-mcp:local' `
+		-PinnedImageId 'sha256:aaaa1111' -TagImageId 'sha256:bbbb2222'
+}
+_Assert -Name 'differing pinned and tag ids are reported as DRIFT' `
+	-Condition ($null -ne $pinDrift -and $pinDrift.status -eq 'drift' -and $pinDrift.drifted -and $pinDrift.checked) `
+	-Detail ($pinDrift | ConvertTo-Json -Compress)
+$pinDriftMessage = if ($null -ne $pinDrift) { "$($pinDrift.message)" } else { '' }
+_Assert -Name 'the drift message names both ids and says a restart would replace the code' `
+	-Condition ($pinDriftMessage -like '*LIVE IMAGE DRIFT*' -and $pinDriftMessage -like '*sha256:aaaa1111*' -and $pinDriftMessage -like '*sha256:bbbb2222*' -and $pinDriftMessage -like '*REPLACE*') `
+	-Detail $pinDriftMessage
+
+$pinClean = _Try {
+	Compare-RigLiveImagePin -Container 'repocontextcontainer-repocontext-1' -ImageReference 'repocontext-mcp:local' `
+		-PinnedImageId 'sha256:aaaa1111' -TagImageId 'sha256:aaaa1111'
+}
+_Assert -Name 'matching ids are reported as CLEAN, not drift' `
+	-Condition ($null -ne $pinClean -and $pinClean.status -eq 'clean' -and -not $pinClean.drifted -and $pinClean.checked) `
+	-Detail ($pinClean | ConvertTo-Json -Compress)
+
+# Docker prints ids in a single case, but a caller trimming or upper-casing one
+# of them must not manufacture an alarm out of nothing.
+$pinCase = _Try {
+	Compare-RigLiveImagePin -Container 'c' -ImageReference 'i' -PinnedImageId ' SHA256:AAAA1111 ' -TagImageId 'sha256:aaaa1111'
+}
+_Assert -Name 'case and whitespace differences are not mistaken for drift' `
+	-Condition ($null -ne $pinCase -and $pinCase.status -eq 'clean') -Detail ($pinCase | ConvertTo-Json -Compress)
+
+# Fail-SAFE, not fail-closed: this is a read-only advisory about a deployment
+# the rig does not own. A clean box must produce a quiet skip - never a crash,
+# and never a false alarm that trains an operator to ignore the check.
+$pinNoContainer = _Try { Compare-RigLiveImagePin -Container '' -ImageReference '' -PinnedImageId '' -TagImageId '' }
+_Assert -Name 'no live container yields a quiet SKIP, not drift' `
+	-Condition ($null -ne $pinNoContainer -and $pinNoContainer.status -eq 'skipped' -and -not $pinNoContainer.drifted -and -not $pinNoContainer.checked) `
+	-Detail ($pinNoContainer | ConvertTo-Json -Compress)
+
+$pinNoTag = _Try {
+	Compare-RigLiveImagePin -Container 'repocontextcontainer-repocontext-1' -ImageReference 'repocontext-mcp:local' `
+		-PinnedImageId 'sha256:aaaa1111' -TagImageId ''
+}
+_Assert -Name 'an image reference that does not resolve yields a SKIP, not drift' `
+	-Condition ($null -ne $pinNoTag -and $pinNoTag.status -eq 'skipped' -and -not $pinNoTag.drifted) `
+	-Detail ($pinNoTag | ConvertTo-Json -Compress)
+
+$pinNoPin = _Try {
+	Compare-RigLiveImagePin -Container 'repocontextcontainer-repocontext-1' -ImageReference 'repocontext-mcp:local' `
+		-PinnedImageId '' -TagImageId 'sha256:aaaa1111'
+}
+_Assert -Name 'an unreadable pinned image id yields a SKIP, not drift' `
+	-Condition ($null -ne $pinNoPin -and $pinNoPin.status -eq 'skipped' -and -not $pinNoPin.drifted) `
+	-Detail ($pinNoPin | ConvertTo-Json -Compress)
 
 # ---------------------------------------------------------------------------
 Write-Host 'Get-RigConfig (override semantics)' -ForegroundColor Cyan
@@ -543,6 +711,129 @@ _Assert -Name 'a one-event SSE response body is decoded' -Condition ($null -ne $
 _Assert -Name 'the first text content block is extracted' -Condition ((Get-RigMcpFirstText -Result $decoded.result) -eq '{"mode":"semantic"}') -Detail (Get-RigMcpFirstText -Result $decoded.result)
 _Assert -Name 'a plain JSON response body is decoded' -Condition ((ConvertFrom-RigMcpBody -Body '{"jsonrpc":"2.0","id":7}').id -eq 7)
 _Assert -Name 'an empty response body yields null rather than an error' -Condition ($null -eq (ConvertFrom-RigMcpBody -Body ''))
+
+# ---------------------------------------------------------------------------
+Write-Host 'Live image drift detection (Docker-backed: a REAL divergence)' -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+
+# The pure cases above prove the COMPARISON. They cannot prove that the
+# detector reads the right two things out of Docker - and a drift check that
+# never sees an actual divergence proves nothing at all. So this section builds
+# one: two throwaway images with genuinely different ids, a container pinned to
+# the first, and then the tag moved onto the second. That is precisely the shape
+# a deploy leaves behind when it rebuilds and re-points a tag under a running
+# container.
+#
+# Everything it creates lives in the RIG's own namespace (a `coldstart-` build
+# tag and a `lattice-coldstart` container name) and is removed again, so the
+# test cannot name, read or disturb anything belonging to the live deployment.
+
+function _Docker {
+	param([Parameter(Mandatory, ValueFromRemainingArguments)] [string[]] $DockerArgs)
+	$output = & docker @DockerArgs 2>&1
+	return [pscustomobject] @{ Ok = ($LASTEXITCODE -eq 0); Output = ($output | Out-String).Trim() }
+}
+
+$driftTag = 'repocontext-mcp:coldstart-drifttest'
+$driftOtherTag = 'repocontext-mcp:coldstart-drifttest-other'
+$driftContainer = 'lattice-coldstart-drifttest'
+
+$dockerReady = $false
+if (-not $SkipDockerTests) {
+	try { $dockerReady = (_Docker version --format '{{.Server.Version}}').Ok } catch { $dockerReady = $false }
+	if ($dockerReady -and -not (Get-Command tar -ErrorAction SilentlyContinue)) { $dockerReady = $false }
+}
+
+if (-not $dockerReady) {
+	Write-Host '  SKIP  no reachable Docker daemon (or no tar); the real-divergence cases did not run.' -ForegroundColor Yellow
+}
+else {
+	# The throwaway tags must themselves satisfy the rig's build-destination
+	# guard: if this test needed a name the rig would refuse, it would be
+	# proving the detector on artefacts the rig could never legitimately own.
+	$fixtureAccepted = $true
+	try { Assert-RigBuildImage -Config $baseline -Destination $driftTag | Out-Null }
+	catch { $fixtureAccepted = $false }
+	_Assert -Name "the drift fixture's own tag lives in the rig's build namespace" -Condition $fixtureAccepted
+
+	$driftRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rig-drift-{0}" -f [guid]::NewGuid().ToString('N').Substring(0, 8))
+	New-Item -ItemType Directory -Force -Path $driftRoot | Out-Null
+	$imageIdA = ''
+	$imageIdB = ''
+	try {
+		# Two single-file tarballs with different content import as two images
+		# with different ids: no network, no build context, no base image.
+		Set-Content -LiteralPath (Join-Path $driftRoot 'pinned.txt') -Value 'the code the container is running' -Encoding ascii
+		Set-Content -LiteralPath (Join-Path $driftRoot 'moved.txt') -Value 'the code a restart would adopt instead' -Encoding ascii
+		tar -cf (Join-Path $driftRoot 'pinned.tar') -C $driftRoot 'pinned.txt' | Out-Null
+		tar -cf (Join-Path $driftRoot 'moved.tar') -C $driftRoot 'moved.txt' | Out-Null
+
+		_Docker rm -f $driftContainer | Out-Null
+		$imageIdA = (_Docker import (Join-Path $driftRoot 'pinned.tar') $driftTag).Output
+		$imageIdB = (_Docker import (Join-Path $driftRoot 'moved.tar') $driftOtherTag).Output
+
+		_Assert -Name 'the two fixture images really do have different ids' `
+			-Condition ($imageIdA -like 'sha256:*' -and $imageIdB -like 'sha256:*' -and $imageIdA -ne $imageIdB) `
+			-Detail "A='$imageIdA' B='$imageIdB'"
+
+		# Created, never started: `.Image` is the pinned id either way, and a
+		# stopped container is exactly the case where the swap happens on the
+		# next start.
+		$created = _Docker create --name $driftContainer $driftTag /noop
+		_Assert -Name 'a container can be pinned to the first fixture image' -Condition $created.Ok -Detail $created.Output
+
+		# NO-DRIFT case first: while the tag still resolves to the pinned image,
+		# the detector must be quiet. A detector that shouted here would be
+		# useless, because every run would shout.
+		$observedClean = _Try { Get-RigLiveImagePin -Config $baseline -Container $driftContainer -ImageReference $driftTag }
+		_Assert -Name 'an undisturbed container and tag are reported CLEAN' `
+			-Condition ($null -ne $observedClean -and $observedClean.status -eq 'clean' -and -not $observedClean.drifted) `
+			-Detail ($observedClean | ConvertTo-Json -Compress)
+
+		# Now construct the hazard: move the tag onto the OTHER image, exactly
+		# as a rebuild-and-re-point does. The container keeps running the image
+		# it was pinned to; its next restart would not.
+		$moved = _Docker tag $driftOtherTag $driftTag
+		_Assert -Name 'the fixture tag can be moved onto the second image' -Condition $moved.Ok -Detail $moved.Output
+
+		$observedDrift = _Try { Get-RigLiveImagePin -Config $baseline -Container $driftContainer -ImageReference $driftTag }
+		_Assert -Name 'a REAL divergence between pin and tag is DETECTED' `
+			-Condition ($null -ne $observedDrift -and $observedDrift.status -eq 'drift' -and $observedDrift.drifted) `
+			-Detail ($observedDrift | ConvertTo-Json -Compress)
+		_Assert -Name 'the detected drift reports the pinned id and the id the tag moved to' `
+			-Condition ($null -ne $observedDrift -and $observedDrift.pinnedImageId -eq $imageIdA -and $observedDrift.tagImageId -eq $imageIdB) `
+			-Detail ($observedDrift | ConvertTo-Json -Compress)
+
+		# Restoring the tag must silence it again, so the check reflects the
+		# host's state rather than latching once it has fired.
+		_Docker tag $imageIdA $driftTag | Out-Null
+		$observedRestored = _Try { Get-RigLiveImagePin -Config $baseline -Container $driftContainer -ImageReference $driftTag }
+		_Assert -Name 're-pointing the tag at the pinned image clears the drift' `
+			-Condition ($null -ne $observedRestored -and $observedRestored.status -eq 'clean') `
+			-Detail ($observedRestored | ConvertTo-Json -Compress)
+
+		# The two ways a real host disappoints the detector. Neither may throw,
+		# and neither may be mistaken for drift.
+		$observedNoContainer = _Try { Get-RigLiveImagePin -Config $baseline -Container 'lattice-coldstart-drifttest-absent' -ImageReference $driftTag }
+		_Assert -Name 'an absent container is a quiet SKIP against a real daemon' `
+			-Condition ($null -ne $observedNoContainer -and $observedNoContainer.status -eq 'skipped' -and -not $observedNoContainer.drifted) `
+			-Detail ($observedNoContainer | ConvertTo-Json -Compress)
+
+		$observedNoTag = _Try { Get-RigLiveImagePin -Config $baseline -Container $driftContainer -ImageReference 'repocontext-mcp:coldstart-drifttest-absent' }
+		_Assert -Name 'an unresolvable image reference is a quiet SKIP against a real daemon' `
+			-Condition ($null -ne $observedNoTag -and $observedNoTag.status -eq 'skipped' -and -not $observedNoTag.drifted) `
+			-Detail ($observedNoTag | ConvertTo-Json -Compress)
+	}
+	finally {
+		_Docker rm -f $driftContainer | Out-Null
+		_Docker rmi -f $driftTag | Out-Null
+		_Docker rmi -f $driftOtherTag | Out-Null
+		foreach ($id in @($imageIdA, $imageIdB)) {
+			if ($id -like 'sha256:*') { _Docker rmi -f $id | Out-Null }
+		}
+		Remove-Item -Recurse -Force -LiteralPath $driftRoot -ErrorAction SilentlyContinue
+	}
+}
 
 # ---------------------------------------------------------------------------
 Write-Host ''

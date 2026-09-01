@@ -134,6 +134,230 @@ function Get-RigImageTag {
 
 <#
 .SYNOPSIS
+	Returns the repository portion of a Docker image reference (the part
+	before the tag).
+#>
+function Get-RigImageRepository {
+	[CmdletBinding()]
+	param([string] $Image)
+
+	$normalised = ConvertTo-RigNormalisedImage -Image $Image
+	if ($normalised -eq '') { return '' }
+	$lastSlash = $normalised.LastIndexOf('/')
+	$lastColon = $normalised.LastIndexOf(':')
+	if ($lastColon -le $lastSlash) { return $normalised }
+	return $normalised.Substring(0, $lastColon)
+}
+
+<#
+.SYNOPSIS
+	The tag prefix every image the rig BUILDS must carry.
+
+.DESCRIPTION
+	Optional configuration, so a parameters.local.ps1 written before the build
+	command existed still loads. The default is the rig's own namespace, which
+	no live tag shares.
+#>
+function Get-RigBuildTagPrefix {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)] [hashtable] $Config)
+
+	if ($Config.ContainsKey('BuildImageTagPrefix')) {
+		$configured = "$($Config.BuildImageTagPrefix)"
+		if (-not [string]::IsNullOrWhiteSpace($configured)) { return $configured }
+	}
+	return 'coldstart-'
+}
+
+<#
+.SYNOPSIS
+	The image reference the rig builds a given commit into.
+#>
+function Get-RigBuildImageReference {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Config,
+		[Parameter(Mandatory)] [string] $Sha
+	)
+
+	$shortSha = "$Sha".Trim().ToLowerInvariant()
+	if ($shortSha.Length -gt 12) { $shortSha = $shortSha.Substring(0, 12) }
+	if ($shortSha -eq '') { throw 'Rig build REFUSED: the commit to build was not resolved.' }
+
+	# Same repository as the image the rig runs, different tag: the build
+	# produces a SOURCE the rig then applies its additional run tag to.
+	return '{0}:{1}{2}' -f (Get-RigImageRepository -Image "$($Config.McpImage)"), (Get-RigBuildTagPrefix -Config $Config), $shortSha
+}
+
+<#
+.SYNOPSIS
+	Refuses any image reference the rig must never WRITE by building.
+
+.DESCRIPTION
+	Fail-closed, and deliberately the same shape as the tagging guard: a build
+	is the only operation in the rig that creates an image, so it is the one
+	place a live tag could be moved. The destination must not be a live image,
+	must carry the rig's build-tag prefix, and must not be the tag the rig
+	itself runs (a build must produce a source, never overwrite the running
+	image in place).
+
+	Returns the validated, normalised destination so a caller can pipe it.
+#>
+function Assert-RigBuildImage {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)] [hashtable] $Config,
+		[Parameter(Mandatory)] [AllowEmptyString()] [string] $Destination
+	)
+
+	$normalised = ConvertTo-RigNormalisedImage -Image $Destination
+	if ($normalised -eq '') {
+		throw 'Rig isolation guard REFUSED to build: the destination image reference is null or empty.'
+	}
+
+	$forbidden = @($Config.ForbiddenImages) | ForEach-Object { ConvertTo-RigNormalisedImage -Image $_ }
+	if ($forbidden -contains $normalised) {
+		throw "Rig isolation guard REFUSED to build: '$normalised' is a LIVE image tag; a rig build must never write one."
+	}
+
+	$prefix = Get-RigBuildTagPrefix -Config $Config
+	$tag = Get-RigImageTag -Image $normalised
+	if (-not $tag.StartsWith($prefix, [StringComparison]::Ordinal)) {
+		throw "Rig isolation guard REFUSED to build: '$normalised' does not carry the required rig build-tag prefix '$prefix'."
+	}
+
+	if ($normalised -eq (ConvertTo-RigNormalisedImage -Image "$($Config.McpImage)")) {
+		throw "Rig isolation guard REFUSED to build: '$normalised' is the tag the rig RUNS; a build must produce a source the rig then tags, never overwrite the run tag."
+	}
+
+	return $normalised
+}
+
+<#
+.SYNOPSIS
+	Resolves the NuGet.Config a rig build should restore through, or '' when the
+	build should use the SDK default (public nuget.org).
+
+.DESCRIPTION
+	Mirrors the local-dev reference architecture's convention exactly, so an
+	operator behind a corporate proxy configures one thing once and it works in
+	both places: an explicit argument wins, then $env:NUGET_CONFIG_FILE, then a
+	`NuGetConfigFile` entry in the rig parameters.
+
+	A value that names a file which does not exist is a REFUSAL rather than a
+	silent fallback: falling back would restore from a feed the host cannot
+	reach and fail minutes later inside the image build, blaming the wrong
+	thing.
+#>
+function Resolve-RigNuGetConfigFile {
+	[CmdletBinding()]
+	param(
+		[hashtable] $Config,
+		[AllowEmptyString()] [string] $Explicit,
+		[AllowEmptyString()] [string] $EnvironmentValue
+	)
+
+	$source = ''
+	$value = ''
+	if (-not [string]::IsNullOrWhiteSpace($Explicit)) { $value = $Explicit.Trim(); $source = '-NuGetConfigFile' }
+	elseif (-not [string]::IsNullOrWhiteSpace($EnvironmentValue)) { $value = $EnvironmentValue.Trim(); $source = '$env:NUGET_CONFIG_FILE' }
+	elseif ($null -ne $Config -and $Config.ContainsKey('NuGetConfigFile') -and -not [string]::IsNullOrWhiteSpace("$($Config.NuGetConfigFile)")) {
+		$value = "$($Config.NuGetConfigFile)".Trim()
+		$source = "the rig parameters' NuGetConfigFile"
+	}
+
+	if ($value -eq '') { return '' }
+	if (-not (Test-Path -LiteralPath $value -PathType Leaf)) {
+		throw "Rig build REFUSED: $source names a NuGet.Config that does not exist: '$value'."
+	}
+	return (Resolve-Path -LiteralPath $value).Path
+}
+
+<#
+.SYNOPSIS
+	Compares a live container's PINNED image id against what its image tag
+	resolves to now, and reports whether a restart would silently swap the
+	running code.
+
+.DESCRIPTION
+	Pure, so the comparison is testable without Docker. A running container is
+	pinned to an image ID at create time, so moving its tag (as a deploy that
+	builds and re-points `:local` does) leaves the container alone but arms the
+	NEXT restart to adopt different code.
+
+	Fail-SAFE rather than fail-closed, deliberately: this is a read-only
+	advisory over a deployment the rig does not own, and a clean box that has
+	never run the deployment must produce a quiet skip, not a crash and not a
+	false alarm. Any input the caller could not resolve yields status
+	'skipped'. Only two ids that are both present AND differ yield 'drift'.
+#>
+function Compare-RigLiveImagePin {
+	[CmdletBinding()]
+	param(
+		[AllowEmptyString()] [string] $Container,
+		[AllowEmptyString()] [string] $ImageReference,
+		[AllowEmptyString()] [string] $PinnedImageId,
+		[AllowEmptyString()] [string] $TagImageId,
+		[AllowEmptyString()] [string] $SkipReason
+	)
+
+	$normalise = {
+		param($id)
+		if ([string]::IsNullOrWhiteSpace($id)) { return '' }
+		return "$id".Trim().ToLowerInvariant()
+	}
+
+	$pinned = & $normalise $PinnedImageId
+	$tagged = & $normalise $TagImageId
+
+	$report = [ordered] @{
+		status         = 'skipped'
+		drifted        = $false
+		checked        = $false
+		container      = "$Container"
+		imageReference = "$ImageReference"
+		pinnedImageId  = "$PinnedImageId"
+		tagImageId     = "$TagImageId"
+		message        = ''
+	}
+
+	if (-not [string]::IsNullOrWhiteSpace($SkipReason)) {
+		$report.message = "Live image drift check skipped: $SkipReason."
+		return [pscustomobject] $report
+	}
+	if ([string]::IsNullOrWhiteSpace($Container)) {
+		$report.message = 'Live image drift check skipped: no live container was found on this host.'
+		return [pscustomobject] $report
+	}
+	if ($pinned -eq '') {
+		$report.message = "Live image drift check skipped: the pinned image id of container '$Container' could not be read."
+		return [pscustomobject] $report
+	}
+	if ($tagged -eq '') {
+		$report.message = "Live image drift check skipped: image reference '$ImageReference' does not resolve on this host."
+		return [pscustomobject] $report
+	}
+
+	$report.checked = $true
+	if ($pinned -eq $tagged) {
+		$report.status = 'clean'
+		$report.message = "Live image pin is CLEAN: container '$Container' and tag '$ImageReference' are both $pinned."
+		return [pscustomobject] $report
+	}
+
+	$report.status = 'drift'
+	$report.drifted = $true
+	$report.message = (
+		"LIVE IMAGE DRIFT: container '$Container' is pinned to $pinned but tag '$ImageReference' now resolves to $tagged. " +
+		'The live deployment is running code that a restart or recreate would silently REPLACE. ' +
+		'Nothing the rig does moves that tag; something else on this host rebuilt it. ' +
+		"Re-point the tag at the running image (docker tag $pinned $ImageReference) before restarting, or restart deliberately knowing the code changes."
+	)
+	return [pscustomobject] $report
+}
+
+<#
+.SYNOPSIS
 	Refuses a rig configuration that could touch a live deployment.
 
 .DESCRIPTION

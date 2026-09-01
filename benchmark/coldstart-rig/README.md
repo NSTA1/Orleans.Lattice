@@ -25,9 +25,13 @@ guard refuses to start when any of them is violated:
 
 On top of the naming, four structural properties:
 
-- **Nothing is ever built.** `docker-compose.rig.yml` has no `build:` section
-  anywhere. The rig applies its own **additional** tag to an image that already
-  exists, so it can never rebuild an image or move a live tag.
+- **The stack is never built.** `docker-compose.rig.yml` has no `build:` section
+  anywhere, and the guard refuses a resolved document that declares one. What a
+  cohort runs is always an **additional** tag applied to an image that already
+  exists, so a run can never rebuild an image or move a live tag. Building a
+  test image is a separate, deliberate command
+  ([below](#building-a-test-image)) whose destination is guarded in its own
+  right.
 - **The stack cannot bind the pristine master.** Only the per-run working clone
   is mountable, so a run can never mutate the baseline that makes two runs
   comparable.
@@ -35,6 +39,11 @@ On top of the naming, four structural properties:
 - **The guard runs twice.** Once over the configuration (operator intent), and
   once over the compose document **Docker actually resolved** - which is what
   would really be bound, after all interpolation and merging.
+- **The one command that creates an image cannot write a live tag.**
+  `rig.ps1 build` is the only rig operation that builds anything, and its
+  destination is validated by `Assert-RigBuildImage`: it must carry the rig's
+  `coldstart-` build-tag prefix, must not be any tag the isolation contract
+  names live, and must not even be the tag the rig itself runs.
 
 Prove it to yourself at any time:
 
@@ -49,12 +58,146 @@ live identity at both layers:
 pwsh -File ./scripts/Test-RigHelpers.ps1
 ```
 
+### The hazard the guard does not cover: the workflow around it
+
+The guard governs **the rig**. It does not govern **its operator**, and the rig
+used to create the incentive to go around it.
+
+The rig's default source is the live tag (`SourceMcpImage =
+'repocontext-mcp:local'`), and the rig only ever applies an additional tag to an
+image that already exists. Reading that tag is legal and is the right default
+for "measure what is currently deployed". But it means that to measure **new**
+code, something must first put new code into a source image - and the rig used
+to offer no supported way to build one. The path of least resistance was the
+deploy script, which builds a candidate image and then moves `:local` onto it.
+
+Moving `:local` does not disturb the running container: a container is pinned to
+an image **ID** at create time, so it keeps running the code it started with.
+What it does is arm the **next restart or recreate** to silently adopt different
+code. On a deployment whose volume carries a large amount of accumulated
+repository context, that is not an acceptable accident.
+
+Two changes answer it, and they are deliberately independent:
+
+- a supported build command, which removes the *reason* to reach for a tool that
+  promotes to production as a side effect;
+- a drift detector, which catches the divergence *whoever* caused it - deploy
+  script, manual build, or rig operator.
+
+### Building a test image
+
+```powershell
+./scripts/rig.ps1 build feat/my-branch     # or: -Ref <any git ref>; defaults to HEAD
+./scripts/rig.ps1 tag                      # applies the rig's run tag to what was just built
+```
+
+`build` resolves the ref to a commit, checks that commit out as a **detached
+worktree**, and builds `apps/repocontext/Dockerfile` from it into
+`repocontext-mcp:coldstart-<sha>`. Building the worktree rather than your working
+tree means the tag's `<sha>` is honest: the image contains exactly that commit,
+and uncommitted edits are **not** in it. Commit before you measure.
+
+#### Behind a private or corporate NuGet feed
+
+The image build restores third-party packages from a NuGet feed, so on a host
+where public nuget.org is unreachable (a corporate proxy, or an offline feed)
+the build fails in restore with `NU1301`. Point it at your own `NuGet.Config`
+with the **same environment variable the local-dev reference architecture
+uses**, so a proxy is configured once and works in both places:
+
+```powershell
+$env:NUGET_CONFIG_FILE = "$env:APPDATA\NuGet\NuGet.Config"
+./scripts/rig.ps1 build feat/my-branch
+```
+
+Precedence is `-NuGetConfigFile` > `$env:NUGET_CONFIG_FILE` > the `NuGetConfigFile`
+rig parameter > the SDK default (nuget.org). Nothing tracked needs editing.
+
+The path is passed to `docker build` as the BuildKit secret `nugetcfg`, and the
+Dockerfile restores through it with `--configfile` straight from its tmpfs
+mount, so a `NuGet.Config` carrying **feed credentials is never written into an
+image layer or the build cache**. A configured path that does not exist is a
+refusal rather than a silent fallback: falling back would restore from a feed
+the host cannot reach and fail minutes later inside the image build, blaming the
+wrong thing.
+
+The result is recorded as the run's source image, so the following `rig.ps1 tag`
+(and `run-cohort.ps1`) applies the rig's additional `:coldstart-rig` tag to the
+image you just built rather than to whatever `:local` happens to hold. The
+record is ignored if that image is later pruned, so a stale record can never
+quietly send a cohort back to the live image while claiming otherwise.
+
+The compose stack still has no `build:` section anywhere, and the resolved-compose
+half of the guard still refuses any service that declares one. `build` is a
+separate, deliberately-invoked operator command, not something a cohort can
+trigger.
+
+### Live image drift, and what to do about it
+
+`rig.ps1 guard` and the start of every cohort compare two things about the live
+deployment:
+
+| | Command | Meaning |
+|---|---|---|
+| What it **is running** | `docker inspect <live-container> --format '{{.Image}}'` | The image ID the container was pinned to when it was created |
+| What its tag **resolves to now** | `docker inspect repocontext-mcp:local --format '{{.Id}}'` | The image ID a restart would pick up |
+
+Equal is healthy. Different means the live deployment is running code that a
+restart or recreate would **silently replace**, and the check says so loudly.
+
+The container is found from the compose project the isolation contract already
+declares forbidden, and the tag is read from the container itself, so there is
+no second copy of the live identity to drift out of date. The whole check is two
+`docker inspect` calls: it reads, and touches nothing.
+
+It is deliberately **fail-safe rather than fail-closed**, unlike the isolation
+guard. This is a read-only advisory about a deployment the rig does not own, so
+a host with no live deployment (or a tag that does not resolve) produces a quiet
+skip, never a crash and never a false alarm. Only two IDs that are both present
+and genuinely differ are reported as drift. A check that cried wolf on a clean
+box would be trained away within a week.
+
+**If drift is reported**, nothing the rig did caused it: the rig cannot write
+that tag. Something else on the host rebuilt it. Decide deliberately:
+
+- to keep the deployment on the code it is running, re-point the tag at the
+  pinned image: `docker tag <pinned-id> repocontext-mcp:local`;
+- to adopt the new code, restart it knowing that is what you are doing, and take
+  a volume backup first if the durable state matters;
+- either way, do not leave it drifted, because the next unrelated restart (a
+  Docker Desktop update, a reboot) then makes the decision for you.
+
+### Provenance, and the post-condition
+
+Two supporting habits, both free:
+
+- Every `cohort.json` records **which image produced its numbers**:
+  `imageUnderTest` carries the tested tag and its resolved image ID, and, when
+  the rig built it, the git ref and commit behind it. The build record is only
+  credited when its image ID still matches the tested image, so a superseded
+  build cannot claim provenance it no longer has. Two cohorts are only
+  comparable if you know what each one ran, and that should not rest on operator
+  memory.
+- Every cohort re-reads the live container's pinned image ID **after** the run
+  and asserts it is unchanged from before. That turns "the rig cannot touch the
+  deployment" from a design claim into something measured on every run. The
+  result is recorded under `liveDeployment.postCondition`, and the cohort file
+  is written before a violated post-condition is allowed to fail the run, so the
+  evidence is never lost with the failure.
+
 ## Prerequisites
 
 - Docker with Compose v2, and PowerShell 7.
-- The two source images already built on the box (the rig only re-tags them):
-  `repocontext-mcp:local` and `repocontextcontainer-embedder:latest`. Override
-  the sources in `parameters.local.ps1` if yours are named differently.
+- A source image for each of the two services. The rig re-tags an existing
+  image rather than building the stack, so either have
+  `repocontext-mcp:local` and `repocontextcontainer-embedder:latest` on the box
+  already (override the sources in `parameters.local.ps1` if yours are named
+  differently), or build the host image yourself with
+  [`rig.ps1 build`](#building-a-test-image), which is the supported way to
+  measure code that is not what is currently deployed.
+- Behind a private or corporate NuGet feed, `$env:NUGET_CONFIG_FILE` pointing at
+  your own `NuGet.Config` (see
+  [Behind a private or corporate NuGet feed](#behind-a-private-or-corporate-nuget-feed)).
 - A **volume backup tarball** (below).
 - `WorkspaceRoot` in the parameters pointing at a directory that contains a
   folder named after the repo id in the restored corpus (default: a directory
@@ -73,14 +216,14 @@ pwsh -File ./scripts/Test-RigHelpers.ps1
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides. |
 | `scripts/_rig-helpers.ps1` | Pure helpers: config, the isolation guard, the file-WAL framing walk, statistics, log counters. |
 | `scripts/_rig-docker.ps1` | Docker, HTTP and stateless-MCP helpers. Every binding operation runs the guard first. |
-| `scripts/Test-RigHelpers.ps1` | Regression suite for the guard and the parsers. No Docker, no wall-clock dependence. |
+| `scripts/Test-RigHelpers.ps1` | Regression suite for the guard and the parsers. Pure and Docker-free except the live-image-drift cases, which construct a real divergence from throwaway rig-namespace images and skip themselves when no daemon is reachable. |
 | `scripts/prepare-master.ps1` | Restores a backup tarball into the pristine master volume and applies the rig image tags. |
 | `scripts/run-cohort.ps1` | **The one-command run.** Clones the master, runs the restart scenarios, emits `cohort.json`. |
 | `scripts/inspect-state.ps1` | Offline durable-state census, with known-answer validation. |
 | `scripts/snapshot-volume.ps1` | Extracts a rig volume to a staging directory so the census can walk a volume that has moved on (a healed working volume, say). |
 | `scripts/observe-healing.ps1` | Attaches to a running box and records, on a cadence, whether it keeps serving while it heals itself. |
 | `scripts/generate-corpus.ps1` | Synthetic scale mode: generate, index and promote a corpus well beyond live size. |
-| `scripts/rig.ps1` | Day-to-day helper: `guard`, `tag`, `up`, `down`, `status`, `logs`, `mcp`, `clean`. |
+| `scripts/rig.ps1` | Day-to-day helper: `guard`, `build`, `tag`, `up`, `down`, `status`, `logs`, `mcp`, `clean`. |
 
 Run artefacts land under `benchmark/.run/coldstart-rig/`, which is gitignored.
 
@@ -199,11 +342,13 @@ Top level:
 
 | Key | Meaning |
 |---|---|
-| `schemaVersion` | Result schema version. Currently `1`. |
+| `schemaVersion` | Result schema version. Currently `2`. Version 2 added `imageUnderTest` and `liveDeployment`; a `1` file does not say which image produced it, so comparing one against a `2` file rests on operator memory for the older side. |
 | `kind` | `coldstart-rig/cohort`. |
 | `cohortId`, `generatedUtc` | Identity of the run. |
 | `hostContext` | What the host looked like: `dockerCpus`, `dockerMemoryBytes`, `runningContainers`, `foreignContainers`, `foreignContainerNames[]`, and `contended`. A cohort taken alongside unrelated containers is still valid, but its spread is the **host's** floor, not the rig's - read this before believing a spread figure. |
 | `configuration` | Project, port, images, volumes, repo id, query, scenarios, run count. |
+| `imageUnderTest` | **Which image produced these numbers**: `mcpImage` and its resolved `mcpImageId`, the same for the embedder, the configured `sourceMcpImage`, and `builtFrom` (git ref, commit, build time) when `rig.ps1 build` produced it. `builtFrom.matchesTestedImage` is false when the build was later superseded by a re-tag from elsewhere, so a stale build record cannot claim provenance it no longer has. |
+| `liveDeployment` | The live deployment's image pin `pinBeforeCohort` / `pinAfterCohort` (each `status` of `clean`, `drift` or `skipped`), and `postCondition`, which asserts the live container's pinned image ID was **unchanged** across the run. `checked` is false on a host with no live deployment. |
 | `runs[]` | One entry per run, each with `scenarios[]`. |
 | `summary[]` | One entry per scenario, aggregated across runs. |
 

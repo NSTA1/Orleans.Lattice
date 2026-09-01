@@ -15,6 +15,17 @@
 #
 #   docker build -f apps/repocontext/Dockerfile -t repocontext-mcp:local .
 #
+# Behind a private / corporate-proxy / offline NuGet feed, where public
+# nuget.org is unreachable, point the restore at your own NuGet.Config with the
+# optional BuildKit secret (the same 'nugetcfg' convention the local-dev
+# reference architecture uses). Nothing tracked needs editing:
+#
+#   docker build -f apps/repocontext/Dockerfile -t repocontext-mcp:local \
+#     --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config .
+#
+# The cold-start rig's `rig.ps1 build` passes it for you from
+# $env:NUGET_CONFIG_FILE.
+#
 # The runtime stage is the distroless, shell-less, non-root chiseled ASP.NET
 # image. There is no shell in the final image, so health probing is HTTP-only
 # (GET /health/live and GET /health/ready) - there is deliberately no
@@ -31,9 +42,23 @@ WORKDIR /src
 # src/ projects it references - no gRPC facade, no Explorer.
 COPY . .
 
+# Restore third-party packages (the Orleans.Lattice.* bits are project
+# references from src/**, so they are built, not restored). The optional
+# BuildKit secret 'nugetcfg' points the restore at a private, corporate-proxy
+# or offline NuGet.Config for a host where public nuget.org is unreachable;
+# without it the SDK default (nuget.org) is used and this build is byte-for-byte
+# what it was before. The secret is read straight from its tmpfs mount via
+# --configfile and is never copied into the build context, so a NuGet.Config
+# carrying feed credentials is not written into an image layer or the build
+# cache.
+RUN --mount=type=secret,id=nugetcfg \
+    if [ -f /run/secrets/nugetcfg ]; then set -- --configfile /run/secrets/nugetcfg; fi && \
+    dotnet restore apps/repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Host.csproj "$@"
+
 RUN dotnet publish apps/repocontext/Orleans.Lattice.Api.Mcp.RepoContext.Host.csproj \
     -c Release \
     -o /app/publish \
+    --no-restore \
     /p:UseAppHost=false
 
 # Stage an empty data root here (this stage has a shell) so the runtime stage can
