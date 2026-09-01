@@ -123,7 +123,7 @@ public sealed class ExplorerAppHost : IAsyncDisposable
 
         builder.Services.AddLatticeExplorerWeb();
 
-        // Do not retain a circuit whose browser has gone away.
+        // Retain a disconnected circuit briefly - but only briefly.
         //
         // This is the difference between a lane that runs in one process and one that
         // dies part way through. Every UI test opens one to three fresh browser
@@ -137,13 +137,25 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         // which reads as "Test host process crashed" with no test result to blame,
         // and is why every fixture passes alone while the whole lane aborts.
         //
-        // Nothing under test depends on reconnection, so retaining nothing is both
-        // safe and much closer to what these tests mean: each test gets a genuinely
-        // new circuit, and the previous one is collected as soon as its page closes.
+        // Retaining NOTHING fixed that and introduced something worse, because it
+        // conflates two different disconnects. A closed context is gone for good and
+        // should be collected at once - but a circuit whose socket blips while its
+        // test is still running is not gone, and with nothing retained the server
+        // destroys it instantly and the client can never reconnect. The page then sits
+        // on "Reconnecting..." for the rest of the test: it still renders its
+        // prerendered markup, so it looks alive in a screenshot, while every
+        // interactive element is dead. That surfaces as a handful of focus stops where
+        // there should be dozens, arrow keys that move nothing, and journey assertions
+        // that time out against a frozen shell - load-dependent, so it passes locally
+        // and fails on a loaded CI runner, and varies run to run.
+        //
+        // A small non-zero retention keeps both properties: a blip can recover, and at
+        // most a few circuits are ever held, for seconds rather than minutes, so they
+        // cannot accumulate.
         builder.Services.Configure<CircuitOptions>(options =>
         {
-            options.DisconnectedCircuitMaxRetained = 0;
-            options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(1);
+            options.DisconnectedCircuitMaxRetained = 4;
+            options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(30);
 
             // Say what actually went wrong. A server-side exception on a Blazor circuit
             // otherwise reaches the browser as "There was an unhandled exception on the

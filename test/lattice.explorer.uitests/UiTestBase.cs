@@ -73,6 +73,14 @@ public abstract class UiTestBase
         });
 
         var page = await context.NewPageAsync();
+
+        // Every fixture shares one browser, so a page created earlier can still hold
+        // the browser's focus target. Claim it on creation: a page without focus
+        // reports document.hasFocus() === false, and its sequential (Tab) navigation
+        // does not advance, which turns a keyboard assertion into a confusing claim
+        // that the shell has nothing focusable.
+        await page.BringToFrontAsync();
+
         _pages.Add(page);
         return page;
     }

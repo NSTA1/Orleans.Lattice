@@ -351,9 +351,20 @@ public sealed partial class AccessibilityStructureTests
     /// Clears focus so the next Tab press starts a fresh sequential walk from the top of
     /// the document. Blurring is how a browser's sequential focus navigation starting
     /// point is reset without clicking, which would itself move focus somewhere.
+    /// <para>
+    /// The page is brought to the front first. Every fixture shares one browser, so by
+    /// the time a keyboard walk runs, later pages have been created and this page may
+    /// no longer be the focused target. A page without browser focus reports
+    /// <c>document.hasFocus() === false</c> and its sequential navigation does not
+    /// advance, so the walk finds one or two stops and stops - which reads as "the
+    /// shell has almost nothing focusable" rather than as a lost focus target. That is
+    /// why these cases pass alone and fail in the full lane.
+    /// </para>
     /// </summary>
-    private static Task ResetFocusAsync(IPage page) =>
-        page.Locator(":root").EvaluateAsync(
+    private static async Task ResetFocusAsync(IPage page)
+    {
+        await page.BringToFrontAsync();
+        await page.Locator(":root").EvaluateAsync(
             """
             () => {
                 if (document.activeElement instanceof HTMLElement) {
@@ -361,6 +372,7 @@ public sealed partial class AccessibilityStructureTests
                 }
             }
             """);
+    }
 
     private const string RovingTabIndexProbe =
         """
