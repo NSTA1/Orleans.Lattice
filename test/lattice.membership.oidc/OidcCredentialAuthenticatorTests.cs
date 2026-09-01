@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Orleans.Lattice.Membership.Oidc.Tests;
@@ -452,6 +454,53 @@ public class OidcCredentialAuthenticatorTests
         Assert.That(authenticator.CanHandle(new LatticeCredential(string.Empty)), Is.False);
     }
 
+    [Test]
+    public void CanHandle_oversized_credential_returns_false_without_parsing()
+    {
+        // The pre-authentication selection parse is bounded by the validating
+        // handler's own maximum token size, so an unauthenticated caller cannot
+        // amplify a large request body into a parse once per registered
+        // authenticator.
+        var authenticator = CreateAuthenticator();
+        var oversized = new string('A', TokenValidationParameters.DefaultMaximumTokenSizeInBytes + 1);
+
+        Assert.That(authenticator.CanHandle(new LatticeCredential(oversized)), Is.False);
+    }
+
+    [Test]
+    public void CanHandle_oversized_credential_allocates_far_less_than_parsing_it()
+    {
+        // Pins the guard's purpose rather than just its verdict: a malformed
+        // credential of this size returns false either way, so only the
+        // allocation profile distinguishes "declined early" from "parsed, then
+        // rejected".
+        var authenticator = CreateAuthenticator();
+        var oversized = new string('A', TokenValidationParameters.DefaultMaximumTokenSizeInBytes + 1);
+        var credential = new LatticeCredential(oversized);
+
+        authenticator.CanHandle(credential);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        authenticator.CanHandle(credential);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        // Parsing a credential this size allocates on the order of its own
+        // length; declining it allocates effectively nothing.
+        Assert.That(allocated, Is.LessThan(oversized.Length));
+    }
+
+    [Test]
+    public void CanHandle_token_at_the_size_bound_is_still_parsed()
+    {
+        // The guard must not reject a credential the validating handler would
+        // have accepted, so the bound itself is inclusive.
+        var authenticator = CreateAuthenticator();
+        var token = _authority.MintToken();
+
+        Assert.That(token.Length, Is.LessThan(TokenValidationParameters.DefaultMaximumTokenSizeInBytes));
+        Assert.That(authenticator.CanHandle(new LatticeCredential(token)), Is.True);
+    }
+
     // ----------------------------------------------------------------- construction
 
     [Test]
@@ -614,6 +663,91 @@ public class OidcCredentialAuthenticatorTests
     }
 
     [Test]
+    public async Task AuthenticateAsync_algorithm_pin_narrows_when_the_provider_stops_advertising_one()
+    {
+        // The discovered pin is memoized against the configuration instance. A
+        // provider that deprecates an algorithm publishes a new document, and the
+        // pin must follow it down rather than stay stuck on the wider set the
+        // authenticator first saw - otherwise a retired algorithm stays accepted
+        // for the life of the process.
+        var source = new RotatingConfigurationSource(_authority.SigningKey, OidcTestAuthority.Issuer);
+        source.Advertise(SecurityAlgorithms.RsaSha256, SecurityAlgorithms.RsaSha512);
+        var authenticator = new OidcCredentialAuthenticator(CreateOptions(), source);
+        var rs512 = new LatticeCredential(_authority.MintToken(algorithm: SecurityAlgorithms.RsaSha512));
+
+        Assert.That(await authenticator.AuthenticateAsync(rs512), Is.Not.Null);
+
+        source.Advertise(SecurityAlgorithms.RsaSha256);
+
+        Assert.That(await authenticator.AuthenticateAsync(rs512), Is.Null);
+    }
+
+    [Test]
+    public async Task AuthenticateAsync_algorithm_pin_widens_when_the_provider_advertises_another()
+    {
+        // The converse of the narrowing case: the memo must not pin the first
+        // document forever, or a newly advertised algorithm never becomes usable.
+        var source = new RotatingConfigurationSource(_authority.SigningKey, OidcTestAuthority.Issuer);
+        source.Advertise(SecurityAlgorithms.RsaSha256);
+        var authenticator = new OidcCredentialAuthenticator(CreateOptions(), source);
+        var rs512 = new LatticeCredential(_authority.MintToken(algorithm: SecurityAlgorithms.RsaSha512));
+
+        Assert.That(await authenticator.AuthenticateAsync(rs512), Is.Null);
+
+        source.Advertise(SecurityAlgorithms.RsaSha256, SecurityAlgorithms.RsaSha512);
+
+        Assert.That(await authenticator.AuthenticateAsync(rs512), Is.Not.Null);
+    }
+
+    [Test]
+    public async Task ResolveValidationParametersAsync_non_openid_configuration_denies_every_algorithm()
+    {
+        // A BaseConfiguration that is not an OpenIdConnectConfiguration carries no
+        // advertised algorithm list, so there is nothing to pin. That must deny,
+        // never fall through to the permissive empty allow-list.
+        var probe = new ProbeAuthenticator(CreateOptions(), new PlainConfigurationSource());
+
+        var parameters = await probe.ResolveAsync(new LatticeCredential(_authority.MintToken()));
+
+        Assert.That(parameters.ValidAlgorithms, Is.Null.Or.Empty);
+        Assert.That(parameters.AlgorithmValidator, Is.Not.Null);
+        Assert.That(
+            parameters.AlgorithmValidator!(SecurityAlgorithms.RsaSha256, _authority.SigningKey, null!, parameters),
+            Is.False);
+    }
+
+    [Test]
+    public async Task ResolveValidationParametersAsync_null_configuration_denies_every_algorithm()
+    {
+        // A configuration manager that yields no configuration at all must also
+        // fail closed rather than leave the algorithm set unrestricted.
+        var probe = new ProbeAuthenticator(CreateOptions(), new NullConfigurationSource());
+
+        var parameters = await probe.ResolveAsync(new LatticeCredential(_authority.MintToken()));
+
+        Assert.That(parameters.ValidAlgorithms, Is.Null.Or.Empty);
+        Assert.That(parameters.AlgorithmValidator, Is.Not.Null);
+        Assert.That(
+            parameters.AlgorithmValidator!(SecurityAlgorithms.RsaSha256, _authority.SigningKey, null!, parameters),
+            Is.False);
+    }
+
+    [Test]
+    public async Task ResolveValidationParametersAsync_explicit_pin_survives_a_null_configuration()
+    {
+        // An explicitly configured pin is taken without consulting discovery, so
+        // it must still apply when the document is unavailable.
+        var probe = new ProbeAuthenticator(
+            CreateOptions(o => o.Algorithms.Add(SecurityAlgorithms.RsaSha256)),
+            new NullConfigurationSource());
+
+        var parameters = await probe.ResolveAsync(new LatticeCredential(_authority.MintToken()));
+
+        Assert.That(parameters.ValidAlgorithms, Is.EquivalentTo(new[] { SecurityAlgorithms.RsaSha256 }));
+        Assert.That(parameters.AlgorithmValidator, Is.Null);
+    }
+
+    [Test]
     public async Task ResolveValidationParametersAsync_resolves_the_configured_metadata_address()
     {
         var source = _authority.CreateConfigurationSource();
@@ -669,5 +803,58 @@ public class OidcCredentialAuthenticatorTests
             ResolveValidationParametersAsync(credential, CancellationToken.None);
 
         public LatticePrincipal? Map(JsonWebToken token, ClaimsIdentity identity) => MapPrincipal(token, identity);
+    }
+
+    /// <summary>
+    /// A configuration source whose advertised algorithm set can be republished,
+    /// standing in for a provider that rotates its discovery document. Each
+    /// republish hands out a distinct configuration instance, exactly as a real
+    /// refresh does.
+    /// </summary>
+    private sealed class RotatingConfigurationSource(RsaSecurityKey signingKey, string issuer) : IOidcConfigurationSource
+    {
+        private OpenIdConnectConfiguration _configuration = new() { Issuer = issuer };
+
+        public void Advertise(params string[] algorithms)
+        {
+            var configuration = new OpenIdConnectConfiguration { Issuer = issuer };
+            configuration.SigningKeys.Add(signingKey);
+            foreach (var algorithm in algorithms)
+            {
+                configuration.IdTokenSigningAlgValuesSupported.Add(algorithm);
+            }
+
+            _configuration = configuration;
+        }
+
+        public BaseConfigurationManager GetOrCreate(string metadataAddress) =>
+            new StaticConfigurationManager<OpenIdConnectConfiguration>(_configuration);
+    }
+
+    /// <summary>Serves a <see cref="BaseConfiguration"/> that is not an <see cref="OpenIdConnectConfiguration"/>.</summary>
+    private sealed class PlainConfigurationSource : IOidcConfigurationSource
+    {
+        public BaseConfigurationManager GetOrCreate(string metadataAddress) =>
+            new StaticConfigurationManager<BaseConfiguration>(new PlainConfiguration());
+
+        private sealed class PlainConfiguration : BaseConfiguration
+        {
+        }
+    }
+
+    /// <summary>Serves no configuration at all, standing in for an unreachable discovery document.</summary>
+    private sealed class NullConfigurationSource : IOidcConfigurationSource
+    {
+        public BaseConfigurationManager GetOrCreate(string metadataAddress) => new NullConfigurationManager();
+
+        private sealed class NullConfigurationManager : BaseConfigurationManager
+        {
+            public override Task<BaseConfiguration> GetBaseConfigurationAsync(CancellationToken cancel) =>
+                Task.FromResult<BaseConfiguration>(null!);
+
+            public override void RequestRefresh()
+            {
+            }
+        }
     }
 }

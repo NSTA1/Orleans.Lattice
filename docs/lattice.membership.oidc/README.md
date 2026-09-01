@@ -56,10 +56,23 @@ siloBuilder.AddLatticeOidc(options =>
     options.Issuer = "https://keycloak.example.com/realms/lattice";
     options.Audiences.Add("lattice-api");
     options.GroupClaimTypes.Clear();
-    options.GroupClaimTypes.Add("realm_access.roles");
+    options.GroupClaimTypes.Add("groups");
     options.SchemeHint = "keycloak";
 });
 ```
+
+> **Claim types are matched by exact name, not by JSON path.** A claim type is
+> compared against the claim names the validated token actually produced, and
+> the token handler does not flatten nested JSON objects into dotted names. A
+> Keycloak realm role therefore cannot be read with
+> `GroupClaimTypes.Add("realm_access.roles")`: the token carries `realm_access`
+> as a single nested object, no claim is ever named `realm_access.roles`, and
+> the entry silently matches nothing - so the caller is resolved with **no**
+> asserted groups. This fails closed (it under-grants, never over-grants), but
+> it fails silently, so configure the provider to emit the memberships as a
+> top-level claim instead. In Keycloak that is a dedicated group or realm-role
+> protocol mapper on the client, with "Token Claim Name" set to a flat name such
+> as `groups` and "Add to access token" enabled.
 
 ## Choosing between this package and the Entra package
 
@@ -74,6 +87,7 @@ siloBuilder.AddLatticeOidc(options =>
 - **Audience validation is always on.** There is no `ValidateAudience` switch. `Audiences` must contain at least one entry, and an empty list throws at construction rather than silently accepting a token minted for a different relying party.
 - **Algorithm pinning is always on.** See "fail-closed signature-algorithm pinning" above. Pin `Algorithms` explicitly when you want a set narrower than what the provider advertises.
 - **A `SchemeHint` short-circuits issuer selection.** When a credential's scheme matches the hint, this authenticator claims the credential before the issuer is read. The token is still fully validated - a foreign token claimed this way fails validation and resolves to anonymous - but it no longer falls through to another authenticator. Leave `SchemeHint` unset unless a head genuinely tags its credentials.
+- **Selection parses the token, and that parse is bounded.** Unlike the base JWT authenticator, a scheme that does not match the hint does not end selection: it falls through to the exact-issuer match, because the credential bridges stamp the scheme from operator configuration rather than from the caller, so an authenticator that leaves `SchemeHint` unset would otherwise never be selected. Selection therefore reads the token on a pre-authentication path that runs once per registered authenticator. To keep that from being an amplification lever for an unauthenticated caller, a credential longer than the validating handler's own maximum token size (256,000 characters) is declined without being parsed - a credential that large would have been rejected by validation regardless, so nothing that could have authenticated is ever turned away.
 
 ## Reference
 

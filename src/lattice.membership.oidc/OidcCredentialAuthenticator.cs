@@ -44,6 +44,21 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
     /// <summary>The empty pin, reused so the discovery-derived cache never allocates for a provider that advertises no algorithms.</summary>
     private static readonly string[] NoAlgorithms = Array.Empty<string>();
 
+    /// <summary>
+    /// The largest credential <see cref="CanHandle"/> will parse, in characters.
+    /// It is deliberately the same bound the validating handler applies
+    /// (<see cref="TokenValidationParameters.DefaultMaximumTokenSizeInBytes"/>,
+    /// the default of <c>JsonWebTokenHandler.MaximumTokenSizeInBytes</c>), so a
+    /// credential this selection pass declines to parse is one
+    /// <c>ValidateTokenAsync</c> would have rejected anyway - the guard can
+    /// therefore never reject a credential that would otherwise have
+    /// authenticated. A well-formed JWT is base64url plus dots, so it is pure
+    /// ASCII and its character count equals its byte count; a credential
+    /// carrying multi-byte characters is not a JWT and only ever measures
+    /// shorter here than the byte bound, so the comparison stays conservative.
+    /// </summary>
+    private const int MaxParsableTokenLength = TokenValidationParameters.DefaultMaximumTokenSizeInBytes;
+
     private DiscoveredAlgorithms? _discoveredAlgorithms;
 
     /// <summary>
@@ -96,6 +111,22 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
     /// never widened to a prefix, a wildcard, or a catch-all: a token from any
     /// other issuer returns <c>false</c> so resolution falls through to the next
     /// authenticator. A malformed token never matches.
+    /// <para>
+    /// This deliberately diverges from
+    /// <see cref="JwtCredentialAuthenticator.CanHandle"/>, which treats a
+    /// non-empty scheme that matches neither the hint nor the issuer as a
+    /// decisive "not mine" and returns without reading the token. That
+    /// short-circuit is unusable here: the credential bridges stamp the scheme
+    /// from operator configuration rather than from the caller, so it is
+    /// non-empty on essentially every request, and inheriting the base rule
+    /// would make an authenticator that leaves
+    /// <see cref="LatticeOidcAuthenticatorOptions.SchemeHint"/> unset - the
+    /// documented default - permanently unselectable. Falling through to the
+    /// issuer match is what makes the exact-issuer promise the real selection
+    /// key. The cost is that a non-matching scheme still parses the token, so
+    /// the parse is bounded by <see cref="MaxParsableTokenLength"/> to keep this
+    /// pre-authentication path from being an amplification lever.
+    /// </para>
     /// </remarks>
     public override bool CanHandle(in LatticeCredential credential)
     {
@@ -227,7 +258,15 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
     /// <summary>
     /// Reads the provider-advertised signing algorithms out of the current
     /// discovery configuration, memoized against the configuration instance so a
-    /// steady-state authentication reuses the cached array and allocates nothing.
+    /// steady-state authentication reuses the cached array rather than
+    /// re-projecting it. The memo is keyed on the configuration instance by
+    /// reference, so a document refresh that rotates the advertised set is
+    /// picked up on the next call rather than being pinned to the stale set.
+    /// This trims the projection, not the whole call: reaching the configuration
+    /// still costs the configuration manager's own await, so this path stays
+    /// measurably dearer than an explicitly configured
+    /// <see cref="LatticeOidcAuthenticatorOptions.Algorithms"/> pin, which skips
+    /// it entirely.
     /// </summary>
     private async ValueTask<string[]> ResolveDiscoveredAlgorithmsAsync(
         BaseConfigurationManager configurationManager,
@@ -264,6 +303,19 @@ public class OidcCredentialAuthenticator : JwtCredentialAuthenticator
         issuer = string.Empty;
         if (string.IsNullOrEmpty(token))
         {
+            return false;
+        }
+
+        if (token.Length > MaxParsableTokenLength)
+        {
+            // Bound the pre-authentication parse. CanHandle runs for every
+            // registered authenticator on every resolution-cache miss, and
+            // parsing allocates on the order of the token's own length, so an
+            // unbounded parse lets an unauthenticated caller amplify a large
+            // request body into a multiple of itself once per registered
+            // authenticator. The bound is the validating handler's own maximum
+            // token size, so a credential declined here is one validation would
+            // have rejected regardless: declining is never a false negative.
             return false;
         }
 
