@@ -37,13 +37,45 @@ repository you are in (**derive it from the listing, never from your current
 directory** - see [The repo id](#the-repo-id), which matters most in a git
 worktree), then `index_status {repoId}` (which also calibrates you -
 see [Health and degraded mode](#health-and-degraded-mode)), then **sweep the
-memory you are about to need**: `search` your task in natural language (it ranks
-code and memory together), and `scan` scope `Memory` - or `MemoryTopic` for a
-topic you can predict, such as the epic, component, or package you are about to
-touch. You are looking for three things: the decision that already settled this,
-the gotcha that will cost you an hour, and the convention you would otherwise
+memory you are about to need**.
+
+**`list_topics` + `recall` is the primary memory mechanism.** Memory is a small,
+keyed, topic-partitioned store, so the right way into it is to *enumerate* it,
+not to rank it: enumeration is both more precise (it cannot out-rank the entry
+you need) and faster (one small call, no vector search). Semantic search over
+memory exists and is useful, but it is a **supplement for discovery**, not a
+replacement for the mechanism - reach for it when you could not have named what
+you were looking for, never as the way you check whether something was captured.
+
+The ladder, in order:
+
+1. **`repocontext_list_topics {repoId}`** - the map: every topic with its live
+   entry count. One call, small payload, no ranking. **This is the step everyone
+   skips and the one that makes the rest work**, because every other memory read
+   needs a topic or a key you must already know.
+2. **`repocontext_scan` scope `MemoryTopic`** for the one or two topics the
+   listing shows are relevant (the epic, component, or package you are about to
+   touch, plus `decisions` / `gotchas` / `conventions`). Targeted and complete.
+3. **`repocontext_recall`** by key when you know it - the cheapest and most
+   precise path of all, and the reason a stable, predictable `id` on capture
+   matters so much.
+4. *Supplementary:* **`repocontext_search`** to turn up an entry you could not
+   have named (it ranks memory alongside code), and **`repocontext_neighbors`**
+   to walk typed links out of an entry you did find.
+
+You are looking for three things: the decision that already settled this, the
+gotcha that will cost you an hour, and the convention you would otherwise
 violate. Reading memory is the entire point of having written it; a session that
 files entries and never reads any is using half the tool.
+
+> **Why enumeration beats ranking here, stated plainly.** A memory question is
+> almost always "has this already been decided / hit / written down?" - a
+> question about *presence*. `search` answers a different question: "what is most
+> similar?" It ranks memory against the whole code corpus, so a genuinely
+> relevant entry can sit below ten plausible files and read as "nothing was
+> captured". `list_topics` plus a topic `scan` enumerates, so it can distinguish
+> "not captured" from "captured but out-ranked". **A `search` miss is never
+> evidence of absence.** Use `search` to discover; use enumeration to decide.
 
 **2. Before any discovery - probe, do not guess.**
 Any "where is X / how does Y work / has this been decided" question opens with
@@ -115,10 +147,14 @@ The two jobs it is your first move for:
   entry). Use it even when you have a rough idea of the filename; it is faster
   than guessing paths.
 - **Durable cross-session memory** - check what past sessions captured
-  (decisions, gotchas, conventions, glossary) before rediscovering it. Note that
-  `search` ranks across code *and* memory together and has no memory-only
-  filter, so for a memory-only sweep use `scan` with scope `Memory` (or
-  `MemoryTopic` for a single topic).
+  (decisions, gotchas, conventions, glossary) before rediscovering it. **The
+  primary mechanism is `list_topics` + `recall`** (with `scan` scope
+  `MemoryTopic` between them): memory is a small, keyed, topic-partitioned store,
+  so enumerating it is both more precise and faster than ranking it. Semantic
+  search over memory is a **supplement for discovery** - use it to surface an
+  entry you could not have named. It does not replace enumeration, and because it
+  ranks memory against the whole code corpus, a `search` miss is never proof an
+  entry was not captured.
 
 **Two loops - pick by what you need, not by habit.**
 
@@ -275,8 +311,9 @@ mid-task.
   (or `recall` the record) for the body.
 - **Every hit carries a `reasons` list explaining why it ranked** - server-derived,
   deterministic, ordinal-ordered, bounded, and never null. A `semantic` hit lists
-  `semantic`, the matched chunk kind (`chunk:symbol` or `chunk:file`), and
-  `symbol:<fqName>` for a symbol vector; a `keyword` hit lists whichever projected
+  `semantic`, the matched chunk kind (`chunk:symbol`, `chunk:file`, or `chunk:memory`), and
+  `symbol:<fqName>` for a symbol vector or `topic:<topic>` for a memory vector; a
+  `keyword` hit lists whichever projected
   fields the query terms hit (`path-name-match`, `symbol:<fqName>`, `tag:<tag>`,
   `topic-match`, `content-match`, `key-match`). Use `reasons` to judge whether a hit
   is relevant for the right reason (a name/path coincidence versus a genuine content
@@ -285,6 +322,29 @@ mid-task.
   every payload as both structured and text content - so keep `k` small and
   prefer a targeted `scan` (with `pathPrefix`) when you want breadth without the
   per-hit weight.
+
+### list_topics - the map of the memory store
+
+- `repocontext_list_topics {repoId}` returns every distinct memory topic with its
+  live entry count. One call, a small payload, and no ranking involved.
+- **With `recall`, this is the primary memory mechanism** - not a preliminary to
+  searching. Memory is small, keyed, and partitioned by topic, so enumerating it
+  is both more precise than ranking (nothing can out-rank the entry you need) and
+  faster (no vector search, no large payload). Semantic search over memory is a
+  supplement for *discovery*; it does not replace this path.
+- **It is the step most often skipped**, and skipping it is what breaks the rest:
+  every other memory read needs a topic or a key you must already know - `scan`
+  scope `MemoryTopic` needs the topic name, `recall` needs the full key. Without
+  the listing you are guessing, and the usual fallback (a blind `scan` scope
+  `Memory` over the entire store, paged, then hand-parsed) is many calls and a
+  large payload to answer what one call answers.
+- Use it to decide *where* to look before looking: the counts tell you which
+  topics are substantial, and the names tell you which per-workstream topics
+  (`epic-1830`, `perf`, a component name) a past session actually used, which you
+  could not have guessed.
+- It is also the only honest way to answer "was this ever captured?". `search`
+  ranks; `list_topics` plus a topic `scan` enumerates. Only the second can
+  distinguish "not captured" from "captured but out-ranked".
 
 ### scan - ordered, complete enumeration
 

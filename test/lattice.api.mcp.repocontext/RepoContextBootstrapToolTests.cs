@@ -294,6 +294,56 @@ public sealed class RepoContextBootstrapToolTests
     }
 
     /// <summary>
+    /// A failing embedding arm no longer vetoes its siblings. The symbol arm and the
+    /// memory arm are independent passes over the same store, so a symbol-arm fault
+    /// (a timeout on a large repository, say) must not cost the memory arm its pass -
+    /// while still leaving the run reported as failed, so it is retried rather than
+    /// silently reported as a clean success over a partial view.
+    /// </summary>
+    [Test]
+    public async Task A_failing_symbol_arm_does_not_stop_the_memory_arm()
+    {
+        var root = NewRepo();
+        Write(root, "a.cs", "class A {}");
+
+        var ingestor = new SymbolArmFailsVectorIngestor();
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions
+            {
+                Posture = RepoContextMcpAuthPosture.Writer,
+                ConfigureServices = services =>
+                    services.AddSingleton<IRepoContextVectorIngestor>(ingestor),
+            },
+            Ct);
+        await using var client = await harness.ConnectAsync(Ct);
+
+        var accepted = await client.CallToolAsync(ToolName, Args(root), cancellationToken: Ct);
+        Assert.That(accepted.IsError, Is.Not.True, "Starting the job is accepted.");
+        var settled = await client.WaitForIndexAsync(RepoId, Ct);
+
+        Assert.Multiple(() =>
+        {
+            // The point of the fix: the arm downstream of the fault still ran.
+            Assert.That(ingestor.MemoryArmRuns, Is.GreaterThan(0),
+                "The memory arm runs even though the symbol arm threw before it.");
+
+            // Paired positive control, so the assertion above cannot pass vacuously
+            // on a run that simply never reached the vectorising phase at all.
+            Assert.That(ingestor.SymbolArmRuns, Is.GreaterThan(0),
+                "The symbol arm was reached, so the memory arm genuinely ran after a real fault.");
+            Assert.That(ingestor.FileArmRuns, Is.GreaterThan(0),
+                "The file arm ran, so the run reached vectorising rather than failing earlier.");
+
+            // And the failure is still surfaced: continuing past a faulted arm must not
+            // launder a partial pass into a reported success.
+            Assert.That(settled.GetProperty("status").GetString(), Is.EqualTo("Failed"),
+                "The arm fault still settles the job in Failed, so the run is retried.");
+            Assert.That(settled.GetProperty("error").GetString(), Does.Contain("symbol arm"),
+                "The recorded failure is the symbol arm's, not a later substitute.");
+        });
+    }
+
+    /// <summary>
     /// The status tool reports <c>None</c> for a repository that was never
     /// onboarded, so a caller can distinguish "no job" from a running or settled
     /// one without the tool erroring.
@@ -356,5 +406,66 @@ public sealed class RepoContextBootstrapToolTests
             IReadOnlyCollection<string> changedSymbolKeys,
             IReadOnlyCollection<string> prunedSymbolKeys,
             CancellationToken cancellationToken) => Task.FromResult(0);
+
+        public Task<int> IngestMemoryAsync(
+            string repoId,
+            IReadOnlyCollection<string> changedMemoryKeys,
+            IReadOnlyCollection<string> retiredMemoryKeys,
+            CancellationToken cancellationToken) => Task.FromResult(0);
+    }
+
+    /// <summary>
+    /// A test vectorisation seam whose symbol arm always faults, while the file and
+    /// memory arms record that they ran. It proves the arms are independent: a fault
+    /// in one must not cost the others their pass.
+    /// </summary>
+    private sealed class SymbolArmFailsVectorIngestor : IRepoContextVectorIngestor
+    {
+        private int _fileArmRuns;
+        private int _symbolArmRuns;
+        private int _memoryArmRuns;
+
+        public int FileArmRuns => Volatile.Read(ref _fileArmRuns);
+
+        public int SymbolArmRuns => Volatile.Read(ref _symbolArmRuns);
+
+        public int MemoryArmRuns => Volatile.Read(ref _memoryArmRuns);
+
+        public ValueTask<int> IngestAsync(
+            string repoId,
+            string repoRoot,
+            IReadOnlyList<RepoFileEntry> changedFiles,
+            IReadOnlyList<RepoFileEntry> unchangedFiles,
+            Func<int, CancellationToken, ValueTask>? onProgress,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _fileArmRuns);
+            return ValueTask.FromResult(0);
+        }
+
+        public Task RetireAsync(
+            string repoId,
+            IReadOnlyList<string> removedPaths,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<int> IngestSymbolsAsync(
+            string repoId,
+            IReadOnlyCollection<string> changedSymbolKeys,
+            IReadOnlyCollection<string> prunedSymbolKeys,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _symbolArmRuns);
+            throw new InvalidOperationException("Simulated symbol arm fault.");
+        }
+
+        public Task<int> IngestMemoryAsync(
+            string repoId,
+            IReadOnlyCollection<string> changedMemoryKeys,
+            IReadOnlyCollection<string> retiredMemoryKeys,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _memoryArmRuns);
+            return Task.FromResult(0);
+        }
     }
 }

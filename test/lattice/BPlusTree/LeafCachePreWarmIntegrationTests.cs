@@ -132,6 +132,68 @@ public class LeafCachePreWarmIntegrationTests
         Assert.That(await cold.GetAsync("cold-a"), Is.EqualTo(Bytes("cold-a")));
     }
 
+    /// <summary>
+    /// A pre-warm that ranks nothing must still record a duration observation.
+    /// That observation is the only thing separating "pre-warm ran and had nothing
+    /// to warm" from "pre-warm never ran" without turning on debug logging - and
+    /// the empty-ranking case is the one the feature most needs to be visible in,
+    /// because an unclean restart is exactly what leaves the access-frequency model
+    /// empty and turns every later pre-warm into a silent no-op.
+    /// </summary>
+    [Test]
+    public async Task Warm_up_that_ranks_nothing_still_records_a_duration_observation()
+    {
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        const string coldTree = "prewarm-observability-tree";
+        await registry.RegisterAsync(coldTree, new TreeRegistryEntry
+        {
+            MaxLeafKeys = LeafCachePreWarmClusterFixture.MaxLeafKeys,
+            ShardCount = 1,
+        });
+        var cold = _cluster.Client.GetGrain<ILattice>(coldTree);
+
+        var durations = 0;
+        var warmedTotal = 0L;
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Name is "orleans.lattice.warmup.leaf_cache.duration"
+                or "orleans.lattice.warmup.leaf_cache.prewarmed")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>((instrument, value, _, _) =>
+        {
+            if (instrument.Name == "orleans.lattice.warmup.leaf_cache.duration")
+            {
+                Interlocked.Increment(ref durations);
+            }
+        });
+        listener.SetMeasurementEventCallback<long>((instrument, value, _, _) =>
+        {
+            if (instrument.Name == "orleans.lattice.warmup.leaf_cache.prewarmed")
+            {
+                Interlocked.Add(ref warmedTotal, value);
+            }
+        });
+        listener.Start();
+
+        await cold.WarmUpAsync(default);
+        listener.RecordObservableInstruments();
+
+        Assert.Multiple(() =>
+        {
+            // Paired: the positive proves the instrument fired at all, so the
+            // zero-warmed assertion cannot pass merely because nothing was observed.
+            Assert.That(durations, Is.GreaterThan(0),
+                "A pre-warm that ranked nothing still records that it ran,");
+            Assert.That(warmedTotal, Is.Zero,
+                "and reports zero leaves warmed - so 'ran but warmed nothing' is "
+                + "distinguishable from 'never ran', which records no duration at all.");
+        });
+    }
+
     [Test]
     public async Task A_second_restart_cycle_keeps_accumulating_the_model()
     {

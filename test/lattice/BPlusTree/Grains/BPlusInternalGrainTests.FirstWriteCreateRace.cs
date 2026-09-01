@@ -95,4 +95,36 @@ public partial class BPlusInternalGrainTests
             "A genuine stale-state conflict on an existing row must still "
             + "surface loudly and not be swallowed as a benign create race.");
     }
+
+    [Test]
+    public void SetTreeId_still_throws_on_an_existing_row_conflict_that_carries_no_etags()
+    {
+        // The production shape, which the non-empty-etag test above does NOT
+        // cover. AdoNetGrainStorage raises a version conflict through the
+        // message-only constructor and never populates either etag: measured on
+        // a real deployment, 0 of 134 conflicts carried a non-empty etag, and
+        // that included conflicts on rows that plainly existed (ETag=245,
+        // ETag=164, ETag=7718 appear in the message text while both the
+        // StoredEtag and CurrentEtag properties are empty).
+        //
+        // So the empty/empty clause in the guard is VACUOUSLY TRUE in
+        // production and cannot discriminate anything; only the creatingRow
+        // flag does. This test pins that the fail-loud contract survives on the
+        // shape that actually occurs, not just on the synthetic one.
+        var state = new FakePersistentState<InternalNodeState> { RecordExistsValue = true };
+        var grain = CreateGrain(state);
+
+        state.ThrowOnWrite = new InconsistentStateException(
+            "Version conflict (WriteState): ServiceId=repo-context ProviderName=lattice "
+            + "GrainType=internal GrainId=c7808456-7de1-f399-3c70-309f6166109e ETag=7718. "
+            + "Expected Etag= Received Etag= ",
+            storedEtag: string.Empty,
+            currentEtag: string.Empty);
+
+        Assert.ThrowsAsync<InconsistentStateException>(
+            async () => await grain.SetTreeIdAsync("fox"),
+            "An existing-row conflict must surface even though both etags are empty - "
+            + "otherwise, on a provider that never populates them, the guard would "
+            + "swallow every stale-state conflict the #1560 contract requires to fail loudly.");
+    }
 }

@@ -24,21 +24,37 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// The adopt is safe because it is scoped, by construction, to a genuine
-/// insert-vs-insert race on a brand-new row:
-/// <list type="bullet">
-///   <item><description>
-///     the <c>creatingRow</c> flag is captured from
-///     <c>RecordExists</c> <em>before</em> the
-///     write, so this activation never read an existing row; and
-///   </description></item>
-///   <item><description>
-///     both <see cref="InconsistentStateException.StoredEtag"/> and
-///     <see cref="InconsistentStateException.CurrentEtag"/> are empty, which a
-///     stale-state conflict on an <em>existing</em> row can never be (it carries
-///     non-empty etags and must still surface, preserving the #1560
-///     fall-off-the-log fail-loud contract).
-///   </description></item>
-/// </list>
+/// insert-vs-insert race on a brand-new row: the <c>creatingRow</c> flag is
+/// captured from <c>RecordExists</c> <em>before</em> the write, so this
+/// activation never read an existing row. A stale-state conflict on an existing
+/// row therefore still surfaces, preserving the #1560 fall-off-the-log fail-loud
+/// contract.
+/// </para>
+/// <para>
+/// <b>The etag test is a belt-and-braces check, not the discriminator - do not
+/// rely on it.</b> This helper also requires
+/// <see cref="InconsistentStateException.StoredEtag"/> and
+/// <see cref="InconsistentStateException.CurrentEtag"/> to be empty, and the
+/// original rationale held that a conflict on an existing row "can never be"
+/// empty/empty because it carries non-empty etags. <b>That is not true of every
+/// provider.</b> Measured against <c>AdoNetGrainStorage</c> on a real
+/// deployment, <b>0 of 134</b> version conflicts carried a non-empty etag -
+/// including conflicts on rows that plainly existed (<c>ETag=245</c>,
+/// <c>ETag=164</c>, <c>ETag=7718</c>) - because that provider raises the
+/// conflict with the message-only constructor and never populates either
+/// property. So with AdoNet the etag clause is vacuously true and
+/// <c>creatingRow</c> alone does the discriminating.
+/// </para>
+/// <para>
+/// The guard is still correct, because <c>creatingRow</c> is the load-bearing
+/// condition and it is evaluated from this activation's own read. But the etag
+/// clause must not be treated as a second, independent safety net, and it must
+/// not be relaxed on the assumption that the etags carry information: on a
+/// provider that leaves them empty, removing <c>creatingRow</c> would silently
+/// widen this catch to every conflict, including the stale-state ones #1560
+/// requires to fail loudly.
+/// </para>
+/// <para>
 /// The only writers of a topology grain's deterministic id are the shard root
 /// seeding the same tree (and the split/bulk-load paths that create nodes with a
 /// single logical identity), and data mutations are gated behind the topology
@@ -60,10 +76,14 @@ internal static class TopologySeedPersist
 {
     /// <summary>
     /// Writes <paramref name="state"/>, converging a benign cold-start
-    /// first-create write race (both etags empty on a brand-new row) by
-    /// re-reading and adopting the concurrently-committed row. Every other
-    /// failure - including a stale-state conflict on an existing row - is
-    /// rethrown unchanged.
+    /// first-create write race by re-reading and adopting the
+    /// concurrently-committed row. Every other failure - including a stale-state
+    /// conflict on an existing row - is rethrown unchanged.
+    /// <para>
+    /// <c>creatingRow</c> is the load-bearing condition; see the type remarks for
+    /// why the etag clause beside it is vacuous on <c>AdoNetGrainStorage</c> and
+    /// must not be relied on as an independent check.
+    /// </para>
     /// </summary>
     /// <typeparam name="TState">The persisted grain-state POCO.</typeparam>
     /// <param name="state">The grain's persistent state.</param>
@@ -78,8 +98,11 @@ internal static class TopologySeedPersist
         GrainId grainId)
     {
         // #1557 / #1566: capture whether this write is an initial create BEFORE
-        // the attempt. See the type remarks for why the empty/empty guard makes
-        // adopting the winner's row provably safe.
+        // the attempt. This flag - NOT the etag test below - is what makes
+        // adopting the winner's row safe: see the type remarks for the measured
+        // evidence that AdoNetGrainStorage never populates either etag, so that
+        // clause is vacuously true and cannot discriminate a create race from a
+        // stale-state conflict. Never relax this condition.
         var creatingRow = !state.RecordExists;
         try
         {

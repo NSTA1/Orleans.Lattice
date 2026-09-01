@@ -475,13 +475,100 @@ internal sealed class RepoContextBootstrapService
             // refreshed or retired, and any symbol still lacking a live embedding - a
             // repository captured before symbol embedding existed - is back-filled, so
             // symbol-level recall converges without a re-walk.
-            var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
-                repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
-                .ConfigureAwait(false);
-            if (symbolsEmbedded > 0)
+            // Each embedding arm is attempted independently. A transient failure
+            // in one - characteristically a response timeout while the vector
+            // trees are still replaying - must not veto the others, because every
+            // arm is idempotent and back-fills whatever it missed on the next
+            // pass. Before this, a symbol-arm timeout aborted the whole run, and
+            // on a large repository that happened on EVERY pass: measured on a
+            // real deployment, 65 runs started, 65 failed, 0 completed, so the
+            // memory arm below never executed once and the feature could not
+            // converge in production at all.
+            //
+            // Failures are collected rather than swallowed. The first is rethrown
+            // once every arm has had its turn, so the run is still reported as
+            // failed and retried - it just no longer costs the other arms their
+            // pass. Silently reporting success here would be the exact
+            // partial-view defect this sweep exists to remove.
+            Exception? armFailure = null;
+
+            try
             {
-                _logger.LogInformation(
-                    "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
+                var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
+                    repoId, changedSymbolKeys, prunedSymbolKeys, cancellationToken)
+                    .ConfigureAwait(false);
+                if (symbolsEmbedded > 0)
+                {
+                    _logger.LogInformation(
+                        "Repo {RepoId}: embedded {Symbols} symbol passage(s).", repoId, symbolsEmbedded);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                armFailure = ex;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: symbol vectorisation did not complete this pass; continuing with the "
+                    + "remaining embedding arms and retrying it on the next reconcile.",
+                    repoId);
+            }
+
+            // Embed the durable agent-memory entries as their own passages, so a
+            // natural-language search ranks captured decisions, gotchas and
+            // conventions alongside code instead of silently omitting them
+            // (issue #1878). Like symbols, this runs even when the structural
+            // plan was a no-op, and back-fills any entry lacking a live
+            // embedding - which is what converts a store captured entirely
+            // before memory embedding existed, with no re-walk.
+            //
+            // Memory is written through the tools rather than the walk, so the
+            // ingestor gets no per-pass changed set. The change signal instead
+            // comes from the write side: RepoContextStore retires an entry's
+            // vector on every remember, update, and forget (both the hard delete
+            // and the lapse), so a revised entry looks un-embedded and this
+            // back-fill re-embeds it from its current text on the next reconcile.
+            // That needs no digest and no dirty-set.
+            //
+            // RESIDUAL, stated rather than hidden: an entry that expires by its
+            // own TTL rather than through an explicit forget - a coordination
+            // handoff written with ttlSeconds, say - vanishes from the tree with
+            // no code path observing it, so its vector is never retired. That is
+            // fail-safe: the semantic path drops a hit that no longer hydrates
+            // via its !entry.Exists guard, so the cost is an inflated membership
+            // tally and an occasional wasted ranking slot, never a dead key
+            // returned to a caller. A prune IS possible - VectorMetadataRecord
+            // keeps each vector's SourceKey - but not free: memory source ids
+            // are not separable from file and symbol ids in the membership set,
+            // so it would take a full metadata scan on a path that otherwise
+            // touches only what changed. Left for a deliberate sweep rather than
+            // paid on every reconcile.
+            try
+            {
+                var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
+                    repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
+                    .ConfigureAwait(false);
+                if (memoryEmbedded > 0)
+                {
+                    _logger.LogInformation(
+                        "Repo {RepoId}: embedded {Entries} memory passage(s).", repoId, memoryEmbedded);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                armFailure ??= ex;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: memory vectorisation did not complete this pass; it will be retried on "
+                    + "the next reconcile.",
+                    repoId);
+            }
+
+            // Every arm has had its turn. If any failed, surface the first failure
+            // so the run is reported as failed and re-driven; the arms that did
+            // succeed keep their work either way.
+            if (armFailure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(armFailure).Throw();
             }
 
             // The run reconciled and applied cleanly, so publish the walk's directory
