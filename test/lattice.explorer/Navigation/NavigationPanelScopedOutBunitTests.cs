@@ -4,6 +4,7 @@ using NSubstitute;
 using NUnit.Framework.Internal;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
+using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.DeadLetter;
 using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
@@ -137,6 +138,145 @@ public sealed class NavigationPanelScopedOutBunitTests : LatticeComponentTestCon
         var cut = Render<NavigationPanel>();
 
         Assert.That(cut.FindAll(".lx-shell-nav-state-headline"), Is.Empty);
+    }
+
+    [Test]
+    public void A_catalog_refused_for_want_of_a_grant_says_so_rather_than_reporting_a_failure()
+    {
+        // The server answered; it did not break. Reporting a refusal as a fault
+        // sends the reader to check the cluster instead of their permissions.
+        ConfigureRefusedCatalog(new LatticeStateApiException("Access to the state API was denied.")
+        {
+            RequiresAuthentication = true,
+            IsPermissionDenied = true,
+        });
+
+        var cut = Render<NavigationPanel>();
+
+        Assert.That(
+            cut.Find(".lx-shell-nav-state-headline").TextContent,
+            Is.EqualTo(ExplorerStateCopy.NotPermitted(ExplorerSubjects.ForCatalogKind(CatalogKind.Trees)).Headline));
+    }
+
+    [Test]
+    public void A_catalog_refused_because_the_caller_is_anonymous_asks_them_to_sign_in()
+    {
+        ConfigureRefusedCatalog(new LatticeStateApiException("Authentication is required to access the state API.")
+        {
+            RequiresAuthentication = true,
+            IsPermissionDenied = false,
+        });
+
+        var cut = Render<NavigationPanel>();
+
+        Assert.That(
+            cut.Find(".lx-shell-nav-state-headline").TextContent,
+            Is.EqualTo(ExplorerStateCopy.SignInRequired(ExplorerSubjects.ForCatalogKind(CatalogKind.Trees)).Headline));
+    }
+
+    [Test]
+    public void A_signed_in_caller_missing_a_grant_is_never_told_to_sign_in()
+    {
+        // The loop this prevents: offering "sign in" to someone already signed in,
+        // whose problem signing in again cannot possibly solve.
+        ConfigureRefusedCatalog(new LatticeStateApiException("Access to the state API was denied.")
+        {
+            RequiresAuthentication = true,
+            IsPermissionDenied = true,
+        });
+
+        var cut = Render<NavigationPanel>();
+
+        var signIn = ExplorerStateCopy.SignInRequired(ExplorerSubjects.ForCatalogKind(CatalogKind.Trees));
+
+        Assert.That(cut.Find(".lx-shell-nav-state-headline").TextContent, Is.Not.EqualTo(signIn.Headline));
+    }
+
+    [Test]
+    public void A_transport_failure_is_still_reported_as_a_failure_and_not_as_a_refusal()
+    {
+        // The opposite lie: telling someone they lack permission when the cluster
+        // is simply unreachable would send them to an administrator who can do
+        // nothing for them. A transient fault keeps the error branch, whose
+        // "Try again" affordance is the one that actually helps here.
+        ConfigureRefusedCatalog(new LatticeStateApiException("The state API is unavailable.")
+        {
+            IsTransient = true,
+            RequiresAuthentication = false,
+            IsPermissionDenied = false,
+        });
+
+        var cut = Render<NavigationPanel>();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lx-shell-nav-error"), Is.Not.Empty);
+            Assert.That(cut.FindAll(".lx-shell-nav-state-headline"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_refusal_is_not_offered_a_try_again_button()
+    {
+        // Retrying an unauthorized read changes nothing, so offering the retry
+        // affordance invites the reader to hammer a door that will not open.
+        ConfigureRefusedCatalog(new LatticeStateApiException("Access to the state API was denied.")
+        {
+            RequiresAuthentication = true,
+            IsPermissionDenied = true,
+        });
+
+        var cut = Render<NavigationPanel>();
+
+        Assert.That(cut.FindAll(".lx-shell-nav-error"), Is.Empty);
+    }
+
+    [Test]
+    public void A_refusal_outranks_the_tenant_scope_because_the_read_never_reached_it()
+    {
+        ConfigureRefusedCatalog(new LatticeStateApiException("Access to the state API was denied.")
+        {
+            RequiresAuthentication = true,
+            IsPermissionDenied = true,
+        });
+
+        var cut = Render<NavigationPanel>();
+
+        var scopedOut = ExplorerStateCopy.ScopedOut(ExplorerSubjects.ForCatalogKind(CatalogKind.Trees), "acme");
+
+        Assert.That(cut.Find(".lx-shell-nav-state-headline").TextContent, Is.Not.EqualTo(scopedOut.Headline));
+    }
+
+    [Test]
+    public void The_three_empty_states_do_not_collapse_into_one_message()
+    {
+        // The regression this fixture exists to prevent: absent, scoped-out and
+        // not-permitted all reading identically, which is what shipped.
+        var subject = ExplorerSubjects.ForCatalogKind(CatalogKind.Trees);
+
+        var absent = ExplorerStateCopy.Empty(subject).Headline;
+        var scopedOut = ExplorerStateCopy.ScopedOut(subject, "acme").Headline;
+        var notPermitted = ExplorerStateCopy.NotPermitted(subject).Headline;
+
+        Assert.That(
+            new[] { absent, scopedOut, notPermitted },
+            Is.Unique);
+    }
+
+    private void ConfigureRefusedCatalog(Exception refusal)
+    {
+        JSInterop.Mode = JSRuntimeMode.Loose;
+
+        var catalog = Substitute.For<ICatalogReader>();
+        catalog
+            .LoadAsync(Arg.Any<CatalogKind>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<CatalogPage>(refusal));
+
+        Services.AddSingleton(catalog);
+        Services.AddSingleton(Substitute.For<IDeadLetterReader>());
+        Services.AddSingleton(Substitute.For<IExplorerSelection>());
+        Services.AddSingleton(Substitute.For<IExplorerSession>());
+        Services.AddExplorerSession();
     }
 
     private void ConfigureCatalog(

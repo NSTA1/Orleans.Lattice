@@ -257,6 +257,11 @@
     // count would assert a filter that this read did not perform.
     private string? _scopedToTenantId;
     private int _scopeFilteredCount;
+
+    // Set when the server REFUSED the read rather than failing it, so the panel
+    // can offer the remedy that fits: signing in cannot supply a grant, and
+    // holding a grant is no use to a caller who never signed in.
+    private ExplorerStateKind? _refusal;
     private bool _loading = true;
     private string? _error;
     private bool _showConfig;
@@ -471,6 +476,7 @@
 
         _loading = true;
         _error = null;
+        _refusal = null;
         StateHasChanged();
 
         List<CatalogItem>? trees = null;
@@ -505,6 +511,18 @@
             {
                 trees = new List<CatalogItem>(page.Items);
             }
+        }
+        catch (LatticeStateApiException ex) when (ex.RequiresAuthentication)
+        {
+            // A refusal is not an error. The server answered, and its answer has a
+            // remedy - so it must not land in the error branch, whose affordance is
+            // a "Try again" button. Retrying an unauthorized read changes nothing;
+            // offering it invites the reader to hammer a door that will not open.
+            // Leaving _error null routes this to the state block, which renders the
+            // explanation and the remedy that actually applies.
+            _refusal = ex.IsPermissionDenied
+                ? ExplorerStateKind.NotPermitted
+                : ExplorerStateKind.SignInRequired;
         }
         catch (Exception ex)
         {
@@ -648,18 +666,27 @@
         // because the read failed is a different thing from one that is empty
         // because there is nothing there, and only one of them has a remedy.
         //
+        // Precedence is refusal, then scope, then absence, because each earlier
+        // answer explains away the later one: a refused read never reached the
+        // scope, and a scope that hid everything is not an empty cluster.
+        //
         // ScopedOut is judged on the scope having actually removed something, not
         // on a scope merely being active: a tenant-scoped cluster that genuinely
         // holds nothing must still say it is empty. Claiming a filter that removed
         // nothing would be the same class of untruth as hiding one that did.
         var subject = ExplorerSubjects.ForCatalogKind(_kind);
-        _state = _error is not null
-            ? ExplorerStateCopy.Failed(subject, _error)
-            : _scopeFilteredCount > 0
-                ? ExplorerStateCopy.ScopedOut(subject, _scopedToTenantId)
-                : ExplorerStateCopy.Empty(subject);
+        _state = _refusal switch
+        {
+            ExplorerStateKind.NotPermitted => ExplorerStateCopy.NotPermitted(subject),
+            ExplorerStateKind.SignInRequired => ExplorerStateCopy.SignInRequired(subject),
+            _ => _error is not null
+                ? ExplorerStateCopy.Failed(subject, _error)
+                : _scopeFilteredCount > 0
+                    ? ExplorerStateCopy.ScopedOut(subject, _scopedToTenantId)
+                    : ExplorerStateCopy.Empty(subject),
+        };
 
-        if (_error is not null)
+        if (_error is not null || _refusal is not null)
         {
             _announcement = _state.Headline + " " + _state.Explanation;
             return;

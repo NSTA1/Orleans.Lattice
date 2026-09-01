@@ -14,6 +14,10 @@ public partial class LatticeStateConnectionTests
 
     private static RpcException Permanent() => new(new Status(StatusCode.Unauthenticated, "denied"));
 
+    // An authenticated caller the server refused for want of a grant, as opposed
+    // to an anonymous one it refused for want of a credential.
+    private static RpcException Denied() => new(new Status(StatusCode.PermissionDenied, "denied"));
+
     private static LatticeConnectionSettings Settings(string address = "http://localhost:1") => new()
     {
         Address = address,

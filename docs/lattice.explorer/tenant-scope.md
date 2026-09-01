@@ -59,18 +59,26 @@ A non-operator cannot switch tenant, and cannot elevate themselves into the
 all-tenant view. That is enforced on the server; the console simply reports the
 refusal honestly.
 
-## An emptied catalog says the scope emptied it
+## An emptied catalog says why it is empty
 
-When the active tenant scope filters every entry out of a catalog, the console
-says so and names the tenant responsible, rather than reporting the cluster as
-empty. Those are different situations with different remedies: an empty cluster
-has nothing to do about it, while a scoped-out catalog is undone by switching
-tenant or listing across every tenant you can reach.
+An empty catalog is not one situation but three, and they have different
+remedies:
 
-The distinction is drawn on whether the scope actually removed anything, not on
-whether a scope is active. A tenant that genuinely holds no trees still reports
-an empty catalog, because claiming a filter that removed nothing would be as
-misleading as concealing one that did.
+| What happened | What the console says | What fixes it |
+| --- | --- | --- |
+| The cluster holds nothing | It is empty | Nothing to fix |
+| The tenant scope filtered everything out | It names the tenant responsible | Switch tenant, or list across every tenant you can reach |
+| The server refused the read | It says which is missing, a sign-in or a grant | Sign in, or ask for the grant |
+
+The scoped-out case is judged on whether the scope actually removed anything,
+not on whether a scope is active. A tenant that genuinely holds no trees still
+reports an empty catalog, because claiming a filter that removed nothing would
+be as misleading as concealing one that did.
+
+A refusal is reported as a refusal rather than as a failure, and is not offered
+a "Try again" button: retrying a read the server declined changes nothing. A
+caller who is already signed in and merely lacks a grant is never asked to sign
+in again, because that is a loop rather than a remedy.
 
 ## Remembered, and re-validated on restore
 
