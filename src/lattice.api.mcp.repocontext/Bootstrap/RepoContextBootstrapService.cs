@@ -448,25 +448,47 @@ internal sealed class RepoContextBootstrapService
                 "Repo {RepoId}: vectorising {Changed} changed file(s); scanning {Unchanged} unchanged for embedding gaps.",
                 repoId, changed.Count, unchangedForBackfill.Count);
             var lastVectorisingHeartbeat = 0;
-            var embedded = await _vectorIngestor.IngestAsync(
-                repoId,
-                repoRoot,
-                changed,
-                unchangedForBackfill,
-                (count, ct) =>
-                {
-                    if (count - lastVectorisingHeartbeat >= VectorisingHeartbeatInterval)
-                    {
-                        lastVectorisingHeartbeat = count;
-                        _logger.LogInformation(
-                            "Repo {RepoId}: vectorising progress - {Embedded} file(s) embedded after {Elapsed} ms.",
-                            repoId, count, stopwatch.ElapsedMilliseconds);
-                    }
 
-                    return ReportAsync(
-                        progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct);
-                },
-                cancellationToken).ConfigureAwait(false);
+            // Failures are collected rather than swallowed. The first is rethrown
+            // once every arm has had its turn, so the run is still reported as
+            // failed and retried - it just no longer costs the other arms their
+            // pass. Silently reporting success here would be the exact
+            // partial-view defect this sweep exists to remove.
+            Exception? armFailure = null;
+
+            var embedded = 0;
+            try
+            {
+                embedded = await _vectorIngestor.IngestAsync(
+                    repoId,
+                    repoRoot,
+                    changed,
+                    unchangedForBackfill,
+                    (count, ct) =>
+                    {
+                        if (count - lastVectorisingHeartbeat >= VectorisingHeartbeatInterval)
+                        {
+                            lastVectorisingHeartbeat = count;
+                            _logger.LogInformation(
+                                "Repo {RepoId}: vectorising progress - {Embedded} file(s) embedded after {Elapsed} ms.",
+                                repoId, count, stopwatch.ElapsedMilliseconds);
+                        }
+
+                        return ReportAsync(
+                            progress, new RepoIndexProgressUpdate { FilesEmbedded = count }, ct);
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                armFailure = ex;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: file vectorisation did not complete this pass; continuing with the "
+                    + "remaining embedding arms and retrying it on the next reconcile.",
+                    repoId);
+            }
+
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -484,14 +506,6 @@ internal sealed class RepoContextBootstrapService
             // real deployment, 65 runs started, 65 failed, 0 completed, so the
             // memory arm below never executed once and the feature could not
             // converge in production at all.
-            //
-            // Failures are collected rather than swallowed. The first is rethrown
-            // once every arm has had its turn, so the run is still reported as
-            // failed and retried - it just no longer costs the other arms their
-            // pass. Silently reporting success here would be the exact
-            // partial-view defect this sweep exists to remove.
-            Exception? armFailure = null;
-
             try
             {
                 var symbolsEmbedded = await _vectorIngestor.IngestSymbolsAsync(
@@ -505,7 +519,7 @@ internal sealed class RepoContextBootstrapService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                armFailure = ex;
+                armFailure ??= ex;
                 _logger.LogWarning(
                     ex,
                     "Repo {RepoId}: symbol vectorisation did not complete this pass; continuing with the "
