@@ -308,11 +308,34 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        var ranked = model.RankTopLeaves(settings.PreWarmCount);
-        if (ranked.Length == 0) return;
-
         var tags = LeafAccessMetricTags();
         var startTicks = Environment.TickCount64;
+
+        var ranked = model.RankTopLeaves(settings.PreWarmCount);
+        if (ranked.Length == 0)
+        {
+            // Pre-warm is ENABLED but has nothing to rank, which is the case the
+            // feature most needs to be visible in: the access-frequency model
+            // reaches disk on a clean deactivation or a coalescing flush, so an
+            // unclean silo kill - precisely the restart this feature exists to
+            // soften - can leave no ranking and turn every later pre-warm into a
+            // silent no-op.
+            //
+            // Record the duration observation anyway. That is what makes the two
+            // states distinguishable WITHOUT enabling debug logging: a non-zero
+            // observation count on cache_prewarm_duration with a flat-zero
+            // cache_prewarmed total means "ran, ranked nothing", while no
+            // observations at all means the pre-warm never ran. Returning early
+            // recorded neither, so an operator could not tell a disabled feature
+            // from a dead one.
+            LatticeMetrics.LeafCachePreWarmDurationMs.Record(Environment.TickCount64 - startTicks, tags);
+            logger.LogDebug(
+                "Leaf-cache pre-warm for shard {ShardKey} ranked no leaves, so nothing was warmed; "
+                + "the access-frequency model is empty (typically after an unclean restart).",
+                context.GrainId.Key.ToString());
+            return;
+        }
+
         var warmed = 0;
 
         using var gate = new SemaphoreSlim(MaxLeafPreWarmParallelism, MaxLeafPreWarmParallelism);
