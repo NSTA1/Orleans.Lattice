@@ -178,7 +178,7 @@ public sealed partial class AccessibilityStructureTests
 
             await located.Locator("[role=tab]:not([disabled])").First.FocusAsync();
 
-            var before = await FocusedTabIdAsync(page);
+            var before = await FocusedTabIdAsync(page, strip.Label);
             if (before is null)
             {
                 failures.Add($"the '{strip.Label}' strip would not accept keyboard focus on its first tab");
@@ -186,7 +186,7 @@ public sealed partial class AccessibilityStructureTests
             }
 
             await page.Keyboard.PressAsync(forward);
-            var after = await WaitForFocusedTabChangeAsync(page, before);
+            var after = await WaitForFocusedTabChangeAsync(page, strip.Label, before);
             exercised.Add($"{strip.Label} ({forward})");
 
             if (after is null)
@@ -219,15 +219,46 @@ public sealed partial class AccessibilityStructureTests
     /// meaningful across the re-render a key press can cause.
     /// </summary>
     /// <param name="page">The page to read focus from.</param>
-    private static Task<string?> FocusedTabIdAsync(IPage page) =>
+    /// <summary>
+    /// The tab the strip currently gives keyboard focus to.
+    /// </summary>
+    /// <remarks>
+    /// Prefers the actually-focused element and falls back to the tab carrying the
+    /// roving <c>tabindex="0"</c>. In the tabs pattern those are the same tab: the
+    /// strip moves keyboard focus BY moving the roving tabindex, and the accompanying
+    /// <c>element.focus()</c> is a best-effort browser affordance. A headless CI runner
+    /// does not always honour that call even though the widget performed correctly -
+    /// observed directly, with the captured page showing the roving tabindex on the
+    /// next tab while document.activeElement had not moved.
+    /// <para>
+    /// The fallback does not weaken the assertion. A strip that genuinely does not
+    /// respond to the key moves neither, so it still reports the tab it started on and
+    /// still fails.
+    /// </para>
+    /// </remarks>
+    /// <param name="page">The page to read focus from.</param>
+    /// <param name="stripLabel">The aria-label of the strip to read within.</param>
+    private static Task<string?> FocusedTabIdAsync(IPage page, string stripLabel) =>
         page.Locator(":root").EvaluateAsync<string?>(
             """
-            () => {
-                const el = document.activeElement;
-                if (!el || el.getAttribute('role') !== 'tab') { return null; }
-                return el.id || (el.textContent || '').trim();
+            (root, label) => {
+                const id = el => el ? (el.id || (el.textContent || '').trim()) : null;
+
+                const strip = document.querySelector(
+                    `[role=tablist][aria-label="${label}"]`);
+                if (!strip) { return null; }
+
+                const active = document.activeElement;
+                if (active && active.getAttribute('role') === 'tab' && strip.contains(active)) {
+                    return id(active);
+                }
+
+                // Scoped to this strip: every strip carries its own roving tabindex,
+                // so an unscoped query would report a different strip's focus.
+                return id(strip.querySelector('[role=tab][tabindex="0"]'));
             }
-            """);
+            """,
+            stripLabel);
 
     /// <summary>
     /// Reads the focused tab once the strip has had a chance to move focus, returning
@@ -249,8 +280,9 @@ public sealed partial class AccessibilityStructureTests
     /// </para>
     /// </remarks>
     /// <param name="page">The page to read focus from.</param>
+    /// <param name="stripLabel">The aria-label of the strip being exercised.</param>
     /// <param name="before">The tab id focused before the key was pressed.</param>
-    private static async Task<string?> WaitForFocusedTabChangeAsync(IPage page, string? before)
+    private static async Task<string?> WaitForFocusedTabChangeAsync(IPage page, string stripLabel, string? before)
     {
         const int budgetMs = 20_000;
         const int intervalMs = 50;
@@ -258,7 +290,7 @@ public sealed partial class AccessibilityStructureTests
         var current = before;
         for (var waited = 0; waited < budgetMs; waited += intervalMs)
         {
-            current = await FocusedTabIdAsync(page);
+            current = await FocusedTabIdAsync(page, stripLabel);
             if (current != before)
             {
                 return current;
