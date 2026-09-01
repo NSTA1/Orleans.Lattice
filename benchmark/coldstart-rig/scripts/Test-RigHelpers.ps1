@@ -837,6 +837,106 @@ else {
 
 # ---------------------------------------------------------------------------
 Write-Host ''
+Write-Host 'Build-source resolution (prepare-master and run-cohort must agree)' -ForegroundColor Cyan
+
+$buildSourceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rig-buildsrc-" + [guid]::NewGuid().ToString('n').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path (Join-Path $buildSourceRoot '.run\coldstart-rig') | Out-Null
+	$buildSourceScriptRoot = Join-Path $buildSourceRoot 'pkg\scripts'
+	New-Item -ItemType Directory -Force -Path $buildSourceScriptRoot | Out-Null
+try {
+	$recordPath = Join-Path $buildSourceRoot '.run\coldstart-rig\build-source.json'
+
+	# No record at all: both callers must fall back to the configured source
+	# rather than throwing, which is the state on a box that never built.
+	$absent = Get-RigBuildSource -ScriptRoot $buildSourceScriptRoot
+	_Assert -Name 'an absent build record resolves to null, so callers fall back to the configured source' `
+		-Condition ($null -eq $absent) -Detail "got: $absent"
+
+	# A record naming an image that does not exist must not be honoured: the
+	# image it points at may have been pruned, and tagging from a missing
+	# reference would fail confusingly rather than falling back.
+	@{ image = 'repocontext-mcp:coldstart-buildsrctest-missing'; imageId = 'sha256:0'; gitRef = 'HEAD'; commitSha = 'deadbeef'; builtUtc = '2026-01-01T00:00:00Z' } |
+		ConvertTo-Json | Set-Content -LiteralPath $recordPath -Encoding utf8
+	$dangling = Get-RigBuildSource -ScriptRoot $buildSourceScriptRoot
+	_Assert -Name 'a build record naming an absent image resolves to null' `
+		-Condition ($null -eq $dangling) -Detail "got: $dangling"
+
+	# A malformed record must degrade to the fallback rather than throwing, so a
+	# truncated write cannot wedge every later rig invocation.
+	'{ not json' | Set-Content -LiteralPath $recordPath -Encoding utf8
+	$malformed = Get-RigBuildSource -ScriptRoot $buildSourceScriptRoot
+	_Assert -Name 'a malformed build record resolves to null rather than throwing' `
+		-Condition ($null -eq $malformed) -Detail "got: $malformed"
+}
+finally {
+	Remove-Item -Recurse -Force -LiteralPath $buildSourceRoot -ErrorAction SilentlyContinue
+}
+
+# The load-bearing case, Docker-backed: a REAL divergence between the recorded
+# build source and what the rig tag resolves to. This is the exact state
+# prepare-master.ps1 used to leave behind, and the state in which a cohort
+# measures one image while reporting another.
+if ($dockerReady) {
+	$bsRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rig-buildsrc-live-{0}" -f [guid]::NewGuid().ToString('N').Substring(0, 8))
+	New-Item -ItemType Directory -Force -Path (Join-Path $bsRoot '.run\coldstart-rig') | Out-Null
+	$bsScriptRoot = Join-Path $bsRoot 'pkg\scripts'
+	New-Item -ItemType Directory -Force -Path $bsScriptRoot | Out-Null
+	$bsRecord = Join-Path $bsRoot '.run\coldstart-rig\build-source.json'
+	$bsBuilt = 'repocontext-mcp:coldstart-buildsrctest'
+	$bsOther = 'repocontext-mcp:coldstart-buildsrctest-other'
+	$bsIdA = ''
+	$bsIdB = ''
+	try {
+		Set-Content -LiteralPath (Join-Path $bsRoot 'built.txt') -Value 'the image the operator built' -Encoding ascii
+		Set-Content -LiteralPath (Join-Path $bsRoot 'other.txt') -Value 'the image a re-tag would substitute' -Encoding ascii
+		tar -cf (Join-Path $bsRoot 'built.tar') -C $bsRoot 'built.txt' | Out-Null
+		tar -cf (Join-Path $bsRoot 'other.tar') -C $bsRoot 'other.txt' | Out-Null
+
+		$bsIdA = (_Docker import (Join-Path $bsRoot 'built.tar') $bsBuilt).Output
+		$bsIdB = (_Docker import (Join-Path $bsRoot 'other.tar') $bsOther).Output
+
+		_Assert -Name 'the two build-source fixture images really do have different ids' `
+			-Condition ($bsIdA -like 'sha256:*' -and $bsIdB -like 'sha256:*' -and $bsIdA -ne $bsIdB) `
+			-Detail "A=$bsIdA B=$bsIdB"
+
+		@{ image = $bsBuilt; imageId = $bsIdA; gitRef = 'HEAD'; commitSha = 'abc123'; builtUtc = '2026-01-01T00:00:00Z' } |
+			ConvertTo-Json | Set-Content -LiteralPath $bsRecord -Encoding utf8
+
+		$resolved = Get-RigBuildSource -ScriptRoot $bsScriptRoot
+		_Assert -Name 'a build record naming a REAL image is honoured' `
+			-Condition ($null -ne $resolved -and "$($resolved.image)" -eq $bsBuilt) `
+			-Detail ($resolved | ConvertTo-Json -Compress)
+
+		_Assert -Name 'a recorded build matching the tested image is detected as matching' `
+			-Condition ((Get-RigDockerImageId -Reference $bsBuilt) -eq "$($resolved.imageId)") `
+			-Detail "tag=$(Get-RigDockerImageId -Reference $bsBuilt) record=$($resolved.imageId)"
+
+		# Re-point the recorded tag at the OTHER image, exactly as a re-tag from
+		# the configured default would. The recorded id and the tag now disagree,
+		# which is what run-cohort.ps1 must refuse to measure.
+		_Docker tag $bsIdB $bsBuilt | Out-Null
+		$afterRetag = Get-RigDockerImageId -Reference $bsBuilt
+		_Assert -Name 'a REAL divergence between the recorded id and the tag is DETECTED' `
+			-Condition ($afterRetag -eq $bsIdB -and $afterRetag -ne "$($resolved.imageId)") `
+			-Detail "tag now=$afterRetag record=$($resolved.imageId)"
+
+		_Docker tag $bsIdA $bsBuilt | Out-Null
+		_Assert -Name 're-pointing the tag at the recorded image clears the divergence' `
+			-Condition ((Get-RigDockerImageId -Reference $bsBuilt) -eq "$($resolved.imageId)") `
+			-Detail "tag=$(Get-RigDockerImageId -Reference $bsBuilt)"
+	}
+	finally {
+		_Docker rmi -f $bsBuilt | Out-Null
+		_Docker rmi -f $bsOther | Out-Null
+		foreach ($id in @($bsIdA, $bsIdB)) {
+			if ($id -like 'sha256:*') { _Docker rmi -f $id | Out-Null }
+		}
+		Remove-Item -Recurse -Force -LiteralPath $bsRoot -ErrorAction SilentlyContinue
+	}
+}
+
+# ---------------------------------------------------------------------------
+Write-Host ''
 Write-Host ("Passed: {0}  Failed: {1}  Total: {2}" -f $script:_PassCount, $script:_FailCount, ($script:_PassCount + $script:_FailCount)) `
 	-ForegroundColor $(if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' })
 

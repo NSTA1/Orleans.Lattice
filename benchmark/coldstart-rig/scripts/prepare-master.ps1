@@ -136,7 +136,19 @@ New-RigVolume -Config $config -Name "$($config.HfCacheVolume)" | Out-Null
 # --- Image tags ----------------------------------------------------------
 if (-not $SkipImages) {
 	Write-Host 'Applying the rig image tags (additional tags on already-built images) ...' -ForegroundColor Cyan
-	Add-RigImageTag -Config $config -Source "$($config.SourceMcpImage)" -Destination "$($config.McpImage)" | Out-Null
+
+	# A recorded build is the source when there is one, exactly as `rig.ps1 tag`
+	# resolves it. Reading the configured default here instead would silently
+	# undo a preceding `rig.ps1 build`: the operator builds a branch, prepares
+	# the master, and the cohort then measures whatever the live tag holds while
+	# labelling the results as the candidate. Both paths must agree, so both
+	# call the same helper.
+	$built = Get-RigBuildSource -ScriptRoot $PSScriptRoot
+	$mcpSource = if ($built) { "$($built.image)" } else { "$($config.SourceMcpImage)" }
+	if ($built) {
+		Write-Host "  using the recorded build source $mcpSource (commit $($built.commitSha))" -ForegroundColor Cyan
+	}
+	Add-RigImageTag -Config $config -Source $mcpSource -Destination "$($config.McpImage)" | Out-Null
 	Add-RigImageTag -Config $config -Source "$($config.SourceEmbedderImage)" -Destination "$($config.EmbedderImage)" | Out-Null
 	Write-Host "  $($config.SourceMcpImage) -> $($config.McpImage)"
 	Write-Host "  $($config.SourceEmbedderImage) -> $($config.EmbedderImage)"
