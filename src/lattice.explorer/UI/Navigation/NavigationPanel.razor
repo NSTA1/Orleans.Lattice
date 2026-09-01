@@ -100,7 +100,17 @@
                     var isSelected = string.Equals(Selection.Selected?.Id, item.Id, StringComparison.Ordinal)
                         && Selection.Selected?.Kind == item.Kind;
                     var badgeStart = row * ExplorerBadges.MaxCatalogBadges;
-                    var badgeCount = _rowBadgeCounts[row];
+                    @*
+                        Floored rather than indexed blind. The buffers are rebuilt
+                        in the same synchronous step that appends the rows, so this
+                        should never bite - but when it did, an unhandled
+                        IndexOutOfRangeException out of BuildRenderTree took the
+                        whole circuit down and the shell froze on "Loading
+                        catalog...". A row with no badge is a far better failure
+                        than a shell with no rows, and the bounds check is one
+                        comparison the array access performs anyway.
+                    *@
+                    var badgeCount = row < _rowBadgeCounts.Length ? _rowBadgeCounts[row] : 0;
                     <li role="option" aria-selected="@(isSelected ? "true" : "false")">
                         <button type="button"
                                 class="lx-shell-nav-item @(isSelected ? "is-selected" : null)"
@@ -245,6 +255,11 @@
     private string? _error;
     private bool _showConfig;
     private bool _restored;
+    private bool _disposed;
+
+    // Identifies the current listing, so a badge fan-out that outlives the load
+    // it belongs to cannot apply counts over a newer one.
+    private int _loadGeneration;
 
     // The selection the route names and the catalog has not yet resolved to an
     // item. Empty string means "the route names no selection", which is a real
@@ -449,9 +464,15 @@
 
     private async Task LoadPageAsync(bool reset)
     {
+        // Stamps this load so a badge fan-out that outlives it cannot apply its
+        // counts over a newer listing.
+        var generation = ++_loadGeneration;
+
         _loading = true;
         _error = null;
         StateHasChanged();
+
+        List<CatalogItem>? trees = null;
 
         try
         {
@@ -464,13 +485,18 @@
             _nextToken = page.NextPageToken;
             _hasMore = page.HasMore;
 
-            // Populate the DLQ badge counts for the freshly loaded trees. Zero /
-            // absent counts (including a cluster with no schema enforcement, where
-            // the reader returns 0) simply render no badge. Views and tag indexes
-            // have no dead-letter queue, so this is skipped for those kinds.
-            if (_kind == CatalogKind.Trees)
+            // Rebuilt here, in the same synchronous step that appended the rows,
+            // because the render path indexes these buffers BY ROW. Leaving them
+            // to the finally opened a window - across an await - in which _items
+            // was longer than the badge buffers, and any render landing in it
+            // threw IndexOutOfRangeException out of BuildRenderTree. That is not
+            // a hypothetical: the window only exists when the catalog actually
+            // returns rows, which is why an empty-catalog head never saw it.
+            RebuildBadges();
+
+            if (_kind == CatalogKind.Trees && page.Items.Count > 0)
             {
-                await LoadDeadLetterCountsAsync(page.Items);
+                trees = new List<CatalogItem>(page.Items);
             }
         }
         catch (Exception ex)
@@ -484,6 +510,55 @@
             ApplyPendingSelection();
             Announce();
             StateHasChanged();
+        }
+
+        if (trees is not null)
+        {
+            // Deliberately NOT awaited. A dead-letter count is decoration on a row
+            // that has already loaded, and there is one call per tree: awaiting the
+            // fan-out here made the whole catalog - and, because this runs from
+            // OnInitializedAsync, the panel's first real render - wait on the
+            // slowest of them, and wait forever on one that never answers. The
+            // rows now appear immediately and the badges fill in behind them.
+            _ = ApplyDeadLetterCountsAsync(trees, generation);
+        }
+    }
+
+    /// <summary>
+    /// Fetches the dead-letter counts for <paramref name="trees"/> and folds them
+    /// into the badges, off the load path.
+    /// </summary>
+    /// <remarks>
+    /// Fault-isolated and generation-checked: a failure leaves the rows without
+    /// badges rather than without rows, and counts from a superseded load are
+    /// discarded instead of being painted over a newer listing.
+    /// </remarks>
+    private async Task ApplyDeadLetterCountsAsync(List<CatalogItem> trees, int generation)
+    {
+        try
+        {
+            await LoadDeadLetterCountsAsync(trees);
+
+            if (_disposed || generation != _loadGeneration)
+            {
+                return;
+            }
+
+            await InvokeAsync(() =>
+            {
+                if (_disposed || generation != _loadGeneration)
+                {
+                    return;
+                }
+
+                RebuildBadges();
+                StateHasChanged();
+            });
+        }
+        catch (Exception)
+        {
+            // Decoration only. A badge that cannot be fetched is not a reason to
+            // disturb a catalog the caller can already use.
         }
     }
 
@@ -774,6 +849,7 @@
 
     public void Dispose()
     {
+        _disposed = true;
         Selection.SelectionChanged -= OnSelectionChanged;
         Session.ConfigurationChanged -= OnConfigurationChanged;
         Router.RouteChanged -= OnRouteChanged;
