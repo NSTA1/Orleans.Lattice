@@ -189,6 +189,12 @@ internal static class JourneyShell
     /// <param name="label">The exact area label.</param>
     internal static async Task OpenAreaAsync(IPage page, string label)
     {
+        // Wait for the gates before clicking. An area shown plainly while unprobed
+        // can demote a moment later, so a click aimed at a tab mid-settle can land
+        // on a control that is no longer there - which reads as "the area would not
+        // open" rather than as a race.
+        await AssertRailSettledAsync(page);
+
         var tab = page.GetByRole(AriaRole.Tab, new PageGetByRoleOptions { Name = label, Exact = true });
         await Assertions.Expect(tab).ToBeVisibleAsync();
         await tab.ClickAsync();

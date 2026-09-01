@@ -235,6 +235,17 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             .Expect(page.Locator("[role=tablist][aria-label='Catalog kind'] [role=tab]:not([disabled])").First)
             .ToBeVisibleAsync();
 
+        // The detail strip has the same busy state for the same reason - its surface
+        // tabs are disabled while the selected tree's surfaces resolve - and the walk
+        // exercises it too, so it must be waited for on the same terms rather than
+        // only the catalog strip.
+        await Assertions
+            .Expect(page.Locator("[role=tablist][aria-label='Detail tabs'] [role=tab]:not([disabled])").First)
+            .ToBeVisibleAsync();
+
+        // The rail settles independently of both, as its area gates report.
+        await JourneyShell.AssertRailSettledAsync(page);
+
         await Assertions.Expect(page.Locator("[role=tablist]").First).ToBeAttachedAsync();
 
         // Snapshot the strips by the name each publishes, in one read, and address them

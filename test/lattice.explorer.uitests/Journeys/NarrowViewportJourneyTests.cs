@@ -36,6 +36,11 @@ public sealed class NarrowViewportJourneyTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await ExplorerShell.AssertBreakpointAsync(page, LatticeBreakpoint.Compact);
 
+        // Enumerating the rail before its gates have reported reads a set that is
+        // still changing: an area shown plainly while unprobed can demote a moment
+        // later, so a tab counted here need not be the tab clicked below.
+        await JourneyShell.AssertRailSettledAsync(page);
+
         var tabs = page.Locator(JourneyShell.RailTabSelector);
         var count = await tabs.CountAsync();
 
