@@ -144,6 +144,15 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         {
             options.DisconnectedCircuitMaxRetained = 0;
             options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(1);
+
+            // Say what actually went wrong. A server-side exception on a Blazor circuit
+            // otherwise reaches the browser as "There was an unhandled exception on the
+            // current circuit, so this circuit will be terminated" and nothing else -
+            // and because the circuit is then dead, every later assertion in the test
+            // fails against a frozen page rather than against the fault. In a test host
+            // there is no reason to withhold the detail, and having it turns a whole
+            // afternoon of bisecting into reading one stack trace.
+            options.DetailedErrors = true;
         });
 
         var app = builder.Build();
