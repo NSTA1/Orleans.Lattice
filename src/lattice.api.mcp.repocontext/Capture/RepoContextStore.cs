@@ -764,9 +764,41 @@ internal sealed class RepoContextStore
     public async Task<RepoContextRepoListResult> ListReposAsync(CancellationToken cancellationToken)
     {
         var tree = Tree(RepoContextTrees.Structural);
+        var repoIds = await ListRepoIdsAsync(cancellationToken).ConfigureAwait(false);
+        var summaries = new List<RepoContextRepoSummary>(repoIds.Count);
+        foreach (var repoId in repoIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            summaries.Add(await BuildRepoSummaryAsync(tree, repoId, cancellationToken).ConfigureAwait(false));
+        }
+
+        return new RepoContextRepoListResult
+        {
+            Repos = summaries,
+            Count = summaries.Count,
+        };
+    }
+
+    /// <summary>
+    /// Walks the registered repository ids without building a per-repository
+    /// summary.
+    /// <para>
+    /// A summary carries <c>embeddedVectorCount</c>, which is scanned from the
+    /// membership tree - the largest and slowest tree in the store. A caller that
+    /// only needs the ids (the retrieval warmup, which discards everything else)
+    /// would otherwise pay that scan per repository, and it runs at startup while
+    /// the vector trees are still replaying, which is precisely when that scan is
+    /// slowest and times out.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the scan between repositories.</param>
+    /// <returns>The registered repository ids, in key order.</returns>
+    internal async Task<IReadOnlyList<string>> ListRepoIdsAsync(CancellationToken cancellationToken)
+    {
+        var tree = Tree(RepoContextTrees.Structural);
         var namespacePrefix = RepoContextKeys.AllReposPrefix();
         var namespaceEnd = RepoContextPortability.PrefixUpperBound(namespacePrefix);
-        var summaries = new List<RepoContextRepoSummary>();
+        var repoIds = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         var lower = namespacePrefix;
@@ -803,7 +835,7 @@ internal sealed class RepoContextStore
             var repoId = parsed.RepoId;
             if (seen.Add(repoId))
             {
-                summaries.Add(await BuildRepoSummaryAsync(tree, repoId, cancellationToken).ConfigureAwait(false));
+                repoIds.Add(repoId);
             }
 
             if (parsed.Kind == RepoContextRecordKind.Repo)
@@ -829,7 +861,7 @@ internal sealed class RepoContextStore
             lower = subtreeEnd;
         }
 
-        return new RepoContextRepoListResult { Repos = summaries, Count = summaries.Count };
+        return repoIds;
     }
 
     /// <summary>
