@@ -224,11 +224,19 @@ internal static class ShardConsolidationPlanner
         if (physical.Count < 2) return false;
 
         // Count every shard's slots in a single pass. The per-pair
-        // CountOwnedSlots shape this replaces was O(shards x slots), which on
-        // exactly the badly-over-split trees this planner exists to heal - a
-        // thousand-plus physical shards over four thousand virtual slots - is
-        // millions of comparisons per planning call. The counts are rented
-        // rather than allocated so a repeated planning sweep costs nothing.
+        // CountOwnedSlots shape this replaces was O(shards x slots), which on a
+        // tree with a high physical shard count over a large virtual slot space
+        // costs millions of comparisons per planning call. The counts are
+        // rented rather than allocated so a repeated planning sweep costs
+        // nothing.
+        //
+        // A tree reaches such a count through an explicit ReshardAsync rather
+        // than through autonomic splitting, which MaxPhysicalShardsPerTree
+        // (default 256) now bounds. (An earlier version of this comment
+        // justified the pass by citing a deployment observed at a thousand-plus
+        // physical shards; that reading was wrong - the figure counted leaf
+        // grains within shards, not shards - so the complexity argument is left
+        // to stand on its own.)
         var maxIndex = physical[physical.Count - 1];
         var counts = ArrayPool<int>.Shared.Rent(maxIndex + 1);
         try
