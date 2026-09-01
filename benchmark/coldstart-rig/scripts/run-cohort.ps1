@@ -456,6 +456,18 @@ Write-Host ("Testing {0} ({1})." -f $imageProvenance.mcpImage, $(if ($imageProve
 if ($null -ne $imageProvenance.builtFrom) {
 	Write-Host ("  built by the rig from {0} (commit {1}); matches the tested image: {2}" -f `
 			$imageProvenance.builtFrom.gitRef, $imageProvenance.builtFrom.commitSha, $imageProvenance.builtFrom.matchesTestedImage) -ForegroundColor DarkGray
+
+	# Refuse rather than measure the wrong image. A recorded build that does not
+	# match what the rig tag now resolves to means something re-tagged in
+	# between - prepare-master.ps1 used to do exactly that from the configured
+	# default - and a cohort run in that state measures one image while every
+	# report of it names another. That failure is silent and produces a
+	# plausible result, which is worse than an error: the numbers look like the
+	# candidate's and are the deployed image's. `rig.ps1 tag` re-applies the
+	# record and clears this.
+	if (-not $imageProvenance.builtFrom.matchesTestedImage) {
+		throw (Get-RigImageProvenanceRefusal -Provenance $imageProvenance)
+	}
 }
 if ($hostContext.contended) {
 	Write-Host ("NOTE: {0} unrelated container(s) are running on this host. Cold start is CPU-bound, so the spread this cohort reports is the HOST's floor, not the rig's. RECORD this cohort as contended - do NOT stop the live deployment to quiet the box (see the README): a number bought that way is not reproducible." -f $hostContext.foreignContainers) -ForegroundColor Yellow
