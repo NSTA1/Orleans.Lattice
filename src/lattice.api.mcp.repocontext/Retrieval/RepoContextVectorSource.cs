@@ -28,6 +28,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// </summary>
 internal sealed class RepoContextVectorSource : IRepoContextVectorSource
 {
+    /// <summary>
+    /// Reconnect budget for the whole-prefix count walk. Deliberately far above
+    /// <see cref="LatticeExtensions.DefaultScanReconnectAttempts"/>: see
+    /// <see cref="CountAsync"/>.
+    /// </summary>
+    private const int CountReconnectAttempts = 64;
+
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
     private readonly string _repoId;
@@ -192,12 +199,6 @@ internal sealed class RepoContextVectorSource : IRepoContextVectorSource
 
         return count;
     }
-
-    /// <summary>
-    /// Reconnect budget for the whole-prefix count walk. Deliberately far above
-    /// the shared default: see <see cref="CountAsync"/>.
-    /// </summary>
-    private const int CountReconnectAttempts = 64;
 
     /// <inheritdoc />
     public Task<bool> ContainsAsync(string id, CancellationToken cancellationToken = default)

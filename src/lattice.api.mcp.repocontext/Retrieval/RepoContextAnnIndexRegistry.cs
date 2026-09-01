@@ -260,33 +260,95 @@ internal sealed class RepoContextAnnIndexRegistry : IRepoContextAnnIndex, IDispo
 
     private async Task RunBuildAsync(Entry entry)
     {
-        try
+        // RETRY IN PLACE, WITH A BOUNDED BACKOFF, RATHER THAN RE-ARMING.
+        //
+        // This loop used to be a single attempt: any fault tore the build task
+        // down, logged, and set BuildArmed back to 0 so the NEXT QUERY started a
+        // fresh attempt. The stated reason was that re-arming is "naturally
+        // rate-limited by query traffic instead of by a timer nobody can see",
+        // and that reasoning is sound FOR A CHEAP RETRY. It is wrong for an
+        // expensive one, and this retry is expensive: a build resumes from its
+        // last flushed checkpoint, so a fault costs every vector ingested since
+        // that flush, and the resumed attempt re-opens the index before it can
+        // make any forward progress.
+        //
+        // Measured on a restored copy of the live deployment (#1844): a corpus of
+        // roughly 35,800 vectors faulted about once per flush boundary with a
+        // 30-second Orleans response timeout against a saturated shard root, so
+        // query-gated re-arming turned a TRANSIENT fault into PERMANENT
+        // non-convergence - the index sat at one flush (4,096 vectors) and never
+        // reached Ready, so query cost stayed proportional to corpus size and
+        // cold start could not improve. Retrying in place lets the build absorb
+        // the transient and carry on from its checkpoint.
+        //
+        // The backoff is linear and capped so a genuinely broken store still
+        // yields rather than spinning, and the loop still gives up eventually and
+        // re-arms, so a query can start a fresh attempt later.
+        for (var attempt = 1; attempt <= BuildAttempts; attempt++)
         {
-            await entry.Handle.EnsureBuiltAsync(_stopping.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
-        {
-            // The host is shutting down. The index is derived, so an interrupted
-            // build costs the next start a resume from its last checkpoint.
-        }
-        catch (ObjectDisposedException)
-        {
-            // The registry was disposed while the build was in flight.
-        }
-        catch (Exception ex)
-        {
-            // The build is best-effort by construction: retrieval keeps working
-            // through the exact scan the whole time it is not serving. Re-arming
-            // rather than retrying in place means the next query pays for one more
-            // attempt, which is naturally rate-limited by query traffic instead of
-            // by a timer nobody can see.
-            _logger.LogWarning(
-                ex,
-                "Repository-context approximate index build did not complete; semantic retrieval continues "
-                + "through the exact path and the build will be retried on the next query.");
-            Volatile.Write(ref entry.BuildArmed, 0);
+            try
+            {
+                await entry.Handle.EnsureBuiltAsync(_stopping.Token).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+            {
+                // The host is shutting down. The index is derived, so an interrupted
+                // build costs the next start a resume from its last checkpoint.
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                // The registry was disposed while the build was in flight.
+                return;
+            }
+            catch (Exception ex)
+            {
+                // The build is best-effort by construction: retrieval keeps working
+                // through the exact scan the whole time it is not serving.
+                var lastAttempt = attempt == BuildAttempts;
+                _logger.LogWarning(
+                    ex,
+                    "Repository-context approximate index build step {Attempt} of {Attempts} did not complete; "
+                    + "semantic retrieval continues through the exact path and the build {Continuation}.",
+                    attempt,
+                    BuildAttempts,
+                    lastAttempt ? "will be retried on the next query" : "resumes from its last checkpoint");
+
+                if (lastAttempt)
+                {
+                    Volatile.Write(ref entry.BuildArmed, 0);
+                    return;
+                }
+
+                try
+                {
+                    await Task.Delay(BackoffFor(attempt), _stopping.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
         }
     }
+
+    /// <summary>
+    /// How many times a background build absorbs a transient fault and resumes
+    /// from its checkpoint before handing back to the query-gated re-arm.
+    /// </summary>
+    private const int BuildAttempts = 32;
+
+    /// <summary>
+    /// Backoff before a build resumes from its checkpoint. Short at first, so a
+    /// TRANSIENT fault - a saturated shard root timing out, which is the case
+    /// measured on a real deployment - is absorbed promptly rather than costing
+    /// seconds of stalled progress per flush boundary. It grows linearly and is
+    /// capped, so a persistently broken store yields the thread pool instead of
+    /// spinning.
+    /// </summary>
+    private static TimeSpan BackoffFor(int attempt)
+        => TimeSpan.FromMilliseconds(Math.Min(200 * attempt, 10_000));
 
     private sealed class Entry(RepoContextAnnIndexHandle handle)
     {
