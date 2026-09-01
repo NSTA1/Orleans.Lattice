@@ -83,6 +83,9 @@ public static class ExplorerTermIds
     /// <summary>An isolated slice of the cluster.</summary>
     public const string Tenant = "tenant";
 
+    /// <summary>The reserved tenant that owns the un-prefixed trees.</summary>
+    public const string DefaultTenant = "default-tenant";
+
     /// <summary>The tenant the Explorer is currently scoped to.</summary>
     public const string ActiveTenant = "active-tenant";
 

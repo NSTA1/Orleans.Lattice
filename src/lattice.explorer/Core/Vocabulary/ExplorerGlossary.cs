@@ -183,6 +183,13 @@ public static class ExplorerGlossary
         },
         new()
         {
+            Id = ExplorerTermIds.DefaultTenant,
+            Label = "Default tenant",
+            Explanation = "The reserved tenant that owns every tree with no tenant prefix. It always exists and cannot be suspended or deleted, so a cluster that was never made multi-tenant has this one and nothing else.",
+            DocsLink = ExplorerDocsLinks.Tenancy,
+        },
+        new()
+        {
             Id = ExplorerTermIds.ActiveTenant,
             Label = "Active tenant",
             Explanation = "The tenant the Explorer is currently reading as. Everything listed belongs to it, so changing the active tenant changes what you see.",

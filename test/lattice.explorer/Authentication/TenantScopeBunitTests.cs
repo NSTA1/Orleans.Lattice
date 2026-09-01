@@ -210,14 +210,28 @@ public sealed class TenantScopeBunitTests : BunitContext
     [Test]
     public void The_default_tenant_is_explained_in_product()
     {
+        // The picker resolves "default-tenant" from the shared glossary and falls
+        // back to the generic "Tenant" term when it is absent. That fallback kept
+        // the control working while #1853 and #1851 ran in parallel, but the
+        // generic term says nothing about the RESERVED default - the one that owns
+        // the un-prefixed trees and cannot be suspended or deleted - so asserting
+        // only that some panel rendered let the fallback ship unnoticed. Assert the
+        // real term, so the fallback cannot silently become permanent.
         Configure(isOperator: true, ExplorerTenantId.Default, ExplorerTenantId.Default.Value);
 
         var cut = Render<TenantScope>();
+        var explained = cut.FindAll(".lx-help-panel").Select(p => p.TextContent).ToArray();
 
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll("[title]"), Is.Empty, "a title attribute is not an explanation");
-            Assert.That(cut.FindAll(".lx-help-panel"), Is.Not.Empty);
+            Assert.That(explained, Is.Not.Empty);
+            Assert.That(
+                explained.Any(t => t.Contains(
+                    ExplorerGlossary.Get(ExplorerTermIds.DefaultTenant).Explanation,
+                    StringComparison.Ordinal)),
+                Is.True,
+                "the picker must explain the reserved default tenant, not fall back to the generic Tenant term");
         });
     }
 
