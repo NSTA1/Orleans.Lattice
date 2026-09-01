@@ -244,6 +244,13 @@
     // item was picked" from "the same item's surface changed".
     private string? _lastSelection;
 
+    // The last selection that actually named something, kept so returning to the
+    // catalog can put it back. The remembered ROUTE cannot serve this: switching
+    // area drops the selection, and that selection-less route is what then gets
+    // remembered, so by the time the caller returns there is nothing left in it.
+    private string _lastSelectionKind = string.Empty;
+    private string _lastSelectionId = string.Empty;
+
     // The rail's per-render buffers, sized once at mount, so a render pass
     // allocates nothing however many areas are registered and however often the
     // access store changes. The tab list is a reused List rather than an array
@@ -723,6 +730,11 @@
             return route;
         }
 
+        if (_lastSelectionId.Length != 0)
+        {
+            return route.WithSelection(_lastSelectionKind, _lastSelectionId);
+        }
+
         if (Services.GetService(typeof(IExplorerShellPreferences)) is not IExplorerShellPreferences preferences)
         {
             return route;
@@ -783,6 +795,12 @@
         var selection = route.HasSelection ? route.Kind + "/" + route.Id : null;
         var selectionMoved = !string.Equals(selection, _lastSelection, StringComparison.Ordinal);
         _lastSelection = selection;
+
+        if (route.HasSelection)
+        {
+            _lastSelectionKind = route.Kind;
+            _lastSelectionId = route.Id;
+        }
 
         if (selectionMoved && selection is not null && IsCatalogOpen)
         {
