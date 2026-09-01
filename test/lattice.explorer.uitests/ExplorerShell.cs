@@ -76,9 +76,21 @@ internal static class ExplorerShell
     /// Reads a document-element custom property and the painted background of the
     /// shell in one style recalculation, after applying <c>data-theme</c>.
     /// </summary>
+    /// <summary>
+    /// Reads a document-element custom property and the painted background of the
+    /// shell in one style recalculation, after applying <c>data-theme</c>.
+    /// </summary>
+    /// <remarks>
+    /// The first parameter is the element the locator resolved to, not the theme.
+    /// <see cref="ILocator.EvaluateAsync{T}(string, object?, LocatorEvaluateOptions?)"/>
+    /// always passes the matched element first and the caller's argument second, so a
+    /// single-parameter function silently binds the element to what it thinks is its
+    /// argument - which here wrote an element into <c>data-theme</c> and made both
+    /// palettes resolve identically. Naming the element parameter keeps that explicit.
+    /// </remarks>
     private const string ApplyThemeScript =
         """
-        value => {
+        (element, value) => {
             document.documentElement.setAttribute('data-theme', value);
             const shell = document.querySelector('.lx-shell');
             const token = getComputedStyle(document.documentElement)

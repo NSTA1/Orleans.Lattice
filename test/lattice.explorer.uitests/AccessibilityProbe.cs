@@ -46,7 +46,13 @@ internal static class AccessibilityProbe
     /// the rest of the run continues.
     /// </remarks>
     /// <param name="page">The page to evaluate in.</param>
-    /// <param name="script">The probe script.</param>
+    /// <param name="script">
+    /// The probe script. Because it is evaluated through a locator, its first
+    /// parameter is the matched element and <paramref name="argument"/> is its
+    /// <i>second</i> - so a probe that takes an argument must be written
+    /// <c>(element, arg) =&gt; ...</c>. A probe that takes none may keep the
+    /// <c>() =&gt; ...</c> form, since JavaScript ignores extra arguments.
+    /// </param>
     /// <param name="argument">An optional argument passed to the probe.</param>
     internal static async Task<Report> RunAsync(IPage page, string script, object? argument = null)
     {
