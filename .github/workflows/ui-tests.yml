@@ -48,7 +48,26 @@ env:
 jobs:
   browser-ui:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+
+    # Two shards, run in parallel, split on the one boundary that matters: the
+    # journeys drive their own web head with a mutable demo world, the structure
+    # and accessibility fixtures drive the shared disconnected head. Splitting
+    # there keeps each shard to one head and roughly halves wall-clock.
+    #
+    # The lane used to fit one 20-minute job only because most of its cases
+    # failed within a second - a page that had lost the browser focus target
+    # ends its keyboard walk after two stops. With that fixed the walks and the
+    # journeys run to completion, and the whole suite in one job exceeds the
+    # budget. Sharding buys the headroom without weakening any assertion.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: structure
+            filter: 'TestCategory=UI&FullyQualifiedName!~Journeys'
+          - shard: journeys
+            filter: 'TestCategory=UI&FullyQualifiedName~Journeys'
 
     steps:
       - uses: actions/checkout@v5
@@ -105,8 +124,8 @@ jobs:
       - name: Run browser UI tests
         run: |
           dotnet test "$UI_TEST_PROJECT" --no-build --configuration Release \
-            --filter "TestCategory=UI" \
-            --logger "trx;LogFileName=ui-tests.trx"
+            --filter "${{ matrix.filter }}" \
+            --logger "trx;LogFileName=ui-tests-${{ matrix.shard }}.trx"
 
       # Playwright traces and failure screenshots are the only practical way to
       # diagnose a browser failure after the fact, so keep them even on success
@@ -115,7 +134,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ui-test-results
+          name: ui-test-results-${{ matrix.shard }}
           path: |
             **/*.trx
             test/lattice.explorer.uitests/**/playwright-traces/**
