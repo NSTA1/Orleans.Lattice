@@ -466,13 +466,7 @@ if ($null -ne $imageProvenance.builtFrom) {
 	# candidate's and are the deployed image's. `rig.ps1 tag` re-applies the
 	# record and clears this.
 	if (-not $imageProvenance.builtFrom.matchesTestedImage) {
-		throw ("The recorded build source '{0}' (commit {1}, image {2}) is NOT what '{3}' resolves to ({4}). " +
-			"Something re-tagged the rig image after the build, so this cohort would measure a different image " +
-			"than it reports. Run './rig.ps1 tag' to re-apply the recorded source, or './rig.ps1 build' to " +
-			"record a new one." -f `
-				$imageProvenance.builtFrom.image, $imageProvenance.builtFrom.commitSha,
-				$imageProvenance.builtFrom.imageId, $imageProvenance.mcpImage,
-				$(if ($imageProvenance.mcpImageId) { $imageProvenance.mcpImageId } else { 'unresolved' }))
+		throw (Get-RigImageProvenanceRefusal -Provenance $imageProvenance)
 	}
 }
 if ($hostContext.contended) {

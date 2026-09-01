@@ -411,6 +411,32 @@ function Get-RigBuildSource {
 
 <#
 .SYNOPSIS
+	The refusal text for a cohort whose recorded build no longer matches the tag
+	it would actually measure.
+.DESCRIPTION
+	Lives here, as a function, so the MESSAGE is testable and not merely the
+	detection that triggers it. A guard whose decision is covered but whose
+	report is not can fire correctly and still tell the operator nothing - which
+	is what happened here: the text was originally assembled inline as
+	"..." + "..." -f $args, and PowerShell binds -f TIGHTER than +, so the
+	format applied only to the final fragment and every {0}-{4} shipped
+	unexpanded. The refusal worked and named no image.
+#>
+function Get-RigImageProvenanceRefusal {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)] $Provenance)
+
+	$tagId = if ($Provenance.mcpImageId) { $Provenance.mcpImageId } else { 'unresolved' }
+	return (("The recorded build source '{0}' (commit {1}, image {2}) is NOT what '{3}' resolves to ({4}). " +
+			"Something re-tagged the rig image after the build, so this cohort would measure a different image " +
+			"than it reports. Run './rig.ps1 tag' to re-apply the recorded source, or './rig.ps1 build' to " +
+			"record a new one.") -f `
+			$Provenance.builtFrom.image, $Provenance.builtFrom.commitSha,
+			$Provenance.builtFrom.imageId, $Provenance.mcpImage, $tagId)
+}
+
+<#
+.SYNOPSIS
 	True when a named Docker volume exists.
 #>
 function Test-RigVolumeExists {

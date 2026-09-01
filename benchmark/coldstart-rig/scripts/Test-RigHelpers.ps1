@@ -936,6 +936,65 @@ if ($dockerReady) {
 }
 
 # ---------------------------------------------------------------------------
+# The refusal MESSAGE, not just the detection that triggers it.
+#
+# The guard that raises this was originally written inline as
+#   "...{0}..." + "..." + "..." -f $a, $b, $c
+# and PowerShell binds -f TIGHTER than +, so the format applied only to the
+# LAST fragment (which has no placeholders) and every {0}-{4} shipped
+# unexpanded. The refusal fired correctly and named no image, no commit and no
+# id - useless at exactly the moment an operator needs them. Detection was
+# covered; the report was not. These tests close that.
+Write-Host ''
+Write-Host 'Image-provenance refusal message (the report, not just the decision)' -ForegroundColor Cyan
+
+$refusal = Get-RigImageProvenanceRefusal -Provenance ([pscustomobject]@{
+		mcpImage   = 'repocontext-mcp:coldstart-rig'
+		mcpImageId = 'sha256:deadbeef'
+		builtFrom  = [pscustomobject]@{
+			image = 'repocontext-mcp:rig-build'; commitSha = 'abc1234'
+			imageId = 'sha256:cafef00d'; matchesTestedImage = $false
+		}
+	})
+
+# The regression test proper: a literal {0}-style placeholder means the format
+# never applied. This is the assertion that fails against the inline form.
+_Assert -Name 'the refusal expands every placeholder (no literal {N} survives)' `
+	-Condition (-not ($refusal -match '\{\d\}')) `
+	-Detail $refusal
+
+# Paired positive assertions - each value must actually BE there. A "no
+# placeholder" check alone would pass on an empty string, so these prove the
+# message was built at all rather than merely lacking braces.
+foreach ($pair in @(
+		@{ what = 'the recorded image'; value = 'repocontext-mcp:rig-build' }
+		@{ what = 'the recorded commit'; value = 'abc1234' }
+		@{ what = 'the recorded image id'; value = 'sha256:cafef00d' }
+		@{ what = 'the tag it would have measured'; value = 'repocontext-mcp:coldstart-rig' }
+		@{ what = 'the id that tag resolves to'; value = 'sha256:deadbeef' })) {
+	_Assert -Name "the refusal names $($pair.what)" `
+		-Condition ($refusal.Contains($pair.value)) `
+		-Detail "expected '$($pair.value)' in: $refusal"
+}
+
+_Assert -Name 'the refusal tells the operator how to recover' `
+	-Condition ($refusal.Contains('./rig.ps1 tag')) `
+	-Detail $refusal
+
+# An unresolved tag id must degrade to a word, not to an empty gap.
+$refusalUnresolved = Get-RigImageProvenanceRefusal -Provenance ([pscustomobject]@{
+		mcpImage   = 'repocontext-mcp:coldstart-rig'
+		mcpImageId = ''
+		builtFrom  = [pscustomobject]@{
+			image = 'repocontext-mcp:rig-build'; commitSha = 'abc1234'
+			imageId = 'sha256:cafef00d'; matchesTestedImage = $false
+		}
+	})
+_Assert -Name 'an unresolved tag id reads as "unresolved" rather than a blank' `
+	-Condition ($refusalUnresolved.Contains('(unresolved)') -and -not ($refusalUnresolved -match '\{\d\}')) `
+	-Detail $refusalUnresolved
+
+# ---------------------------------------------------------------------------
 Write-Host ''
 Write-Host ("Passed: {0}  Failed: {1}  Total: {2}" -f $script:_PassCount, $script:_FailCount, ($script:_PassCount + $script:_FailCount)) `
 	-ForegroundColor $(if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' })
