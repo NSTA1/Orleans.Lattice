@@ -41,9 +41,17 @@ internal sealed class ListGrainKeySource : IGrainKeySource
     /// </summary>
     internal long? ApproximateCount { get; set; }
 
+    /// <summary>An exception <see cref="TryGetApproximateCountAsync"/> throws, or <c>null</c>.</summary>
+    internal Exception? CountFault { get; set; }
+
     /// <inheritdoc />
-    public ValueTask<long?> TryGetApproximateCountAsync(CancellationToken cancellationToken) =>
-        ValueTask.FromResult(ApproximateCount);
+    public ValueTask<long?> TryGetApproximateCountAsync(CancellationToken cancellationToken)
+    {
+        if (CountFault is { } fault)
+            throw fault;
+
+        return ValueTask.FromResult(ApproximateCount);
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<string> EnumerateKeysAsync(

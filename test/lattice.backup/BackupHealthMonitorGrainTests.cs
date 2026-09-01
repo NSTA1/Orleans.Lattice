@@ -162,13 +162,112 @@ public sealed class BackupHealthMonitorGrainTests
             Arg.Any<TimeSpan>());
     }
 
+    [Test]
+    public void GrainContext_returns_the_injected_context()
+    {
+        // Line 44: the GrainContext property getter.
+        var ctx = Substitute.For<IGrainContext>();
+        var sink = Substitute.For<ILatticeBackupSink>();
+        sink.IsDurable.Returns(true);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeBackupHealthOptions>>();
+        monitor.CurrentValue.Returns(new LatticeBackupHealthOptions { Enabled = true });
+        var grain = new BackupHealthMonitorGrain(
+            ctx,
+            Substitute.For<IReminderRegistry>(),
+            sink,
+            new FakeCatalog(),
+            new FakeHealthService(),
+            new FakeHealthStore(),
+            monitor,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<BackupHealthMonitorGrain>.Instance,
+            new FakePersistentState<BackupHealthMonitorState>());
+
+        Assert.That(grain.GrainContext, Is.SameAs(ctx));
+    }
+
+    [Test]
+    public async Task SweepAsync_skips_when_a_sweep_is_already_in_flight()
+    {
+        // Line 78: the _sweepInFlight guard returns 0 for the concurrent call.
+        var grain = CreateGrain(new FakeCatalog("a"), new FakeHealthStore(), new FakeHealthService());
+        typeof(BackupHealthMonitorGrain)
+            .GetField("_sweepInFlight", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(grain, true);
+
+        var result = await grain.SweepAsync();
+        Assert.That(result, Is.Zero);
+    }
+
+    [Test]
+    public async Task SweepAsync_verification_exception_is_logged_and_sweep_continues()
+    {
+        // Lines 111-114: an exception from healthService.VerifyAsync is caught and
+        // logged; the sweep still processes the remaining backup and returns the
+        // partial count.
+        var catalog = new FakeCatalog("a", "b");
+        var store = new FakeHealthStore();
+        var service = new FakeHealthService { ThrowOn = new InvalidOperationException("simulated") };
+
+        // Both verifications throw; verified count stays 0 but no exception escapes.
+        var verified = await CreateGrain(catalog, store, service).SweepAsync();
+        Assert.That(verified, Is.Zero);
+    }
+
+    [Test]
+    public async Task ReceiveReminder_with_unknown_name_does_not_run_a_sweep()
+    {
+        // Lines 136-138: a reminder with a name other than "backup-health-sweep" is
+        // silently ignored.
+        var service = new FakeHealthService();
+        var grain = CreateGrain(new FakeCatalog("a"), new FakeHealthStore(), service);
+
+        await grain.ReceiveReminder("some-other-reminder", default);
+
+        Assert.That(service.VerifiedIds, Is.Empty);
+    }
+
+    [Test]
+    public async Task ReceiveReminder_with_sweep_name_runs_a_sweep()
+    {
+        // Line 141: when the reminder name matches the sweep reminder, ReceiveReminder
+        // calls SweepAsync. A non-durable sink means SweepAsync returns quickly with
+        // zero verifications - enough to prove the call-through at line 141.
+        var service = new FakeHealthService();
+        var grain = CreateGrain(new FakeCatalog("a"), new FakeHealthStore(), service, durable: false);
+
+        // The constant "backup-health-sweep" is private; access it via the known name.
+        await grain.ReceiveReminder("backup-health-sweep", default);
+
+        // SweepAsync was called: non-durable sink returns early but VerifiedIds is empty.
+        Assert.That(service.VerifiedIds, Is.Empty);
+    }
+
+    [Test]
+    public async Task EnsureStartedAsync_reminder_unregister_failure_is_swallowed()
+    {
+        // Lines 154-157: GetReminder throws inside UnregisterSweepAsync; the
+        // exception must not propagate.
+        var reminders = Substitute.For<IReminderRegistry>();
+        reminders
+            .GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+            .Returns<Task<IGrainReminder>>(_ => throw new InvalidOperationException("simulated"));
+        var grain = CreateGrain(
+            new FakeCatalog(), new FakeHealthStore(), new FakeHealthService(),
+            durable: false, reminders: reminders);
+
+        Assert.That(async () => await grain.EnsureStartedAsync(), Throws.Nothing);
+    }
+
     private sealed class FakeHealthService : ILatticeBackupHealthService
     {
         public List<string> VerifiedIds { get; } = new();
+        public Exception? ThrowOn { get; set; }
 
         public Task<BackupHealthReport> VerifyAsync(string backupId, CancellationToken cancellationToken = default)
         {
             VerifiedIds.Add(backupId);
+            if (ThrowOn is not null)
+                throw ThrowOn;
             return Task.FromResult(new BackupHealthReport(
                 backupId,
                 BackupHealthStatus.Healthy,

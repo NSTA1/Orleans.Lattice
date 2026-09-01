@@ -273,6 +273,33 @@ public class GrainIndexUpdatePlanTests
         Assert.That(() => GrainIndexUpdatePlan.Removing(null!), Throws.ArgumentNullException);
     }
 
+    [Test]
+    public void Between_projections_from_different_property_orderings_reconciles_by_key_scan()
+    {
+        // When property ordering differs between before and after, the index-aligned
+        // probe fails and IndexOfKey is called to find the entry by its key (line 202).
+        var state = State();
+        var before = IndexedTestIndex.Projector().Project("alice", state);
+
+        // After projector has properties in a different order: Country first.
+        var reorderedDef = new GrainIndexDefinition<ITestStringKeyedGrain, IndexedTestState>(
+            "Subjects",
+            StringGrainKeyCodec<ITestStringKeyedGrain>.Instance,
+            [
+                IndexedTestIndex.Property<string>("Country", static s => s.Country),
+                IndexedTestIndex.Property<int>("Age", static s => s.Age),
+                IndexedTestIndex.Property<DateTimeOffset?>("LastSeen", static s => s.LastSeen),
+                IndexedTestIndex.Property<TestStatus>("Status", static s => s.Status),
+            ]);
+        var after = IndexedTestIndex.Projector(reorderedDef).Project("alice", state);
+
+        // Act: Between must reconcile entries across the ordering mismatch.
+        var plan = GrainIndexUpdatePlan.Between(before, after);
+
+        // No entries changed, only their position in the list, so the plan is empty.
+        Assert.That(plan.IsEmpty, Is.True);
+    }
+
     private static string PropertyOf(string key)
     {
         GrainIndexKeyEncoder.TryParseKey(key, out var property, out _, out _);

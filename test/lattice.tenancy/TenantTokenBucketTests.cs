@@ -50,6 +50,19 @@ public sealed class TenantTokenBucketTests
     }
 
     [Test]
+    public void ComputeBurstToleranceTicks_floors_a_non_positive_rate_per_second_to_one_when_burst_is_positive()
+    {
+        // ratePerSecond <= 0 but burstPercent > 0: the rate is treated as 1 so the
+        // burst tolerance is at least one emission interval's worth of tokens.
+        var emissionAtOne = TenantTokenBucket.ComputeEmissionIntervalTicks(1, Frequency);
+        var burst = TenantTokenBucket.ComputeBurstToleranceTicks(0, 20, Frequency);
+
+        // 0 ops/sec floored to 1 ops/sec; 20% burst => 0.2 tokens floored to 1 =>
+        // tolerance == 1 * emissionAtOne.
+        Assert.That(burst, Is.EqualTo(emissionAtOne));
+    }
+
+    [Test]
     public void Properties_reflect_the_construction_parameters()
     {
         var bucket = new TenantTokenBucket(emissionIntervalTicks: 123, burstToleranceTicks: 456);
