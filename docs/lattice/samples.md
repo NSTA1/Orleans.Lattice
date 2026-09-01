@@ -22,6 +22,7 @@ Minimal, single-feature samples - one per row in the [README feature table](../.
 | [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
 | [EntraAuthorization](../../samples/EntraAuthorization/README.md) | Single-silo authorization driven by a real Microsoft Entra ID identity: the signed-in Azure CLI user's `oid` is the tree owner (sole bootstrap administrator), so the owner writes and reads a value while an anonymous request is denied by the default-deny gate. |
 | [Events](../../samples/Events/README.md) | Subscribing to the per-tree `LatticeTreeEvent` Orleans stream. |
+| [GrainIndex](../../samples/GrainIndex/README.md) | Indexing a grain's typed state and running typed predicate queries over it, including a two-property conjunction and a de-duplicated disjunction. |
 | [HistoryViews](../../samples/HistoryViews/README.md) | An opt-in durable per-key history view whose revisions survive WAL garbage collection. |
 | [MaterialisedViews](../../samples/MaterialisedViews/README.md) | A filter view and a sum-aggregation view maintained off the source tree's WAL. |
 | [Metrics](../../samples/Metrics/README.md) | Reading the `orleans.lattice` meter instruments with a `MeterListener`. |

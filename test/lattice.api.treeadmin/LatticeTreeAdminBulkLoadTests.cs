@@ -98,6 +98,26 @@ public sealed class LatticeTreeAdminBulkLoadTests
     }
 
     [Test]
+    public async Task BeginBulkLoadAsync_probes_the_tree_with_a_deep_diagnostic()
+    {
+        // The tombstone half of the emptiness guard is only meaningful on a deep
+        // probe: the shallow diagnostic path never populates TotalTombstones, so
+        // a shallow probe reports an all-deleted, tombstone-only tree as empty
+        // and would admit the load onto tombstoned leaves. Assert the facade asks
+        // for a deep diagnostic (a substitute cannot reproduce the shallow path's
+        // always-zero tombstone count, so this is what pins the fix at unit level).
+        var factory = Substitute.For<IGrainFactory>();
+        var lattice = Wire(factory);
+        StubDiagnose(lattice, liveKeys: 0);
+        var facade = Create(factory);
+
+        await facade.BeginBulkLoadAsync(Tree, Op);
+
+        await lattice.Received(1).DiagnoseAsync(true, Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().DiagnoseAsync(false, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void BeginBulkLoadAsync_denied_by_gate_throws_and_does_not_dial_lattice()
     {
         var factory = Substitute.For<IGrainFactory>();

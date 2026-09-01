@@ -173,6 +173,74 @@ internal sealed class LatticeRegistryGrain(
                 paramName);
     }
 
+    /// <summary>
+    /// Rejects an alias whose <paramref name="physicalTreeId"/> names a more
+    /// privileged namespace than the logical <paramref name="treeId"/> it is
+    /// being bound to.
+    /// <para>
+    /// An alias transplants a logical identity onto another tree's physical
+    /// shards, and every data-plane access gate on the
+    /// <see cref="Orleans.Lattice.BPlusTree.ILattice"/> facade is evaluated
+    /// against the <em>logical</em> id before the alias is resolved (the
+    /// physical shard and leaf grains enforce no policy of their own). Without
+    /// this guard a caller holding admin rights on any ordinary tree could
+    /// alias it onto <c>sys-</c>-prefixed authorization, membership or tenant
+    /// registry state, or onto another tenant's namespace, and then read and
+    /// rewrite that state through the facade - the gates would only ever see
+    /// the ordinary logical id.
+    /// </para>
+    /// <para>
+    /// The rule is namespace-preserving rather than a flat deny-list, so
+    /// internal maintenance flows that derive the physical id from the logical
+    /// one (tree resize's <c>{treeId}/resized/{operationId}</c>, schema
+    /// remediation's <c>{treeId}/remediated/{operationId}</c>, and backup's
+    /// shadow-restore target) stay legal for system and tenant trees alike.
+    /// System-origin callers are exempt: they are library-internal maintenance
+    /// paths that have already been gated at their own entry point.
+    /// </para>
+    /// </summary>
+    private static void ThrowIfAliasEscalatesNamespace(string treeId, string physicalTreeId)
+    {
+        if (LatticeAccessGateContext.IsSystemOrigin)
+            return;
+
+        // The logical id can never live in the reserved internal namespace
+        // (UpdateAsync rejects it), so an alias into it is always an escalation.
+        if (physicalTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Physical tree ID '{physicalTreeId}' is reserved: an alias may not target the " +
+                $"'{LatticeConstants.SystemTreePrefix}' internal namespace.",
+                nameof(physicalTreeId));
+        }
+
+        if (physicalTreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+            && !treeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Physical tree ID '{physicalTreeId}' is reserved: an alias from the ordinary tree " +
+                $"'{treeId}' may not target the '{LatticeConstants.SystemDataTreePrefix}' system-data " +
+                "namespace, because access is authorized against the logical tree ID.",
+                nameof(physicalTreeId));
+        }
+
+        if (LatticeTenantTrees.IsTenantScoped(physicalTreeId))
+        {
+            var targetKnown = LatticeTenantTrees.TryGetTenant(physicalTreeId, out var target);
+            var ownerKnown = LatticeTenantTrees.TryGetTenant(treeId, out var owner);
+            if (!targetKnown
+                || !ownerKnown
+                || !string.Equals(owner.Value, target.Value, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Physical tree ID '{physicalTreeId}' belongs to a tenant namespace that does not own " +
+                    $"the logical tree '{treeId}'. An alias may not cross a tenant boundary, because " +
+                    "access is authorized against the logical tree ID.",
+                    nameof(physicalTreeId));
+            }
+        }
+    }
+
     public async Task UpdateAsync(string treeId, TreeRegistryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -284,6 +352,13 @@ internal sealed class LatticeRegistryGrain(
 
         if (string.Equals(treeId, physicalTreeId, StringComparison.Ordinal))
             throw new ArgumentException("Physical tree ID must differ from the logical tree ID.", nameof(physicalTreeId));
+
+        // The alias target is caller-supplied and is never re-authorized
+        // downstream: routing resolves it and addresses its shards directly,
+        // while every access gate on the facade has already been evaluated
+        // against the logical id. Refuse a target that would raise the caller's
+        // effective privilege before anything is written.
+        ThrowIfAliasEscalatesNamespace(treeId, physicalTreeId);
 
         // Enforce single-level indirection: the target must not itself be aliased.
         var targetEntry = await GetEntryAsync(physicalTreeId);

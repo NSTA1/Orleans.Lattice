@@ -209,19 +209,19 @@ public sealed class LatticeAtomicWriteBuilderTests
     }
 
     [Test]
-    public void SetWhere_rejects_a_second_predicate_on_the_same_tree_even_when_it_is_identical()
+    public void SetWhere_admits_a_restatement_of_an_identical_predicate_on_the_same_tree()
     {
         var factory = Substitute.For<IGrainFactory>();
         var builder = factory.BeginAtomicWrite("op")
             .ForTree("orders")
             .SetWhere<Doc>("a", new Doc("ada", 7), d => d.Score > 3);
 
-        // NOTE: the guard is `!existing.Equals(ir)`, which is meant to admit a
-        // restatement of the same predicate for a second key in the slice. It does
-        // not, because LatticePredicateNode is a record struct whose Children array
-        // compares by reference - see issue #1827. This test pins the behaviour as it
-        // actually is; update it when that issue is fixed.
-        Assert.Throws<InvalidOperationException>(
+        // The guard is `!existing.Equals(ir)`, which admits a restatement of the
+        // same predicate for a second key in the slice. Since issue #1827 gave
+        // LatticePredicateNode structural equality, two compilations of the same
+        // predicate compare equal, so restating it is idempotent rather than a
+        // conflict.
+        Assert.DoesNotThrow(
             () => builder.SetWhere<Doc>("b", new Doc("bob", 9), d => d.Score > 3));
     }
 
@@ -319,5 +319,64 @@ public sealed class LatticeAtomicWriteBuilderTests
         Assert.ThrowsAsync<OperationCanceledException>(() =>
             factory.BeginAtomicWrite("op").ForTree("orders").Set("k", Bytes("v")).CommitAsync(cts.Token));
         Assert.That(captured, Is.Empty);
+    }
+
+    // === Defensive copy of caller-owned staged buffers ===
+
+    [Test]
+    public async Task Set_copies_the_value_so_a_post_stage_mutation_cannot_reach_the_committed_batch()
+    {
+        var factory = FactoryCapturing(out var captured);
+        var value = Bytes("v1");
+
+        var builder = factory.BeginAtomicWrite("op").ForTree("orders").Set("k", value);
+        // Mutate the caller's buffer after staging but before commit.
+        value[0] = (byte)'X';
+        await builder.CommitAsync();
+
+        var committed = captured.Single().Single().Entries.Single().Value;
+        Assert.That(Encoding.UTF8.GetString(committed), Is.EqualTo("v1"));
+    }
+
+    [Test]
+    public async Task SetWithDelta_copies_value_and_delta_so_a_post_stage_mutation_cannot_reach_the_committed_batch()
+    {
+        var factory = FactoryCapturing(out var captured);
+        var value = Bytes("v1");
+        var delta = Bytes("d1");
+
+        var builder = factory.BeginAtomicWrite("op").ForTree("orders").SetWithDelta("k", value, delta);
+        value[0] = (byte)'X';
+        delta[0] = (byte)'Y';
+        await builder.CommitAsync();
+
+        var batch = captured.Single().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(batch.Entries.Single().Value), Is.EqualTo("v1"));
+            Assert.That(Encoding.UTF8.GetString(batch.EntryDeltas!.Single()!), Is.EqualTo("d1"));
+        });
+    }
+
+    [Test]
+    public async Task Set_of_a_staged_crdt_write_copies_value_and_delta_so_a_post_stage_mutation_cannot_reach_the_committed_batch()
+    {
+        var factory = FactoryCapturing(out var captured);
+        var value = Bytes("v1");
+        var delta = Bytes("d1");
+
+        var builder = factory.BeginAtomicWrite("op")
+            .ForTree("orders")
+            .Set(new LatticeStagedCrdtWrite("k", value, delta));
+        value[0] = (byte)'X';
+        delta[0] = (byte)'Y';
+        await builder.CommitAsync();
+
+        var batch = captured.Single().Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(batch.Entries.Single().Value), Is.EqualTo("v1"));
+            Assert.That(Encoding.UTF8.GetString(batch.EntryDeltas!.Single()!), Is.EqualTo("d1"));
+        });
     }
 }

@@ -153,6 +153,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly ReceiverAppliedContentIndex _appliedContentIndex;
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
     private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider;
+    private readonly ILatticeReplicationContext? _replicationContext;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -177,7 +178,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <see cref="ILatticeCompressionDictionaryCatalog"/>) so an opted-in
     /// sender only compresses with a dictionary this peer can decode; the
     /// default registration is the always-resolvable empty operator-supplied
-    /// provider, which advertises no dictionaries.
+    /// provider, which advertises no dictionaries. The optional
+    /// <paramref name="replicationContext"/> supplies the local per-tree
+    /// replication enrollment used by the peer-read gate on the probe,
+    /// content-manifest, and high-water-mark RPCs; when it is absent that gate
+    /// has no enrollment signal and fails closed.
     /// </summary>
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
@@ -187,7 +192,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         IGrainFactory grainFactory,
         ReceiverAppliedContentIndex appliedContentIndex,
         ILogger<LatticeReplicationGrpcService> logger,
-        ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
+        ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
+        ILatticeReplicationContext? replicationContext = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
@@ -204,6 +210,133 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         _appliedContentIndex = appliedContentIndex;
         _logger = logger;
         _dictionaryProvider = dictionaryProvider;
+        _replicationContext = replicationContext;
+    }
+
+    /// <summary>
+    /// Re-resolves a peer-supplied tree name against this cluster's own
+    /// replication enrollment, and refuses the call when the tree is not
+    /// enrolled here.
+    /// <para>
+    /// <see cref="Push"/> already performs this classification inside
+    /// <c>ReplicationApplier.ClassifyInboundTree</c>, but the read-side and
+    /// metadata-side RPCs reached the tree with the wire value verbatim. That
+    /// matters most for the digest probes, which deliberately read under
+    /// <c>LatticeAccessGateContext.EnterSystemOrigin()</c> so the fail-closed
+    /// data-plane access gate does not refuse the anonymous replication
+    /// subject: without this check, the documented precondition of
+    /// <c>ReplicationSystemOriginDigestReader</c> ("the tree id is resolved by
+    /// the caller against local state; the wire never supplies a bypass") was
+    /// not actually met, and a peer holding the mesh secret could aim that
+    /// bypass at any tree on the silo - including the <c>sys-</c>-prefixed
+    /// authorization and identity trees, and other tenants' trees, that a
+    /// cluster keeps local by never enrolling them.
+    /// </para>
+    /// <para>
+    /// Fails closed on ambiguity: a service resolved without an
+    /// <see cref="ILatticeReplicationContext"/> has no enrollment signal, so
+    /// the null-conditional below denies rather than falls through to allow.
+    /// The lookup is a single cached dictionary read.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">The peer-supplied logical tree name.</param>
+    /// <param name="rpc">The RPC name, for the refusal diagnostic.</param>
+    /// <exception cref="RpcException">
+    /// <see cref="StatusCode.PermissionDenied"/> when the tree is not enrolled
+    /// for replication on this cluster, or no enrollment source is available.
+    /// </exception>
+    private void EnsureTreeEnrolledForPeerRead(string treeName, string rpc)
+    {
+        if (_replicationContext?.ResolveMergeMode(treeName) is not null)
+        {
+            return;
+        }
+
+        // Cold reject path only - the interpolation and the log call are never
+        // reached on the steady-state enrolled path above.
+        _logger.LogWarning(
+            "Refusing replication {Rpc} for tree '{TreeName}': the tree is not enrolled for replication "
+            + "on this cluster (or no enrollment source is wired, in which case the gate fails closed).",
+            rpc,
+            treeName);
+
+        throw new RpcException(new Status(StatusCode.PermissionDenied,
+            $"Tree '{treeName}' is not enrolled for replication on this cluster."));
+    }
+
+    /// <summary>
+    /// Binds a body-declared origin cluster id to the origin the transport
+    /// stamped on the call, and refuses the call when the two disagree.
+    /// <para>
+    /// <c>ExchangeContentManifest</c> takes <c>OriginClusterId</c> from the
+    /// request body and uses it as the per-origin key of a <b>durable</b>
+    /// high-water-mark write (<c>IReplicationHighWaterMarkGrain.TryAdvanceAsync</c>).
+    /// Left unbound, a peer could name a third cluster's origin id and drive
+    /// that innocent stream's recorded clock forward, which suppresses
+    /// anti-entropy repair for it: the poisoned value is served back by
+    /// <see cref="GetPeerHighWaterMark"/> and used as the re-replay cursor, so
+    /// a maxed cursor makes every WAL entry ineligible for re-replay.
+    /// </para>
+    /// <para>
+    /// <c>GrpcChannelHardening</c> stamps
+    /// <c>LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader</c> from
+    /// the sender's own configured cluster id alongside the shared secret, and
+    /// a host whose <c>ILatticeReplicationSecretSource</c> partitions secrets
+    /// per origin has the receiving interceptor select the accepted secret by
+    /// that header - so under per-peer secrets the header is the
+    /// secret-bound identity and this check stops cross-origin forgery
+    /// outright. The header is absent-tolerant (an older or custom binding may
+    /// not stamp it), matching how <c>LatticeSagaGrpcService</c> treats the
+    /// same header; only a present-and-disagreeing value is rejected, so this
+    /// never refuses a call the previous build would have accepted from an
+    /// honest peer.
+    /// </para>
+    /// </summary>
+    /// <param name="context">The server call context carrying the request headers.</param>
+    /// <param name="declaredOrigin">The origin cluster id the request body declares.</param>
+    /// <param name="rpc">The RPC name, for the refusal diagnostic.</param>
+    /// <exception cref="RpcException">
+    /// <see cref="StatusCode.PermissionDenied"/> when the stamped origin is
+    /// present and names a different cluster than the body declares.
+    /// </exception>
+    private void EnsureOriginMatchesCaller(ServerCallContext context, string declaredOrigin, string rpc)
+    {
+        var stamped = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
+        if (string.IsNullOrWhiteSpace(stamped)
+            || string.Equals(stamped, declaredOrigin, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Cold reject path only.
+        _logger.LogWarning(
+            "Refusing replication {Rpc}: the request declares origin '{DeclaredOrigin}' but the transport "
+            + "stamped origin '{StampedOrigin}'. A peer may only advance its own stream.",
+            rpc,
+            declaredOrigin,
+            stamped);
+
+        throw new RpcException(new Status(StatusCode.PermissionDenied,
+            "ContentManifestRequest.OriginClusterId does not match the origin stamped on the call; "
+            + "a peer may only exchange manifests for its own origin."));
+    }
+
+    /// <summary>
+    /// Reads a request header by name, ordinal-ignore-case as HTTP/2 header
+    /// names are lower-cased on the wire. Mirrors the sibling helper on
+    /// <c>LatticeSagaGrpcService</c>.
+    /// </summary>
+    private static string? ReadHeader(ServerCallContext context, string key)
+    {
+        foreach (var entry in context.RequestHeaders)
+        {
+            if (string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry.Value;
+            }
+        }
+
+        return null;
     }
 
     /// <inheritdoc />
@@ -423,6 +556,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 "DigestProbeRequest.TreeName must be non-empty."));
         }
 
+        EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(ProbeDigest));
+
         var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
         try
         {
@@ -433,7 +568,10 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             // data-plane access gate and, lacking an ambient identity, resolves to
             // the anonymous subject that a deny-by-default tree refuses. Read it
             // under a system-origin scope so the gate's infrastructure bypass
-            // applies; the tree id is resolved locally (never trusting the wire).
+            // applies. The bypass is safe only because the wire-supplied tree id
+            // has just been re-resolved against local enrollment by the guard
+            // above, which is what makes the reader's documented precondition
+            // ("the wire never supplies a bypass") actually hold.
             var digest = await ReplicationSystemOriginDigestReader
                 .ReadShardDigestAsync(lattice, request.ShardIndex, context.CancellationToken)
                 .ConfigureAwait(false);
@@ -485,6 +623,9 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             throw new RpcException(new Status(StatusCode.InvalidArgument,
                 "ContentManifestRequest.OriginClusterId must be non-empty."));
         }
+
+        EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(ExchangeContentManifest));
+        EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(ExchangeContentManifest));
 
         var entries = request.Entries ?? (IReadOnlyList<ContentManifestEntry>)Array.Empty<ContentManifestEntry>();
 
@@ -607,13 +748,19 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 "MerkleWalkProbeRequest.TreeName must be non-empty."));
         }
 
+        EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(ProbeMerkleWalk));
+
         var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
         try
         {
-            // Same trust basis as ProbeDigest: an authenticated replication peer
-            // walking for drift localisation. Read the range digest under a
-            // system-origin scope so the fail-closed access gate's infrastructure
-            // bypass applies rather than refusing the anonymous subject.
+            // Same trust basis as ProbeDigest, including the same precondition:
+            // the wire-supplied tree id has been re-resolved against local
+            // enrollment by the guard above before the range digest is read under
+            // a system-origin scope. This matters more here than on ProbeDigest,
+            // because the caller also chooses the half-open key range, so an
+            // ungated walk is a key-existence and key-distribution oracle over
+            // the named tree (LeafProjectionDigest carries EntryCount as well as
+            // Hash, and the range can be bisected).
             var digest = await ReplicationSystemOriginDigestReader
                 .ReadRangeDigestAsync(
                     lattice,
@@ -673,6 +820,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             throw new RpcException(new Status(StatusCode.InvalidArgument,
                 "PeerHighWaterMarkRequest.OriginClusterId must be non-empty."));
         }
+
+        EnsureTreeEnrolledForPeerRead(request.TreeName, nameof(GetPeerHighWaterMark));
 
         // Resolve the receiver's durable per-origin high-water-mark for the
         // (tree, origin) stream. An origin the receiver has never applied

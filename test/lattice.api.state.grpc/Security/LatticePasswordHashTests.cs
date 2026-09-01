@@ -125,4 +125,23 @@ public class LatticePasswordHashTests
         Assert.That(() => LatticePasswordHash.Encode("Sup3rSecret", ReadOnlySpan<byte>.Empty, 210_000),
             Throws.ArgumentException);
     }
+
+    [Test]
+    public void TryParse_emptySaltComponent_returnsFalse()
+    {
+        // Well-formed shape, valid base64, but a zero-length salt: PBKDF2 with no
+        // salt is not a credential, so the parse must fail closed rather than
+        // hand back components that would verify against an unsalted derivation.
+        Assert.That(
+            LatticePasswordHash.TryParse("pbkdf2-sha256$210000$$" + Convert.ToBase64String(new byte[32]), out _),
+            Is.False);
+    }
+
+    [Test]
+    public void TryParse_emptyDerivedKeyComponent_returnsFalse()
+    {
+        Assert.That(
+            LatticePasswordHash.TryParse("pbkdf2-sha256$210000$" + Convert.ToBase64String(new byte[16]) + "$", out _),
+            Is.False);
+    }
 }

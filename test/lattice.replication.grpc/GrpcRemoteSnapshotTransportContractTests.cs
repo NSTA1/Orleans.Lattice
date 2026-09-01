@@ -55,6 +55,7 @@ public class GrpcRemoteSnapshotTransportContractTests : RemoteSnapshotTransportC
                         new StubBatchEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     // The contract tests focus on the wire shape; the
                     // shared-secret authenticator is covered separately.

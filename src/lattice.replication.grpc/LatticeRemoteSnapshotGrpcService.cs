@@ -173,6 +173,15 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
         {
             throw;
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Sender-side enrollment gate refusal. Surfaced as PermissionDenied
+            // rather than flattened into the Internal arm below, so a peer sees
+            // a deliberate refusal and an operator is not sent hunting for a
+            // server fault. The message names only the tree the caller already
+            // supplied, so it discloses nothing the caller did not assert.
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex,
@@ -226,6 +235,13 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Sender-side enrollment gate refusal - see the sibling arm on
+            // GetMetadata. The gate runs before the provider is touched, so no
+            // entry has been written to the response stream at this point.
+            throw new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
         }
         catch (Exception ex)
         {

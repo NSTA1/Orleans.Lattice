@@ -31,7 +31,9 @@ public sealed class LatticeSchemaPolicy
     public LatticeSchemaPolicy(IReadOnlyList<LatticeSchemaRule> rules, bool strictIngest = false)
     {
         ArgumentNullException.ThrowIfNull(rules);
-        Rules = rules;
+        // Defensively copy the caller-owned collection so a mutation of the
+        // original list after construction cannot change this [Immutable] policy.
+        Rules = [.. rules];
         StrictIngest = strictIngest;
     }
 

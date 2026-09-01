@@ -942,23 +942,61 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         _acceptedTrees.Add(treeId);
     }
 
+    // Above this many tags the linear dedup scan below is outgrown by a hash
+    // set; a tag write or query in practice carries a handful of tags, so a
+    // HashSet - and its bucket and entry arrays - is pure overhead on the
+    // common path. Larger tag sets keep the O(n) set membership to avoid the
+    // O(n^2) linear scan.
+    private const int TagLinearDedupThreshold = 16;
+
     private static string[] NormalizeTags(string[]? tags)
     {
         if (tags is null || tags.Length == 0)
         {
             return Array.Empty<string>();
         }
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         var list = new List<string>(tags.Length);
-        foreach (var tag in tags)
+        if (tags.Length <= TagLinearDedupThreshold)
         {
-            ValidateTag(tag);
-            if (seen.Add(tag))
+            // Small tag sets (the overwhelming common case) dedup against the
+            // accumulating result with an ordinal linear scan and allocate no
+            // HashSet. Semantics are identical to the set path: ValidateTag is
+            // run for every element including duplicates, and first-seen order
+            // is preserved.
+            foreach (var tag in tags)
             {
-                list.Add(tag);
+                ValidateTag(tag);
+                if (!ContainsOrdinal(list, tag))
+                {
+                    list.Add(tag);
+                }
+            }
+        }
+        else
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var tag in tags)
+            {
+                ValidateTag(tag);
+                if (seen.Add(tag))
+                {
+                    list.Add(tag);
+                }
             }
         }
         return list.ToArray();
+    }
+
+    private static bool ContainsOrdinal(List<string> list, string value)
+    {
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (string.Equals(list[i], value, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void ValidateTag(string tag)

@@ -402,9 +402,14 @@ internal sealed class AggregationApplier(
 
     private static string LargestSourceKey(Dictionary<string, MemberEntry> map)
     {
+        // Iterate the dictionary directly rather than through its `.Keys`
+        // collection, mirroring the sibling WorstKey above. The map is a fresh
+        // per-mutation decode (see MutateInverseAsync), so each call otherwise
+        // allocates a throwaway KeyCollection wrapper on first access; walking
+        // the entries needs only the struct enumerator.
         string largest = string.Empty;
         var first = true;
-        foreach (var sourceKey in map.Keys)
+        foreach (var (sourceKey, _) in map)
         {
             if (first || string.CompareOrdinal(sourceKey, largest) > 0)
             {

@@ -102,6 +102,7 @@ public class GrpcReplicationHeaderCaptureTests
                     services.AddSingleton<CapturedHeaders>(captured);
                     services.AddSingleton<CapturingInterceptor>();
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     // Add the capturing interceptor after the auth interceptor so
                     // it only runs on calls that already passed auth.

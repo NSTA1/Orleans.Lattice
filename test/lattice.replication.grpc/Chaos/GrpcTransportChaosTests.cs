@@ -92,6 +92,7 @@ public class GrpcTransportChaosTests
                         new SerializerBackedBatchEncoder(sp.GetRequiredService<Serializer<ReplicationBatchEnvelope>>()));
                     services.AddRouting();
                     services.AddSingleton(Substitute.For<IGrainFactory>());
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
                 });

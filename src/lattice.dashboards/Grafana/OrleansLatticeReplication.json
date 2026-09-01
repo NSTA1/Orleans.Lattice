@@ -666,7 +666,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 57
       },
       "fieldConfig": {
         "defaults": {
@@ -695,7 +695,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 71
       },
       "fieldConfig": {
         "defaults": {
@@ -724,7 +724,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 57
+        "y": 71
       },
       "fieldConfig": {
         "defaults": {
@@ -753,7 +753,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 78
       },
       "fieldConfig": {
         "defaults": {},
@@ -780,7 +780,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 78
       },
       "fieldConfig": {
         "defaults": {},
@@ -807,7 +807,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 71
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -843,7 +843,7 @@
       "description": "Per-tick outbound batch cap the shipper actually used, distribution p50/p95/p99. With adaptive sizing on (AdaptiveBatchSizingEnabled=true, the default) the AIMD controller keeps it at the configured ShipBatchSize on a healthy link and backs it off on rising ack latency or send errors, so a sustained dip flags a degraded peer or repeated apply failures; with it off it sits flat at ShipBatchSize. The receiver flow-control hint is always the hard ceiling.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 56 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 64 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_ship_effective_batch_size_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
@@ -857,7 +857,7 @@
       "description": "Round-trip latency from sending a batch to receiving its ack, per (tree, peer). This is the primary signal the adaptive batch-size controller reacts to: a sustained rise above AdaptiveBatchLatencyThreshold shrinks the effective batch size. Emitted on every acknowledged batch regardless of whether adaptive sizing is enabled.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 56 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 64 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_ship_ack_latency_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
@@ -878,7 +878,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 78
+        "y": 92
       },
       "fieldConfig": {
         "defaults": {},
@@ -905,7 +905,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 78
+        "y": 92
       },
       "fieldConfig": {
         "defaults": {},
@@ -932,7 +932,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 71
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -975,7 +975,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 85
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {},
@@ -1002,7 +1002,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 85
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {},
@@ -1022,7 +1022,7 @@
       "description": "Distribution of the receiver apply degree-of-parallelism chosen per batch (orleans.lattice.replication.apply.parallel_runs). 1 = serial apply (the default, or a batch with no independent (tree, origin) runs); higher values appear only when ApplyMaxParallelRuns > 1 and the batch fans out across independent runs.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 78 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 99 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_apply_parallel_runs_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
@@ -1036,7 +1036,7 @@
       "description": "Current count of shipped-but-unacknowledged replication batches per peer (orleans.lattice.replication.peer.ship_in_flight observable gauge). Climbs toward ShipMaxInFlight when pipelining is enabled and the peer is the bottleneck; flat at 0 or 1 with default settings.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 78 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 99 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "max by (peer) (orleans_lattice_replication_peer_ship_in_flight{peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"})", "legendFormat": "{{peer}}" }
@@ -1048,7 +1048,7 @@
       "description": "Per-tree rate of entries and value bytes received by the receiver bootstrap/backfill path (orleans.lattice.replication.bootstrap.entries_received / bootstrap.bytes_received). Non-zero only while a peer is catching up a cold or fell-off-log receiver.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 85 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 106 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_bootstrap_entries_received_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "entries/s {{tree}}" },
@@ -1061,7 +1061,7 @@
       "description": "Wall-clock duration of receiver bootstrap operations (orleans.lattice.replication.bootstrap.duration), tagged by origin and outcome. Long tails indicate large backfills or a slow source.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 85 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 106 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(orleans_lattice_replication_bootstrap_duration_milliseconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50" },
@@ -1075,7 +1075,7 @@
       "description": "Rate of transient (retryable) failures during receiver bootstrap (orleans.lattice.replication.bootstrap.transient_retries), by tree. A sustained non-zero rate signals a flaky source link slowing convergence.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 92 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 113 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_bootstrap_transient_retries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
@@ -1087,7 +1087,7 @@
       "description": "Rate of fall-off-log detections suppressed as duplicates (orleans.lattice.replication.peer.fell_off_log_suppressed), by tree. Pairs with the peer.fell_off_log panel: a high suppressed-to-raised ratio means the detector is correctly de-duplicating repeated signals for the same gap.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 92 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 113 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_replication_peer_fell_off_log_suppressed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
@@ -1106,7 +1106,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 92
+        "y": 127
       },
       "fieldConfig": {
         "defaults": {},
@@ -1133,7 +1133,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 92
+        "y": 127
       },
       "fieldConfig": {
         "defaults": {},
@@ -1160,7 +1160,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 99
+        "y": 134
       },
       "fieldConfig": {
         "defaults": {},
@@ -1187,7 +1187,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 106
+        "y": 141
       },
       "fieldConfig": {
         "defaults": {},
@@ -1214,7 +1214,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 106
+        "y": 141
       },
       "fieldConfig": {
         "defaults": {},
@@ -1241,7 +1241,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 113
+        "y": 148
       },
       "fieldConfig": {
         "defaults": {
@@ -1310,7 +1310,7 @@
       "description": "Rate of Set-entry payloads and value bytes elided from outbound batches by the sender-manifest / receiver-pull-missing content-hash round trip (orleans.lattice.replication.ship.elided_payloads / ship.elided_payload_bytes). Opt-in via ContentHashDedupElisionEnabled (which also requires ContentHashDedupEnabled); flat-zero unless elision is enabled and a peer advertises the exchange capability for a duplicate-heavy workload.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 120 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 155 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "ENTRIES", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_elided_payloads_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "entries/s {{tree}} -> {{peer}}" },
@@ -1323,7 +1323,7 @@
       "description": "Rate of content-hash manifest exchanges performed with each peer on the outbound ship path (orleans.lattice.replication.ship.manifest_exchanges). One per shipped batch that advertised a manifest. Read alongside the elision panel to gauge average payloads elided per exchange and whether the pull-missing round trip is paying for itself.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 120 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 155 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_ship_manifest_exchanges_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} -> {{peer}}" }
@@ -1342,7 +1342,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 127
+        "y": 162
       },
       "fieldConfig": {
         "defaults": {
@@ -1364,7 +1364,7 @@
       "description": "Rate of per-peer shared-dictionary capability negotiations by outcome (orleans.lattice.replication.ship.dictionary_negotiation). matched = the peer advertised the configured dictionary id and the sender compressed with it; fell_back = the peer advertised a capability without the configured id; unknown = the peer has not advertised a dictionary capability yet. Opt-in via DictionaryNegotiationEnabled with a ZstdDictionary tree; flat-zero unless negotiation is enabled and a shared dictionary is configured.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 134 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 169 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_negotiation_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
@@ -1376,7 +1376,7 @@
       "description": "Rate of batches shipped on the dictionary-eligible path split by whether a shared dictionary was used (orleans.lattice.replication.ship.dictionary_batches). with_dictionary = compressed against a negotiated shared dictionary; without_dictionary = plain dictionary-less Zstd (the fallback for a peer that has not advertised the configured id). Read alongside the negotiation-outcomes panel to confirm a mixed fleet keeps shipping during a rolling dictionary rollout.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 134 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 169 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, dictionary) (rate(orleans_lattice_replication_ship_dictionary_batches_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{dictionary}} {{tree}} -> {{peer}}" }
@@ -1388,7 +1388,7 @@
       "description": "Rate of content-hash manifest exchanges the receiver answered for each origin peer (orleans.lattice.replication.receiver.content_manifest_exchanges). One per inbound pull-missing request handled. Pairs with the sender-side manifest-exchanges panel so an operator can confirm both ends of the round trip agree on the exchange volume. Flat-zero unless a peer ships with ContentHashDedupElisionEnabled against this receiver.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 141 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 176 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_manifest_exchanges_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
@@ -1400,7 +1400,7 @@
       "description": "Rate of manifest entries the receiver reported it already holds byte-identical content for (orleans.lattice.replication.receiver.content_entries_elided) - the entries the receiver told the sender it does not need shipped. Pairs with the sender-side content-hash payload elision panel: the two track the same elided entries from each end of the round trip. Flat-zero unless the receiver's applied-content index is populated (ContentHashDedupEnabled) and a peer advertises the exchange.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 141 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 176 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_entries_elided_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
@@ -1412,7 +1412,7 @@
       "description": "Rate of metadata-only per-origin high-water-mark advances the receiver performed during a content-hash exchange (orleans.lattice.replication.receiver.content_hwm_advances) - the identical-content-newer-clock idempotent re-set case where the high-water-mark advances without the payload travelling. Flat-zero unless idempotent upstream retry re-sends byte-identical content with a newer clock and the receiver already holds it.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 148 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 183 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer) (rate(orleans_lattice_replication_receiver_content_hwm_advances_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{peer}} -> {{tree}}" }
@@ -1424,7 +1424,7 @@
       "description": "Rate of shared-dictionary convergence byte-pulls a sender performed against an advertising peer (orleans.lattice.replication.ship.dictionary_convergence), tagged by outcome. installed = the peer served the advertised dictionary bytes and the sender installed them (fingerprint-verified); rejected = the peer served bytes whose fingerprint did not match the advertisement, so they were discarded; unavailable = the peer or transport did not serve the bytes (un-upgraded peer, transport fallback). Opt-in via AddLatticeAutoSharedDictionary; flat-zero unless the self-distributing auto-dictionary feature is enabled and a peer advertises a dictionary this sender does not yet hold.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 148 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 183 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, outcome) (rate(orleans_lattice_replication_ship_dictionary_convergence_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{outcome}} {{tree}} -> {{peer}}" }
@@ -1436,7 +1436,7 @@
       "description": "Rate of per-batch wire-version down-stamp outcomes the shipper recorded while negotiating the framing version for an older peer (orleans.lattice.replication.ship.wire_version_down_stamp), split by reason. compression_dropped = a last-writer-wins tree's framing compression was auto-dropped for this peer so it keeps replicating uncompressed (lossless); blocked_crdt_mode = a CRDT-mode tree cannot be faithfully down-encoded for a pre-current-version receiver, so replication to the peer is paused until upgrade; blocked_unsupported_version = the negotiated target is below the down-encode floor. Opt-in via WireVersionNegotiationEnabled; flat-zero unless a mixed-version fleet is down-stamping. A non-zero blocked_* series is the operator-actionable signal that a peer must be upgraded.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 155 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 190 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, peer, reason) (rate(orleans_lattice_replication_ship_wire_version_down_stamp_total{tree=~\"$tree\",peer=~\"$peer\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{reason}} {{tree}} -> {{peer}}" }
@@ -1448,7 +1448,7 @@
       "description": "Throughput of the log-first replication producer. appended = entries committed to the leaf write-ahead log by WalCommitLogWriter (orleans.lattice.wal.shard.dispatch.entries), which is now the sole appender; the replication sink no longer performs a redundant second WAL append. shipped = entries the shipper drained from that same WAL and sent to peers (orleans.lattice.replication.wal.entries_shipped). In steady state the two series track each other; a sustained gap (appended outpacing shipped) is the log-tailing producer falling behind the WAL it tails - cross-check with per-peer entries-behind and fell-off-log.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 155 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 190 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum(rate(orleans_lattice_wal_shard_dispatch_entries_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "appended (leaf WAL)" },
@@ -1468,7 +1468,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 162
+        "y": 197
       },
       "fieldConfig": {
         "defaults": {
@@ -1502,7 +1502,7 @@
       "description": "95th-percentile duration of coordinated multi-cluster restore saga phases and per-tree write-fence windows. 'phase p95' (orleans.lattice.replication.saga.phase.duration, split by phase = prepare/commit/abort) separates the long unfenced prepare (shadow build) window from the short fenced cutover. 'fence p95' (orleans.lattice.replication.saga.fence.duration, per tree) measures only the write-blocking cutover window (engage to lift), NOT the longer globally-gated shipping pause - so a fence duration that grows toward the whole build window is the operator-actionable signal that a cutover is not staying bounded.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 169 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 204 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(orleans_lattice_replication_saga_phase_duration_milliseconds_bucket{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "phase p95 {{phase}}" },
@@ -1515,7 +1515,7 @@
       "description": "Rate of coordinated-restore participant outcomes. 'vote' (orleans.lattice.replication.saga.participant.votes, split by reason) counts prepare votes: commit, or an abort reason (infeasible = admission refused a target that cannot fit; precondition = a missing backup/base in the manifest chain; build-failed = the bounded build-retry budget was exhausted; engine-unavailable = the backup package is not wired here). 'commit' (orleans.lattice.replication.saga.participant.commits) and 'abort' (orleans.lattice.replication.saga.participant.aborts) count terminal cutovers and rollbacks. A rising abort/vote fraction, or a spike in a specific abort reason, is the operator signal that restores are failing admission or build.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 169 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 204 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "V", "expr": "sum by (reason) (rate(orleans_lattice_replication_saga_participant_votes_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "vote {{reason}}" },
@@ -1529,7 +1529,7 @@
       "description": "Rate of coordinated-restore compensations (rollbacks), split by cause (orleans.lattice.replication.saga.compensations). vote-abort = a coordinator-driven rollback after at least one participant voted abort (an all-or-nothing rollback of every prepared cluster); coordinator-loss = a participant's own cutover-fence-expiry auto-compensation after the coordinator decision never arrived. A non-zero coordinator-loss series is the operator-actionable signal that a coordinator cluster is being lost mid-saga and the bounded fence timer is the only thing preventing a leaked prepared restore.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 176 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 211 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (cause) (rate(orleans_lattice_replication_saga_compensations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{cause}}" }
@@ -1541,7 +1541,7 @@
       "description": "Rate of WAL garbage-collection passes the per-silo scheduler drove, split by outcome (orleans.lattice.wal.gc.passes). reclaimed = the pass trimmed at least one entry, so the tree had backlog above the trim floor; idle = nothing was reclaimable; failed = the pass threw. Emitted once per pass unconditionally, so this series is the denominator for the per-tree reclaim rate and the reference that tells apart a tree with no backlog from a tree that is not being collected at all.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 176 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 218 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_wal_gc_passes_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} {{outcome}}" }
@@ -1553,7 +1553,7 @@
       "description": "The cadence the WAL garbage-collection scheduler selected per tree after its most recent pass (orleans.lattice.wal.gc.interval). The value moves inside the configured band [LatticeOptions.WalGcMinInterval, LatticeOptions.WalGcInterval]: a sustained reading at the floor is a tree whose log is growing faster than one pass reclaims, and a reading at the ceiling is a quiet tree. Read against the pass-outcome panel this shows the cadence tightening under backlog and relaxing once the backlog clears.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 183 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 218 },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.5, sum by (le, tree) (rate(orleans_lattice_wal_gc_interval_seconds_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p50 {{tree}}" },
@@ -1566,7 +1566,7 @@
       "description": "95th-percentile retained WAL bytes left after a garbage-collection pass (orleans.lattice.wal.gc.backlog_bytes), sampled from the pass own report so it costs no extra I/O. Byte accounting is a provider capability gated behind LatticeOptions.WalMaxRetainedBytes, so this series is absent on a host without it - and because orleans.lattice.wal.gc.passes is emitted unconditionally, a tree reporting passes but no backlog samples is knowably not measured rather than ambiguously at zero backlog.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 183 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 225 },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree) (rate(orleans_lattice_wal_gc_backlog_bytes_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))) or vector(0)", "legendFormat": "p95 {{tree}}" }

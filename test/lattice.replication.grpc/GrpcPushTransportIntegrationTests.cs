@@ -55,6 +55,7 @@ public class GrpcPushTransportIntegrationTests
                         new CompressionDictionaryTrainingOptions { Enabled = true });
                     dictionaryProvider.TryInstall(8u, PulledDictionaryBytes);
                     services.AddSingleton<ILatticeCompressionDictionaryProvider>(dictionaryProvider);
+                    services.AddEnrollAllReplicationContext();
                     services.AddLatticeReplicationGrpc();
                     // This fixture validates the wire shape rather than the
                     // shared-secret authenticator; disable the receiver-side
