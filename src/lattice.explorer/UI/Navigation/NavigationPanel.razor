@@ -430,7 +430,7 @@
         // navigation state lives, so the toggle asks for a route and adopts the
         // one that comes back. That is also what makes the change survive a
         // reload, a bookmark and Back.
-        Router.NavigateTo(Router.Current.WithKind(SlugFor(kind)));
+        Publish(Router.Current.WithKind(SlugFor(kind)));
         return Task.CompletedTask;
     }
 
@@ -498,6 +498,18 @@
         var id = _pendingSelectionId;
         if (id is null)
         {
+            return;
+        }
+
+        if (_loading)
+        {
+            // A read is in flight, so there is nothing to match against yet.
+            // Consuming the id here would silently discard the selection a deep
+            // link or a restore asked for - the in-flight load applies it against
+            // the rows it returns. This is the ordering a real cluster produces
+            // and an instant catalog never does: the address arrives (entry-policy
+            // restore, or a link followed mid-load) while the first read is still
+            // outstanding.
             return;
         }
 
@@ -642,9 +654,7 @@
     }
 
     /// <summary>
-    /// Puts <paramref name="selected"/> in the address bar. A no-op when the
-    /// route already names it, so adopting a deep link never echoes back as a
-    /// second navigation and no flag or timer is needed to tell the two apart.
+    /// Puts <paramref name="selected"/> in the address bar.
     /// </summary>
     private void PublishSelection(CatalogItem? selected)
     {
@@ -661,11 +671,42 @@
         {
             // Clearing is a correction the user did not ask for (a new cluster
             // invalidated what was selected), so it replaces rather than pushes.
-            Router.NavigateTo(current.WithKind(SlugFor(_kind)), replace: true);
+            Publish(current.WithKind(SlugFor(_kind)), replace: true);
             return;
         }
 
-        Router.NavigateTo(current.WithSelection(SlugFor(selected.Kind), selected.Id));
+        Publish(current.WithSelection(SlugFor(selected.Kind), selected.Id));
+    }
+
+    /// <summary>
+    /// Asks the router for <paramref name="route"/>, unless it is the route
+    /// already showing.
+    /// </summary>
+    /// <remarks>
+    /// The guard is load-bearing and belongs here rather than at the router. The
+    /// router suppresses the <em>announcement</em> for an unchanged route but
+    /// still raises the address request (deliberately - that is the remedy for a
+    /// non-canonical spelling of the right route), so a caller that publishes
+    /// unconditionally asks the head to navigate to the address it is already on.
+    /// <para>
+    /// That is not harmless at first render. The head buffers a request raised
+    /// before its circuit is live and keeps only the latest, so an unnecessary
+    /// publication <em>overwrites</em> the entry policy's buffered restore - and
+    /// the restore's history <em>replace</em> becomes this publication's
+    /// <em>push</em>. The result is a real navigation, and a spurious history
+    /// entry, at the exact moment the shell is still mounting. It only happens
+    /// when the catalog actually returns the remembered row, which is why an
+    /// empty-catalog test head never sees it.
+    /// </para>
+    /// </remarks>
+    private void Publish(ExplorerRoute route, bool replace = false)
+    {
+        if (route.Equals(Router.Current))
+        {
+            return;
+        }
+
+        Router.NavigateTo(route, replace);
     }
 
     private void OnRouteChanged(ExplorerRoute route) => InvokeAsync(_adoptRoute);

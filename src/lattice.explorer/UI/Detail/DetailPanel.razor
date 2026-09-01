@@ -393,7 +393,7 @@
 
         var surface = ExplorerRouteSlug.FromIdentifier(_activePluginId);
         _routeSurface = surface;
-        Router.NavigateTo(Router.Current.WithSurface(surface), replace: true);
+        Publish(Router.Current.WithSurface(surface), replace: true);
     }
 
     /// <summary>
@@ -507,9 +507,7 @@
     /// <summary>
     /// Puts the surface at <paramref name="index"/> in the address bar, reading
     /// its slug from the set derived with the applicable plugins rather than
-    /// re-deriving it. A no-op when the surface has no slug; the router itself
-    /// suppresses the echo, because a route that equals the current one is
-    /// recognised by value.
+    /// re-deriving it.
     /// </summary>
     private void PublishSurface(int index)
     {
@@ -520,7 +518,30 @@
         }
 
         _routeSurface = surface;
-        Router.NavigateTo(Router.Current.WithSurface(surface));
+        Publish(Router.Current.WithSurface(surface));
+    }
+
+    /// <summary>
+    /// Asks the router for <paramref name="route"/>, unless it is the route
+    /// already showing.
+    /// </summary>
+    /// <remarks>
+    /// The router suppresses the <em>announcement</em> for an unchanged route but
+    /// still raises the address request, so a caller that publishes
+    /// unconditionally asks the head to navigate to the address it is already on.
+    /// At first render the head buffers such a request and keeps only the latest,
+    /// so an unnecessary publication displaces the entry policy's buffered
+    /// restore and turns its history replace into a push. See the twin guard on
+    /// the navigation panel for the whole story.
+    /// </remarks>
+    private void Publish(ExplorerRoute route, bool replace = false)
+    {
+        if (route.Equals(Router.Current))
+        {
+            return;
+        }
+
+        Router.NavigateTo(route, replace);
     }
 
     /// <summary>
