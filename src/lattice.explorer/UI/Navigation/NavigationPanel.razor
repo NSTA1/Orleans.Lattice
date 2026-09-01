@@ -799,6 +799,18 @@
         var current = Router.Current;
         if (selected is null)
         {
+            if (_loading)
+            {
+                // The catalog is mid-reload, so "nothing is selected" is a statement
+                // about a list that has been emptied and not yet refilled - not about
+                // the selection. Publishing a clearing route here destroys the very
+                // selection that caused the reload: choosing an item publishes it into
+                // the address, the address reloads the list, and the empty list then
+                // reports no selection. The user is left on "Nothing selected"
+                // immediately after choosing something.
+                return;
+            }
+
             // Clearing is a correction the user did not ask for (a new cluster
             // invalidated what was selected), so it replaces rather than pushes.
             Publish(current.WithKind(SlugFor(_kind)), replace: true);
