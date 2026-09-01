@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -218,6 +218,13 @@ if (string.Equals(suite, "viewdrain", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> viewdrain (ViewDrainClassificationBenchmarks)");
     var viewDrainSummary = BenchmarkRunner.Run<ViewDrainClassificationBenchmarks>(config);
     return viewDrainSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "aggiter", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> aggiter (AggregationDictIterationBenchmarks)");
+    var aggIterSummary = BenchmarkRunner.Run<AggregationDictIterationBenchmarks>(config);
+    return aggIterSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
