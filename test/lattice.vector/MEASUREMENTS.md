@@ -157,9 +157,14 @@ of the corpus.
 
 ## Allocation
 
-Asserted by `VectorIndexAllocationTests` using
-`GC.GetAllocatedBytesForCurrentThread` after a warm-up, so what is measured is
-the steady state rather than JIT and array-pool priming.
+Asserted by `VectorIndexAllocationTests`, which follows the same four-part probe
+rule as the durable fixture below: differential rather than absolute, a
+**full-size** warm-up, the **minimum** kept across repeats, and set-up kept
+outside the measured window. Its battery test proves the probe can fail, with a
+sink that provably escapes. The synchronous query and mutation paths use
+`GC.GetAllocatedBytesForCurrentThread`; training uses
+`GC.GetTotalAllocatedBytes(precise: true)`, because it may hand its assignment
+pass to the thread pool and a per-thread figure would under-count that work.
 
 | path | allocated |
 |---|---|
