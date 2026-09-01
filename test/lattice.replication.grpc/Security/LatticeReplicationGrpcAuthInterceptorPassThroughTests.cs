@@ -84,6 +84,36 @@ public class LatticeReplicationGrpcAuthInterceptorPassThroughTests
     }
 
     [Test]
+    public async Task ServerStreamingServerHandler_passes_through_for_non_replication_method_without_consulting_secrets()
+    {
+        var secrets = Substitute.For<IReplicationSecretProvider>();
+        var interceptor = new LatticeReplicationGrpcAuthInterceptor(
+            secrets,
+            OptionsFor(new LatticeReplicationSecurityOptions { RequireAuthentication = true }),
+            NullLogger<LatticeReplicationGrpcAuthInterceptor>.Instance);
+
+        var ctx = new StubServerCallContext("/some.other.Service/Stream");
+        var writer = new NullStreamWriter<string>();
+        var called = false;
+
+        await interceptor.ServerStreamingServerHandler<object, string>(
+            request: new object(),
+            responseStream: writer,
+            context: ctx,
+            continuation: (_, _, _) => { called = true; return Task.CompletedTask; });
+
+        Assert.That(called, Is.True);
+        _ = secrets.DidNotReceiveWithAnyArgs().IsAcceptedAsync(default!, default);
+    }
+
+    private sealed class NullStreamWriter<T> : IServerStreamWriter<T>
+    {
+        public WriteOptions? WriteOptions { get; set; }
+
+        public Task WriteAsync(T message) => Task.CompletedTask;
+    }
+
+    [Test]
     public void UnaryServerHandler_throws_when_request_is_null()
     {
         var interceptor = new LatticeReplicationGrpcAuthInterceptor(

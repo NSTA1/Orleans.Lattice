@@ -558,6 +558,35 @@ public sealed partial class LatticeTenantGrantAdminTests
     }
 
     [Test]
+    public async Task ListGrantsAsync_orders_two_grants_from_one_granter_by_grant_id()
+    {
+        // Two grants from the same granting tenant to the same grantee, differing
+        // only by scope, share a GranterTenantId - so the inbox sort falls through
+        // the granting-tenant comparison to the grant-id tie-break and orders them
+        // deterministically regardless of registry iteration order.
+        var registry = TwoTenantRegistry();
+        var admin = Admin(registry);
+        await admin.OfferGrantAsync(Granter, Grantee, "zzz-scope", TenantGrantAccess.Read);
+        await admin.OfferGrantAsync(Granter, Grantee, "aaa-scope", TenantGrantAccess.Read);
+
+        var report = await admin.ListGrantsAsync(Grantee);
+
+        var grantIds = report.Received.Select(static g => g.GrantId).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Received, Has.Count.EqualTo(2));
+            Assert.That(
+                report.Received.Select(static g => g.GranterTenantId),
+                Is.All.EqualTo(Granter),
+                "both grants share the granting tenant, forcing the grant-id tie-break");
+            Assert.That(
+                grantIds,
+                Is.EqualTo(grantIds.OrderBy(static id => id, StringComparer.Ordinal).ToArray()),
+                "within one granter the inbox is ordered by grant id");
+        });
+    }
+
+    [Test]
     public async Task ListGrantsAsync_excludes_a_grant_offered_to_another_tenant()
     {
         var registry = TwoTenantRegistry();

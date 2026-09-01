@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice;
 using Orleans.Lattice.Auth;
+using Orleans.Lattice.Membership;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Api.TenantAdmin.Tests;
@@ -31,6 +33,18 @@ internal static class TenantAdminTestSupport
         public ValueTask<LatticeAccessDecision> AuthorizeAsync(
             in LatticeAccessRequest request, CancellationToken cancellationToken = default)
             => new(LatticeAccessDecision.Filtered(static _ => true, "narrowed by test"));
+    }
+
+    /// <summary>
+    /// A gate that allows but narrows with a key filter and carries <b>no reason</b>,
+    /// so a facade that reports a partial allow as a fail-closed denial must fall back
+    /// to its own default message rather than surface a (null) gate reason.
+    /// </summary>
+    internal sealed class FilteredNoReasonGate : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request, CancellationToken cancellationToken = default)
+            => new(LatticeAccessDecision.Filtered(static _ => true));
     }
 
     /// <summary>A gate that records the single request it saw, so a test can assert the operation and scope authorized.</summary>
@@ -507,5 +521,88 @@ internal static class TenantAdminTestSupport
             Deletes++;
             return Task.FromResult(_records.Remove(tenant.Value));
         }
+    }
+
+    /// <summary>
+    /// A membership context that models a <b>cache miss</b>: the warm synchronous
+    /// <see cref="TryResolveCurrent"/> path fails, forcing the facade onto the
+    /// asynchronous <see cref="ResolveCurrentAsync"/> directory-read path. It
+    /// records whether that read ran under a <see cref="LatticeSystemOrigin"/>
+    /// scope, so a test can pin the invariant that the uncached resolution bypasses
+    /// the gate (rather than re-entering it) exactly as the production seam requires.
+    /// </summary>
+    internal sealed class CacheMissMembershipContext : ILatticeMembershipContext
+    {
+        private readonly LatticeSubject _subject;
+
+        public CacheMissMembershipContext(LatticeSubject subject) => _subject = subject;
+
+        /// <summary>Whether the asynchronous resolve path was taken at all.</summary>
+        public bool ResolveCurrentCalled { get; private set; }
+
+        /// <summary>Whether the asynchronous resolve ran inside a system-origin scope.</summary>
+        public bool ResolvedUnderSystemOrigin { get; private set; }
+
+        public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default)
+        {
+            ResolveCurrentCalled = true;
+            ResolvedUnderSystemOrigin = LatticeSystemOrigin.IsActive;
+            return new(_subject);
+        }
+
+        public bool TryResolveCurrent(out LatticeSubject subject)
+        {
+            subject = LatticeSubject.Anonymous;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A configurable <see cref="ILatticeIdentityDirectory"/> that is not the
+    /// default <see cref="NullIdentityDirectory"/> (so the facade treats it as a
+    /// real, available provider) and resolves every id to a single configured
+    /// principal, or to <c>null</c> to model a typo'd, retired, or
+    /// not-yet-provisioned id. Records the ids it was asked to resolve.
+    /// </summary>
+    internal sealed class FakeIdentityDirectory : ILatticeIdentityDirectory
+    {
+        private readonly DirectoryPrincipal? _principal;
+
+        public FakeIdentityDirectory(DirectoryPrincipal? principal) => _principal = principal;
+
+        /// <summary>The ids <see cref="ResolveAsync"/> was called for, in order.</summary>
+        public List<string> Resolved { get; } = [];
+
+        public string ProviderId => "fake";
+
+        public string DescribeEntry(DirectoryPrincipalKind? kind) => "A fake identity directory for tests.";
+
+        public Task<DirectorySearchPage> SearchAsync(
+            DirectorySearchQuery query, CancellationToken cancellationToken = default)
+            => Task.FromResult(DirectorySearchPage.Empty);
+
+        public Task<DirectoryPrincipal?> ResolveAsync(
+            string principalId, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(principalId);
+            Resolved.Add(principalId);
+            return Task.FromResult(_principal);
+        }
+    }
+
+    /// <summary>
+    /// A minimal <see cref="IOptionsMonitor{TOptions}"/> serving one fixed value,
+    /// so a facade that reads <c>CurrentValue</c> / <c>Get</c> can be driven without
+    /// the options infrastructure. Change notification is a no-op.
+    /// </summary>
+    internal sealed class FixedOptionsMonitor<T> : IOptionsMonitor<T>
+    {
+        public FixedOptionsMonitor(T value) => CurrentValue = value;
+
+        public T CurrentValue { get; }
+
+        public T Get(string? name) => CurrentValue;
+
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
     }
 }

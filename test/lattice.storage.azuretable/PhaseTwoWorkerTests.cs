@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Storage.AzureTable.Tests;
 /// committed group, and disposal that faults pending commits.
 /// </summary>
 [TestFixture]
-public class PhaseTwoWorkerTests
+public partial class PhaseTwoWorkerTests
 {
     private const string ManifestPartitionKey = "_m_|tree|0";
 
