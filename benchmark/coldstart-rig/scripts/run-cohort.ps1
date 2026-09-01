@@ -402,7 +402,7 @@ function Get-RigHostContext {
 $runResults = [System.Collections.Generic.List[object]]::new()
 $hostContext = Get-RigHostContext -Config $config
 if ($hostContext.contended) {
-	Write-Host ("NOTE: {0} unrelated container(s) are running on this host. Cold start is CPU-bound, so the spread this cohort reports is the HOST's floor, not the rig's. Stop them before attributing a delta." -f $hostContext.foreignContainers) -ForegroundColor Yellow
+	Write-Host ("NOTE: {0} unrelated container(s) are running on this host. Cold start is CPU-bound, so the spread this cohort reports is the HOST's floor, not the rig's. RECORD this cohort as contended - do NOT stop the live deployment to quiet the box (see the README): a number bought that way is not reproducible." -f $hostContext.foreignContainers) -ForegroundColor Yellow
 }
 
 # WARM-UP. The embedding companion loads its model into memory on first use,

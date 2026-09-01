@@ -27,14 +27,21 @@
 	                     that no re-index could reconstruct, so it is the part
 	                     where loss would be unrecoverable.
 
-	WHAT "MATCHED" MEANS, AND WHY IT IS NOT ALWAYS EQUALITY. A volume captured
-	mid-ingest RESUMES that ingest every time the box boots, so the symbol and
-	vector populations climb monotonically while it runs - on both sides of the
-	comparison. The invariant an upgrade must satisfy is therefore that nothing
-	DISAPPEARS. Files are compared for exact equality (the file set is settled),
-	symbols and memory as a superset (every key present before must still be
-	present after, growth allowed), and the vector count as at-least. A missing
-	key is named, not merely counted.
+	WHAT "MATCHED" MEANS, AND WHY IT IS NOT EQUALITY. A volume captured
+	mid-ingest RESUMES that ingest every time the box boots, so the file, symbol
+	and vector populations climb monotonically while it runs - on both sides of
+	the comparison. The invariant an upgrade must satisfy is therefore that
+	nothing DISAPPEARS. Every population is compared as a SUPERSET (every key
+	present before must still be present after, growth allowed) and the vector
+	count as at-least. A missing key is named, not merely counted.
+
+	THIS IS ONLY A VALID PAIR ON ONE VOLUME. Because the corpus grows while the
+	box runs, two fingerprints are only comparable when they were taken from the
+	SAME working volume with nothing but the image changed between them. Taking
+	"before" on a settled box and "after" on a freshly restored clone compares a
+	finished ingest against an unfinished one and reports a large false loss -
+	which is exactly what it did once during S14 before the method was corrected.
+	Boot, fingerprint, swap the image in place, fingerprint again.
 	  * spotChecks     - a content-level check, not a count: each named key is
 	                     recalled and its stored content DIGEST recorded. A file
 	                     that survived as a row but lost its content projection
@@ -368,10 +375,13 @@ foreach ($beforeRepo in $baseline.repos) {
 	Assert-RigSame -Name "repo/$($beforeRepo.repoId)/vectorCount" -Before $beforeRepo.embeddedVectorCount -After $afterRepo.embeddedVectorCount -AtLeast
 }
 
-Assert-RigSame -Name 'files/count' -Before $baseline.files.count -After $fingerprint.files.count
-Assert-RigSame -Name 'files/setHash' -Before $baseline.files.setHash -After $fingerprint.files.setHash
+Assert-RigSubset -Name 'files' -BeforeKeys $baseline.files.keys -AfterKeys $fingerprint.files.keys
 Assert-RigSubset -Name 'symbols' -BeforeKeys $baseline.symbols.keys -AfterKeys $fingerprint.symbols.keys
 Assert-RigSubset -Name 'memory' -BeforeKeys $baseline.memory.keys -AfterKeys $fingerprint.memory.keys
+Write-Host ("  COUNTS   files {0} -> {1}   symbols {2} -> {3}   memory {4} -> {5}" -f `
+		$baseline.files.count, $fingerprint.files.count,
+	$baseline.symbols.count, $fingerprint.symbols.count,
+	$baseline.memory.count, $fingerprint.memory.count) -ForegroundColor DarkGray
 
 foreach ($beforeSpot in $baseline.spotChecks) {
 	$afterSpot = $fingerprint.spotChecks | Where-Object { $_.key -eq $beforeSpot.key } | Select-Object -First 1

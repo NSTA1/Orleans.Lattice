@@ -32,6 +32,36 @@ internal sealed class InMemoryRepoContextVectorSource : IRepoContextVectorSource
     /// <summary>How many identifier batches have been resolved back to source keys.</summary>
     public int SourceKeyResolutions { get; private set; }
 
+    /// <summary>
+    /// How many times the whole-corpus count probe has been asked for. The probe
+    /// is an O(corpus) key walk on the real source, so a build that pays it when
+    /// it need not is paying the cost the approximate plane exists to remove.
+    /// </summary>
+    public int CountCalls { get; private set; }
+
+    /// <summary>
+    /// Faults to inject into the next enumerations, one per remaining count, so a
+    /// test can reproduce a build interrupted by a TRANSIENT store fault rather
+    /// than waiting for a real one. Set with
+    /// <see cref="FailNextEnumerations(int, Func{Exception})"/>.
+    /// </summary>
+    private int _pendingEnumerationFaults;
+    private Func<Exception>? _enumerationFault;
+
+    /// <summary>
+    /// Arms <paramref name="count"/> consecutive enumeration attempts to throw,
+    /// after which enumeration succeeds normally. Models a store that is
+    /// transiently unavailable - a saturated shard root timing out, say - which is
+    /// what a background build has to survive rather than abandon.
+    /// </summary>
+    /// <param name="count">How many attempts should fault.</param>
+    /// <param name="fault">Produces the exception each faulting attempt throws.</param>
+    public void FailNextEnumerations(int count, Func<Exception> fault)
+    {
+        _pendingEnumerationFaults = count;
+        _enumerationFault = fault;
+    }
+
     /// <summary>The identifiers the view currently holds, in ascending ordinal order.</summary>
     public IReadOnlyList<string> Ids => [.. _entries.Keys];
 
@@ -67,6 +97,12 @@ internal sealed class InMemoryRepoContextVectorSource : IRepoContextVectorSource
     public async IAsyncEnumerable<VectorSourceEntry> EnumerateAsync(
         string? afterIdExclusive, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        if (_pendingEnumerationFaults > 0)
+        {
+            _pendingEnumerationFaults--;
+            throw (_enumerationFault ?? (static () => new TimeoutException("injected")))();
+        }
+
         if (afterIdExclusive is null)
         {
             FullEnumerations++;
@@ -88,7 +124,10 @@ internal sealed class InMemoryRepoContextVectorSource : IRepoContextVectorSource
 
     /// <inheritdoc />
     public Task<int> CountAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(_entries.Count);
+    {
+        CountCalls++;
+        return Task.FromResult(_entries.Count);
+    }
 
     /// <inheritdoc />
     public Task<bool> ContainsAsync(string id, CancellationToken cancellationToken = default)

@@ -123,10 +123,15 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             var index = await OpenAsync(cancellationToken).ConfigureAwait(false);
             if (index.Progress.Phase != VectorIndexBuildPhase.Ready)
             {
+                var restoredAtOpen = index.Progress.RestoredFromDurableState;
                 _progress = await index.BuildStepAsync(cancellationToken).ConfigureAwait(false);
                 if (_progress.Phase == VectorIndexBuildPhase.Ready)
                 {
-                    await CatchUpAsync(index, cancellationToken).ConfigureAwait(false);
+                    // This process streamed the corpus itself, so it knows what the
+                    // index covers - unless the index it resumed was restored
+                    // part-built, in which case an earlier process streamed some of
+                    // it and only the probe can confirm the join.
+                    await CatchUpAsync(index, restoredAtOpen, cancellationToken).ConfigureAwait(false);
                     MarkServing(index);
                 }
 
@@ -134,8 +139,10 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
             }
 
             // Already built: the remaining work is the shortfall repair, which is
-            // idempotent and completes in one step.
-            await CatchUpAsync(index, cancellationToken).ConfigureAwait(false);
+            // idempotent and completes in one step. Reaching Ready at OPEN means the
+            // index came off durable state, so the probe is the only way to learn
+            // whether the store of record has moved on since.
+            await CatchUpAsync(index, probeSource: true, cancellationToken).ConfigureAwait(false);
             MarkServing(index);
             return _progress;
         }
@@ -401,8 +408,22 @@ internal sealed class RepoContextAnnIndexHandle : IDisposable
         return _index;
     }
 
-    private async Task CatchUpAsync(DurableVectorIndex index, CancellationToken cancellationToken)
+    private async Task CatchUpAsync(
+        DurableVectorIndex index, bool probeSource, CancellationToken cancellationToken)
     {
+        // ONLY AN INDEX THIS PROCESS DID NOT STREAM NEEDS THE SHORTFALL PROBE.
+        // The probe is an O(corpus) key walk whose only job is to decide whether a
+        // persisted index is BEHIND the store of record. When this activation
+        // streamed the corpus itself, the index covers exactly what it streamed and
+        // anything written since arrives through the writer's write-through seam,
+        // so the walk is pure cost - and it is the single most timeout-prone call
+        // in the build, which took the whole build down with it (#1844).
+        if (!probeSource)
+        {
+            await MaintainAsync(index, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         // A key-only walk, so this costs a fraction of the streaming enumeration and
         // is the cheapest honest way to learn whether the persisted index is behind.
         // In a repository holding more than one embedding space the count is an upper
