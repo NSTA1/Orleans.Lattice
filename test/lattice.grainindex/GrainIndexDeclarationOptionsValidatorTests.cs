@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Orleans.Lattice.GrainIndex.Tests;
 
@@ -98,5 +99,29 @@ public sealed class GrainIndexDeclarationOptionsValidatorTests
 
         Assert.That(result.Failures?.Count(), Is.EqualTo(2),
             "A host with several misconfigured indexes should see all of them at once.");
+    }
+
+    [Test]
+    public void An_index_with_an_empty_name_fails()
+    {
+        // Lines 33-34: the validator detects a definition with a null or empty name.
+        var definition = Substitute.For<IGrainIndexDefinition>();
+        definition.Name.Returns(string.Empty);
+        definition.PropertyDescriptors.Returns(
+            new List<GrainIndexPropertyDescriptor>
+            {
+                new("Age", "System.Int32")
+            });
+
+        var options = new GrainIndexDeclarationOptions();
+        options.Definitions.Add(definition);
+
+        var result = new GrainIndexDeclarationOptionsValidator().Validate(Options.DefaultName, options);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain("has no index name"));
+        });
     }
 }

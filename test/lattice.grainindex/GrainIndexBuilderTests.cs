@@ -208,6 +208,23 @@ public sealed class GrainIndexBuilderTests
                 .Build(),
             Throws.TypeOf<GrainIndexKeyEncodingException>());
 
+    [Test]
+    public void Include_with_a_cast_expression_unwraps_to_the_underlying_property_name()
+    {
+        // Lines 195-196: the unary Convert wrapping x.Age is peeled off in the
+        // while loop so the property name resolves correctly.
+        var definition = Builder()
+            .WithName("cast-test")
+            .Include(x => (long)x.Age)
+            .Build();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(definition.PropertyDescriptors, Has.Count.EqualTo(1));
+            Assert.That(definition.PropertyDescriptors[0].Name, Is.EqualTo("Age"));
+        });
+    }
+
     /// <summary>
     /// A custom codec used only to prove the pluggable seam is honoured: it
     /// reverses the string key, which no built-in codec does.

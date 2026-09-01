@@ -187,6 +187,43 @@ public sealed class CachingTenantRateProviderTests
         });
     }
 
+    [Test]
+    public async Task A_concurrent_caller_that_arrives_while_a_refresh_is_in_flight_is_served_from_the_same_refresh()
+    {
+        // Covers the "already fresh" guard inside the semaphore: the second waiter
+        // enters the gate AFTER the first caller has finished the scan and updated
+        // the snapshot, finds it fresh, and returns early without scanning again.
+        var scanStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scanGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inner = new GatedRateProvider(scanStarted, scanGate, Spec("acme", 100));
+        var clock = new ManualTimeProvider();
+        var provider = Create(inner, clock, TimeSpan.FromSeconds(60));
+
+        // Prime the cache so that both concurrent callers below will all see a
+        // stale snapshot (first scan happens synchronously here).
+        _ = await DrainAsync(provider);
+        clock.AdvanceSeconds(61);
+
+        // Start the first refresh; it will stall at the scan gate.
+        var first = DrainAsync(provider);
+        await scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Second caller arrives while the first scan is still in progress.
+        var second = DrainAsync(provider);
+
+        // Let the in-flight scan complete.
+        scanGate.SetResult();
+
+        var r1 = await first.WaitAsync(TimeSpan.FromSeconds(10));
+        var r2 = await second.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inner.Scans, Is.EqualTo(2), "exactly one real scan for the concurrent pair");
+            Assert.That(r1.Select(s => s.Tenant), Is.EquivalentTo(r2.Select(s => s.Tenant)));
+        });
+    }
+
     private static TenantRateSpec Spec(string tenant, long opsPerSecond)
         => new(TenantId.Parse(tenant), opsPerSecond, BurstPercent: 0);
 
@@ -221,5 +258,36 @@ public sealed class CachingTenantRateProviderTests
             }
         }
 #pragma warning restore CS1998
+    }
+
+    /// <summary>
+    /// A provider that signals when the SECOND scan starts and then waits on a gate
+    /// task before yielding results, enabling deterministic concurrent-caller tests.
+    /// The first scan (priming the cache) completes immediately.
+    /// </summary>
+    private sealed class GatedRateProvider(
+        TaskCompletionSource started,
+        TaskCompletionSource gate,
+        params TenantRateSpec[] specs) : ITenantRateProvider
+    {
+        /// <summary>Total number of scans started.</summary>
+        public int Scans { get; private set; }
+
+        public async IAsyncEnumerable<TenantRateSpec> GetConfiguredRatesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var n = ++Scans;
+            if (n >= 2)
+            {
+                // Only gate the second and later scans; the prime scan returns immediately.
+                started.TrySetResult();
+                await gate.Task.ConfigureAwait(false);
+            }
+
+            foreach (var spec in specs)
+            {
+                yield return spec;
+            }
+        }
     }
 }

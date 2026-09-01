@@ -274,4 +274,38 @@ public sealed class CompiledTenantPolicySnapshotMaintainerTests
         Assert.That(tenant!.TryGetTenantGrants("beta", out var grants), Is.True);
         Assert.That(grants!, Has.Length.EqualTo(1));
     }
+
+    [Test]
+    public async Task RunRebuildLoopAsync_catches_a_faulting_rebuild_and_keeps_the_previous_snapshot()
+    {
+        // Covers lines 186-189: the background rebuild loop catches a non-transient
+        // exception thrown by RebuildOnceAsync (propagated from the registry scan),
+        // logs a warning, and leaves the previous snapshot intact.
+        var calls = 0;
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls++;
+            return calls == 1
+                ? Stream([Record("acme", admins: ["alice"])])
+                : ThrowAsync(new InvalidOperationException("registry-fault"));
+        });
+        var maintainer = CreateMaintainer(registry);
+
+        // Seed a valid snapshot via the public rebuild path.
+        await maintainer.RebuildNowAsync();
+        var epochAfterSeed = maintainer.CurrentEpoch;
+
+        // Second rebuild (triggered by a mutation) faults in the background loop.
+        await maintainer.OnMutationAsync(RegistryMutation(), CancellationToken.None);
+        await maintainer.BackgroundRebuild;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(maintainer.CurrentEpoch, Is.EqualTo(epochAfterSeed),
+                "the faulting rebuild must not advance the epoch");
+            Assert.That(maintainer.Current.TenantCount, Is.EqualTo(1),
+                "the previous snapshot must remain intact after the exception");
+        });
+    }
 }

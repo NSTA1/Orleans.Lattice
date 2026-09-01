@@ -136,4 +136,15 @@ public sealed class TenantBudgetApportionmentTests
 
         Assert.That(share, Is.EqualTo(250), "negative local demand is treated as no signal (static-even)");
     }
+
+    [Test]
+    public void DemandProportionalShare_clamps_a_negative_cluster_rate_to_zero()
+    {
+        // A negative cluster rate is nonsensical; it must be clamped to zero so the
+        // method returns 0 rather than propagating a negative rate to the bucket.
+        var share = TenantBudgetApportionment.DemandProportionalShare(
+            clusterRate: -500, liveSiloCount: 2, thisSiloDemand: 100, totalClusterDemand: 200, reserveFraction: 0.2);
+
+        Assert.That(share, Is.EqualTo(0));
+    }
 }

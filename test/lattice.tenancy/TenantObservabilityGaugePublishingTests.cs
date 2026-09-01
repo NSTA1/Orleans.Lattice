@@ -213,4 +213,130 @@ public sealed class TenantObservabilityGaugePublishingTests
 
         Assert.That(async () => await publisher.StopAsync(CancellationToken.None), Throws.Nothing);
     }
+
+    [Test]
+    public async Task RunLoopAsync_falls_back_to_the_default_publish_interval_when_configured_interval_is_non_positive()
+    {
+        // Covers line 115: when PublishInterval is <= 0, RunLoopAsync falls back to
+        // DefaultPublishInterval. The fakes complete synchronously so the background task
+        // always reaches line 115 before StopAsync can cancel the timer wait.
+        var publisher = new TenantObservabilityPublisher(
+            new TenantObservabilitySource(new FakeTenantUsageIndex(), new FakeTenantOverageBilling()),
+            new RateLimiterTestData.ManualTimeProvider(),
+            Options(new TenantObservabilityOptions { PublishGauges = true, PublishInterval = TimeSpan.Zero }),
+            Substitute.For<ILogger<TenantObservabilityPublisher>>());
+
+        await publisher.StartAsync(CancellationToken.None);
+        await publisher.StopAsync(CancellationToken.None);
+
+        Assert.That(publisher.Loop!.IsCompleted, Is.True,
+            "the loop must have run through the interval-fallback path and exited on stop");
+    }
+
+    [Test]
+    public async Task RunLoopAsync_fires_a_second_publish_on_the_next_tick()
+    {
+        // Covers lines 121-123: the loop body inside the while fires a second
+        // PublishCycleSafelyAsync call on the second timer tick. Uses a real short
+        // interval (5 ms) and waits for a deterministic signal from the second tick.
+        var secondEntry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var usage = new SignalingFakeUsageIndex(secondEntry);
+        var publisher = new TenantObservabilityPublisher(
+            new TenantObservabilitySource(usage, new FakeTenantOverageBilling()),
+            TimeProvider.System,
+            Options(new TenantObservabilityOptions
+            {
+                PublishGauges = true,
+                PublishInterval = TimeSpan.FromMilliseconds(5),
+            }),
+            Substitute.For<ILogger<TenantObservabilityPublisher>>());
+
+        await publisher.StartAsync(CancellationToken.None);
+        await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await publisher.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Test]
+    public async Task PublishCycleSafelyAsync_swallows_a_non_cancellation_exception_and_continues()
+    {
+        // Covers lines 135-140: PublishCycleSafelyAsync catches a non-OCE thrown by
+        // PublishOnceAsync, logs a warning, and returns normally so the loop can
+        // continue to the next tick.
+        var secondEntry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var usage = new FaultingFirstCallUsageIndex(secondEntry);
+        var publisher = new TenantObservabilityPublisher(
+            new TenantObservabilitySource(usage, new FakeTenantOverageBilling()),
+            TimeProvider.System,
+            Options(new TenantObservabilityOptions
+            {
+                PublishGauges = true,
+                PublishInterval = TimeSpan.FromMilliseconds(5),
+            }),
+            Substitute.For<ILogger<TenantObservabilityPublisher>>());
+
+        await publisher.StartAsync(CancellationToken.None);
+        await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await publisher.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// A fake <see cref="ITenantUsageIndex"/> that signals a
+    /// <see cref="TaskCompletionSource"/> on the second call to
+    /// <see cref="EnsureWarmAsync"/>, so a test can wait deterministically for the
+    /// loop's second tick.
+    /// </summary>
+    private sealed class SignalingFakeUsageIndex(TaskCompletionSource secondEntry) : ITenantUsageIndex
+    {
+        private int _calls;
+
+        public bool TryGetView(TenantId tenant, out TenantUsageView view)
+        {
+            view = default;
+            return false;
+        }
+
+        public Task EnsureWarmAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _calls) >= 2)
+            {
+                secondEntry.TrySetResult();
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public IReadOnlyDictionary<string, TenantUsageView> EnumerateViews() =>
+            new Dictionary<string, TenantUsageView>(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A fake <see cref="ITenantUsageIndex"/> that throws on the first call to
+    /// <see cref="EnsureWarmAsync"/> (exercising the general-exception catch) and
+    /// signals the supplied <see cref="TaskCompletionSource"/> on the second.
+    /// </summary>
+    private sealed class FaultingFirstCallUsageIndex(TaskCompletionSource secondEntry) : ITenantUsageIndex
+    {
+        private int _calls;
+
+        public bool TryGetView(TenantId tenant, out TenantUsageView view)
+        {
+            view = default;
+            return false;
+        }
+
+        public Task EnsureWarmAsync(CancellationToken cancellationToken = default)
+        {
+            var n = Interlocked.Increment(ref _calls);
+            if (n == 1)
+            {
+                return Task.FromException(new InvalidOperationException("observability-source-fault"));
+            }
+
+            secondEntry.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public IReadOnlyDictionary<string, TenantUsageView> EnumerateViews() =>
+            new Dictionary<string, TenantUsageView>(StringComparer.Ordinal);
+    }
 }

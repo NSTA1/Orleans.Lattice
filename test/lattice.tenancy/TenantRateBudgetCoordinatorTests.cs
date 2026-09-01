@@ -217,4 +217,29 @@ public sealed class TenantRateBudgetCoordinatorTests
 
         Assert.That(limiter.BucketCount, Is.EqualTo(0));
     }
+
+    [Test]
+    public async Task RunLeaseCycleAsync_clamps_a_non_positive_silo_count_to_one()
+    {
+        // Covers line 82: when ILiveSiloCountProvider returns 0 (or negative) the
+        // coordinator falls back to 1 so no division-by-zero occurs.
+        var clock = new ManualTimeProvider();
+        var limiter = new SiloLocalTenantRateLimiter(clock);
+        var tenant = TenantId.Parse("acme");
+        var options = new LatticeTenantRateLimiterOptions { Apportionment = TenantRateApportionmentStrategy.StaticEven };
+        var coordinator = Create(
+            limiter, clock, options,
+            new FakeRateProvider(new TenantRateSpec(tenant, OpsPerSecond: 1000, BurstPercent: 0)),
+            new FakeSiloCountProvider(0),
+            new FakeDemandExchange(null));
+
+        await coordinator.RunLeaseCycleAsync();
+
+        // 1000 ops / 1 silo (clamped from 0) = 1000; 0% burst => 1 immediate.
+        Assert.Multiple(() =>
+        {
+            Assert.That(limiter.BucketCount, Is.EqualTo(1));
+            Assert.That(limiter.TryAcquire(tenant), Is.True, "bucket was configured at full rate");
+        });
+    }
 }

@@ -15,6 +15,9 @@ internal sealed class FakeGrainIndexRegistryStore : IGrainIndexRegistryStore
     /// <summary>The number of <see cref="WriteAsync"/> calls made so far.</summary>
     internal int WriteCount { get; private set; }
 
+    /// <summary>An exception every <see cref="WriteAsync"/> call throws, or <c>null</c>.</summary>
+    internal Exception? WriteFault { get; set; }
+
     /// <summary>The number of <see cref="ReadAsync"/> calls made so far.</summary>
     internal int ReadCount { get; private set; }
 
@@ -51,6 +54,10 @@ internal sealed class FakeGrainIndexRegistryStore : IGrainIndexRegistryStore
         ArgumentNullException.ThrowIfNull(record);
         WriteCount++;
         LastToken = cancellationToken;
+
+        if (WriteFault is { } fault)
+            return Task.FromException(fault);
+
         _records[indexName] = record;
         return Task.CompletedTask;
     }

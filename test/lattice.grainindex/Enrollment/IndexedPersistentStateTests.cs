@@ -510,4 +510,39 @@ public sealed class IndexedPersistentStateTests
         Assert.That(async () => await harness.Indexed.OnStop(CancellationToken.None), Throws.Nothing);
         await Task.CompletedTask;
     }
+
+    [Test]
+    public async Task Read_state_on_an_untracked_grain_delegates_and_returns_immediately()
+    {
+        // Line 224: _enrollers.Length == 0 -> return immediately after inner read.
+        var inner = new RecordingPersistentState<IndexedTestState>(StateOf(), recordExists: true);
+        var harness = Harness(inner); // no enrollers
+
+        await harness.Indexed.ReadStateAsync(CancellationToken.None);
+
+        Assert.That(inner.ReadCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Read_state_that_cannot_record_the_batch_does_not_surface_the_failure()
+    {
+        // Lines 234-240: PlanAsync throws (WritePendingAsync faults) but
+        // ReadStateAsync catches and logs rather than propagating - a read
+        // must not fail the grain activation over an index outage.
+        var store = new RecordingEnrollmentStore
+        {
+            WritePendingFault = new InvalidOperationException("storage down"),
+        };
+        var inner = new RecordingPersistentState<IndexedTestState>(StateOf(age: 30), recordExists: true);
+        var harness = Harness(inner, EnrollmentTestIndex.Enroller(store));
+        await harness.ActivateAsync();
+
+        // Mutate so the next plan produces a non-empty diff, then fault the batch.
+        inner.State.Age = 99;
+
+        Assert.That(
+            async () => await harness.Indexed.ReadStateAsync(CancellationToken.None),
+            Throws.Nothing,
+            "A plan failure during a read must be swallowed; the outbox entry already recorded is what converges it.");
+    }
 }

@@ -184,4 +184,40 @@ public sealed class BackupSetModelTests
             () => new LatticeBackupSetCaptureResult(null!, Array.Empty<LatticeBackupCaptureResult>()),
             Throws.ArgumentNullException);
     }
+
+    [Test]
+    public void Result_rejects_an_empty_members_list()
+    {
+        // Line 24: the members-empty guard.
+        var setManifest = new BackupSetManifest(null, "nightly", DateTimeOffset.UnixEpoch, false, null, new[] { "m1" });
+        Assert.That(
+            () => new LatticeBackupSetCaptureResult(setManifest, Array.Empty<LatticeBackupCaptureResult>()),
+            Throws.ArgumentException.With.Message.Contains("at least one member"));
+    }
+
+    // ---- BackupRetentionReport ------------------------------------------
+
+    [Test]
+    public void BackupRetentionReport_Empty_has_zero_retained_and_zero_pruned()
+    {
+        // Line 41: the Empty static-property getter.
+        var empty = BackupRetentionReport.Empty;
+        Assert.Multiple(() =>
+        {
+            Assert.That(empty.PrunedCount, Is.Zero);
+            Assert.That(empty.RetainedCount, Is.Zero);
+            Assert.That(empty.PrunedBackupIds, Is.Empty);
+        });
+    }
+
+    // ---- LatticeRestoreRequest ------------------------------------------
+
+    [Test]
+    public void LatticeRestoreRequest_rejects_empty_operation_id()
+    {
+        // Line 62: when operationId is non-null but empty, ArgumentException is thrown.
+        Assert.That(
+            () => new LatticeRestoreRequest("backup-id", operationId: ""),
+            Throws.InstanceOf<ArgumentException>());
+    }
 }

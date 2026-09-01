@@ -271,6 +271,32 @@ public sealed class BackupAccessAuthorizerTests
             "with no tenancy add-on the null scope is inert and runs no tenant check");
     }
 
+    // ---- BackupScopeSelector constructor guard (WholeTree + key) -----------
+
+    [Test]
+    public void BackupScopeSelector_WholeTree_constructor_with_non_null_key_or_prefix_throws()
+    {
+        // Lines 42-43: the WholeTree case with a non-null keyOrPrefix throws.
+        Assert.That(
+            () => new BackupScopeSelector(BackupScopeKind.WholeTree, "orders", "prefix"),
+            Throws.ArgumentException);
+    }
+
+    // ---- Unknown scope kind (switch default arm) -------------------------
+
+    [Test]
+    public void AuthorizeBackupAsync_unknown_scope_kind_throws_ArgumentOutOfRangeException()
+    {
+        // Lines 132-133: the default arm of the scope-kind switch.
+        // A BackupScopeSelector can be constructed with an undefined kind
+        // because the constructor only guards the known variants.
+        var unknownScope = new BackupScopeSelector((BackupScopeKind)99, "orders", null);
+        var authorizer = Create(new CapturingAccessGate());
+
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            async () => await authorizer.AuthorizeBackupAsync(unknownScope));
+    }
+
     // ---- Construction guards --------------------------------------------
 
     [Test]

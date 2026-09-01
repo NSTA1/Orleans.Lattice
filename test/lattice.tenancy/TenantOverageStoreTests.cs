@@ -107,6 +107,45 @@ public sealed class TenantOverageStoreTests
     }
 
     [Test]
+    public async Task GetAsync_with_a_valid_tenant_returns_null_when_the_key_is_absent()
+    {
+        // Covers lines 50-54: the happy-path body of GetAsync for a valid TenantId.
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var serializer = TestSerializers.For<TenantOverageRecord>();
+        var lattice = Substitute.For<ILattice>();
+        grainFactory.GetGrain<ILattice>(TenantTreeNames.OverageTree).Returns(lattice);
+        lattice.GetAsync(Acme.Value!, Arg.Any<CancellationToken>()).Returns((byte[]?)null);
+        var store = new TenantOverageStore(grainFactory, serializer);
+
+        var result = await store.GetAsync(Acme);
+
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public async Task MeterAsync_a_non_empty_increment_calls_through_to_the_merge_loop()
+    {
+        // Covers line 105: MeterAsync with a non-empty increment delegates to MeterMergeAsync.
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var serializer = TestSerializers.For<TenantOverageRecord>();
+        var lattice = Substitute.For<ILattice>();
+        grainFactory.GetGrain<ILattice>(TenantTreeNames.OverageTree).Returns(lattice);
+
+        // Absent key => zero-version; write succeeds first try.
+        lattice.GetWithVersionAsync(Acme.Value!, Arg.Any<CancellationToken>())
+            .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
+        lattice.SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var store = new TenantOverageStore(grainFactory, serializer);
+        var increment = Overage(bytes: 50);
+
+        var result = await store.MeterAsync(Acme, "east", increment);
+
+        Assert.That(result.Fold(), Is.EqualTo(increment));
+    }
+
+    [Test]
     public void MeterMergeAsync_throws_after_exhausting_the_retry_budget()
     {
         var (store, serializer) = Create();

@@ -132,4 +132,28 @@ public sealed class CompiledTenantPolicyTests
 
         Assert.That(snapshot, Is.SameAs(CompiledTenantPolicy.Empty));
     }
+
+    [Test]
+    public void CompiledTenant_Id_property_returns_the_tenants_identity()
+    {
+        var snapshot = CompiledTenantPolicy.Compile(
+        [
+            Record("acme", TenantStatus.Active, admins: ["alice"]),
+        ]);
+
+        Assert.That(snapshot.TryGetTenant("acme", out var tenant), Is.True);
+        Assert.That(tenant!.Id, Is.EqualTo(TenantId.Parse("acme")));
+    }
+
+    [Test]
+    public void CompiledTenant_Admins_property_returns_the_frozen_admin_set()
+    {
+        var snapshot = CompiledTenantPolicy.Compile(
+        [
+            Record("acme", TenantStatus.Active, admins: ["alice", "bob"]),
+        ]);
+
+        Assert.That(snapshot.TryGetTenant("acme", out var tenant), Is.True);
+        Assert.That(tenant!.Admins, Is.EquivalentTo(new[] { "alice", "bob" }));
+    }
 }

@@ -264,4 +264,42 @@ public sealed class TenantPlacementSnapshotMaintainerTests
                 "a failed rebuild must not swap the snapshot or advance the epoch");
         });
     }
+
+    [Test]
+    public async Task RunRebuildLoopAsync_swallows_a_faulting_rebuild_and_leaves_the_previous_snapshot_intact()
+    {
+        // Covers lines 190-193: the background loop calls RebuildOnceAsync which throws a
+        // non-transient exception; the loop must catch it, log a warning, and leave the
+        // previous snapshot intact rather than crashing the background task.
+        var acme = TenantId.Parse("acme");
+        var registry = Substitute.For<ITenantRegistry>();
+
+        // Prime a clean snapshot via the internal RebuildNowAsync (bypasses the background
+        // lock path) so there is a stable previous state to validate against.
+        registry.ListAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Stream(new[] { RecordWith(acme, TenantPlacement.Shared) }));
+        var maintainer = Maintainer(registry);
+        await maintainer.RebuildNowAsync();
+        var epochBefore = maintainer.CurrentEpoch;
+
+        // Reconfigure the registry to throw on the background rebuild.
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            entered.TrySetResult();
+            return ThrowAsync(new InvalidOperationException("background-rebuild-failure"));
+        });
+
+        // Trigger a background rebuild via the mutation observer.
+        await maintainer.OnMutationAsync(
+            new LatticeMutation { TreeId = TenantTreeNames.RegistryTree, Kind = MutationKind.Set, Key = "acme" },
+            CancellationToken.None);
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // Let the catch block finish executing before asserting the epoch.
+        await Task.Delay(50);
+
+        Assert.That(maintainer.CurrentEpoch, Is.EqualTo(epochBefore),
+            "the background exception must not advance the epoch; the previous snapshot remains in effect");
+    }
 }

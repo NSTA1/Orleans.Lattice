@@ -258,6 +258,91 @@ public sealed class GrainIndexRangeBuilderTests
     }
 
     [Test]
+    public void An_unknown_operator_derives_no_range()
+    {
+        // An operator value outside the known set returns false (line 110).
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Age, (LatticeComparisonOperator)99, 18, out _, out _);
+
+        Assert.That(built, Is.False);
+    }
+
+    [Test]
+    public void A_prefix_whose_encoded_last_char_is_max_value_derives_no_range()
+    {
+        // A prefix whose encoded form ends with char.MaxValue has no successor
+        // character to form the upper bound (line 135).
+        bool built = GrainIndexRangeBuilder.TryBuildPrefix(Country, "\uFFFF", out _);
+
+        Assert.That(built, Is.False);
+    }
+
+    [Test]
+    public void Equality_with_null_on_a_non_nullable_property_matches_nothing()
+    {
+        // A non-nullable property has no null slot, so null == prop is empty (line 159).
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Age, LatticeComparisonOperator.Equal, null, out var ranges, out bool exact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.True);
+            Assert.That(exact, Is.True);
+            Assert.That(ranges, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_float_bound_is_widened_to_double_for_a_double_property()
+    {
+        // A float constant is widened via the float branch of TryAsDouble (lines 244-245).
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Score, LatticeComparisonOperator.Equal, 1.0f, out _, out bool exact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.True);
+            Assert.That(exact, Is.True);
+        });
+    }
+
+    [Test]
+    public void A_decimal_bound_converts_via_IConvertible()
+    {
+        // decimal implements IConvertible; ToDouble succeeds (lines 249-250).
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Score, LatticeComparisonOperator.Equal, 2.0m, out _, out bool exact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.True);
+            Assert.That(exact, Is.True);
+        });
+    }
+
+    [Test]
+    public void A_convertible_bound_that_cannot_convert_to_double_derives_no_range()
+    {
+        // DateTime implements IConvertible but ToDouble throws InvalidCastException
+        // (lines 252-256 in the catch block of TryAsDouble).
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Score, LatticeComparisonOperator.Equal, DateTime.UtcNow, out _, out _);
+
+        Assert.That(built, Is.False);
+    }
+
+    [Test]
+    public void A_non_IConvertible_bound_on_a_double_property_derives_no_range()
+    {
+        // An object that implements neither double, float, nor IConvertible hits
+        // the default branch of TryAsDouble (lines 260-261).
+        bool built = GrainIndexRangeBuilder.TryBuild(
+            Score, LatticeComparisonOperator.Equal, new object(), out _, out _);
+
+        Assert.That(built, Is.False);
+    }
+
+    [Test]
     public void A_query_property_classifies_its_encoding_traits()
     {
         Assert.Multiple(() =>
