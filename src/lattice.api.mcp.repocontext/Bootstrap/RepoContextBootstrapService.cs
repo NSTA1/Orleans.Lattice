@@ -492,19 +492,27 @@ internal sealed class RepoContextBootstrapService
             // embedding - which is what converts a store captured entirely
             // before memory embedding existed, with no re-walk.
             //
-            // KNOWN BOUND, stated rather than hidden. Memory is written through
-            // the tools, not the walk, so there is no per-pass changed set to
-            // hand in and the back-fill is the whole mechanism. That covers a
-            // NEW entry (it has no embedding yet) but not a REVISED one, whose
-            // vector keeps ranking on the pre-revision text until something
-            // retires it, nor a FORGOTTEN one, whose vector lingers in the
-            // membership count. Neither is a correctness fault: hydration is
-            // always live, so a revised entry still returns its current body,
-            // and a forgotten entry's hit is dropped by the !entry.Exists guard
-            // on the semantic path rather than returned as a dead key. Closing
-            // the gap properly needs a change signal the writer cannot express
-            // today (it tracks presence, not a per-source digest); tracked
-            // separately rather than bodged in here.
+            // Memory is written through the tools rather than the walk, so the
+            // ingestor gets no per-pass changed set. The change signal instead
+            // comes from the write side: RepoContextStore retires an entry's
+            // vector on every remember, update, and forget (both the hard delete
+            // and the lapse), so a revised entry looks un-embedded and this
+            // back-fill re-embeds it from its current text on the next reconcile.
+            // That needs no digest and no dirty-set.
+            //
+            // RESIDUAL, stated rather than hidden: an entry that expires by its
+            // own TTL rather than through an explicit forget - a coordination
+            // handoff written with ttlSeconds, say - vanishes from the tree with
+            // no code path observing it, so its vector is never retired. That is
+            // fail-safe: the semantic path drops a hit that no longer hydrates
+            // via its !entry.Exists guard, so the cost is an inflated membership
+            // tally and an occasional wasted ranking slot, never a dead key
+            // returned to a caller. A prune IS possible - VectorMetadataRecord
+            // keeps each vector's SourceKey - but not free: memory source ids
+            // are not separable from file and symbol ids in the membership set,
+            // so it would take a full metadata scan on a path that otherwise
+            // touches only what changed. Left for a deliberate sweep rather than
+            // paid on every reconcile.
             var memoryEmbedded = await _vectorIngestor.IngestMemoryAsync(
                 repoId, Array.Empty<string>(), Array.Empty<string>(), cancellationToken)
                 .ConfigureAwait(false);

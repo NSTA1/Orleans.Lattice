@@ -70,6 +70,18 @@ internal sealed class RepoContextVectorWriter
     internal const string ContentlessMarkerPrefix = "nil-";
 
     /// <summary>
+    /// The marker prefixing the collection component of a membership flag that
+    /// records an embedded MEMORY entry, keyed by the entry's own record key rather
+    /// than by its one-way source id. Distinguishes it from an ordinary source-id
+    /// flag in the same tree, exactly as <see cref="ContentlessMarkerPrefix"/> does,
+    /// and is what makes an orphaned memory embedding discoverable: an entry that
+    /// expires by its own time-to-live is removed with nothing observing it, so the
+    /// only way to find its abandoned vector is to compare the recorded keys against
+    /// the live ones.
+    /// </summary>
+    internal const string MemoryKeyMarkerPrefix = "memkey-";
+
+    /// <summary>
     /// The width, in digits, of the zero-padded unit ordinal embedded in a
     /// presence key. Fixed-width so the lexical key order matches the numeric unit
     /// order, and wide enough for the chunker's per-file cap.
@@ -477,9 +489,119 @@ internal sealed class RepoContextVectorWriter
         _cache.Invalidate(repoId);
     }
 
-    private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
-        => GuardMembershipAsync(async () =>
+    /// <summary>
+    /// Records that each memory entry currently has a live embedding, as one
+    /// add-wins flag per entry keyed by the entry's own record key.
+    /// <para>
+    /// Memory membership is otherwise indistinguishable from file and symbol
+    /// membership - those flags are keyed by the one-way
+    /// <see cref="VectorCodec.SourceId(string)"/>, so an embedded source cannot be
+    /// mapped back to the key it came from - which would leave no way to find a
+    /// memory vector whose entry has since vanished. Keeping the key itself, behind
+    /// the <see cref="MemoryKeyMarkerPrefix"/> marker exactly as
+    /// <see cref="ContentlessMarkerPrefix"/> does, makes that orphan set directly
+    /// computable as (recorded - live).
+    /// </para>
+    /// <para>
+    /// One flag per entry rather than a set of all keys, so the record stays an
+    /// <see cref="OrFlag"/> like every other record in this tree - the CRDT shape is
+    /// resolved per tree, so a set here would need its own tree to be replicable -
+    /// and so a revision, which retires and re-embeds, touches only its own small
+    /// record instead of churning dots and tombstones on one shared set.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository identity.</param>
+    /// <param name="memoryKeys">The memory record keys just embedded.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    public async Task MarkMemoryEmbeddedAsync(
+        string repoId, IReadOnlyList<string> memoryKeys, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(memoryKeys);
+
+        if (memoryKeys.Count == 0)
         {
+            return;
+        }
+
+        await GuardMembershipAsync(async () =>
+        {
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var replicaId = ReplicaId();
+            foreach (var memoryKey in memoryKeys)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var key = RepoContextKeys.VectorMembership(repoId, MemoryKeyMarkerPrefix + memoryKey);
+                await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Drops a memory entry's embedded-key marker. Paired with
+    /// <see cref="RetireAsync(string, string, CancellationToken)"/> so a retired
+    /// entry leaves no marker to sweep on the next pass.
+    /// </summary>
+    /// <param name="repoId">The repository identity.</param>
+    /// <param name="memoryKey">The memory record key whose embedding was retired.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    public Task UnmarkMemoryEmbeddedAsync(
+        string repoId, string memoryKey, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(memoryKey);
+
+        return GuardMembershipAsync(async () =>
+        {
+            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+            var key = RepoContextKeys.VectorMembership(repoId, MemoryKeyMarkerPrefix + memoryKey);
+
+            // Disable rather than delete so the removal carries causal history and
+            // converges add-wins against a concurrent enable on another cluster,
+            // exactly as source-id membership removal does.
+            await tree.OrFlag(key).DisableAsync(cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads every memory key currently recorded as embedded. Subtracting the live
+    /// memory keys from this set yields exactly the orphaned embeddings - entries
+    /// that expired by their own time-to-live, which no code path observes.
+    /// </summary>
+    /// <param name="repoId">The repository identity.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The recorded memory keys; empty when none are embedded.</returns>
+    public async Task<IReadOnlySet<string>> LoadEmbeddedMemoryKeysAsync(
+        string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
+        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+
+        await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // A disabled flag is a removal that still carries causal history, so
+            // only an enabled one counts as a live embedding.
+            if (!JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
+                || !TryReadSourceId(entry.Key, out var collection)
+                || !collection.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            keys.Add(collection[MemoryKeyMarkerPrefix.Length..]);
+        }
+
+        return keys;
+    }
+
+    private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
+        => GuardMembershipAsync(async () =>        {
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var key = RepoContextKeys.VectorMembership(repoId, sourceId);
 
@@ -702,8 +824,10 @@ internal sealed class RepoContextVectorWriter
             {
                 contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
             }
-            else
+            else if (!collection.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
             {
+                // A memory-key marker shares this tree but is keyed by a record key,
+                // not a source id, so it must never be folded into the embedded set.
                 embedded.Add(collection);
             }
         }
@@ -785,8 +909,10 @@ internal sealed class RepoContextVectorWriter
                 {
                     contentless.Add(collection[ContentlessMarkerPrefix.Length..]);
                 }
-                else
+                else if (!collection.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
                 {
+                    // A memory-key marker shares this tree but is keyed by a record
+                    // key, not a source id, so it is never an embedded member.
                     embedded.Add(collection);
                 }
             }
@@ -854,7 +980,8 @@ internal sealed class RepoContextVectorWriter
             {
                 if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
                     && TryReadSourceId(entry.Key, out var sourceId)
-                    && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+                    && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal)
+                    && !sourceId.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
                 {
                     members.Add(sourceId);
                 }
@@ -897,7 +1024,8 @@ internal sealed class RepoContextVectorWriter
             {
                 if (JsonLatticeSerializer<OrFlag>.Default.Deserialize(entry.Value).IsEnabled
                     && TryReadSourceId(entry.Key, out var sourceId)
-                    && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal))
+                    && !sourceId.StartsWith(ContentlessMarkerPrefix, StringComparison.Ordinal)
+                    && !sourceId.StartsWith(MemoryKeyMarkerPrefix, StringComparison.Ordinal))
                 {
                     enabled++;
                 }

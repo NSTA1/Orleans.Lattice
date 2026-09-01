@@ -529,6 +529,7 @@ internal sealed class RepoContextStore
         }
 
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        await InvalidateMemoryVectorAsync(repoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextRememberResult
         {
             Key = key,
@@ -541,6 +542,48 @@ internal sealed class RepoContextStore
             LinksAdded = linksAdded,
             LinksRemoved = linksRemoved,
         };
+    }
+
+    /// <summary>
+    /// Retires the embedding of a memory entry that has just been written, so the
+    /// vector plane never ranks an entry by text it no longer carries.
+    /// <para>
+    /// This is the change signal the reconcile cannot derive for itself. Memory is
+    /// written through the tools rather than the repository walk, so no per-pass
+    /// changed set reaches the ingestor and its back-fill - which embeds any entry
+    /// with no live vector - would otherwise cover only brand-new entries. A
+    /// REVISED entry already has a vector, so it would keep ranking on its
+    /// pre-revision text indefinitely; a FORGOTTEN one would linger in the
+    /// membership tally.
+    /// </para>
+    /// <para>
+    /// Retiring on write closes both without a digest, a dirty-set, or any new
+    /// persisted state: the entry simply looks un-embedded again, and the existing
+    /// back-fill re-embeds it from its current text on the next reconcile (or, for
+    /// a forget, finds no record and leaves it retired). The entry is briefly
+    /// unreachable on the semantic path in between, which is the honest failure
+    /// direction - a short absence that self-corrects, rather than a confident hit
+    /// ranked on text the entry no longer has.
+    /// </para>
+    /// <para>
+    /// Best-effort by design: retirement only deletes stored vector records, so it
+    /// needs no embedder, and a failure here must not fail the caller's write. The
+    /// capture is the durable act; the vector is a derived projection that the
+    /// always-on sweep reconciles anyway.
+    /// </para>
+    /// </summary>
+    private async Task InvalidateMemoryVectorAsync(
+        string repoId, string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _vectorWriter.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+            await _vectorWriter.UnmarkMemoryEmbeddedAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Swallowed deliberately: see the best-effort note above.
+        }
     }
 
     /// <summary>
@@ -614,6 +657,7 @@ internal sealed class RepoContextStore
             await tree.SetAsync(key, patch.Merged, cancellationToken).ConfigureAwait(false);
         }
 
+        await InvalidateMemoryVectorAsync(parsed.RepoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextUpdateResult
         {
             Key = key,
@@ -625,7 +669,6 @@ internal sealed class RepoContextStore
             LinksRemoved = patch.LinksRemoved,
         };
     }
-
     /// <summary>
     /// Forgets the entry at <paramref name="key"/>: a hard delete removes it
     /// immediately; a soft lapse re-writes it with a short time-to-live so it
@@ -649,6 +692,7 @@ internal sealed class RepoContextStore
         if (!lapse)
         {
             var deleted = await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
+            await InvalidateMemoryVectorAsync(parsed.RepoId, key, cancellationToken).ConfigureAwait(false);
             return new RepoContextForgetResult
             {
                 Key = key,
@@ -695,6 +739,7 @@ internal sealed class RepoContextStore
         }
 
         var lapsed = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
+        await InvalidateMemoryVectorAsync(parsed.RepoId, key, cancellationToken).ConfigureAwait(false);
         return new RepoContextForgetResult
         {
             Key = key,

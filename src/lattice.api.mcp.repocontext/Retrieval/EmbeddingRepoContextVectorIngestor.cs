@@ -353,6 +353,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var prefix = RepoContextKeys.MemoryPrefix(repoId);
         var sources = new List<EmbeddingSource>();
 
+        // Every memory key that is live right now. Collected during the same walk
+        // that selects what to embed, so the orphan sweep below costs one extra
+        // set rather than a second pass over the store.
+        var liveKeys = new HashSet<string>(StringComparer.Ordinal);
+
         string? token = null;
         do
         {
@@ -367,6 +372,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 if (record.Value is not null)
                 {
                     pageKeys.Add(record.Key);
+                    liveKeys.Add(record.Key);
                 }
             }
 
@@ -421,7 +427,75 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
-        return await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken).ConfigureAwait(false);
+        await SweepOrphanedMemoryVectorsAsync(repoId, liveKeys, cancellationToken).ConfigureAwait(false);
+
+        var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Record what is now embedded so a later pass can compute the orphan set.
+        // Written after the store so a marker never claims an embedding that did
+        // not land; a source whose batch failed stays unmarked and is retried.
+        if (sources.Count > 0)
+        {
+            var marked = new List<string>(sources.Count);
+            foreach (var source in sources)
+            {
+                marked.Add(source.SourceKey);
+            }
+
+            await _writer.MarkMemoryEmbeddedAsync(repoId, marked, cancellationToken).ConfigureAwait(false);
+        }
+
+        return embedded;
+    }
+
+    /// <summary>
+    /// Retires the embeddings of memory entries that no longer exist.
+    /// <para>
+    /// An entry removed through <c>forget</c> has its vector retired on the spot by
+    /// the store, but an entry that simply <b>expires by its own time-to-live</b> -
+    /// a coordination handoff written with <c>ttlSeconds</c>, say - vanishes with no
+    /// code path observing it. Without this sweep its vector would survive its
+    /// entry indefinitely, inflating the membership tally and spending ranking slots
+    /// on a key that no longer hydrates. Vectorising memory is only a complete
+    /// feature with this half present.
+    /// </para>
+    /// <para>
+    /// The orphan set is exactly (recorded - live), both of which this pass already
+    /// holds: the recorded keys come from one small add-wins record, and the live
+    /// keys were collected during the enumeration above. So the sweep adds one read
+    /// and touches only entries that actually vanished.
+    /// </para>
+    /// </summary>
+    private async Task SweepOrphanedMemoryVectorsAsync(
+        string repoId, HashSet<string> liveKeys, CancellationToken cancellationToken)
+    {
+        var recorded = await _writer.LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken).ConfigureAwait(false);
+        if (recorded.Count == 0)
+        {
+            return;
+        }
+
+        var swept = 0;
+        foreach (var key in recorded)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (liveKeys.Contains(key))
+            {
+                continue;
+            }
+
+            await _writer.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+            await _writer.UnmarkMemoryEmbeddedAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+            swept++;
+        }
+
+        if (swept > 0)
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: retired {Swept} orphaned memory embedding(s) whose entries no longer exist.",
+                repoId, swept);
+        }
     }
 
     /// <summary>
