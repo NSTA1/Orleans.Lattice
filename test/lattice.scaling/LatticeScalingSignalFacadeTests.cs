@@ -40,7 +40,7 @@ public sealed class LatticeScalingSignalFacadeTests
 
     private sealed class FakeSplit(bool inFlight) : ISplitActivityProbe
     {
-        public bool AnySplitInFlight() => inFlight;
+        public ValueTask<bool> AnySplitInFlightAsync(CancellationToken cancellationToken) => ValueTask.FromResult(inFlight);
     }
 
     private static (LatticeScalingSignal Facade, MutableTimeProvider Clock) Build(

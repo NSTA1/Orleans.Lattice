@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Orleans.Hosting;
 
 namespace Orleans.Lattice.Scaling;
@@ -20,8 +22,9 @@ public static partial class LatticeScalingServiceCollectionExtensions
     /// (a silo-scoped hosted service that samples cluster-aggregate compute
     /// pressure on a timer and caches the resulting <see cref="ScalingSignal"/>),
     /// its compute-axis collector and cluster runtime-statistics source, the
-    /// storage-axis collector (#1187) and its WAL storage-state source, a no-op
-    /// split-activity probe, binds
+    /// storage-axis collector (#1187) and its WAL storage-state source, the
+    /// split-activity probe that suppresses scale-in while an adaptive shard
+    /// split is in flight (#1224), binds
     /// <see cref="LatticeScalingSignalOptions"/>, and ensures a
     /// <see cref="TimeProvider"/> is available for sampling timestamps.
     /// <para>
@@ -68,12 +71,19 @@ public static partial class LatticeScalingServiceCollectionExtensions
 
         // Axis collectors and probes. The compute collector is #1186; the storage
         // collector (#1187) reads the WAL storage state through its own source
-        // seam. The split probe remains a no-op here. All use TryAdd so a host may
-        // substitute richer implementations.
+        // seam; the split probe (#1224) reads cluster split activity through the
+        // core admin surface. All use TryAdd so a host may substitute richer
+        // implementations - or register NoOpSplitActivityProbe first to keep the
+        // split axis inert.
         services.TryAddSingleton<IComputePressureCollector, ComputePressureCollector>();
         services.TryAddSingleton<IWalStorageStateSource, LatticeWalStorageStateSource>();
         services.TryAddSingleton<IStoragePressureCollector, StoragePressureCollector>();
-        services.TryAddSingleton<ISplitActivityProbe, NoOpSplitActivityProbe>();
+        services.TryAddSingleton<ISplitActivityProbe>(sp =>
+            sp.GetRequiredService<IOptions<LatticeScalingSignalOptions>>().Value.SplitAwareScaleIn
+                ? new LatticeSplitActivityProbe(
+                    sp.GetService<IGrainFactory>(),
+                    sp.GetService<ILogger<LatticeSplitActivityProbe>>())
+                : new NoOpSplitActivityProbe());
 
         services.TryAddSingleton<ScalingSignalComputer>();
 

@@ -79,6 +79,100 @@ internal sealed class HotShardMonitorGrain(
     private bool _running;
 
     /// <summary>
+    /// The in-flight footprint this monitor last published to the cluster gate.
+    /// Tracked so the no-ceiling path can stay edge-triggered: it reports while
+    /// splits are in flight and issues exactly one further call to clear the
+    /// footprint once they finish, rather than heartbeating an idle zero forever.
+    /// It also tells an aborted pass whether it has an outstanding footprint to
+    /// keep alive. Reset to zero on activation, which is safe because an
+    /// unrefreshed footprint expires on its own.
+    /// </summary>
+    private int _reportedFootprint;
+
+    /// <summary>
+    /// The time-to-live to attach to this monitor's cluster-gate footprint:
+    /// a generous multiple of the sampling interval, so a single missed pass does
+    /// not prematurely expire it while a silo that stops reporting entirely still
+    /// has its share reclaimed.
+    /// </summary>
+    private static TimeSpan FootprintTtl(LatticeOptions options)
+    {
+        var sampleInterval = options.HotShardSampleInterval;
+        if (sampleInterval <= TimeSpan.Zero) sampleInterval = LatticeOptions.DefaultHotShardSampleInterval;
+        return sampleInterval * ClusterFootprintTtlSampleMultiple;
+    }
+
+    /// <summary>
+    /// Publishes this tree's in-flight footprint to the cluster gate on the
+    /// no-ceiling path, where the gate makes no admission decision and exists
+    /// only as the cluster's readable split-activity source.
+    /// <para>
+    /// Never throws. The heartbeat is pure observability, but it sits upstream of
+    /// the split triggers, so letting a transient gate failure escape would abort
+    /// the pass and start no splits at all - a storage blip would silently cost
+    /// the tree its elasticity. This mirrors the fail-open posture the reading
+    /// side takes; a missed heartbeat costs at most a footprint that expires.
+    /// </para>
+    /// </summary>
+    private async Task PublishFootprintAsync(int footprint, LatticeOptions options)
+    {
+        try
+        {
+            var gate = grainFactory.GetGrain<IClusterSplitConcurrencyGrain>(ClusterSplitConcurrencyKey);
+            await gate.ReportInFlightAsync(TreeId, footprint, FootprintTtl(options));
+            _reportedFootprint = footprint;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not publish split-activity footprint for tree {TreeId}", TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Keeps an already-published footprint alive when a pass aborts before it
+    /// can recompute the authoritative in-flight count.
+    /// <para>
+    /// Four suppressors end a pass early - auto-split disabled, the min-tree-age
+    /// grace period, a resize/reshard/merge/snapshot in progress, and a pending
+    /// bulk graft - but none of them stop splits that are already draining, since
+    /// those run on their own coordinators. Without this refresh the footprint
+    /// would lapse after its time-to-live and the split-activity source would
+    /// report an idle cluster while splits were genuinely in flight, which is the
+    /// precise failure the scale-in gate exists to prevent. Re-reporting the last
+    /// known count can only over-report for one pass if those splits have since
+    /// finished, which holds scale-in marginally longer - the safe direction -
+    /// and self-corrects on the next unsuppressed pass.
+    /// </para>
+    /// <para>
+    /// Costs nothing when no footprint is outstanding, so an idle tree is
+    /// unaffected. Routed through whichever path originally published the
+    /// footprint, so a capped tree's entry stays in the admission ledger.
+    /// </para>
+    /// </summary>
+    private async Task RefreshOutstandingFootprintAsync(LatticeOptions options)
+    {
+        if (_reportedFootprint <= 0) return;
+
+        if (options.MaxClusterConcurrentAutoSplits is { } clusterCap)
+        {
+            try
+            {
+                var gate = grainFactory.GetGrain<IClusterSplitConcurrencyGrain>(ClusterSplitConcurrencyKey);
+                await gate.AcquireSlotsAsync(
+                    TreeId, _reportedFootprint, desiredNew: 0, clusterCap, FootprintTtl(options));
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Could not refresh split footprint for tree {TreeId}", TreeId);
+            }
+
+            return;
+        }
+
+        await PublishFootprintAsync(_reportedFootprint, options);
+    }
+
+    /// <summary>
     /// Returns the monitor's first-ever activation time for this tree,
     /// loading and persisting the value on first use so it survives silo
     /// restarts. Without persistence, the
@@ -199,7 +293,11 @@ internal sealed class HotShardMonitorGrain(
     public async Task RunSamplingPassAsync()
     {
         var options = Options;
-        if (!options.AutoSplitEnabled) return;
+        if (!options.AutoSplitEnabled)
+        {
+            await RefreshOutstandingFootprintAsync(options);
+            return;
+        }
 
         var nowUtc = TimeProvider.GetUtcNow().UtcDateTime;
 
@@ -207,7 +305,11 @@ internal sealed class HotShardMonitorGrain(
         var activationUtc = await GetOrSetActivationUtcAsync(nowUtc);
 
         // Enforce the min-age grace period before allowing splits to trigger.
-        if (nowUtc - activationUtc < options.AutoSplitMinTreeAge) return;
+        if (nowUtc - activationUtc < options.AutoSplitMinTreeAge)
+        {
+            await RefreshOutstandingFootprintAsync(options);
+            return;
+        }
 
         // Suppress while bulk maintenance is in flight.
         //
@@ -228,10 +330,14 @@ internal sealed class HotShardMonitorGrain(
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            if (!await lattice.IsResizeCompleteAsync()) return;
-            if (!await lattice.IsReshardCompleteAsync()) return;
-            if (!await lattice.IsMergeCompleteAsync()) return;
-            if (!await lattice.IsSnapshotCompleteAsync()) return;
+            if (!await lattice.IsResizeCompleteAsync() ||
+                !await lattice.IsReshardCompleteAsync() ||
+                !await lattice.IsMergeCompleteAsync() ||
+                !await lattice.IsSnapshotCompleteAsync())
+            {
+                await RefreshOutstandingFootprintAsync(options);
+                return;
+            }
         }
 
         // Resolve the current shard map and list of physical shards.
@@ -283,12 +389,6 @@ internal sealed class HotShardMonitorGrain(
             await Task.WhenAll(pendingBulkTasks);
             await Task.WhenAll(splittingTasks);
 
-            // Suppress all autonomic splits if any shard has a pending bulk graft.
-            // (Bulk grafts mutate tree topology in ways the split coordinator
-            // cannot interleave with safely.)
-            for (int i = 0; i < shardCount; i++)
-                if (pendingBulkTasks[i].Result) return;
-
             // Count splits already in flight from the splitting-status results.
             // A shard reports IsSplitting==true while it is the source of an
             // unfinished split; this is our authoritative cluster-wide concurrency
@@ -304,6 +404,23 @@ internal sealed class HotShardMonitorGrain(
             var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId);
             var tenantTag = LatticeTenantLabel.ForTree(TreeId);
             LatticeMetrics.SplitInFlight.Record(inFlight, treeTag, tenantTag);
+
+            // Suppress all autonomic splits if any shard has a pending bulk graft.
+            // (Bulk grafts mutate tree topology in ways the split coordinator
+            // cannot interleave with safely.) Splits already draining are unaffected
+            // by the graft, so publish the authoritative count we just measured
+            // before bailing out rather than letting the footprint lapse.
+            for (int i = 0; i < shardCount; i++)
+            {
+                if (!pendingBulkTasks[i].Result) continue;
+
+                if (options.MaxClusterConcurrentAutoSplits is null && (inFlight > 0 || _reportedFootprint > 0))
+                    await PublishFootprintAsync(inFlight, options);
+                else
+                    await RefreshOutstandingFootprintAsync(options);
+
+                return;
+            }
 
             var maxConcurrent = options.MaxConcurrentAutoSplits;
             if (maxConcurrent < 1) maxConcurrent = 1;
@@ -393,27 +510,42 @@ internal sealed class HotShardMonitorGrain(
             // How many splits this tree would start under its own per-tree cap.
             var desiredNew = Math.Min(slotsAvailable, candidates.Count);
 
-            // Cluster-wide admission gate (opt-in). When enabled, report this tree's
-            // authoritative in-flight count every pass - even when it wants no new
-            // splits - so other trees see this tree's drain footprint, and receive a
-            // grant of new slots against the remaining cluster headroom. When the
-            // option is null the gate grain is never consulted, so the disabled path
-            // issues no extra RPC and behaves exactly as before.
+            // Cluster-wide admission gate. When a ceiling is configured, report this
+            // tree's authoritative in-flight count every pass - even when it wants no
+            // new splits - so other trees see this tree's drain footprint, and
+            // receive a grant of new slots against the remaining cluster headroom.
+            //
+            // With no ceiling configured the gate makes no admission decision, but it
+            // is still the cluster's readable split-activity source (surfaced by
+            // ILatticeAdmin.GetSplitActivityAsync and consumed by the scaling
+            // package's scale-in safety gate), so the footprint is published anyway.
+            // That publication is edge-triggered - only while splits are actually in
+            // flight, plus one final call to clear a footprint we previously reported
+            // - so an idle tree issues no extra RPC at all and the disabled path
+            // behaves exactly as before in steady state.
             int triggerCount;
             var clusterDeferred = 0;
             if (options.MaxClusterConcurrentAutoSplits is { } clusterCap)
             {
-                var sampleInterval = options.HotShardSampleInterval;
-                if (sampleInterval <= TimeSpan.Zero) sampleInterval = LatticeOptions.DefaultHotShardSampleInterval;
                 var gate = grainFactory.GetGrain<IClusterSplitConcurrencyGrain>(ClusterSplitConcurrencyKey);
                 var granted = await gate.AcquireSlotsAsync(
-                    TreeId, inFlight, desiredNew, clusterCap, sampleInterval * ClusterFootprintTtlSampleMultiple);
+                    TreeId, inFlight, desiredNew, clusterCap, FootprintTtl(options));
                 triggerCount = granted;
                 clusterDeferred = desiredNew - granted;
+                _reportedFootprint = inFlight + granted;
             }
             else
             {
                 triggerCount = desiredNew;
+
+                // Report the post-trigger count, so splits started by this very pass
+                // are visible to the safety gate immediately rather than one sampling
+                // interval later. Over-reporting (a trigger that the coordinator
+                // rejects as busy) is the conservative direction - it holds scale-in
+                // slightly longer - and self-corrects on the next pass.
+                var footprint = inFlight + triggerCount;
+                if (footprint > 0 || _reportedFootprint > 0)
+                    await PublishFootprintAsync(footprint, options);
             }
 
             // Candidates the tree could not start this pass: those beyond its own

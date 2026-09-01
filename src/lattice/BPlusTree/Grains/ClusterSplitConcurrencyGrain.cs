@@ -9,8 +9,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// Caps the aggregate number of concurrently in-flight autonomic splits across
 /// every tree at the configured <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>
-/// ceiling. The gate is only ever reached when an operator opts in; with the
-/// option left at its <c>null</c> default no monitor consults it.
+/// ceiling. The ceiling is only ever applied when an operator opts in; with the
+/// option left at its <c>null</c> default no monitor requests a slot, so nothing
+/// is ever denied.
 /// </para>
 /// <para>
 /// It is driven by per-tree heartbeats: each enabled monitor reports its
@@ -19,6 +20,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// footprint carries a time-to-live, so a silo that crashes and stops reporting
 /// has its share reclaimed on expiry - a crashed split can never permanently
 /// consume cluster budget.
+/// </para>
+/// <para>
+/// The same footprints double as the cluster's readable split-activity source.
+/// Monitors publish through <see cref="ReportInFlightAsync"/> even with no
+/// ceiling configured (edge-triggered, so an idle tree calls nothing), and
+/// <see cref="GetActivityAsync"/> reduces them into the snapshot that
+/// <c>ILatticeAdmin.GetSplitActivityAsync</c> serves. Those observation-only
+/// footprints live in their own list and never consume admission headroom.
 /// </para>
 /// Key format: singleton integer key <c>0</c>.
 /// </summary>
@@ -37,38 +46,107 @@ internal sealed class ClusterSplitConcurrencyGrain(
         if (currentInFlight < 0) currentInFlight = 0;
         if (desiredNew < 0) desiredNew = 0;
 
+        var grant = await RecordFootprintAsync(treeId, currentInFlight, desiredNew, clusterCap, ttl);
+
+        if (grant > 0)
+            logger.LogDebug(
+                "Cluster split gate granted {Grant}/{Desired} new split(s) to tree {TreeId} (in-flight now {Footprint}, cap {ClusterCap})",
+                grant, desiredNew, treeId, currentInFlight + grant, clusterCap);
+
+        return grant;
+    }
+
+    /// <inheritdoc />
+    public Task ReportInFlightAsync(string treeId, int inFlight, TimeSpan ttl)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        if (inFlight < 0) inFlight = 0;
+
+        // desiredNew: 0 makes this a pure heartbeat - the footprint is refreshed
+        // (or cleared, when inFlight is zero) and nothing can be granted, so the
+        // ceiling argument is irrelevant on this path.
+        return RecordFootprintAsync(treeId, inFlight, desiredNew: 0, clusterCap: 0, ttl, observationOnly: true);
+    }
+
+    /// <summary>
+    /// Reconciles the footprint lists (dropping the caller's prior entry from
+    /// both and any expired ones), records the caller's refreshed footprint in
+    /// the list matching <paramref name="observationOnly"/>, and returns how many
+    /// of <paramref name="desiredNew"/> fit under the remaining headroom.
+    /// <para>
+    /// Headroom is computed from the admission list alone. Observation-only
+    /// footprints come from trees that never opted into the cluster ceiling, so
+    /// counting them would let an uncapped tree throttle a capped one; they are
+    /// tracked purely so the readable split-activity queries see the whole
+    /// cluster. The caller's prior entry is removed from *both* lists so a tree
+    /// that switches modes (an operator setting or clearing the ceiling) cannot
+    /// leave a duplicate behind.
+    /// </para>
+    /// </summary>
+    private async Task<int> RecordFootprintAsync(
+        string treeId,
+        int currentInFlight,
+        int desiredNew,
+        int clusterCap,
+        TimeSpan ttl,
+        bool observationOnly = false)
+    {
         var nowUtc = DateTime.UtcNow;
-        var footprints = state.State.Footprints;
+        var admission = state.State.Footprints;
+        var observed = state.State.ObservedFootprints;
 
         // Reconcile: drop this tree's prior footprint (about to be re-reported)
         // and any expired footprints (crashed silos), summing the surviving
-        // other-tree in-flight counts as we go.
-        int? oldInFlight = null;
+        // other-tree in-flight counts from the admission list as we go.
+        var oldInFlight = 0;
+        var hadOld = false;
         var otherInFlight = 0;
-        var expiredRemoved = false;
-        for (int i = footprints.Count - 1; i >= 0; i--)
+        var changed = false;
+
+        for (int i = admission.Count - 1; i >= 0; i--)
         {
-            var fp = footprints[i];
+            var fp = admission[i];
             if (fp.TreeId == treeId)
             {
                 oldInFlight = fp.InFlight;
-                footprints.RemoveAt(i);
+                hadOld = true;
+                admission.RemoveAt(i);
                 continue;
             }
             if (fp.ExpiryUtc <= nowUtc)
             {
-                footprints.RemoveAt(i);
-                expiredRemoved = true;
+                admission.RemoveAt(i);
+                changed = true;
                 continue;
             }
             otherInFlight += fp.InFlight;
         }
 
-        // Headroom is the ceiling less every other tree's in-flight splits and
-        // this tree's own already-running drains. Pre-existing over-subscription
-        // (drains that were admitted before the cap tightened) yields a negative
-        // headroom and simply grants nothing new - it never retroactively aborts
-        // a running split.
+        for (int i = observed.Count - 1; i >= 0; i--)
+        {
+            var fp = observed[i];
+            if (fp.TreeId == treeId)
+            {
+                // A mode switch leaves the tree's prior entry in the other list;
+                // fold it into the old-count comparison so the persist decision
+                // still sees a genuine content change.
+                oldInFlight += fp.InFlight;
+                hadOld = true;
+                observed.RemoveAt(i);
+                continue;
+            }
+            if (fp.ExpiryUtc <= nowUtc)
+            {
+                observed.RemoveAt(i);
+                changed = true;
+            }
+        }
+
+        // Headroom is the ceiling less every other *capped* tree's in-flight
+        // splits and this tree's own already-running drains. Pre-existing
+        // over-subscription (drains that were admitted before the cap tightened)
+        // yields a negative headroom and simply grants nothing new - it never
+        // retroactively aborts a running split.
         var headroom = clusterCap - otherInFlight - currentInFlight;
         var grant = desiredNew;
         if (grant > headroom) grant = headroom;
@@ -76,20 +154,18 @@ internal sealed class ClusterSplitConcurrencyGrain(
 
         var footprint = currentInFlight + grant;
         if (footprint > 0)
-            footprints.Add(new TreeSplitFootprint(treeId, footprint, nowUtc + ttl));
+        {
+            var entry = new TreeSplitFootprint(treeId, footprint, nowUtc + ttl);
+            (observationOnly ? observed : admission).Add(entry);
+        }
 
         // Persist only when the material content changed (a footprint appeared,
         // disappeared, or changed count, or a stale entry was reclaimed). A
         // steady-state heartbeat that merely refreshes an unchanged footprint's
         // expiry is kept in memory - losing that refresh across a rare gate
         // reactivation only causes a one-pass undercount that self-heals.
-        var contentChanged = expiredRemoved || (oldInFlight ?? 0) != footprint;
+        var contentChanged = changed || (hadOld ? oldInFlight : 0) != footprint;
         if (contentChanged) await state.WriteStateAsync();
-
-        if (grant > 0)
-            logger.LogDebug(
-                "Cluster split gate granted {Grant}/{Desired} new split(s) to tree {TreeId} (in-flight now {Footprint}, other trees {OtherInFlight}, cap {ClusterCap})",
-                grant, desiredNew, treeId, footprint, otherInFlight, clusterCap);
 
         return grant;
     }
@@ -101,6 +177,35 @@ internal sealed class ClusterSplitConcurrencyGrain(
         var total = 0;
         foreach (var fp in state.State.Footprints)
             if (fp.ExpiryUtc > nowUtc) total += fp.InFlight;
+        foreach (var fp in state.State.ObservedFootprints)
+            if (fp.ExpiryUtc > nowUtc) total += fp.InFlight;
         return Task.FromResult(total);
+    }
+
+    /// <inheritdoc />
+    public Task<SplitActivityReport> GetActivityAsync()
+    {
+        var nowUtc = DateTime.UtcNow;
+        var total = 0;
+        var trees = 0;
+        Accumulate(state.State.Footprints);
+        Accumulate(state.State.ObservedFootprints);
+
+        return Task.FromResult(new SplitActivityReport
+        {
+            InFlight = total,
+            ReportingTrees = trees,
+            ObservedAt = new DateTimeOffset(nowUtc, TimeSpan.Zero),
+        });
+
+        void Accumulate(List<TreeSplitFootprint> footprints)
+        {
+            foreach (var fp in footprints)
+            {
+                if (fp.ExpiryUtc <= nowUtc || fp.InFlight <= 0) continue;
+                total += fp.InFlight;
+                trees++;
+            }
+        }
     }
 }

@@ -18,4 +18,18 @@ internal sealed class ClusterSplitConcurrencyState
 {
     /// <summary>The most recent per-tree in-flight-split heartbeat footprints, live or awaiting expiry-based reclamation.</summary>
     [Id(0)] public List<TreeSplitFootprint> Footprints { get; set; } = [];
+
+    /// <summary>
+    /// Observation-only footprints: the same shape, reported by trees that have
+    /// <em>not</em> opted into <see cref="LatticeOptions.MaxClusterConcurrentAutoSplits"/>.
+    /// <para>
+    /// Kept in a separate list because they must not participate in admission
+    /// accounting. A tree with no ceiling configured never agreed to share a
+    /// cluster budget, so counting its drains against
+    /// <see cref="Footprints"/> would let it throttle - and in the limit
+    /// permanently starve - a tree that did opt in. They are summed only by the
+    /// readable split-activity queries, which want the whole cluster's truth.
+    /// </para>
+    /// </summary>
+    [Id(1)] public List<TreeSplitFootprint> ObservedFootprints { get; set; } = [];
 }
