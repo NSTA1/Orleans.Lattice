@@ -28,6 +28,20 @@ namespace Orleans.Lattice.Explorer.UiTests;
 internal static class ExplorerPublishedAssets
 {
     /// <summary>
+    /// How long the publish is allowed to take before the fixture gives up.
+    /// <para>
+    /// The publish is fast (single-digit seconds; see <see cref="RunPublishAsync"/>), so
+    /// this bound is pure headroom for a loaded agent. It exists because an
+    /// <b>unbounded</b> wait here is the worst possible failure mode: this runs in
+    /// <c>[OneTimeSetUp]</c>, before any test reports, so a stall produces no console
+    /// output at all and <c>dotnet test --blame-hang</c> eventually aborts the whole
+    /// test run with "Test host process crashed" and no test to attribute it to. Failing
+    /// fast with the publish output in the message turns that into a readable error.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan PublishTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Publishes this test project's static web assets into a fresh temp directory and
     /// returns that directory. Uses <c>--no-build</c> so it reuses the assemblies the
     /// build step already produced (CI builds before it tests), keeping the step to a
@@ -103,14 +117,55 @@ internal static class ExplorerPublishedAssets
         startInfo.ArgumentList.Add("-o");
         startInfo.ArgumentList.Add(outputDir);
 
+        // Run MSBuild single-proc, with node reuse off, so this publish neither spawns
+        // worker nodes nor depends on finding warm ones.
+        //
+        // This is load-bearing, and it is what made the coverage lane fail. MSBuild
+        // keeps its worker nodes alive for reuse for fifteen minutes after a build. The
+        // coverage workflow builds the whole solution and then runs every test project
+        // in one job, so this suite starts either side of that fifteen-minute mark
+        // depending only on how long the earlier projects took. Inside the window the
+        // publish reused the existing nodes and finished in seconds. Outside it, the
+        // publish had to spawn a fresh worker node per core - measured at thirty
+        // processes, sixty-seven seconds, on an unloaded developer machine - from inside
+        // the vstest host, alongside coverlet instrumentation and a Chromium launch on a
+        // four-core agent. That tipped over and never returned, and because it happens in
+        // [OneTimeSetUp] the run produced no output for ten minutes until --blame-hang
+        // aborted it. Twenty-five consecutive coverage runs split on that boundary with
+        // no overlap: every run under fifteen minutes passed, every run over it hung.
+        //
+        // Single-proc costs nothing here - there is one project and --no-build means
+        // there is nothing to compile in parallel - and it is strictly faster in the cold
+        // case (measured at ten seconds, zero extra processes). Do not remove it to "let
+        // the publish parallelise"; parallelism is what broke it.
+        startInfo.ArgumentList.Add("-maxcpucount:1");
+        startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        using var timeout = new CancellationTokenSource(PublishTimeout);
+
+        string stdout;
+        string stderr;
+        try
+        {
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            stdout = await stdoutTask;
+            stderr = await stderrTask;
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw new InvalidOperationException(
+                $"'dotnet publish' of the Explorer UI-test host did not complete within "
+                + $"{PublishTimeout.TotalMinutes:0} minutes and was terminated. The UI suite "
+                + "publishes it to obtain a portable static-asset content root (see "
+                + "ExplorerPublishedAssets). This runs before any test, so an unbounded wait "
+                + "would abort the whole test run with no attributable failure.");
+        }
 
         if (process.ExitCode != 0)
         {
@@ -119,6 +174,24 @@ internal static class ExplorerPublishedAssets
                 + $"{process.ExitCode}. The UI suite publishes it to obtain a portable "
                 + "static-asset content root (see ExplorerPublishedAssets). Output:"
                 + Environment.NewLine + stdout + Environment.NewLine + stderr);
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between the check and the kill; nothing to do.
+        }
+        catch (NotSupportedException)
+        {
         }
     }
 

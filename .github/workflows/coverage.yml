@@ -11,6 +11,11 @@ name: Coverage
 on:
   push:
     branches: [main]
+  # Manual trigger. Coverage is a post-merge lane, so without this there is no way
+  # to re-run it after a transient failure, or to validate a change to the lane
+  # itself on a branch before merging it - the change would have to land on main
+  # unverified.
+  workflow_dispatch:
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
 permissions:
@@ -95,7 +100,7 @@ jobs:
         env:
           LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # Exclude the benchmark/throughput test projects: microbench runs
           # BenchmarkDotNet harnesses (not library coverage) and
           # azure-throughput-silo is not part of Orleans.Lattice.slnx, so it is
@@ -111,6 +116,16 @@ jobs:
           mapfile -t testProjs < <(find test -type f -name '*Tests.csproj' \
             -not -path '*/microbench/*' \
             -not -path '*/azure-throughput-silo/*' | sort)
+          # Run every project even when one fails, then fail the step at the end.
+          #
+          # This loop used to run under `set -e`, so the first failing project
+          # aborted the whole step: every later project went unmeasured and the
+          # Codecov upload was skipped entirely, leaving the badge frozen on the
+          # last good commit. One flaky suite therefore discarded the coverage of
+          # all forty-odd others, which is the opposite of what this lane is for.
+          # Collecting failures and reporting them together keeps a green project's
+          # coverage even when a sibling is broken, and still fails the run.
+          failed=()
           for proj in "${testProjs[@]}"; do
             name=$(basename "$proj" .csproj)
             echo "::group::Coverage: $name"
@@ -121,16 +136,27 @@ jobs:
             # cores the deterministic unit tests already exercise, so they are
             # excluded here too. The UI category is deliberately NOT excluded -
             # browsers are installed above precisely so those paths are counted.
-            dotnet test "$proj" --no-build --configuration Release \
+            if ! dotnet test "$proj" --no-build --configuration Release \
               --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
               --collect:"XPlat Code Coverage" \
               --results-directory "coverage/${name}" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}.trx"
+              --logger "trx;LogFileName=${name}.trx"; then
+              failed+=("$name")
+              echo "::error::Coverage run failed for ${name}."
+            fi
             echo "::endgroup::"
           done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::Coverage failed for ${#failed[@]} project(s): ${failed[*]}"
+            exit 1
+          fi
 
       - name: Upload coverage to Codecov
+        # Upload whatever was measured even when a project failed above. The
+        # point of this lane is to keep main's coverage current; discarding a
+        # complete report because one suite broke is how the badge went stale.
+        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v7
         with:
           # Add a CODECOV_TOKEN repository secret (from the Codecov project
