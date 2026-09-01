@@ -101,10 +101,26 @@ public sealed class DeepLinkJourneyTests : JourneyTestBase
         var fresh = await OpenAtAsync(shared.TrimStart('/'), ExpandedWidth);
         await ExplorerShell.SignInAsync(fresh, JourneyWorld.PlatformAdmin);
 
-        await Assertions
-            .Expect(fresh.Locator(JourneyShell.SelectedCatalogRowSelector))
-            .ToContainTextAsync(JourneyCatalogReader.OrdersTree);
+        // The surface first, then the catalog's marking, so a partial adoption - the
+        // address and the detail panel agreeing while the catalog still shows nothing
+        // selected - is distinguishable from the tree never opening at all.
         await Assertions.Expect(fresh.Locator(JourneyShell.DetailTabSelector).First).ToBeVisibleAsync();
+
+        try
+        {
+            await Assertions
+                .Expect(fresh.Locator(JourneyShell.SelectedCatalogRowSelector))
+                .ToContainTextAsync(JourneyCatalogReader.OrdersTree);
+        }
+        catch (PlaywrightException ex)
+        {
+            Assert.Fail(
+                "The address was reproduced and the detail panel opened, but the catalog does not "
+                + $"mark '{JourneyCatalogReader.OrdersTree}' as selected, so the shared link lands on "
+                + "the surface without showing what it is a surface of."
+                + Environment.NewLine + await JourneyShell.DescribeCatalogStateAsync(fresh)
+                + Environment.NewLine + ex.Message);
+        }
     }
 }
 
