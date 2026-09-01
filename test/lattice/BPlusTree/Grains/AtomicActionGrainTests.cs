@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// live-runtime paths are covered by the integration fixture.
 /// </summary>
 [TestFixture]
-public sealed class AtomicActionGrainTests
+public sealed partial class AtomicActionGrainTests
 {
     private const string OperationId = "op-1609";
 

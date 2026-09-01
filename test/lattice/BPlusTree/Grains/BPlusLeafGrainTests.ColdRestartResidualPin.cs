@@ -438,8 +438,8 @@ public partial class BPlusLeafGrainTests
         // partition is checkpointed (correct) stamped the blob's SCALAR
         // SnapshotOffset from partition 0's checkpoint, which is the -1 "idle"
         // sentinel when a leaf's live data hashes only to a non-zero partition.
-        // The REAL LeafSnapshotStorageGrain.LoadAsync treated SnapshotOffset < 0
-        // as "nothing captured" and returned null, so on cold restart the SOLE
+        // The REAL LeafSnapshotStorageGrain.LoadAsync treated a negative
+        // SnapshotOffset as "nothing captured" and returned null, so on cold restart the SOLE
         // durable copy of the busy partition's checkpointed prefix was discarded -
         // and the coverage-gated WAL GC had already trimmed [0, checkpoint], so
         // the prefix was unrecoverable: SILENT LOSS. The three stubbed-LoadAsync
@@ -474,22 +474,25 @@ public partial class BPlusLeafGrainTests
 
         await warm.CaptureSnapshotAsync();
 
-        // The durably-written blob carries the partition-0-idle scalar sentinel
-        // yet DOES cover the busy partition per-partition. This is the exact
-        // shape the load guard must not discard.
-        Assert.That(snapshotState.State.SnapshotOffset, Is.EqualTo(-1L),
-            "precondition: partition 0 is idle so the blob's scalar offset is the -1 sentinel");
+        // The durably-written blob carries no partition-0 coverage at all (an
+        // unset scalar) yet DOES cover the busy partition per-partition. This is
+        // the exact shape the load guard must not discard.
+        Assert.That(snapshotState.State.SnapshotOffset, Is.Null,
+            "precondition: partition 0 is idle, so the capture persists the scalar offset as unset "
+            + "(null). It was the -1 sentinel until issue 1888 made the member nullable; a capture "
+            + "now normalises 'nothing covered' to null so a real covered offset of 0 stays "
+            + "distinguishable from it.");
         Assert.That(snapshotState.State.SnapshotOffsetsByPartition, Is.Not.Null);
         Assert.That(snapshotState.State.SnapshotOffsetsByPartition![dataPartition], Is.EqualTo(3L),
             "precondition: the blob DOES cover the busy non-zero partition at its checkpoint");
 
-        // RED (pre-fix): the real load guard sees SnapshotOffset < 0 and returns
+        // RED (pre-fix): the real load guard sees a negative scalar offset and returns
         // null, discarding the only durable copy. GREEN (post-fix): a
         // per-partition-covered blob is loadable.
         var loaded = await realStore.LoadAsync(default);
         Assert.That(loaded, Is.Not.Null,
-            "a per-partition-covered blob MUST be loadable even when partition 0's scalar offset is the -1 " +
-            "sentinel; otherwise cold restart discards the sole durable copy and the coverage-gated GC has " +
+            "a per-partition-covered blob MUST be loadable even when partition 0 has no covered " +
+            "offset; otherwise cold restart discards the sole durable copy and the coverage-gated GC has " +
             "already trimmed the prefix -> silent loss");
 
         // End-to-end no-loss: a COLD leaf sharing the same durable store

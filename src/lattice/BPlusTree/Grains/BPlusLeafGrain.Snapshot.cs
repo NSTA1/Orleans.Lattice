@@ -168,7 +168,7 @@ internal sealed partial class BPlusLeafGrain
         if (perPartition is null || perPartition.Length == 0)
         {
             // Legacy blob: only partition 0 coverage is known.
-            perPartition = new[] { blob.SnapshotOffset };
+            perPartition = new[] { blob.ScalarOffsetOrSentinel() };
         }
 
         var current = _durableSnapshotOffsetsByPartition;
@@ -307,7 +307,7 @@ internal sealed partial class BPlusLeafGrain
 
             var blob = new LeafSnapshotBlob
             {
-                SnapshotOffset = checkpoint,
+                SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(checkpoint),
                 Rows = legacyRows,
                 EncodedRows = encodedRows,
                 CapturedAtTicks = DateTime.UtcNow.Ticks,
@@ -626,7 +626,7 @@ internal sealed partial class BPlusLeafGrain
         RecordDurableSnapshotCoverage(blob);
 
         var checkpoint = state.State.ProjectionCheckpointOffset;
-        if (blob.SnapshotOffset <= checkpoint)
+        if (blob.ScalarOffsetOrSentinel() <= checkpoint)
         {
             // The snapshot is at or behind the persisted partition-0
             // checkpoint. Historically this always declined ("we already
@@ -727,7 +727,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            state.State.ProjectionCheckpointOffset = blob.SnapshotOffset;
+            state.State.ProjectionCheckpointOffset = blob.ScalarOffsetOrSentinel();
         }
 
         // Invalidate the digest so EnsureProjectionHashInitialized's

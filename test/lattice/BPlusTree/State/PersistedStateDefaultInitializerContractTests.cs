@@ -63,32 +63,6 @@ public sealed class PersistedStateDefaultInitializerContractTests
         => member.GetCustomAttributes().Any(a => a.GetType().Name == "IdAttribute");
 
     /// <summary>
-    /// Members that exhibit the hazard but whose remedy is NOT removing the
-    /// initializer, and which are therefore carried as documented exemptions rather
-    /// than silently tolerated. Both use a negative SENTINEL to mean "unset" over a
-    /// domain in which <c>0</c> is a legitimate value, so deleting the initializer
-    /// would make "unset" indistinguishable from a real zero - a semantic change, not
-    /// a repair. The correct fix for each is to make the member nullable so that
-    /// absent means <see langword="null"/> means unset; that is a separate change with
-    /// its own blast radius and is tracked separately.
-    /// <list type="bullet">
-    /// <item><description><c>AtomicActionState.FailedStepIndex</c> (<c>-1</c> = no fault):
-    /// a saga that faults on step <c>0</c> writes <c>0</c>, which is omitted, and reloads
-    /// as <c>-1</c> - reporting an un-faulted saga and feeding the compensation
-    /// decision.</description></item>
-    /// <item><description><c>LeafSnapshotBlob.SnapshotOffset</c> (<c>-1</c> = nothing
-    /// captured): a snapshot consistent through WAL offset <c>0</c> writes <c>0</c>,
-    /// which is omitted, and reloads as "nothing captured".</description></item>
-    /// </list>
-    /// This list is a subset gate, not a suppression: any NEW violation fails the test.
-    /// </summary>
-    private static readonly HashSet<string> DocumentedSentinelExemptions = new(StringComparer.Ordinal)
-    {
-        "AtomicActionState.FailedStepIndex",
-        "LeafSnapshotBlob.SnapshotOffset",
-    };
-
-    /// <summary>
     /// Every serialized VALUE-typed member of a persisted state POCO must equal
     /// <c>default(T)</c> on a freshly constructed instance, so that a member the
     /// storage serializer omitted (because it was written as the type default)
@@ -96,6 +70,16 @@ public sealed class PersistedStateDefaultInitializerContractTests
     /// value. Reference-typed members are exempt: their default is
     /// <see langword="null"/>, and an initializer such as <c>= []</c> is not the
     /// default and is therefore never omitted.
+    /// <para>
+    /// This gate carries no exemptions. The two negative-sentinel members it once
+    /// named - <c>AtomicActionState.FailedStepIndex</c> and
+    /// <c>LeafSnapshotBlob.SnapshotOffset</c> - are nullable as of issue 1888, so
+    /// their fresh-instance value is <see langword="null"/>, which IS
+    /// <c>default(T)</c> for a <see cref="Nullable{T}"/>. That is the whole remedy:
+    /// where <c>0</c> is a legitimate value the member becomes nullable, so absent
+    /// means <see langword="null"/> means unset and a written <c>0</c> is no longer
+    /// a default the serializer may drop.
+    /// </para>
     /// </summary>
     [Test]
     public void Persisted_state_value_members_must_equal_the_type_default_on_a_fresh_instance()
@@ -112,7 +96,6 @@ public sealed class PersistedStateDefaultInitializerContractTests
                 if (!HasIdAttribute(property)) continue;
                 if (!property.CanRead) continue;
                 if (!property.PropertyType.IsValueType) continue;
-                if (DocumentedSentinelExemptions.Contains($"{type.Name}.{property.Name}")) continue;
 
                 var actual = property.GetValue(instance);
                 var expected = Activator.CreateInstance(property.PropertyType);
