@@ -223,8 +223,8 @@ public sealed partial class AccessibilityStructureTests
     /// The tab the strip currently gives keyboard focus to.
     /// </summary>
     /// <remarks>
-    /// Prefers the actually-focused element and falls back to the tab carrying the
-    /// roving <c>tabindex="0"</c>. In the tabs pattern those are the same tab: the
+    /// Reads the tab carrying the roving
+    /// <c>tabindex="0"</c>, corroborated by the focused element. In the tabs pattern those are the same tab: the
     /// strip moves keyboard focus BY moving the roving tabindex, and the accompanying
     /// <c>element.focus()</c> is a best-effort browser affordance. A headless CI runner
     /// does not always honour that call even though the widget performed correctly -
@@ -248,14 +248,21 @@ public sealed partial class AccessibilityStructureTests
                     `[role=tablist][aria-label="${label}"]`);
                 if (!strip) { return null; }
 
-                const active = document.activeElement;
-                if (active && active.getAttribute('role') === 'tab' && strip.contains(active)) {
-                    return id(active);
-                }
+                // The roving tabindex is the widget's own statement of which tab it
+                // gives keyboard focus to, and is what assistive technology follows,
+                // so it is the authority here. document.activeElement is only
+                // corroboration: a headless runner does not always honour the
+                // accompanying element.focus(), and preferring it would report the
+                // runner's behaviour rather than the widget's.
+                // Scoped to this strip, because every strip carries its own roving
+                // tabindex and an unscoped query would report a different one's.
+                const roving = strip.querySelector('[role=tab][tabindex="0"]');
+                if (roving) { return id(roving); }
 
-                // Scoped to this strip: every strip carries its own roving tabindex,
-                // so an unscoped query would report a different strip's focus.
-                return id(strip.querySelector('[role=tab][tabindex="0"]'));
+                const active = document.activeElement;
+                return active && active.getAttribute('role') === 'tab' && strip.contains(active)
+                    ? id(active)
+                    : null;
             }
             """,
             stripLabel);
