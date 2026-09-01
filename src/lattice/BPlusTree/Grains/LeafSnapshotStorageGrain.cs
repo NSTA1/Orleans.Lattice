@@ -53,7 +53,7 @@ internal sealed class LeafSnapshotStorageGrain(
     /// </summary>
     private static bool HasCapturedPrefix(LeafSnapshotBlob blob)
     {
-        if (blob.SnapshotOffset >= 0)
+        if (blob.ScalarOffsetOrSentinel() >= 0)
         {
             return true;
         }
@@ -215,7 +215,7 @@ internal sealed class LeafSnapshotStorageGrain(
 
         return new LeafSnapshotBlob
         {
-            SnapshotOffset = mergedOffsets[0],
+            SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(mergedOffsets[0]),
             Rows = encodeBinary ? Array.Empty<LeafSnapshotRow>() : rows,
             EncodedRows = encodeBinary ? LeafSnapshotCodec.Encode(rows) : null,
             CapturedAtTicks = Math.Max(existing.CapturedAtTicks, incoming.CapturedAtTicks),
@@ -249,7 +249,7 @@ internal sealed class LeafSnapshotStorageGrain(
         {
             return perPartition[partition];
         }
-        return partition == 0 ? blob.SnapshotOffset : -1L;
+        return partition == 0 ? blob.ScalarOffsetOrSentinel() : -1L;
     }
 
     /// <inheritdoc />
@@ -257,8 +257,8 @@ internal sealed class LeafSnapshotStorageGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // SnapshotOffset == -1 is the "nothing captured" sentinel baked into
-        // LeafSnapshotBlob's default, but the scalar only describes partition 0.
+        // A null (or legacy -1) SnapshotOffset is the "nothing captured" reading,
+        // but the scalar only describes partition 0.
         // A blob captured for a leaf whose live data is in a non-zero partition
         // (partition 0 idle) carries a -1 scalar yet a >= 0 per-partition slot;
         // it is loadable and MUST NOT be discarded (see HasCapturedPrefix). A

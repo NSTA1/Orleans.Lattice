@@ -65,10 +65,21 @@ internal sealed class AtomicActionState
     [Id(3)] public List<AtomicActionStepStatus> StepStatuses { get; set; } = [];
 
     /// <summary>
-    /// The zero-based index of the forward step that faulted, or <c>-1</c> when no
-    /// forward fault has occurred.
+    /// The zero-based index of the forward step that faulted, or
+    /// <see langword="null"/> when no forward fault has occurred.
+    /// <para>
+    /// Nullable rather than a <c>-1</c> sentinel (issue 1888). A grain-storage
+    /// serializer omits any member equal to <c>default(T)</c>, so under an
+    /// <c>int</c> with a <c>-1</c> initializer a saga that faulted on its FIRST
+    /// step wrote <c>0</c>, had it dropped, and reloaded as <c>-1</c> - reporting
+    /// that no forward fault had occurred. <c>0</c> is a legitimate step index
+    /// rather than an off state, so the initializer could not simply be removed;
+    /// making the member nullable is what lets "unset" and "faulted on step 0" be
+    /// two distinguishable readings. <c>default(int?)</c> is <see langword="null"/>,
+    /// so a written <c>0</c> is no longer a default the serializer may drop.
+    /// </para>
     /// </summary>
-    [Id(4)] public int FailedStepIndex { get; set; } = -1;
+    [Id(4)] public int? FailedStepIndex { get; set; }
 
     /// <summary>The message of the originating forward fault, or <c>null</c>.</summary>
     [Id(5)] public string? FailureMessage { get; set; }

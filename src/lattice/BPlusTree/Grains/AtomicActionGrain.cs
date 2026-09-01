@@ -191,7 +191,7 @@ internal sealed class AtomicActionGrain(
             state.State.StepStatuses.Add(AtomicActionStepStatus.Pending);
         }
 
-        state.State.FailedStepIndex = -1;
+        state.State.FailedStepIndex = null;
         state.State.FailureMessage = null;
         state.State.TreeWritePreImages = [];
         state.State.CompensationRetries = 0;
@@ -599,8 +599,20 @@ internal sealed class AtomicActionGrain(
             AtomicActionPhase.Compensated => AtomicActionStatus.Compensated,
             _ => AtomicActionStatus.CompensationFailed,
         };
-        return new AtomicActionOutcome(status, state.State.FailedStepIndex, state.State.FailureMessage);
+        return new AtomicActionOutcome(status, ReportedFailedStepIndex(), state.State.FailureMessage);
     }
+
+    /// <summary>
+    /// Projects the persisted <see cref="AtomicActionState.FailedStepIndex"/> onto
+    /// the public <see cref="AtomicActionOutcome.FailedStepIndex"/> contract, which
+    /// reports <c>-1</c> when no forward step faulted. The persisted member is
+    /// nullable (issue 1888) so that a fault on step <c>0</c> survives a storage
+    /// round trip that omits type defaults; the public surface is unchanged, and a
+    /// legacy state row still carrying the literal <c>-1</c> folds onto the same
+    /// reading as <see langword="null"/>.
+    /// </summary>
+    private int ReportedFailedStepIndex()
+        => state.State.FailedStepIndex is { } index && index >= 0 ? index : -1;
 
     private AtomicActionOutcome BuildTerminalOutcomeOrThrow()
     {
@@ -608,10 +620,10 @@ internal sealed class AtomicActionGrain(
         if (outcome.Status == AtomicActionStatus.CompensationFailed)
         {
             throw new CompensationFailedException(
-                $"Atomic-action saga '{OperationId}' faulted on step {state.State.FailedStepIndex} and a compensating "
+                $"Atomic-action saga '{OperationId}' faulted on step {outcome.FailedStepIndex} and a compensating "
                 + $"effect itself faulted; the saga parked in CompensationFailed and requires operator intervention. "
                 + $"Originating failure: {state.State.FailureMessage}",
-                state.State.FailedStepIndex);
+                outcome.FailedStepIndex);
         }
 
         return outcome;

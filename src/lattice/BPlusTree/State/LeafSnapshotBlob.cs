@@ -26,12 +26,54 @@ internal sealed class LeafSnapshotBlob
     /// <summary>
     /// WAL offset (under "applied through offset N inclusive"
     /// semantics) at which the projection in <see cref="Rows"/> is
-    /// consistent. A reactivation that prefers this snapshot must
+    /// consistent, or <see langword="null"/> when partition 0 has no
+    /// captured prefix. A reactivation that prefers this snapshot must
     /// resume WAL replay strictly after this offset
-    /// (<c>SnapshotOffset + 1</c>). Defaults to the "nothing
-    /// captured" sentinel <c>-1</c>.
+    /// (<c>SnapshotOffset + 1</c>).
+    /// <para>
+    /// Nullable rather than a <c>-1</c> sentinel (issue 1888). A grain-storage
+    /// serializer omits any member equal to <c>default(T)</c>, so under a
+    /// <c>long</c> with a <c>-1</c> initializer a snapshot consistent through WAL
+    /// offset <c>0</c> wrote <c>0</c>, had it dropped, and reloaded claiming
+    /// nothing had been captured - discarding the blob on exactly the cold-restart
+    /// path it exists to serve. Offset <c>0</c> is a legitimate captured prefix
+    /// rather than an off state, so the initializer could not simply be removed.
+    /// <c>default(long?)</c> is <see langword="null"/>, so a written <c>0</c> is no
+    /// longer a default the serializer may drop.
+    /// </para>
+    /// <para>
+    /// Blobs persisted before this member became nullable carry the literal
+    /// <c>-1</c> (non-default for <c>long</c>, so it was written rather than
+    /// omitted). Every reader folds a negative scalar onto the same "nothing
+    /// captured" reading as <see langword="null"/> - see
+    /// <see cref="ScalarOffsetOrSentinel"/> - so a legacy blob is read exactly as
+    /// it always was. New captures normalise "unset" to <see langword="null"/>, so
+    /// there is a single canonical representation going forward.
+    /// </para>
     /// </summary>
-    [Id(0)] public long SnapshotOffset { get; set; } = -1;
+    [Id(0)] public long? SnapshotOffset { get; set; }
+
+    /// <summary>
+    /// <see cref="SnapshotOffset"/> as the <c>-1</c>-sentinel scalar the coverage
+    /// arithmetic works in, folding <see langword="null"/> (unset) and a legacy
+    /// negative value onto the same "nothing captured" reading.
+    /// <para>
+    /// Declared as a method rather than a property on purpose, for the same reason
+    /// <see cref="HasBinaryRowPayload"/> is: the blob is persisted through
+    /// grain-storage serializers that serialise public properties reflectively, and
+    /// a computed property would be written into every persisted row.
+    /// </para>
+    /// </summary>
+    internal long ScalarOffsetOrSentinel()
+        => SnapshotOffset is { } offset && offset >= 0 ? offset : -1L;
+
+    /// <summary>
+    /// Normalises a <c>-1</c>-sentinel scalar offset into the nullable
+    /// representation this member stores, so a capture that covers nothing persists
+    /// <see langword="null"/> rather than reintroducing a negative sentinel.
+    /// </summary>
+    internal static long? NormalizeScalarOffset(long offset)
+        => offset >= 0 ? offset : null;
 
     /// <summary>
     /// Legacy canonical byte-row contents of the leaf's entry cache at
