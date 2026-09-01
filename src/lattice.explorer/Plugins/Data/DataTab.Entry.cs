@@ -147,6 +147,19 @@ public partial class DataTab
         }
         finally
         {
+            // Release the field before disposing, and only when this loop is
+            // still the owner. Without this the field dangles at a disposed
+            // source once the stream ends BY ITSELF (a server-side close or an
+            // empty feed), and the next StopFollowing - which runs from the
+            // component's Dispose - calls Cancel on it. Cancel is the one member
+            // that is not safe after Dispose, so it throws out of the renderer's
+            // own disposal and faults the circuit rather than the component.
+            // The _refreshCts loop below already does this; this one did not.
+            if (ReferenceEquals(_liveCts, cts))
+            {
+                _liveCts = null;
+            }
+
             cts.Dispose();
         }
     }
