@@ -845,6 +845,30 @@ code {
     font-size: 0.8rem;
 }
 
+/*
+    The tenant scope control's two live regions carry no class, deliberately:
+    they are announced by role, and the orphan-class gate fails any class with no
+    rule here. They are addressed as descendants instead.
+
+    :empty matters. Both regions are always present so a screen reader observes a
+    change in an existing region rather than a new one appearing - but an empty
+    flex child still earns its share of the row's gap, so without this the
+    control carried two slivers of dead space whenever it had nothing to say.
+*/
+.lx-shell-tenant-switch [role="status"],
+.lx-shell-tenant-switch [role="alert"] {
+    color: var(--lx-color-text-muted);
+}
+
+.lx-shell-tenant-switch [role="alert"] {
+    color: var(--lx-color-danger);
+}
+
+.lx-shell-tenant-switch [role="status"]:empty,
+.lx-shell-tenant-switch [role="alert"]:empty {
+    display: none;
+}
+
 .lx-shell-tenant-alltenants {
     display: inline-flex;
     align-items: center;
