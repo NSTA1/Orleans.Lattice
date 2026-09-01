@@ -105,6 +105,21 @@ this once per session entry, so the two never disagree.
 
 See [What the Explorer remembers](what-the-explorer-remembers.md).
 
+## Hosting note: the route binding
+
+The component that binds the shell's route to the browser address bar,
+`ShellRouteBinding`, is rendered by the shell's own layout, deliberately outside
+the application shell rather than by the routable page. Entering a contributed
+area swaps out the page, and a binding owned by that page would be disposed with
+it - after which nothing would perform a navigation the shell asked for and
+nothing would observe a Back or Forward.
+
+This only matters if you replace the shell's layout with your own. A custom head
+that hand-rolls a layout must render `ShellRouteBinding` within it, and must
+place it where an area change cannot unmount it. Omit it and the console still
+works, but it keeps its route in memory only: the address bar stops following
+the view, and deep links, sharing and browser history stop working with it.
+
 ## See also
 
 - [Navigation visibility policy](navigation-visibility-policy.md)
