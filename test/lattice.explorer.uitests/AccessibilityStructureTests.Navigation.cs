@@ -139,51 +139,72 @@ public sealed partial class AccessibilityStructureTests
         var page = await OpenHomeAsync(LatticeBreakpoint.Expanded);
         await ExplorerShell.AssertShellRenderedAsync(page);
 
-        var strips = page.Locator("[role=tablist]");
-        await Assertions.Expect(strips.First).ToBeAttachedAsync();
+        await Assertions.Expect(page.Locator("[role=tablist]").First).ToBeAttachedAsync();
 
-        var stripCount = await strips.CountAsync();
+        // Snapshot the strips by the name each publishes, in one read, and address them
+        // by that name afterwards.
+        //
+        // Walking [role=tablist] by index was a real race rather than a theoretical
+        // one: every strip re-renders as a gate reports and as the catalog settles, so
+        // an index resolved against one render can address a detached element in the
+        // next - whose child count then reads zero, which this case previously
+        // interpreted as "no operable strip" and reported as its own vacuity failure.
+        var strips = await page.Locator(":root").EvaluateAsync<StripSnapshot[]>(
+            """
+            () => Array.from(document.querySelectorAll('[role=tablist]')).map(s => ({
+                label: s.getAttribute('aria-label') || '',
+                vertical: s.getAttribute('aria-orientation') === 'vertical',
+                operable: s.querySelectorAll('[role=tab]:not([disabled])').length,
+            }))
+            """);
+
         var failures = new List<string>();
         var exercised = new List<string>();
 
-        for (var i = 0; i < stripCount; i++)
+        foreach (var strip in strips)
         {
-            var strip = strips.Nth(i);
-            var tabs = strip.Locator("[role=tab]:not([disabled])");
-            if (await tabs.CountAsync() < 2)
+            if (strip.Operable < 2 || strip.Label.Length == 0)
             {
                 continue;
             }
 
-            var label = await strip.GetAttributeAsync("aria-label") ?? $"strip #{i}";
-            await tabs.First.FocusAsync();
+            // The axis comes from the strip's own aria-orientation. The area rail is
+            // vertical now, and each axis deliberately leaves the other pair to the
+            // page so a rail does not swallow page scrolling - so asserting one fixed
+            // key pair would report a false failure for a strip that is behaving
+            // exactly as the pattern requires.
+            var forward = strip.Vertical ? "ArrowDown" : "ArrowRight";
+            var located = page.Locator($"[role=tablist][aria-label='{strip.Label}']");
 
-            var before = await FocusedTabIndexAsync(page, i);
-            if (before < 0)
+            await located.Locator("[role=tab]:not([disabled])").First.FocusAsync();
+
+            var before = await FocusedTabIdAsync(page);
+            if (before is null)
             {
-                failures.Add($"the '{label}' strip would not accept keyboard focus on its first tab");
+                failures.Add($"the '{strip.Label}' strip would not accept keyboard focus on its first tab");
                 continue;
             }
 
-            await page.Keyboard.PressAsync("ArrowRight");
-            var after = await FocusedTabIndexAsync(page, i);
-            exercised.Add(label);
+            await page.Keyboard.PressAsync(forward);
+            var after = await FocusedTabIdAsync(page);
+            exercised.Add($"{strip.Label} ({forward})");
 
-            if (after == before)
+            if (after is null)
             {
-                failures.Add($"the '{label}' strip did not move focus when ArrowRight was pressed "
-                    + $"(focus stayed on tab {before}), so it is not keyboard operable");
+                failures.Add($"pressing {forward} in the '{strip.Label}' strip moved focus out of the "
+                    + "strip entirely rather than to the next tab");
             }
-            else if (after < 0)
+            else if (after == before)
             {
-                failures.Add($"pressing ArrowRight in the '{label}' strip moved focus out of the strip "
-                    + "entirely rather than to the next tab");
+                failures.Add($"the '{strip.Label}' strip did not move focus when {forward} was pressed "
+                    + $"(focus stayed on '{before}'), so it is not keyboard operable");
             }
         }
 
         Assert.That(exercised, Is.Not.Empty, () =>
-            $"None of the {stripCount} tab strips had two or more operable tabs, so this case "
-            + "exercised nothing and could not tell an operable strip from an inert one.");
+            $"None of the {strips.Length} tab strips had two or more operable tabs, so this case "
+            + "exercised nothing and could not tell an operable strip from an inert one. Strips seen: ["
+            + string.Join(", ", strips.Select(s => $"{s.Label}:{s.Operable}")) + "].");
 
         Assert.That(failures, Is.Empty, () =>
             $"Exercised [{string.Join(", ", exercised)}]. A tab strip that announces role=tablist "
@@ -191,6 +212,22 @@ public sealed partial class AccessibilityStructureTests
             + "level A)."
             + Environment.NewLine + string.Join(Environment.NewLine, failures));
     }
+
+    /// <summary>
+    /// The id (or label) of the tab that currently has focus, or <see langword="null"/>
+    /// when focus is not on a tab at all. Identity rather than index, so it stays
+    /// meaningful across the re-render a key press can cause.
+    /// </summary>
+    /// <param name="page">The page to read focus from.</param>
+    private static Task<string?> FocusedTabIdAsync(IPage page) =>
+        page.Locator(":root").EvaluateAsync<string?>(
+            """
+            () => {
+                const el = document.activeElement;
+                if (!el || el.getAttribute('role') !== 'tab') { return null; }
+                return el.id || (el.textContent || '').trim();
+            }
+            """);
 
     /// <summary>
     /// Every control a keyboard user can reach must paint something while focused.
@@ -324,26 +361,6 @@ public sealed partial class AccessibilityStructureTests
                 }
             }
             """);
-
-    /// <summary>
-    /// The index of the currently focused tab within the tab strip at
-    /// <paramref name="stripIndex"/>, or a negative value when focus is not on one of
-    /// its tabs.
-    /// </summary>
-    private static Task<int> FocusedTabIndexAsync(IPage page, int stripIndex) =>
-        page.Locator(":root").EvaluateAsync<int>(
-            """
-            index => {
-                const strips = document.querySelectorAll('[role=tablist]');
-                const strip = strips[index];
-                if (!strip) {
-                    return -2;
-                }
-                const tabs = Array.from(strip.querySelectorAll('[role=tab]'));
-                return tabs.indexOf(document.activeElement);
-            }
-            """,
-            stripIndex);
 
     private const string RovingTabIndexProbe =
         """

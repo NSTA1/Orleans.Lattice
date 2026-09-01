@@ -1,4 +1,4 @@
-namespace Orleans.Lattice.Explorer.UiTests.Journeys;
+namespace Orleans.Lattice.Explorer.UiTests;
 
 /// <summary>
 /// One tab strip as read in a single DOM snapshot: the name it publishes, the axis its
@@ -21,3 +21,4 @@ internal sealed record StripSnapshot
     /// <summary>How many of the strip's tabs are not disabled.</summary>
     public int Operable { get; init; }
 }
+
