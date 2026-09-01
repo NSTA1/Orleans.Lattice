@@ -293,7 +293,22 @@ internal sealed class TreeShardConsolidationGrain(
         // Open the shadow-write window. The donor plays exactly the role a
         // split gives its source shard, so this is the split primitive reused
         // rather than a parallel implementation.
-        await donor.BeginSplitAsync(survivorShardIndex, plan.DonorSlots, plan.VirtualShardCount);
+        try
+        {
+            await donor.BeginSplitAsync(survivorShardIndex, plan.DonorSlots, plan.VirtualShardCount);
+        }
+        catch (InvalidOperationException)
+        {
+            // The donor acquired a migration record between the IsSplittingAsync
+            // pre-check above and this call. Unwind the intent just persisted
+            // rather than leaving this coordinator InProgress with no reminder
+            // anchored on it: StartAsync short-circuits on InProgress, so a
+            // half-committed intent would deadlock the pair - never idle, never
+            // driven, and never restartable.
+            Restore(previous);
+            await state.WriteStateAsync();
+            throw;
+        }
 
         await AdvancePhaseAsync(ShardConsolidationPhase.Drain);
 
