@@ -28,6 +28,7 @@ internal sealed class BackupHealthMonitorGrain(
     ILatticeBackupCatalogStore catalog,
     ILatticeBackupHealthService healthService,
     ILatticeBackupHealthStore healthStore,
+    IBackupSinkSharingProbe sharingProbe,
     IOptionsMonitor<LatticeBackupHealthOptions> optionsMonitor,
     ILogger<BackupHealthMonitorGrain> logger,
     [PersistentState("backup-health-monitor", LatticeOptions.StorageProviderName)]
@@ -81,6 +82,21 @@ internal sealed class BackupHealthMonitorGrain(
         _sweepInFlight = true;
         try
         {
+            // Refresh the cross-cluster sink-sharing verdict once per sweep, not
+            // once per backup: sharing is a slow-moving deployment fact and the
+            // per-backup verification reads only the cached result. A probe that
+            // faults must never abort the sweep - local verification is still
+            // worth doing - so the failure is logged and the previous verdict
+            // stands.
+            try
+            {
+                await sharingProbe.ProbeAsync();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "The cross-cluster backup sink sharing probe failed during the health sweep.");
+            }
+
             var now = DateTimeOffset.UtcNow;
             var defaultInterval = Options.DefaultInterval;
             var verified = 0;

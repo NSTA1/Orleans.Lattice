@@ -4,7 +4,9 @@ namespace Orleans.Lattice.Backup;
 
 /// <summary>
 /// Validates <see cref="LatticeBackupOptions"/> at silo start: rejects a
-/// non-positive history retention window and an undefined history retention mode.
+/// non-positive history retention window, an undefined history retention mode,
+/// non-positive fence timings, and an undefined or non-positive sink-sharing
+/// probe configuration.
 /// </summary>
 internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBackupOptions>
 {
@@ -37,6 +39,16 @@ internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBa
         if (options.MaxCrossTreeFenceAttempts < 1)
         {
             failures.Add($"{nameof(LatticeBackupOptions.MaxCrossTreeFenceAttempts)} must be at least 1.");
+        }
+
+        if (!Enum.IsDefined(options.SinkSharingEnforcement))
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.SinkSharingEnforcement)} must be a defined BackupSinkSharingEnforcement value.");
+        }
+
+        if (options.SinkSharingProbeTimeout <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.SinkSharingProbeTimeout)} must be strictly positive.");
         }
 
         return failures.Count > 0

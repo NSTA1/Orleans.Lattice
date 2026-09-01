@@ -460,6 +460,27 @@ public static partial class LatticeReplicationServiceCollectionExtensions
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RestoreSagaDispatcher>>(),
             sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSetResolver>().FirstOrDefault()));
 
+        // Wire the real cross-cluster sink-sharing probe over the backup package's
+        // no-op default so the startup sink guard and the periodic backup-health
+        // sweep stop assuming an external sink is shared and actually prove it: each
+        // cluster writes a marker into its own sink and reads every peer's marker
+        // back out of it. Both the backup sink and the saga control channel are
+        // resolved optionally (GetServices, not GetRequiredService) because neither
+        // is registered by this package: a replication-only host may not wire the
+        // backup package at all, and only the gRPC transport package registers a
+        // control channel. This registration is resolved eagerly by the backup
+        // package's startup guard, so a hard requirement here would turn a
+        // previously fine host into one that cannot start. Missing either dependency
+        // simply keeps the probe inert or its verdict unverified.
+        builder.Services.AddSingleton<Orleans.Lattice.Backup.IBackupSinkSharingProbe>(
+            static sp => new CrossClusterBackupSinkSharingProbe(
+                sp.GetRequiredService<Orleans.Lattice.Backup.IReplicatedTreeMembership>(),
+                sp.GetRequiredService<IReplicationTopology>(),
+                sp.GetServices<ISagaControlChannel>().FirstOrDefault(),
+                sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CrossClusterBackupSinkSharingProbe>>(),
+                sp.GetServices<Orleans.Lattice.Backup.ILatticeBackupSink>().FirstOrDefault()));
+
         // Runtime replication-configuration control plane (opt-in). Applied last
         // so the engine registrations above are the seed/fallback the dynamic,
         // snapshot-backed seams layer on top. Off by default: a static-only

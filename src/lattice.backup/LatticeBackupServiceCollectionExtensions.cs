@@ -131,10 +131,21 @@ public static class LatticeBackupServiceCollectionExtensions
         // backup package carries no dependency on the replication package.
         builder.Services.TryAddSingleton<IRestoreSagaDispatcher, NoRestoreSagaDispatcher>();
 
-        // Fail-fast guard: a replicated tree backed by the default in-cluster sink
-        // is rejected at silo start, because a per-cluster in-cluster sink cannot
-        // resolve or extend a chain across the replication set. Runs as a hosted
-        // startup check, mirroring the replication package's startup validators.
+        // The backup-local cross-cluster sink-sharing seam. The default no-op never
+        // probes and always reports NotApplicable, which is correct for a
+        // single-cluster host that has no peers to share a sink with; the
+        // replication package replaces it with an implementation that writes a
+        // per-cluster marker into the configured sink and reads every peer's marker
+        // back. Kept behind this seam so the backup package carries no dependency on
+        // the replication package.
+        builder.Services.TryAddSingleton<IBackupSinkSharingProbe, NoBackupSinkSharingProbe>();
+
+        // Startup sink guard: a replicated tree backed by the default in-cluster
+        // sink is rejected outright (a per-cluster in-cluster sink provably cannot
+        // resolve or extend a chain across the replication set), and a replicated
+        // tree backed by an external sink is put to an actual cross-cluster test
+        // rather than assumed shared. Runs as a hosted startup check, mirroring the
+        // replication package's startup validators.
         builder.Services.AddSingleton<IHostedService, LatticeBackupReplicatedSinkStartupValidator>();
 
         // The fail-closed backup authorization seam and the capture engine. The

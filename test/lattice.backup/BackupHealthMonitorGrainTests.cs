@@ -45,6 +45,7 @@ public sealed class BackupHealthMonitorGrainTests
             catalog,
             service,
             store,
+            new NoBackupSinkSharingProbe(),
             monitor,
             NullLogger<BackupHealthMonitorGrain>.Instance,
             new FakePersistentState<BackupHealthMonitorState>());
