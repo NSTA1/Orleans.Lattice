@@ -51,7 +51,10 @@ public sealed class SchemaConcernComponentTests
         Assert.Multiple(() =>
         {
             Assert.That(harness.Renderer.Buttons(id)[0].Disabled, Is.True);
-            Assert.That(harness.Renderer.Buttons(id)[0].Title, Is.EqualTo("Refresh trees"));
+            Assert.That(
+                harness.Renderer.ElementAttribute(id, "button", "aria-label"),
+                Is.EqualTo("Refresh trees"),
+                "the control's name is an aria-label, not a title a keyboard or touch caller cannot reach");
         });
     }
 

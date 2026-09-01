@@ -88,12 +88,22 @@ public sealed class CatalogReader : ICatalogReader
         // cluster (the server already scopes a tenant caller's catalog; this is
         // the client-side view layer and the operator all-tenant toggle).
         IReadOnlyList<CatalogItem> scoped = items;
+        var scopedToTenantId = (string?)null;
+        var scopeFilteredCount = 0;
         if (_tenantView.IsActive)
         {
             scoped = await _tenantView.ScopeAsync(items, TreeIdOf, cancellationToken).ConfigureAwait(false);
+            scopedToTenantId = _tenantView.ActiveTenant?.Value;
+            scopeFilteredCount = items.Count - scoped.Count;
         }
 
-        return new CatalogPage { Items = scoped, NextPageToken = page.NextPageToken };
+        return new CatalogPage
+        {
+            Items = scoped,
+            NextPageToken = page.NextPageToken,
+            ScopedToTenantId = scopedToTenantId,
+            ScopeFilteredCount = scopeFilteredCount,
+        };
     }
 
     private async Task<CatalogPage> LoadViewsAsync(CatalogRequest request, CancellationToken cancellationToken)

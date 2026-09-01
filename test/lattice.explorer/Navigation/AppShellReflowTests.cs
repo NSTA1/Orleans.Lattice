@@ -135,15 +135,18 @@ public sealed class AppShellReflowTests
         });
     }
 
-    // ---- the area strip -----------------------------------------------------
+    // ---- the area rail ------------------------------------------------------
 
     [Test]
-    public async Task The_area_strip_overflows_at_compact_rather_than_running_off_the_edge()
+    public async Task The_rail_renders_every_area_at_every_width_rather_than_overflowing()
     {
+        // The horizontal strip this replaced kept one tab inline at compact and
+        // pushed the rest into a menu, so a gate that disabled two areas
+        // displaced a live one. A column has no such scarcity, and that is the
+        // reason the rail is the shape it is.
         var html = await AppShellRenderHarness.RenderAsync(
             LatticeBreakpoint.Compact,
             isCatalogOpen: false,
-            isOverflowOpen: false,
             AppShellRenderHarness.Plugin("a", "Alpha", 100),
             AppShellRenderHarness.Plugin("b", "Bravo", 200),
             AppShellRenderHarness.Plugin("c", "Charlie", 300));
@@ -152,51 +155,42 @@ public sealed class AppShellReflowTests
         {
             Assert.That(
                 AppShellRenderHarness.CountOccurrences(html, Tab),
-                Is.EqualTo(1),
-                "the compact strip keeps only the active area inline");
-            Assert.That(html, Does.Contain(OverflowToggle), "the rest stay reachable through the overflow menu");
-            Assert.That(html, Does.Contain(">Explore<"), "and the active area is the one left visible");
+                Is.EqualTo(4),
+                "the home surface and all three areas, at the narrowest band");
+            Assert.That(html, Does.Not.Contain(OverflowToggle), "a rail scrolls rather than overflowing");
         });
     }
 
     [Test]
-    public async Task The_area_strip_stays_inline_when_it_fits()
+    public async Task The_rail_publishes_its_axis_so_the_arrow_keys_match_it()
     {
         var html = await AppShellRenderHarness.RenderAsync(
             LatticeBreakpoint.Expanded,
             isCatalogOpen: false,
-            isOverflowOpen: false,
-            AppShellRenderHarness.Plugin("a", "Alpha", 100),
-            AppShellRenderHarness.Plugin("b", "Bravo", 200),
-            AppShellRenderHarness.Plugin("c", "Charlie", 300));
+            AppShellRenderHarness.Plugin("a", "Alpha", 100));
 
         Assert.Multiple(() =>
         {
-            Assert.That(AppShellRenderHarness.CountOccurrences(html, Tab), Is.EqualTo(4));
-            Assert.That(html, Does.Not.Contain(OverflowToggle));
+            Assert.That(html, Does.Contain("aria-orientation=\"vertical\""));
+            Assert.That(
+                html,
+                Does.Contain("class=\"lx-shell-rail lx-shell-areastrip\""),
+                "the rail keeps the class the accessibility lane addresses it by");
         });
     }
 
     [Test]
-    public async Task The_overflow_menu_lists_every_area_including_the_home_surface()
+    public async Task The_rail_is_the_only_tab_list_in_the_shell_frame()
     {
+        // Every hand-rolled role=tablist in the shell is gone: the rail, the
+        // catalog kind and the detail surfaces all run on the one primitive, and
+        // the shell frame itself declares exactly one strip.
         var html = await AppShellRenderHarness.RenderAsync(
-            LatticeBreakpoint.Compact,
+            LatticeBreakpoint.Expanded,
             isCatalogOpen: false,
-            isOverflowOpen: true,
-            AppShellRenderHarness.Plugin("a", "Alpha", 100),
-            AppShellRenderHarness.Plugin("b", "Bravo", 200));
+            AppShellRenderHarness.Plugin("a", "Alpha", 100));
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(html, Does.Contain("role=\"menu\""));
-            Assert.That(
-                AppShellRenderHarness.CountOccurrences(html, "role=\"menuitemradio\""),
-                Is.EqualTo(3),
-                "the home surface and both areas");
-            Assert.That(html, Does.Contain("aria-checked=\"true\""));
-            Assert.That(html, Does.Contain("aria-checked=\"false\""));
-        });
+        Assert.That(AppShellRenderHarness.CountOccurrences(html, "role=\"tablist\""), Is.EqualTo(1));
     }
 
     // ---- the ARIA state the strip publishes (issue #1793) -------------------
@@ -219,7 +213,6 @@ public sealed class AppShellReflowTests
         var html = await AppShellRenderHarness.RenderAsync(
             LatticeBreakpoint.Expanded,
             isCatalogOpen: false,
-            isOverflowOpen: false,
             AppShellRenderHarness.Plugin("a", "Alpha", 100),
             AppShellRenderHarness.Plugin("b", "Bravo", 200));
 

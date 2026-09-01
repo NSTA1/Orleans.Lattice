@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins.MyTenant.Components;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
@@ -5,7 +6,7 @@ using Orleans.Lattice.Explorer.Plugins.Tenancy;
 namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
-/// The My Tenant area as a plugin: its descriptor, the panel the shell renders
+/// The My tenant area as a plugin: its descriptor, the panel the shell renders
 /// for it, the controlled domain contract it operates against, and the access
 /// gate this package owns. The shell learns of it only through
 /// <see cref="IExplorerPlugin"/>, so registering or withholding this type is the
@@ -21,26 +22,32 @@ namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 /// <para>
 /// The contract is deliberately the <em>narrow</em> one. This is a tenant
 /// administrator's surface, so it gets the tenant's own operations and not the
-/// operator-only ones the platform-operator Tenants plugin receives through
-/// <see cref="ITenancyDomain"/> (issue #1785).
+/// operator-only ones the platform-operator tenant administration plugin
+/// receives through <see cref="ITenancyDomain"/> (issue #1785).
 /// </para>
 /// </summary>
-/// <param name="gate">The My Tenant package's own access gate.</param>
+/// <remarks>
+/// The area is labelled <see cref="ExplorerVocabulary.MyTenantArea"/> - sentence
+/// case, so it does not read as a proper noun beside
+/// <see cref="ExplorerVocabulary.TenantAdministrationArea"/>, and so the pair
+/// says which administers whose tenants at a glance.
+/// </remarks>
+/// <param name="gate">The My tenant package's own access gate.</param>
 public sealed class MyTenantAreaPlugin(IMyTenantAccessGate gate) : IExplorerPlugin<IMyTenantDomain>
 {
     private static readonly ExplorerPluginDescriptor Registration = new()
     {
         PluginId = MyTenantPluginKeys.PluginId,
-        Label = "My Tenant",
+        Label = ExplorerVocabulary.MyTenantArea,
         Surface = ExplorerPluginSurface.Area,
 
         // Sorted after the operator-facing areas: this is the surface a tenant
         // admin lives in, and it is the one that disappears entirely on a
         // deployment without the tenancy add-on, so it sits at the end rather
         // than leaving a gap mid-strip when it does. 500 rather than 400
-        // because the platform-operator Tenants area already claims 400, and
-        // two areas sharing an order leaves their relative position to an
-        // arbitrary tie-break instead of to intent.
+        // because the platform-operator tenant administration area already
+        // claims 400, and two areas sharing an order leaves their relative
+        // position to an arbitrary tie-break instead of to intent.
         Order = 500,
     };
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.MyTenant;
 
@@ -25,6 +26,12 @@ public static class ExplorerTelemetryServiceCollectionExtensions
     /// its own client - a test double, or a head that reaches telemetry some other
     /// way - keeps it, and calling this twice registers nothing twice.
     /// </para>
+    /// <para>
+    /// It also composes the shell's session stack, which is where the area panel
+    /// remembers the panel a caller was on and addresses the panel a link names.
+    /// That call is idempotent too, so a head that already composed it is not
+    /// disturbed.
+    /// </para>
     /// </remarks>
     /// <param name="services">The service collection.</param>
     /// <returns>The same collection, for chaining.</returns>
@@ -34,6 +41,7 @@ public static class ExplorerTelemetryServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddExplorerPluginHost();
+        services.AddExplorerSession();
         services.TryAddScoped<ITelemetryQueryClient, GrpcTelemetryQueryClient>();
         services.TryAddScoped<ITelemetryQueryService, TelemetryQueryService>();
         services.TryAddScoped<ITelemetryAvailability, TelemetryAvailability>();

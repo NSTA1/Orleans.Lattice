@@ -1,5 +1,7 @@
 using Grpc.Core;
+using NSubstitute;
 using Orleans.Lattice.Api.Schema;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Tests.Plugins;
@@ -7,19 +9,39 @@ using Orleans.Lattice.Explorer.Tests.Plugins;
 namespace Orleans.Lattice.Explorer.Tests.Schema;
 
 /// <summary>
-/// The Schema plugin's own access gate. It reproduces the coarse
-/// control-plane-reachability gate the area used to read from the shared
-/// capability record, now as the plugin-level decision keyed under
-/// <see cref="SchemaPluginKeys.PluginId"/>, and keeps the per-tree capability
-/// probe the panel drives its own action grey-out from.
+/// The Schema plugin's own access gate: the coarse schema authority keyed under
+/// <see cref="SchemaPluginKeys.PluginId"/>, plus the per-tree capability probe
+/// the panel drives its own action grey-out from.
 /// </summary>
+/// <remarks>
+/// The coarse gate reads the capability flags rather than merely observing that
+/// the probe RPC completed (issue #1854): "the schema control endpoint is
+/// reachable" is not a grant, and reporting it as one invited a caller with no
+/// schema authority into a surface every action of which the server refuses.
+/// </remarks>
 [TestFixture]
 public class SchemaAdminCapabilityServiceTests
 {
     private static readonly IExplorerPluginHostContext Context =
         PluginTestHost.Context(SchemaPluginKeys.PluginId);
 
-    private static SchemaAdminCapabilityService Create(FakeSchemaAdminClient client) => new(client);
+    /// <summary>The capability set of a caller who holds some schema authority.</summary>
+    private static LatticeSchemaCapabilities Granted => new()
+    {
+        TreeId = SchemaAdminCapabilityService.CapabilityProbeTreeId,
+        CanViewPolicy = true,
+    };
+
+    private static IExplorerAuthSession SignedIn(bool authenticated = true)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(authenticated);
+        return session;
+    }
+
+    private static SchemaAdminCapabilityService Create(
+        FakeSchemaAdminClient client,
+        bool authenticated = true) => new(client, SignedIn(authenticated));
 
     [Test]
     public void Constructor_null_client_throws()
@@ -36,9 +58,9 @@ public class SchemaAdminCapabilityServiceTests
     }
 
     [Test]
-    public async Task ProbeAsync_probe_reachable_allows_the_plugin()
+    public async Task ProbeAsync_a_schema_grant_allows_the_plugin()
     {
-        var client = new FakeSchemaAdminClient();
+        var client = new FakeSchemaAdminClient { CapabilitiesResult = Granted };
         var service = Create(client);
 
         var access = await service.ProbeAsync(Context);
@@ -48,6 +70,35 @@ public class SchemaAdminCapabilityServiceTests
             Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Allowed));
             Assert.That(client.LastProbeTreeId, Is.EqualTo(SchemaAdminCapabilityService.CapabilityProbeTreeId));
         });
+    }
+
+    [Test]
+    public async Task ProbeAsync_a_reachable_endpoint_without_a_schema_grant_denies_the_plugin()
+    {
+        // The probe answers an all-false capability set rather than throwing when
+        // the caller holds nothing, so "the RPC completed" is not a grant.
+        var client = new FakeSchemaAdminClient();
+        var service = Create(client);
+
+        var access = await service.ProbeAsync(Context);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.Denied));
+            Assert.That(access.Remedy.Permission, Is.EqualTo("Admin"));
+            Assert.That(access.Remedy.Audience, Is.EqualTo("an operator"));
+        });
+    }
+
+    [Test]
+    public async Task ProbeAsync_an_anonymous_caller_is_invited_to_sign_in_rather_than_denied()
+    {
+        var client = new FakeSchemaAdminClient();
+        var service = Create(client, authenticated: false);
+
+        var access = await service.ProbeAsync(Context);
+
+        Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
     }
 
     [Test]
@@ -104,7 +155,7 @@ public class SchemaAdminCapabilityServiceTests
         // twice turned an idempotent initializer into a second-call no-op, so
         // the gate is asserted to make the round trip rather than only the first
         // leg of it.
-        var client = new FakeSchemaAdminClient();
+        var client = new FakeSchemaAdminClient { CapabilitiesResult = Granted };
         var service = Create(client);
         var first = await service.ProbeAsync(Context);
 

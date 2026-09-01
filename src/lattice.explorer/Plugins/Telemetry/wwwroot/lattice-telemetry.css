@@ -366,3 +366,35 @@
     color: var(--lx-color-text);
     white-space: nowrap;
 }
+
+
+/* ==========================================================================
+   "Nothing to show" block
+
+   One shape for every state the shared vocabulary produces: what happened,
+   then what to do about it. The remedy is set apart by weight and spacing
+   rather than by hue, so it survives a forced-colours palette.
+   ========================================================================== */
+
+.lxt-state {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    padding: var(--lx-space-4);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+    color: var(--lx-color-text);
+}
+
+.lxt-state-headline {
+    margin: 0;
+    font-size: var(--lx-text-body);
+}
+
+.lxt-state-explanation,
+.lxt-state-remedy {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}

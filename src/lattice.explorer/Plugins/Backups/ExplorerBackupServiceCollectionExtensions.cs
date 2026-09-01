@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.Plugins;
 
 namespace Orleans.Lattice.Explorer.Backup;
@@ -14,15 +15,32 @@ public static class ExplorerBackupServiceCollectionExtensions
     /// <summary>
     /// Registers the Backups feature. Also calls
     /// <see cref="ExplorerPluginServiceCollectionExtensions.AddExplorerPluginHost"/>
-    /// so the keyed access store the gate publishes into exists. Call after
-    /// <c>AddExplorerConfiguration</c> and <c>AddExplorerAuth</c>, whose session
-    /// and sign-in the backup client reads.
+    /// so the keyed access store the gate publishes into exists, and
+    /// <see cref="ExplorerSessionServiceCollectionExtensions.AddExplorerSession"/>
+    /// so the shell-state contract the panel remembers its open surface on
+    /// exists. Call after <c>AddExplorerConfiguration</c> and
+    /// <c>AddExplorerAuth</c>, whose session and sign-in the backup client reads.
     /// </summary>
+    /// <remarks>
+    /// The panel declares <see cref="BackupsPluginKeys.SurfacePreference"/> on
+    /// the resolved catalog when it mounts rather than here, which is how the
+    /// shell's own rail declares its key too: the catalog is a singleton and
+    /// registration is idempotent by reference, so a key arrives exactly once
+    /// however many circuits mount the area, and a head cannot compose the
+    /// plugin into a container whose catalog was built before the key existed.
+    /// </remarks>
     /// <param name="services">The service collection. Must not be <see langword="null"/>.</param>
     public static IServiceCollection AddExplorerBackup(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddExplorerPluginHost();
+
+        // Idempotent (every registration inside it is a TryAdd), so a head that
+        // already composed the session stack is not disturbed - and a head that
+        // did not cannot end up with a panel whose declared preference key and
+        // addressable surface have nowhere to live.
+        services.AddExplorerSession();
+
         // Scoped per Blazor circuit: the backup control client reads the calling
         // scope's session and sign-in, so it must not be shared across circuits.
         // GrpcBackupControlClient owns its own Orleans serializer provider; it must

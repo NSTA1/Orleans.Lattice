@@ -129,16 +129,17 @@ effect on access, and the group-create and member add/remove controls are
 stay visible (legacy edges, or to preview what a mode change would do). The
 **Policies** and **Explain** tabs remain fully live in every mode, because a rule
 that grants a group id still matches a token-asserted group. As with the
-capability grey-out, this is advisory: the server remains the enforcement point.
+capability demotion, this is advisory: the server remains the enforcement point.
 
-## Capability-aware, grey-out not hide
+## Capability-aware, demote not hide
 
 The whole area is gated by a single coarse capability, **AuthAdminAllowed**. It
 is discovered with a fail-closed probe: the Explorer asks the server for the
 smallest possible page of the admin surface, and only if that succeeds is the
 area treated as available. If the probe is denied or the endpoint is
-unreachable, the area entry stays visible but **disabled (greyed out)**, so the
-user can see the capability exists without being able to enter it.
+unreachable, the area entry stays **visible but demoted**, grouped below a
+divider and stating the permission it needs and who to ask, so the user can see
+the capability exists and ask for the grant.
 
 Inside the area every mutating action - creating or removing a rule, adding or
 removing a member - is likewise shown disabled, not hidden, whenever the
@@ -147,16 +148,17 @@ dropped from the UI.
 
 ### Distinguishing "not signed in" from "not permitted"
 
-A greyed-out area has two very different causes, and the Explorer tells them
+A refused area has two very different causes, and the Explorer tells them
 apart. The probe classifies its own failure:
 
 - If the server rejects the probe as **unauthenticated** (no valid token
   attached), or the probe is denied while the Explorer is **not signed in** to
-  the cluster, the area reports **authentication required** and the disabled
-  panel shows a distinct "You are not signed in to the cluster" banner with a
-  prompt to sign in - not the generic "not permitted" state.
+  the cluster, the area resolves `AuthenticationRequired`: the entry stays
+  prominent and clickable and shows a distinct "You are not signed in to the
+  cluster" prompt - never the generic "not permitted" state. An anonymous caller
+  is never told a surface is unavailable for their account.
 - If the probe is denied while the Explorer **is** signed in, that is a genuine
-  authorization denial and the area stays in the ordinary advisory grey-out.
+  authorization denial and the area resolves `Denied`, demoted with a remedy.
 
 This distinction exists so the anonymous-circuit failure mode - where the
 browser is authenticated at the HTTP layer but the Blazor Server circuit carries
@@ -165,7 +167,7 @@ as a permission problem or an empty cluster.
 
 ## Advisory, not a security boundary
 
-The grey-out is a usability affordance only. The **server remains the
+The demotion is a usability affordance only. The **server remains the
 fail-closed enforcement point**: every real read or mutation is authorized on
 the server when it runs, regardless of what the cached capability said. If the
 capability was over-optimistic - for example the grant changed after it was

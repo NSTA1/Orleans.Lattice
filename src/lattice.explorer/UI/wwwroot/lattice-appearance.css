@@ -1,0 +1,215 @@
+/*
+  Orleans.Lattice Explorer - appearance control and density deferral.
+
+  Two jobs, both belonging to the appearance feature rather than to the token
+  layer or to the shell chrome.
+
+  1. DENSITY DEFERRAL. An explicit density choice is stamped on <body> by
+     lattice-appearance.js. Every adaptive root inside it already carries its own
+     `data-lx-density`, derived from the breakpoint it is in, and the token layer
+     declares each preset at attribute specificity - so without this rule the
+     nearest adaptive root would always out-declare the operator's choice and the
+     choice would do nothing.
+
+     The rule below hands those roots back to their ancestor by inheriting the
+     four density tokens rather than restating any of them, so the presets stay
+     declared in exactly one place (lattice-tokens.css) and cannot drift.
+
+     It is conditioned on <body> carrying the attribute, which it does only when
+     the operator has actually chosen a density. With no choice the rule does not
+     match at all and the adaptive behaviour the shell shipped with is untouched.
+
+     <body> is the carrier rather than <html> on purpose: the breakpoint layer
+     declares the compact band's own density on :root from a later stylesheet at
+     equal specificity, so on <html> the band would win and an explicit choice
+     would be silently ignored on a narrow viewport. Nothing declares density on
+     <body>.
+
+  2. THE APPEARANCE CONTROL. A disclosure holding three native radio groups. It
+     is deliberately built from a real <button>, real <fieldset>/<legend> and real
+     <input type="radio"> elements: the keyboard behaviour an operator expects
+     from a settings control is then the platform's, not a re-implementation of
+     it, and it works before any script has run.
+*/
+
+body[data-lx-density] [data-lx-density] {
+    --lx-density-row-height: inherit;
+    --lx-density-padding-block: inherit;
+    --lx-density-padding-inline: inherit;
+    --lx-density-gap: inherit;
+}
+
+/* ==========================================================================
+   Appearance control
+   ========================================================================== */
+
+.lx-appearance {
+    position: relative;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+/*
+  A labelled control, not a bare glyph. The one thing this affordance has to do
+  is be findable by somebody who has never opened the Explorer before, and an
+  unlabelled icon is exactly how the tenant control became unfindable.
+*/
+.lx-appearance-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-2) var(--lx-space-4);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface);
+    color: var(--lx-color-text);
+    font: inherit;
+    font-size: var(--lx-text-body);
+    cursor: pointer;
+    transition: background var(--lx-motion-fast) var(--lx-motion-ease-out),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease-out);
+}
+
+.lx-appearance-trigger:hover {
+    border-color: var(--lx-color-border-strong);
+    background: var(--lx-color-surface-raised);
+}
+
+.lx-appearance-trigger:focus-visible {
+    outline: var(--lx-focus-outline-width) solid var(--lx-color-accent);
+    outline-offset: var(--lx-focus-outline-offset);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-appearance-trigger[aria-expanded="true"] {
+    border-color: var(--lx-color-border-strong);
+    background: var(--lx-color-surface-raised);
+}
+
+/*
+  Anchored to the control and clamped to it, so the panel cannot be pushed off
+  the leading edge on a narrow shell the way an unclamped menu can.
+*/
+.lx-appearance-panel {
+    position: absolute;
+    inset-inline-end: 0;
+    top: calc(100% + var(--lx-space-2));
+    z-index: var(--lx-layer-menu);
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-5);
+    min-width: min(16rem, calc(100vw - 2 * var(--lx-space-5)));
+    max-width: calc(100vw - 2 * var(--lx-space-5));
+    padding: var(--lx-space-5);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-lg);
+    background: var(--lx-color-surface-raised);
+    box-shadow: var(--lx-elevation-2);
+}
+
+.lx-appearance-panel[hidden] {
+    display: none;
+}
+
+/* Rendered in place instead of as a menu, for a host that puts the control on a
+   settings surface of its own rather than in the chrome. */
+.lx-appearance-inline .lx-appearance-panel {
+    position: static;
+    z-index: auto;
+    min-width: 0;
+    max-width: none;
+    box-shadow: none;
+}
+
+.lx-appearance-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-2);
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.lx-appearance-legend {
+    padding: 0 0 var(--lx-space-2) 0;
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-caption);
+    font-weight: var(--lx-weight-state-selected);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.lx-appearance-option {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-3);
+    min-height: var(--lx-target-min);
+    padding: var(--lx-space-1) var(--lx-space-2);
+    border-radius: var(--lx-radius-sm);
+    color: var(--lx-color-state-rest-fg);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-state-rest);
+    cursor: pointer;
+}
+
+.lx-appearance-option:hover {
+    background: var(--lx-color-surface);
+}
+
+/*
+  Selected state is carried by a luminance step and a weight step, never by the
+  accent hue alone: a hue-only distinction cannot clear 3:1 and does not survive
+  greyscale or forced colours. The state is a class rather than a `:has()`
+  selector so the rendered markup states it outright and a component test can
+  assert it.
+*/
+.lx-appearance-option.is-selected {
+    background: var(--lx-color-surface-selected);
+    color: var(--lx-color-state-selected-fg);
+    font-weight: var(--lx-weight-state-selected);
+}
+
+.lx-appearance-radio {
+    flex: none;
+    width: var(--lx-space-5);
+    height: var(--lx-space-5);
+    accent-color: var(--lx-color-accent);
+}
+
+.lx-appearance-radio:focus-visible {
+    outline: var(--lx-focus-outline-width) solid var(--lx-color-accent);
+    outline-offset: var(--lx-focus-outline-offset);
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-appearance-option-label {
+    flex: 1 1 auto;
+}
+
+/* The sentence shown when a remembered choice could not be used. */
+.lx-appearance-notice {
+    margin: 0;
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+}
+
+/*
+  Forced colours drops box-shadow entirely, so the ring is restated as an outline
+  in the platform's own Highlight, and the selected option states itself
+  structurally rather than by fill.
+*/
+@media (forced-colors: active) {
+    .lx-appearance-trigger:focus-visible,
+    .lx-appearance-radio:focus-visible {
+        outline: 3px solid Highlight;
+        box-shadow: none;
+    }
+
+    .lx-appearance-option.is-selected {
+        forced-color-adjust: none;
+        background: Highlight;
+        color: HighlightText;
+    }
+}

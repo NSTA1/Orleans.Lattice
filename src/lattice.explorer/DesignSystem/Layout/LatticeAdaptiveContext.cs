@@ -27,10 +27,19 @@ namespace Orleans.Lattice.Explorer.DesignSystem.Layout;
 /// be expanded" from "not measured yet" - for example to defer an expensive
 /// wide-only surface until the shell is sure.
 /// </param>
+/// <param name="ViewportWidth">
+/// The measured viewport width in CSS pixels, or <see langword="null"/> when
+/// the head reports a band rather than a width. A primitive that measures its
+/// own layout uses this when it is there and
+/// <see cref="LatticeBreakpoints.NominalWidth"/> when it is not; nothing may
+/// use it to write a media query or to re-derive a breakpoint, which is
+/// <see cref="Breakpoint"/>'s job.
+/// </param>
 public sealed record LatticeAdaptiveContext(
     LatticeBreakpoint Breakpoint,
     LatticeDensity Density,
-    bool IsMeasured)
+    bool IsMeasured,
+    int? ViewportWidth = null)
 {
     /// <summary>
     /// The context assumed when no <see cref="Components.LatticeAdaptiveRoot"/>
@@ -39,4 +48,11 @@ public sealed record LatticeAdaptiveContext(
     /// </summary>
     public static LatticeAdaptiveContext Unmeasured { get; } =
         new(LatticeBreakpoints.Default, LatticeDensity.Cosy, IsMeasured: false);
+
+    /// <summary>
+    /// The width a layout beneath this context measures itself against: the
+    /// measured viewport width when the head reported one, and the
+    /// breakpoint's nominal width otherwise.
+    /// </summary>
+    public int LayoutWidth => ViewportWidth ?? LatticeBreakpoints.NominalWidth(Breakpoint);
 }

@@ -34,24 +34,13 @@
             }
         </div>
 
-        @if (_loading && _metrics is null)
+        @if (State is not null)
         {
-            <div class="lx-metrics-state">Loading metrics...</div>
-        }
-        else if (_error is not null)
-        {
-            <div class="lx-metrics-state lx-metrics-error">
-                <span>@_error</span>
-                <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
-            </div>
-        }
-        else if (_metrics is null)
-        {
-            <div class="lx-metrics-state">No metrics reported for this id.</div>
+            <SelectionStateView Message="State" OnAction="_reload" />
         }
         else
         {
-            var m = _metrics;
+            var m = _metrics!;
             @if (m.DetailPaused)
             {
                 <div class="lx-metrics-state lx-metrics-paused">

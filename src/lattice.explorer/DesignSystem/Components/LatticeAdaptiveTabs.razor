@@ -8,21 +8,25 @@
     last inline slot when it would otherwise be hidden - so a caller can always
     see where they are, at every breakpoint.
 
-    Inline capacity comes from the breakpoint token layer
-    (LatticeBreakpoints.TabInlineCapacity), never from a measurement or a media
-    query (epic decision D7). A caller may override it with InlineCapacity when
-    a surface knows better.
+    Inline capacity is MEASURED, not assumed: LatticeTabCapacity sizes the
+    labels the strip actually holds against the width it actually has, so a
+    strip of long labels overflows sooner and a strip of short ones later. A
+    caller may still pin it with InlineCapacity when a surface knows better.
 
-    Keyboard support follows the WAI-ARIA tabs pattern: a roving tabindex puts
-    exactly one tab in the tab order, and Left/Right/Home/End move between the
-    enabled tabs.
+    One primitive backs every strip in the shell. Variant chooses the
+    presentation - an underlined tab strip, a segmented toggle, or the quieter
+    subordinate control a nested sub-surface wears - while the behaviour is
+    identical in all three: a roving tabindex puts exactly one tab in the tab
+    order, Left/Right/Home/End move between the enabled tabs, every tab names
+    the panel it controls, and a disabled tab is greyed and explained rather
+    than hidden.
 *@
 
-<div class="lx-tabstrip-host @Class" data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
+<div class="@_hostClass" data-lx-breakpoint="@LatticeBreakpoints.Name(_breakpoint)">
     <div class="lx-tabstrip"
          role="tablist"
          aria-label="@Label"
-         aria-orientation="horizontal"
+         aria-orientation="@_ariaOrientation"
          @onkeydown="OnKeyDownAsync">
         @for (var i = 0; i < _tabs.Count; i++)
         {
@@ -36,10 +40,11 @@
                         id="@_tabElementIds[index]"
                         class="@(isActive ? ActiveTabClass : TabClass)"
                         aria-selected="@(isActive ? "true" : "false")"
-                        aria-controls="@(ChildContent is null ? null : _panelElementId)"
+                        aria-controls="@_panelControlsId"
+                        aria-describedby="@(tab.Description is null ? null : _tabDescriptionIds[index])"
                         tabindex="@(index == _rovingIndex ? "0" : "-1")"
                         disabled="@(!tab.IsEnabled)"
-                        title="@(tab.Description ?? tab.Label)"
+                        title="@tab.Description"
                         @ref="_tabElements[index]"
                         @onclick="@(() => SelectAsync(tab))">
                     @tab.Label
@@ -47,6 +52,25 @@
             }
         }
     </div>
+    @if (_hasDescriptions)
+    {
+        @*
+            Outside the tablist on purpose: a tablist owns tabs, and a bare span
+            among them is an unroled child that the ARIA required-children rule
+            flags. aria-describedby reaches across the document, so the
+            descriptions sit beside the strip instead.
+        *@
+        <div class="lx-visually-hidden">
+            @for (var i = 0; i < _tabs.Count; i++)
+            {
+                var tab = _tabs[i];
+                if (tab.Description is not null)
+                {
+                    <span id="@_tabDescriptionIds[i]">@tab.Description</span>
+                }
+            }
+        </div>
+    }
     @if (_layout.HasOverflow)
     {
         <div class="lx-tabstrip-overflow-host">
@@ -74,8 +98,9 @@
                                 class="lx-tabstrip-overflow-item"
                                 role="menuitemradio"
                                 aria-checked="@(isActive ? "true" : "false")"
+                                aria-describedby="@(tab.Description is null ? null : _tabDescriptionIds[i])"
                                 disabled="@(!tab.IsEnabled)"
-                                title="@(tab.Description ?? tab.Label)"
+                                title="@tab.Description"
                                 @onclick="@(() => SelectFromOverflowAsync(tab))">
                             @tab.Label
                         </button>
@@ -102,6 +127,18 @@
     // Pre-composed literals rather than per-render interpolation.
     private const string TabClass = "lx-tab";
     private const string ActiveTabClass = "lx-tab is-active";
+    private const string DescriptionIdSuffix = "-description";
+    private const string UnderlinedHostClass = "lx-tabstrip-host";
+    private const string SegmentedHostClass = "lx-tabstrip-host lx-tabstrip-segmented";
+    private const string SubordinateHostClass =
+        "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-subordinate";
+    private const string VerticalUnderlinedHostClass = "lx-tabstrip-host lx-tabstrip-vertical";
+    private const string VerticalSegmentedHostClass =
+        "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-vertical";
+    private const string VerticalSubordinateHostClass =
+        "lx-tabstrip-host lx-tabstrip-segmented lx-tabstrip-subordinate lx-tabstrip-vertical";
+    private const string HorizontalOrientation = "horizontal";
+    private const string VerticalOrientation = "vertical";
 
     private static readonly IReadOnlyList<LatticeTabItem> NoTabs = Array.Empty<LatticeTabItem>();
 
@@ -114,14 +151,27 @@
     // been, so a steady-state render allocates nothing for the references.
     private ElementReference[] _tabElements = Array.Empty<ElementReference>();
     private string[] _tabElementIds = Array.Empty<string>();
+    private string[] _tabDescriptionIds = Array.Empty<string>();
     private string? _elementIdPrefix;
     private string _panelElementId = string.Empty;
+    private string? _panelControlsId;
     private string _overflowMenuElementId = string.Empty;
     private string _overflowToggleElementId = string.Empty;
+    private string _hostClass = UnderlinedHostClass;
+    private string _ariaOrientation = HorizontalOrientation;
+    private LatticeTabsVariant? _hostClassVariant;
+    private LatticeTabsOrientation? _hostClassOrientation;
+    private string? _hostClassSuffix;
+    private LatticeStripMetrics _metrics = LatticeStripMetrics.Default;
     private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
     private int _activeIndex = -1;
     private int _rovingIndex = -1;
-    private bool _restoreFocusToActiveTab;
+    private bool _hasDescriptions;
+    private bool _restoreFocusToRovingTab;
+
+    // Where an arrow key has moved focus under manual activation, which is not the
+    // selection. -1 means focus has not roamed off the active tab.
+    private int _focusIndex = -1;
 
     /// <summary>The tabs to render, in display order.</summary>
     [Parameter] public IReadOnlyList<LatticeTabItem>? Tabs { get; set; }
@@ -144,6 +194,44 @@
     [Parameter] public string Label { get; set; } = "Tabs";
 
     /// <summary>
+    /// The presentation the strip wears. Defaults to
+    /// <see cref="LatticeTabsVariant.Underlined"/>; choose
+    /// <see cref="LatticeTabsVariant.Segmented"/> for a toggle between peer
+    /// options and <see cref="LatticeTabsVariant.Subordinate"/> for a control
+    /// nested inside an already selected surface. The variant changes only the
+    /// presentation - keyboard behaviour and ARIA semantics are identical.
+    /// </summary>
+    [Parameter] public LatticeTabsVariant Variant { get; set; }
+
+    /// <summary>
+    /// The axis the strip runs along. Defaults to
+    /// <see cref="LatticeTabsOrientation.Horizontal"/>; choose
+    /// <see cref="LatticeTabsOrientation.Vertical"/> for a rail beside its
+    /// panel.
+    /// </summary>
+    /// <remarks>
+    /// The axis is published as <c>aria-orientation</c> and decides which arrow
+    /// keys move between tabs, per the WAI-ARIA tabs pattern. A vertical strip
+    /// also renders every tab inline and scrolls rather than overflowing, which
+    /// is what a rail does; pin <see cref="InlineCapacity"/> to override that.
+    /// </remarks>
+    [Parameter] public LatticeTabsOrientation Orientation { get; set; }
+
+    /// <summary>
+    /// Whether an arrow key also selects the tab it moves to.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see cref="LatticeTabsActivation.Automatic"/>, which is right
+    /// for a strip whose tabs are cheap and always selectable. Use
+    /// <see cref="LatticeTabsActivation.Manual"/> when selecting a tab can be
+    /// refused or navigates: under automatic activation an arrow key is a
+    /// selection attempt, so a tab that cannot be selected cannot be reached
+    /// either, and the strip is not keyboard operable for exactly the entries a
+    /// caller most needs to reach.
+    /// </remarks>
+    [Parameter] public LatticeTabsActivation Activation { get; set; }
+
+    /// <summary>
     /// Pins the breakpoint this strip renders for, overriding the cascaded
     /// shell context. Leave <see langword="null"/> - the intended path - to
     /// follow <see cref="LatticeAdaptiveRoot"/>; set it when a surface knows it
@@ -160,13 +248,33 @@
     [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
 
     /// <summary>
-    /// Overrides the number of tabs rendered inline before the strip overflows.
-    /// Leave <see langword="null"/> to use the breakpoint's token value from
-    /// <see cref="LatticeBreakpoints.TabInlineCapacity"/>, which is the intended
-    /// path; set it only when a surface genuinely knows its strip is narrower or
-    /// wider than the breakpoint implies.
+    /// Overrides the number of tabs rendered inline before the strip overflows,
+    /// bypassing the measurement.
     /// </summary>
+    /// <remarks>
+    /// Leave <see langword="null"/> - the intended path - to let the strip
+    /// measure its own labels against the width it has. Set it only when a
+    /// surface genuinely wants a fixed count regardless of label length.
+    /// </remarks>
     [Parameter] public int? InlineCapacity { get; set; }
+
+    /// <summary>
+    /// The inline extent the strip has to fill, in CSS pixels, used by the
+    /// capacity measurement. Leave <see langword="null"/> to size against the
+    /// cascaded viewport width, or the breakpoint's nominal width when the head
+    /// reports a band rather than a width. Set it when the strip occupies a
+    /// pane whose width the caller knows and the viewport's does not describe.
+    /// Ignored by a <see cref="LatticeTabsOrientation.Vertical"/> strip, which
+    /// scrolls rather than overflowing.
+    /// </summary>
+    [Parameter] public double? AvailableWidth { get; set; }
+
+    /// <summary>
+    /// The strip's geometry, used by the capacity measurement. Leave
+    /// <see langword="null"/> to use the geometry of the chosen
+    /// <see cref="Variant"/>.
+    /// </summary>
+    [Parameter] public LatticeStripMetrics? Metrics { get; set; }
 
     /// <summary>The label of the overflow control. Defaults to <c>More</c>.</summary>
     [Parameter] public string OverflowLabel { get; set; } = "More";
@@ -191,10 +299,19 @@
     /// <summary>
     /// The active tab's panel content. When supplied it is rendered in a
     /// <c>role="tabpanel"</c> region labelled by the active tab, completing the
-    /// tabs pattern; omit it to render the strip alone and host the panel
-    /// yourself.
+    /// tabs pattern; omit it and name your own panel with <see cref="PanelId"/>
+    /// when the panel lives elsewhere in the layout.
     /// </summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>
+    /// The id of the <c>role="tabpanel"</c> element this strip controls, for a
+    /// caller that renders the panel itself rather than passing it as
+    /// <see cref="ChildContent"/>. Every tab points at it through
+    /// <c>aria-controls</c>. Ignored when <see cref="ChildContent"/> is
+    /// supplied, because the strip then owns the panel and knows its id.
+    /// </summary>
+    [Parameter] public string? PanelId { get; set; }
 
     /// <summary>
     /// A stable element-id prefix for the tabs, the panel, and the overflow
@@ -217,6 +334,45 @@
 
     private string TabElementId(string tabId) => ElementIdPrefix + "-tab-" + tabId;
 
+    private static string VariantHostClass(LatticeTabsVariant variant, LatticeTabsOrientation orientation) =>
+        orientation == LatticeTabsOrientation.Vertical
+            ? variant switch
+            {
+                LatticeTabsVariant.Segmented => VerticalSegmentedHostClass,
+                LatticeTabsVariant.Subordinate => VerticalSubordinateHostClass,
+                _ => VerticalUnderlinedHostClass,
+            }
+            : variant switch
+            {
+                LatticeTabsVariant.Segmented => SegmentedHostClass,
+                LatticeTabsVariant.Subordinate => SubordinateHostClass,
+                _ => UnderlinedHostClass,
+            };
+
+    private static LatticeStripMetrics VariantMetrics(LatticeTabsVariant variant) =>
+        variant == LatticeTabsVariant.Underlined
+            ? LatticeStripMetrics.Default
+            : LatticeStripMetrics.Segment;
+
+    // Composed once per parameter change rather than on every render pass, so a
+    // re-render caused by a selection costs no string concatenation.
+    private void RebuildHostClass()
+    {
+        if (_hostClassVariant == Variant
+            && _hostClassOrientation == Orientation
+            && string.Equals(_hostClassSuffix, Class, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _hostClassVariant = Variant;
+        _hostClassOrientation = Orientation;
+        _hostClassSuffix = Class;
+
+        var variantClass = VariantHostClass(Variant, Orientation);
+        _hostClass = string.IsNullOrEmpty(Class) ? variantClass : variantClass + " " + Class;
+    }
+
     // Element ids are composed once per parameter change rather than on every
     // render pass, so a strip of any length allocates no strings while
     // rendering.
@@ -231,18 +387,36 @@
             _overflowToggleElementId = OverflowToggleElementId;
         }
 
+        // Every tab names the panel it controls. The strip's own panel when it
+        // renders one, otherwise the panel the caller named - and nothing at
+        // all when the caller named none, because pointing aria-controls at an
+        // element that does not exist is worse than omitting it.
+        _panelControlsId = ChildContent is not null ? _panelElementId : PanelId;
+
         if (_tabElementIds.Length < _tabs.Count)
         {
             _tabElementIds = new string[_tabs.Count];
+            _tabDescriptionIds = new string[_tabs.Count];
         }
 
         // Rebuilt unconditionally rather than guarded on the tab list's
         // identity: a caller that mutates the list it already handed over would
         // otherwise leave this cache pointing at ids that no longer belong to
         // the tabs beside them.
+        _hasDescriptions = false;
         for (var i = 0; i < _tabs.Count; i++)
         {
-            _tabElementIds[i] = TabElementId(_tabs[i].Id);
+            var id = TabElementId(_tabs[i].Id);
+            _tabElementIds[i] = id;
+
+            if (_tabs[i].Description is null)
+            {
+                _tabDescriptionIds[i] = string.Empty;
+                continue;
+            }
+
+            _hasDescriptions = true;
+            _tabDescriptionIds[i] = id + DescriptionIdSuffix;
         }
     }
 
@@ -251,13 +425,19 @@
     {
         _tabs = Tabs ?? NoTabs;
         _breakpoint = Breakpoint ?? AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default;
+        _metrics = Metrics ?? VariantMetrics(Variant);
 
         if (_tabElements.Length < _tabs.Count)
         {
             _tabElements = new ElementReference[_tabs.Count];
         }
 
+        RebuildHostClass();
         RebuildElementIds();
+
+        _ariaOrientation = Orientation == LatticeTabsOrientation.Vertical
+            ? VerticalOrientation
+            : HorizontalOrientation;
 
         _activeIndex = IndexOfActive();
         _layout = LatticeOverflowLayout.Resolve(_tabs.Count, _activeIndex, ResolveInlineCapacity());
@@ -277,26 +457,29 @@
     /// <inheritdoc />
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_restoreFocusToActiveTab)
+        if (!_restoreFocusToRovingTab)
         {
             return;
         }
 
-        _restoreFocusToActiveTab = false;
+        _restoreFocusToRovingTab = false;
 
-        if (_activeIndex < 0 || _activeIndex >= _tabElements.Length)
+        if (_rovingIndex < 0 || _rovingIndex >= _tabElements.Length)
         {
             return;
         }
 
         try
         {
-            // Keyboard navigation moved the active tab, so move DOM focus with
-            // it. The active tab is guaranteed to be inline (the overflow layout
-            // promotes it), so the reference always points at a rendered
-            // element. Focus is a browser affordance: a host without a JS
-            // runtime simply keeps the caller's focus where it was.
-            await _tabElements[_activeIndex].FocusAsync();
+            // Keyboard navigation moved focus, so move DOM focus with it. Under
+            // automatic activation the roving index is the tab just selected;
+            // under manual activation it is the tab focus moved to without
+            // selecting. Either way it is guaranteed inline (the overflow layout
+            // promotes the active tab, and a manual move only targets inline
+            // tabs), so the reference always points at a rendered element. Focus
+            // is a browser affordance: a host without a JS runtime simply keeps
+            // the caller's focus where it was.
+            await _tabElements[_rovingIndex].FocusAsync();
         }
         catch (InvalidOperationException)
         {
@@ -308,8 +491,42 @@
         }
     }
 
-    private int ResolveInlineCapacity() =>
-        InlineCapacity ?? LatticeBreakpoints.TabInlineCapacity(_breakpoint);
+    // The strip measures what it holds against the width it has, rather than
+    // taking a fixed count that cannot know whether a label reads "Data" or
+    // "Retention and residency".
+    private int ResolveInlineCapacity()
+    {
+        if (InlineCapacity is int pinned)
+        {
+            return pinned;
+        }
+
+        // A rail scrolls rather than collapsing into a menu, so a vertical
+        // strip renders every tab. This is the same reasoning that gives the
+        // navigation primitive's vertical shapes an unbounded capacity: the
+        // constraint on a column is height, and a column that runs past its
+        // container is scrolled to, not hidden behind a "More".
+        if (Orientation == LatticeTabsOrientation.Vertical)
+        {
+            return _tabs.Count;
+        }
+
+        return LatticeTabCapacity.Measure(_tabs, ResolveAvailableWidth(), _metrics);
+    }
+
+    private double ResolveAvailableWidth()
+    {
+        if (AvailableWidth is double supplied)
+        {
+            return supplied;
+        }
+
+        // A pinned breakpoint pins the width too: the caller asked for the
+        // shape of a band, not for the window's real width.
+        return Breakpoint is null && AdaptiveContext is not null
+            ? AdaptiveContext.LayoutWidth
+            : LatticeBreakpoints.NominalWidth(_breakpoint);
+    }
 
     private int IndexOfActive()
     {
@@ -330,9 +547,15 @@
     }
 
     // Exactly one tab carries tabindex="0" so the strip is a single tab stop:
-    // the active tab when there is one, otherwise the first inline enabled tab.
+    // the tab focus has roamed to under manual activation, otherwise the active
+    // tab when there is one, otherwise the first inline enabled tab.
     private int ResolveRovingIndex()
     {
+        if (_focusIndex >= 0 && _focusIndex < _tabs.Count && _tabs[_focusIndex].IsEnabled)
+        {
+            return _focusIndex;
+        }
+
         if (_activeIndex >= 0 && _tabs[_activeIndex].IsEnabled)
         {
             return _activeIndex;
@@ -355,6 +578,10 @@
         {
             return Task.CompletedTask;
         }
+
+        // A real selection ends any focus excursion: the roving tabindex should
+        // follow the tab that is now active, not wherever the arrows had roamed.
+        _focusIndex = -1;
 
         return OnSelect.HasDelegate ? OnSelect.InvokeAsync(tab.Id) : Task.CompletedTask;
     }
@@ -390,27 +617,77 @@
 
     private Task OnKeyDownAsync(KeyboardEventArgs args)
     {
+        // Under manual activation Enter and Space are what select; the arrows only
+        // move focus. Handled first so a strip that navigates still has a key that
+        // means "open this one".
+        if (Activation == LatticeTabsActivation.Manual
+            && args.Key is "Enter" or " " or "Spacebar")
+        {
+            return _rovingIndex >= 0 && _tabs[_rovingIndex].IsEnabled
+                ? SelectAsync(_tabs[_rovingIndex])
+                : Task.CompletedTask;
+        }
+
         var target = args.Key switch
         {
-            "ArrowRight" or "Right" => NextEnabled(1),
-            "ArrowLeft" or "Left" => NextEnabled(-1),
             "Home" => FirstEnabled(),
             "End" => LastEnabled(),
-            _ => -1,
+            _ => ArrowTarget(args.Key),
         };
 
-        if (target < 0 || target == _activeIndex)
+        // Compared against the roving index - the tab focus is on - rather than the
+        // active one, because that is the origin the arrow moved from. Comparing
+        // against the selection would swallow a legitimate move back onto the selected
+        // tab whenever focus had roamed off it.
+        if (target < 0 || target == _rovingIndex)
         {
             return Task.CompletedTask;
         }
 
-        _restoreFocusToActiveTab = true;
+        _restoreFocusToRovingTab = true;
+
+        if (Activation == LatticeTabsActivation.Manual)
+        {
+            // Move focus without selecting. The strip re-renders, the roving
+            // tabindex follows _focusIndex, and OnAfterRender puts DOM focus on it.
+            _focusIndex = target;
+            _rovingIndex = target;
+            StateHasChanged();
+            return Task.CompletedTask;
+        }
+
         return SelectAsync(_tabs[target]);
     }
 
-    // Walks outward from the current tab in `step` direction, wrapping once, and
-    // returns the first enabled tab. Bounded by the tab count, so a strip of
-    // entirely disabled tabs terminates rather than spinning.
+    // The tabs pattern binds the arrow pair to the strip's axis: a horizontal
+    // strip moves on Left and Right, a vertical one on Up and Down. Binding
+    // both pairs in both axes would swallow the keys the surrounding page uses
+    // to scroll.
+    private int ArrowTarget(string? key) =>
+        Orientation == LatticeTabsOrientation.Vertical
+            ? key switch
+            {
+                "ArrowDown" or "Down" => NextEnabled(1),
+                "ArrowUp" or "Up" => NextEnabled(-1),
+                _ => -1,
+            }
+            : key switch
+            {
+                "ArrowRight" or "Right" => NextEnabled(1),
+                "ArrowLeft" or "Left" => NextEnabled(-1),
+                _ => -1,
+            };
+
+    // Walks outward from the tab that currently HOLDS FOCUS in `step` direction,
+    // wrapping once, and returns the first enabled tab. Bounded by the tab count, so a
+    // strip of entirely disabled tabs terminates rather than spinning.
+    //
+    // The origin is the roving index, not the active index, because the two diverge
+    // whenever nothing is selected - which is the ordinary state of the area rail on a
+    // signed-out shell. Starting from the active index in that state resolved to -1,
+    // and a forward step from -1 lands on index 0, which is where focus already was:
+    // the arrow key appeared to do nothing at all. Focus, not selection, is what an
+    // arrow key moves relative to in the tabs pattern.
     private int NextEnabled(int step)
     {
         if (_tabs.Count == 0)
@@ -418,7 +695,7 @@
             return -1;
         }
 
-        var start = _activeIndex >= 0 ? _activeIndex : (step > 0 ? -1 : 0);
+        var start = _rovingIndex >= 0 ? _rovingIndex : (step > 0 ? -1 : 0);
         for (var offset = 1; offset <= _tabs.Count; offset++)
         {
             var candidate = ((start + (step * offset)) % _tabs.Count + _tabs.Count) % _tabs.Count;

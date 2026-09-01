@@ -1,3 +1,4 @@
+@using Orleans.Lattice.Explorer.Core.Vocabulary
 @using Orleans.Lattice.Explorer.DesignSystem.Layout
 @using Orleans.Lattice.Explorer.DesignSystem.Tokens
 @using Orleans.Lattice.Explorer.Plugins
@@ -9,215 +10,281 @@
 @inject IExplorerPluginAccessRefresher AccessRefresher
 @inject ExplorerPluginHostState HostState
 @inject IExplorerAuthSession Auth
+@inject IExplorerShellRouter Router
+@inject IServiceProvider Services
 
 @*
-    The app-level area switcher: a tab strip above the per-selection tier that
-    swaps the whole working surface between the shell's own home surface and one
-    registered area plugin. The shell enumerates IExplorerPlugin from the
-    container, filters to the Area surface, and renders the active one through
-    DynamicComponent, so it names no plugin and gains no per-plugin service
-    injection - a new area joins by being registered, with no change here.
+    The shell frame: a stable vertical rail of areas beside one working surface.
 
-    Gating is advisory (the server stays the sole enforcement point) and is read
-    from the keyed access store: allowed renders active, denied renders
-    disabled-and-visible with the same grey-out and tooltip as before,
-    authentication-required stays clickable and opens the sign-in dialog, and
-    unavailable renders no entry at all.
+    THE RAIL IS THE PRIMARY TIER, and it is a rail rather than a strip on
+    purpose. Four horizontal strips of near-identical appearance signalled no
+    hierarchy at all, and a horizontal area strip put the tiers into competition
+    for the same scarce inline width - so a gate that disabled two areas pushed a
+    live one into an overflow menu. Vertical space is cheap: every area renders,
+    nothing is displaced, and demoting an entry costs nothing.
 
-    The shell is also the frame around the home surface, and it reflows with the
-    cascaded breakpoint rather than holding one desktop shape at every width
-    (issue #1792):
+    ONE PRIMITIVE, FOUR SHAPES. The rail is LatticeAdaptiveTabs in its vertical
+    orientation; the catalog kind is the segmented variant; the per-selection
+    surfaces are the underlined strip; a plugin's sub-surfaces are the
+    subordinate variant. No tier hand-rolls a tablist,
+    so the roving tabindex, the per-axis arrow keys, Home and End, the enumerated
+    aria-selected and the tab-to-panel binding are implemented once.
 
-      expanded / medium  the catalog sits in a persistent pane beside the
-                         detail surface, exactly as before
-      compact            the catalog is not a pane at all: it collapses behind
-                         a toggle into the design system's drawer presentation,
-                         so the detail surface gets the whole width
+    THE ADDRESS IS THE INTENT. The rail does not hold the active area in a field:
+    it reads IExplorerShellRouter.Current.Area and navigates by asking for a
+    route. Restoring the remembered area on a bare '/' is already arbitrated once
+    per session entry by ExplorerShellEntryPolicy in UI/Pages/Home.razor.cs; a
+    second arbitrator here would be a second opinion, so there is not one. The
+    consequence is a pleasant one: an address naming an area a gate has not yet
+    admitted stays in the address bar, and the area opens the moment the gate
+    admits it.
 
-    The area strip overflows rather than running off the edge, on the same
-    LatticeOverflowLayout the design system's own strips use, so the active area
-    is always visible and the rest stay reachable through a menu.
+    GATING IS ADVISORY - the server remains the sole enforcement point - so the
+    policy below is a usability choice. Allowed and authentication-required are
+    offered in the rail (an unauthenticated caller is one sign-in away, so the
+    entry stays prominent and clickable); denied is demoted below a divider,
+    visible and stating its remedy, because a caller who cannot see that Backups
+    exists cannot ask to be granted it; unavailable is withheld and explained
+    once in the capabilities affordance. A preference hides the demoted group,
+    defaulting to showing it.
 *@
 
-@{ BuildVisibleTabs(); }
+@{ BuildRail(); }
 
-<div class="lx-shell-areastrip">
-    <div class="lx-tabstrip" role="tablist" aria-label="Application areas">
-        @if (_strip.IsInline(HomeStripIndex))
+<div class="lx-shell-frame">
+    <nav class="lx-shell-rail lx-shell-areastrip"
+         aria-label="@AreaRailLandmarkLabel"
+         data-lx-rail-settled="@(_railPending ? "false" : "true")">
+        <LatticeAdaptiveTabs Tabs="_railTabs"
+                             ActiveId="@_activeSlug"
+                             OnSelect="_activateArea"
+                             Label="@AreaRailLabel"
+                             Orientation="LatticeTabsOrientation.Vertical"
+                    Activation="LatticeTabsActivation.Manual"
+                             Id="@ExplorerShellRegions.AreaRail"
+                             PanelId="@ExplorerShellRegions.AreaContent"
+                             Class="lx-shell-rail-strip" />
+
+        @if (_demotedCount > 0)
         {
-            <button type="button"
-                    role="tab"
-                    class="@(_activePlugin is null ? ActiveTabClass : TabClass)"
-                    aria-selected="@(_activePlugin is null ? "true" : "false")"
-                    @onclick="_activateHome">
-                @HomeLabel
-            </button>
-        }
-        @for (var slot = 0; slot < _visibleCount; slot++)
-        {
-            if (!_strip.IsInline(slot + 1))
-            {
-                continue;
-            }
-
-            var tab = _tabs[_visible[slot]];
-            var access = _visibleAccess[slot];
-            var signInRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
-            var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
-            <button type="button"
-                    role="tab"
-                    class="@(isActive ? ActiveTabClass : TabClass)"
-                    aria-selected="@(isActive ? "true" : "false")"
-                    disabled="@(!access.IsAllowed && !signInRequired)"
-                    title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
-                    @onclick="tab.Activate">
-                @tab.Label
-            </button>
-        }
-    </div>
-    @if (_strip.HasOverflow)
-    {
-        <div class="lx-tabstrip-overflow-host">
-            <button type="button"
-                    class="lx-tabstrip-overflow-toggle"
-                    id="@_overflowToggleElementId"
-                    aria-haspopup="menu"
-                    aria-expanded="@(IsOverflowOpen ? "true" : "false")"
-                    aria-controls="@_overflowMenuElementId"
-                    @onclick="_toggleOverflow">
-                @OverflowLabel
-            </button>
-            @if (IsOverflowOpen)
-            {
-                <div class="lx-tabstrip-overflow"
-                     id="@_overflowMenuElementId"
-                     role="menu"
-                     aria-labelledby="@_overflowToggleElementId"
-                     @onkeydown="_overflowKeyDown">
-                    <button type="button"
-                            class="lx-tabstrip-overflow-item"
-                            role="menuitemradio"
-                            aria-checked="@(_activePlugin is null ? "true" : "false")"
-                            @onclick="_activateHomeFromOverflow">
-                        @HomeLabel
-                    </button>
-                    @for (var slot = 0; slot < _visibleCount; slot++)
-                    {
-                        var tab = _tabs[_visible[slot]];
-                        var access = _visibleAccess[slot];
-                        var signInRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
-                        var isActive = ReferenceEquals(tab.Plugin, _activePlugin);
-                        <button type="button"
-                                class="lx-tabstrip-overflow-item"
-                                role="menuitemradio"
-                                aria-checked="@(isActive ? "true" : "false")"
-                                disabled="@(!access.IsAllowed && !signInRequired)"
-                                title="@(access.IsAllowed ? null : signInRequired ? tab.SignInTitle : tab.DeniedTitle)"
-                                @onclick="tab.ActivateFromOverflow">
-                            @tab.Label
-                        </button>
-                    }
-                </div>
-            }
-        </div>
-    }
-</div>
-
-<div class="lx-shell-area-content">
-    @if (_activePlugin is not null)
-    {
-        <DynamicComponent Type="_activePlugin.ViewType" />
-    }
-    else if (_breakpoint == LatticeBreakpoint.Compact)
-    {
-        @* Compact: the catalog is not a pane. It lives behind a toggle in the
-           design system's drawer presentation, so the detail surface below it
-           gets the full viewport width instead of the ~70px a fixed 20rem
-           sidebar leaves at a phone width. *@
-        <div class="lx-shell-layout is-stacked">
-            <div class="lx-nav-drawer-host">
-                <button type="button"
-                        class="lx-nav-drawer-toggle"
-                        id="@_catalogToggleElementId"
-                        aria-expanded="@(IsCatalogOpen ? "true" : "false")"
-                        aria-controls="@_catalogDrawerElementId"
-                        @onclick="_toggleCatalog">
-                    @CatalogToggleLabel
-                </button>
-                @if (IsCatalogOpen)
+            <div class="lx-shell-rail-divider" role="separator" aria-orientation="horizontal"></div>
+            <div class="lx-shell-rail-demoted"
+                 role="group"
+                 aria-label="@ExplorerRailCopy.DemotedGroupLabel">
+                <span class="lx-shell-rail-group-label" aria-hidden="true">
+                    @ExplorerRailCopy.DemotedGroupLabel
+                </span>
+                @for (var slot = 0; slot < _demotedCount; slot++)
                 {
-                    <div class="lx-nav-scrim" @onclick="_closeCatalog"></div>
-                    <div class="lx-nav lx-nav-drawer"
-                         id="@_catalogDrawerElementId"
-                         @onkeydown="_catalogKeyDown">
-                        <div class="lx-nav-drawer-header">
-                            <button type="button"
-                                    class="lx-nav-drawer-close"
-                                    @onclick="_closeCatalog">
-                                <span class="lx-visually-hidden">@CatalogCloseLabel</span>
-                            </button>
-                        </div>
-                        @Catalog
+                    var entry = _entries[_demoted[slot]];
+                    <div class="lx-shell-rail-demoted-entry">
+                        <span class="lx-shell-rail-demoted-label"
+                              id="@entry.LabelElementId"
+                              aria-describedby="@entry.ExplanationElementId">@entry.Label</span>
+                        @*
+                            The refusal is the shared vocabulary's; the remedy is
+                            the GATE's, so it names the permission that is
+                            missing and who issues it rather than repeating the
+                            area name the caller just clicked.
+                        *@
+                        <LatticeHelp Id="@entry.HelpId"
+                                     Term="@entry.Label"
+                                     Tone="LatticeHelpTone.Denial"
+                                     Explanation="@entry.DeniedMessage.Explanation"
+                                     Remedy="@entry.DeniedRemedy"
+                                     RemedyLabel="@entry.DeniedMessage.RemedyLabel" />
                     </div>
                 }
             </div>
-            <main class="lx-shell-main">
-                @ChildContent
-            </main>
+        }
+
+        <div class="lx-shell-rail-footer">
+            <LatticeHelp Id="@ExplorerShellRegions.CapabilitiesHelp"
+                         Term="@ExplorerRailCopy.MissingAreasTerm"
+                         TriggerText="@ExplorerRailCopy.MissingAreasTriggerText"
+                         Explanation="@_missingAreas.Explanation"
+                         Remedy="@_missingAreas.Remedy"
+                         RemedyLabel="@_missingAreas.RemedyLabel" />
+
+            <label class="lx-shell-rail-preference" for="@ExplorerShellRegions.HideInaccessibleControl">
+                <input type="checkbox"
+                       id="@ExplorerShellRegions.HideInaccessibleControl"
+                       checked="@_hideInaccessible"
+                       @onchange="_toggleHideInaccessible" />
+                <span>@ExplorerRailCopy.HideInaccessibleLabel</span>
+            </label>
         </div>
-    }
-    else
-    {
-        <div class="lx-shell-layout">
-            @Catalog
-            <main class="lx-shell-main">
-                @ChildContent
-            </main>
-        </div>
-    }
+    </nav>
+
+    <div class="lx-shell-area-content"
+         id="@ExplorerShellRegions.AreaContent"
+         role="tabpanel"
+         aria-labelledby="@_activeTabElementId">
+        @*
+            ONE main landmark, on every area. The shell used to wrap only its own
+            home surface, so the moment a plugin area took over the working
+            surface the document had no main at all and a skip link would have
+            had nowhere to land. The landmark belongs to the frame, not to the
+            surface inside it, so it lives here and every area inherits it.
+
+            tabindex="-1" so the skip link's target is focusable; the surface
+            heading and the controls beneath it are what a caller then tabs
+            through.
+        *@
+        <main class="lx-shell-main" id="@ExplorerShellRegions.Main" tabindex="-1" @ref="_main">
+            <h1 class="lx-shell-surface-title">@_activeLabel</h1>
+
+            @if (_unreachableNotice is not null)
+            {
+                <p class="lx-shell-surface-notice" role="status">@_unreachableNotice</p>
+            }
+
+            @if (_activePlugin is not null)
+            {
+                <CascadingValue Value="_areaContext">
+                    <DynamicComponent Type="_activePlugin.ViewType" />
+                </CascadingValue>
+            }
+            else if (_breakpoint == LatticeBreakpoint.Compact)
+            {
+                @* Compact: the catalog is not a pane. It lives behind a toggle in
+                   the design system's drawer presentation, so the detail surface
+                   below it gets the full viewport width instead of the ~70px a
+                   fixed 20rem sidebar leaves at a phone width. *@
+                <div class="lx-shell-layout is-stacked">
+                    <div class="lx-nav-drawer-host">
+                        <button type="button"
+                                class="lx-nav-drawer-toggle"
+                                id="@_catalogToggleElementId"
+                                aria-expanded="@(IsCatalogOpen ? "true" : "false")"
+                                aria-controls="@_catalogDrawerElementId"
+                                @onclick="_toggleCatalog">
+                            @CatalogToggleLabel
+                        </button>
+                        @if (IsCatalogOpen)
+                        {
+                            <div class="lx-nav-scrim" @onclick="_closeCatalog"></div>
+                            <div class="lx-nav lx-nav-drawer"
+                                 id="@_catalogDrawerElementId"
+                                 @onkeydown="_catalogKeyDown">
+                                <div class="lx-nav-drawer-header">
+                                    <button type="button"
+                                            class="lx-nav-drawer-close"
+                                            @onclick="_closeCatalog">
+                                        <span class="lx-visually-hidden">@CatalogCloseLabel</span>
+                                    </button>
+                                </div>
+                                @Catalog
+                            </div>
+                        }
+                    </div>
+                    <div class="lx-shell-workspace">
+                        @ChildContent
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="lx-shell-layout">
+                    @Catalog
+                    <div class="lx-shell-workspace">
+                        @ChildContent
+                    </div>
+                </div>
+            }
+        </main>
+    </div>
 </div>
 
 @code {
-    private static readonly AreaTab[] NoTabs = [];
+    private static readonly AreaEntry[] NoEntries = [];
     private static readonly int[] NoSlots = [];
-    private static readonly ExplorerPluginAccess[] NoAccess = [];
+    private static readonly string[] NoLabels = [];
 
-    /// <summary>The area strip's fixed first slot: the shell's own home surface.</summary>
-    private const int HomeStripIndex = 0;
+    /// <summary>The accessible name of the rail's tab list.</summary>
+    private const string AreaRailLabel = "Application areas";
 
-    // The two class strings a tab can carry, composed once. Interpolating them
-    // per tab per render would allocate on every access change and every
-    // connection transition, and the strip re-renders on both.
-    private const string TabClass = "lx-shell-area-tab";
-    private const string ActiveTabClass = "lx-shell-area-tab is-active";
+    /// <summary>The accessible name of the navigation landmark the rail sits in.</summary>
+    private const string AreaRailLandmarkLabel = "Areas";
 
-    private readonly string _instanceId = "lx-shell-" + Guid.NewGuid().ToString("N");
+    private readonly string _instanceId = ExplorerShellRegions.Prefix + Guid.NewGuid().ToString("N");
 
-    private AreaTab[] _tabs = NoTabs;
-    private IExplorerPlugin? _activePlugin;
-    private readonly EventCallback _activateHome;
-    private readonly EventCallback _activateHomeFromOverflow;
-    private readonly EventCallback _toggleOverflow;
+    /// <summary>
+    /// The main landmark, held so the shell's skip link can put focus in it
+    /// directly. See <see cref="FocusMainAsync"/> for why the anchor alone is not
+    /// enough.
+    /// </summary>
+    private ElementReference _main;
+
+    /// <summary>
+    /// Moves keyboard focus into the main landmark. The skip link's
+    /// <c>href="#..."</c> stays in the markup - it is what makes the control a
+    /// real link and what still works with no script - but the framework
+    /// intercepts a same-document anchor and updates the address itself rather
+    /// than letting the browser perform a fragment navigation. Only a real
+    /// fragment navigation moves the sequential focus navigation starting point,
+    /// so without this the caller lands back at the top of the chrome and the
+    /// bypass silently does nothing (WCAG SC 2.4.1 Bypass Blocks, level A).
+    /// </summary>
+    public ValueTask FocusMainAsync() => _main.FocusAsync();
+
+    private AreaEntry[] _entries = NoEntries;
+    private AreaEntry? _homeEntry;
+
+    private readonly EventCallback<string> _activateArea;
+    private readonly EventCallback<ChangeEventArgs> _toggleHideInaccessible;
     private readonly EventCallback _toggleCatalog;
     private readonly EventCallback _closeCatalog;
-    private readonly EventCallback<KeyboardEventArgs> _overflowKeyDown;
     private readonly EventCallback<KeyboardEventArgs> _catalogKeyDown;
-    private readonly Action _render;
     private readonly Func<Task> _refresh;
+    private readonly Action _resolveActiveArea;
     private ExplorerPluginConnectionState _lastConnectionState;
 
-    // The strip's visible slots, rebuilt into buffers sized once at mount, so a
-    // render pass allocates nothing however many areas are registered and
-    // however often the access store changes.
-    private int[] _visible = NoSlots;
-    private ExplorerPluginAccess[] _visibleAccess = NoAccess;
-    private int _visibleCount;
-    private LatticeOverflowLayout _strip;
+    // The selection the shell last saw, so a route change can tell "a different
+    // item was picked" from "the same item's surface changed".
+    private string? _lastSelection;
+
+    // The last selection that actually named something, kept so returning to the
+    // catalog can put it back. The remembered ROUTE cannot serve this: switching
+    // area drops the selection, and that selection-less route is what then gets
+    // remembered, so by the time the caller returns there is nothing left in it.
+    private string _lastSelectionKind = string.Empty;
+    private string _lastSelectionId = string.Empty;
+
+    // The rail's per-render buffers, sized once at mount, so a render pass
+    // allocates nothing however many areas are registered and however often the
+    // access store changes. The tab list is a reused List rather than an array
+    // because the primitive takes an IReadOnlyList whose Count must be the
+    // number of live entries.
+    private readonly List<LatticeTabItem> _railTabs = [];
+    private int[] _demoted = NoSlots;
+    private int _demotedCount;
+
+    // True while at least one area's gate has not reported. Published as
+    // data-lx-rail-settled so a caller - a test, or anything driving the shell -
+    // can wait for the rail to mean something instead of racing its probes.
+    private bool _railPending;
+
+    private IExplorerPlugin? _activePlugin;
+    private string _activeSlug = ExplorerRouteSegments.Explore;
+    private string _activeLabel = string.Empty;
+    private string _activeTabElementId =
+        ExplorerShellRegions.AreaTabElementId(ExplorerRouteSegments.Explore);
+    private ExplorerAreaContext? _areaContext;
+    private string? _unreachableNotice;
+
+    private bool _hideInaccessible;
+    private bool _preferencesApplied;
+
+    // Recomposed only when the set of cluster-unavailable areas actually
+    // changes, never per render: the sentence names every missing area and the
+    // rail re-renders on every gate report.
+    private ExplorerStateMessage _missingAreas = ExplorerRailCopy.MissingAreas(NoLabels);
+    private int _missingAreasSignature = -1;
+    private List<string>? _unavailableLabels;
 
     private LatticeBreakpoint _breakpoint = LatticeBreakpoints.Default;
 
-    private readonly string _overflowMenuElementId;
-    private readonly string _overflowToggleElementId;
     private readonly string _catalogDrawerElementId;
     private readonly string _catalogToggleElementId;
 
@@ -226,23 +293,20 @@
     {
         // Bound once rather than per notification, so a probe cycle that files
         // several decisions does not allocate a delegate for each of them.
-        _render = StateHasChanged;
         _refresh = RefreshAccessAsync;
+        _resolveActiveArea = ResolveActiveAreaAndRender;
 
-        // Every callback the strip and the compact frame bind is composed here
-        // rather than on the render path: the strip re-renders on every access
-        // change and every connection transition, and a method group in the
-        // markup would allocate a delegate on each of them.
-        _activateHome = EventCallback.Factory.Create(this, ActivateHomeAsync);
-        _activateHomeFromOverflow = EventCallback.Factory.Create(this, ActivateHomeFromOverflowAsync);
-        _toggleOverflow = EventCallback.Factory.Create(this, ToggleOverflowAsync);
+        // Every callback the rail and the compact frame bind is composed here
+        // rather than on the render path: the rail re-renders on every access
+        // change, every route change and every connection transition, and a
+        // method group in the markup would allocate a delegate on each of them.
+        _activateArea = EventCallback.Factory.Create<string>(this, ActivateAreaAsync);
+        _toggleHideInaccessible =
+            EventCallback.Factory.Create<ChangeEventArgs>(this, OnHideInaccessibleChangedAsync);
         _toggleCatalog = EventCallback.Factory.Create(this, ToggleCatalogAsync);
         _closeCatalog = EventCallback.Factory.Create(this, CloseCatalogAsync);
-        _overflowKeyDown = EventCallback.Factory.Create<KeyboardEventArgs>(this, OnOverflowKeyDown);
         _catalogKeyDown = EventCallback.Factory.Create<KeyboardEventArgs>(this, OnCatalogKeyDown);
 
-        _overflowMenuElementId = _instanceId + "-overflow";
-        _overflowToggleElementId = _instanceId + "-overflow-toggle";
         _catalogDrawerElementId = _instanceId + "-catalog";
         _catalogToggleElementId = _instanceId + "-catalog-toggle";
     }
@@ -265,9 +329,6 @@
     /// <summary>The label of the shell's own always-available home surface.</summary>
     [Parameter] public string HomeLabel { get; set; } = "Explore";
 
-    /// <summary>The label of the area strip's overflow control.</summary>
-    [Parameter] public string OverflowLabel { get; set; } = "More";
-
     /// <summary>The label of the control that opens the catalog drawer at the compact breakpoint.</summary>
     [Parameter] public string CatalogToggleLabel { get; set; } = "Catalog";
 
@@ -285,16 +346,6 @@
     /// <summary>Raised when the catalog drawer opens or closes, for two-way binding.</summary>
     [Parameter] public EventCallback<bool> IsCatalogOpenChanged { get; set; }
 
-    /// <summary>
-    /// Whether the area strip's overflow menu is open. The shell toggles this
-    /// itself; bind it when a host needs to drive the menu. Ignored when the
-    /// whole strip fits inline.
-    /// </summary>
-    [Parameter] public bool IsOverflowOpen { get; set; }
-
-    /// <summary>Raised when the overflow menu opens or closes, for two-way binding.</summary>
-    [Parameter] public EventCallback<bool> IsOverflowOpenChanged { get; set; }
-
     /// <summary>Shared dialog state used to offer a sign-in for a plugin that requires one.</summary>
     [CascadingParameter] public LoginDialogState? Login { get; set; }
 
@@ -305,34 +356,55 @@
     /// </summary>
     [CascadingParameter] public LatticeAdaptiveContext? AdaptiveContext { get; set; }
 
+    /// <inheritdoc />
     protected override async Task OnInitializedAsync()
     {
-        // Every per-tab delegate and title is built once here rather than on the
-        // render path: the strip re-renders on every access change and every
-        // connection transition, and a closure or an interpolated tooltip per tab
-        // per render would allocate on all of them.
+        // Every per-entry delegate, element id and sentence is built once here
+        // rather than on the render path: the rail re-renders on every access
+        // change and every connection transition, and a closure or an
+        // interpolated explanation per entry per render would allocate on all of
+        // them.
+        _homeEntry = AreaEntry.ForHome(HomeLabel);
+        _activeLabel = HomeLabel;
+
         var plugins = PluginCatalog.ForSurface(ExplorerPluginSurface.Area);
         if (plugins.Count > 0)
         {
-            var tabs = new AreaTab[plugins.Count];
+            var entries = new AreaEntry[plugins.Count];
             for (var i = 0; i < plugins.Count; i++)
             {
-                tabs[i] = new AreaTab(this, plugins[i]);
+                entries[i] = AreaEntry.ForPlugin(plugins[i]);
             }
 
-            _tabs = tabs;
+            _entries = entries;
 
-            // Sized once, to the widest the strip can ever be, so the per-render
-            // visibility pass writes into a buffer instead of allocating one.
-            _visible = new int[plugins.Count];
-            _visibleAccess = new ExplorerPluginAccess[plugins.Count];
+            // Sized once, to the widest the rail and the demoted group can ever
+            // be, so the per-render pass writes into buffers instead of growing
+            // them. The rail's list is one longer than the plugin set because
+            // the home surface always leads it.
+            _railTabs.Capacity = plugins.Count + 1;
+            _demoted = new int[plugins.Count];
+            _unavailableLabels = new List<string>(plugins.Count);
         }
+
+        // The rail's own preference key. Registered here rather than by a head,
+        // so a deployment gains it by rendering the shell and the reset-view
+        // affordance discloses and clears it with no further wiring. Registration
+        // is idempotent by reference, and the catalog is resolved optionally so
+        // the shell still renders in a host with no preference contract.
+        (Services.GetService(typeof(IExplorerPreferenceCatalog)) as IExplorerPreferenceCatalog)
+            ?.Register(ExplorerShellNavigationKeys.HideInaccessibleAreas);
 
         _lastConnectionState = HostState.Connection.State;
 
         AccessStore.Changed += OnAccessChanged;
         HostState.Changed += OnHostChanged;
         Auth.AuthenticationChanged += OnAuthenticationChanged;
+        Router.RouteChanged += OnRouteChanged;
+
+        ResolveActiveArea();
+
+        await ApplyPreferencesAsync();
 
         // Probe every registered gate once after the shell mounts.
         await RefreshAccessAsync();
@@ -345,133 +417,336 @@
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
-        // A catalog drawer or an overflow menu left open across a widening
-        // breakpoint change would be orphaned: the wider shapes render neither
-        // the scrim nor the toggle that dismisses it. Routed through the setters
-        // so a bound caller is told rather than silently diverging from the
-        // shell's own state.
+        // A catalog drawer left open across a widening breakpoint change would be
+        // orphaned: the wider shapes render neither the scrim nor the toggle that
+        // dismisses it. Routed through the setter so a bound caller is told
+        // rather than silently diverging from the shell's own state.
         if (IsCatalogOpen && _breakpoint != LatticeBreakpoint.Compact)
         {
             await SetCatalogOpenAsync(false);
         }
+    }
 
-        // The visible count is the one the last render resolved, which is what
-        // the next render will overflow (or not) against.
-        if (IsOverflowOpen && _visibleCount + 1 <= LatticeBreakpoints.TabInlineCapacity(_breakpoint))
+    /// <inheritdoc />
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _preferencesApplied)
         {
-            await SetOverflowOpenAsync(false);
+            return;
+        }
+
+        // Browser storage is unreachable during a server prerender, so the first
+        // attempt can legitimately have done nothing. Re-read once there is a
+        // circuit, then render whichever answer we ended up with.
+        if (await ApplyPreferencesAsync())
+        {
+            StateHasChanged();
         }
     }
 
     /// <summary>
-    /// Rebuilds the strip's visible slots and its overflow split for this render
-    /// pass. Writes into the buffers sized at mount, so it allocates nothing.
+    /// Reads the "hide what I cannot use" preference. Returns whether it was
+    /// applied, so the caller knows whether a re-render is owed.
     /// </summary>
-    private void BuildVisibleTabs()
+    private async Task<bool> ApplyPreferencesAsync()
     {
-        var count = 0;
-        var activeIndex = _activePlugin is null ? HomeStripIndex : -1;
-
-        for (var i = 0; i < _tabs.Length; i++)
+        if (_preferencesApplied)
         {
-            var tab = _tabs[i];
-            var access = AccessStore.Get(tab.PluginId);
-            if (!access.IsVisible)
+            return false;
+        }
+
+        if (Services.GetService(typeof(IExplorerShellPreferences)) is not IExplorerShellPreferences preferences)
+        {
+            // No preference contract in this host. The default - show what you
+            // cannot use - is the safe one, so settle on it and stop asking.
+            _preferencesApplied = true;
+            return false;
+        }
+
+        await preferences.EnsureLoadedAsync();
+        if (!preferences.IsLoaded)
+        {
+            // Reading now would report the fallback as though it were the user's
+            // answer, and a later write would overwrite their real one.
+            return false;
+        }
+
+        _preferencesApplied = true;
+        _hideInaccessible = preferences.GetOrDefault(
+            ExplorerShellNavigationKeys.HideInaccessibleAreas,
+            false);
+
+        return true;
+    }
+
+    private async Task OnHideInaccessibleChangedAsync(ChangeEventArgs args)
+    {
+        // A checkbox reports a bool through the browser's event args, but a
+        // host that round-trips the value as text is legal too, and reading
+        // "true" as false would silently ignore the caller's choice.
+        var hide = args.Value switch
+        {
+            bool value => value,
+            string text => bool.TryParse(text, out var parsed) && parsed,
+            _ => false,
+        };
+
+        if (_hideInaccessible == hide)
+        {
+            return;
+        }
+
+        _hideInaccessible = hide;
+        StateHasChanged();
+
+        if (Services.GetService(typeof(IExplorerShellPreferences)) is IExplorerShellPreferences preferences)
+        {
+            await preferences.SetAsync(ExplorerShellNavigationKeys.HideInaccessibleAreas, hide);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the rail's offered tabs and its demoted group for this render
+    /// pass. Writes into the buffers sized at mount, so it allocates nothing:
+    /// each entry's two tab items were composed once, and the list is cleared
+    /// and refilled rather than replaced.
+    /// </summary>
+    private void BuildRail()
+    {
+        _railTabs.Clear();
+        _demotedCount = 0;
+        _railPending = false;
+        _unavailableLabels?.Clear();
+
+        // The home surface is the shell's own and is always reachable, so it is
+        // never gated and always leads the rail.
+        if (_homeEntry is not null)
+        {
+            _railTabs.Add(_homeEntry.AllowedTab);
+        }
+
+        for (var i = 0; i < _entries.Length; i++)
+        {
+            var entry = _entries[i];
+
+            // An area nobody has probed yet is not a refused area. Reading the
+            // store's fail-closed default as a caption opened the rail with every
+            // entry demoted under a remedy naming a permission no gate had said was
+            // missing, which then vanished as the probes landed. Show it plainly
+            // until its gate actually answers; the server, not this rail, is what
+            // refuses an area the caller may not open.
+            if (!AccessStore.HasReported(entry.PluginId))
             {
+                _railTabs.Add(entry.AllowedTab);
+                _railPending = true;
                 continue;
             }
 
-            if (ReferenceEquals(tab.Plugin, _activePlugin))
+            var access = AccessStore.Get(entry.PluginId);
+            var state = access.State;
+
+            switch (ExplorerAreaVisibilityPolicy.Decide(state, _hideInaccessible))
             {
-                // The home surface owns slot 0, so a plugin's strip index is one
-                // past its position in the visible list.
-                activeIndex = count + 1;
+                case ExplorerAreaEntryPresentation.Primary:
+                    _railTabs.Add(state == ExplorerPluginAccessState.AuthenticationRequired
+                        ? entry.SignInTab
+                        : entry.AllowedTab);
+                    break;
+
+                case ExplorerAreaEntryPresentation.Demoted:
+                    // The gate's remedy travels with the decision, so a refusal
+                    // names the permission that is missing rather than repeating
+                    // the area name. Applied here because it can change between
+                    // probes; the sentence is composed only when it does.
+                    entry.ApplyRemedy(access.Remedy);
+                    _demoted[_demotedCount++] = i;
+                    break;
             }
 
-            _visible[count] = i;
-            _visibleAccess[count] = access;
-            count++;
+            if (ExplorerAreaVisibilityPolicy.IsUnavailableOnCluster(state))
+            {
+                _unavailableLabels?.Add(entry.Label);
+            }
         }
 
-        _visibleCount = count;
-
-        // One more than the visible plugins: the home surface is always a tab.
-        _strip = LatticeOverflowLayout.Resolve(
-            count + 1,
-            activeIndex,
-            LatticeBreakpoints.TabInlineCapacity(_breakpoint));
+        RebuildMissingAreas();
     }
 
-    private Task ActivateHomeAsync()
+    // The sentence names every area the cluster does not have, so recomposing it
+    // per render would concatenate on every gate report. The signature folds the
+    // count with each label's content hash, which changes exactly when the set
+    // does - a length-only fold would confuse two same-length names and leave a
+    // stale sentence behind.
+    private void RebuildMissingAreas()
     {
-        if (_activePlugin is null)
+        var labels = (IReadOnlyList<string>?)_unavailableLabels ?? NoLabels;
+
+        var signature = labels.Count;
+        for (var i = 0; i < labels.Count; i++)
+        {
+            signature = (signature * 31) + StringComparer.Ordinal.GetHashCode(labels[i]);
+        }
+
+        if (signature == _missingAreasSignature)
+        {
+            return;
+        }
+
+        _missingAreasSignature = signature;
+        _missingAreas = ExplorerRailCopy.MissingAreas(labels);
+    }
+
+    /// <summary>
+    /// Points the shell at whatever area the address names. The address is the
+    /// intent; this never rewrites it.
+    /// </summary>
+    private void ResolveActiveArea()
+    {
+        var area = Router.Current.Area;
+        var slug = area.Length == 0 ? ExplorerRouteSegments.Explore : area;
+
+        _activePlugin = null;
+        _unreachableNotice = null;
+
+        if (!string.Equals(slug, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
+        {
+            var entry = FindEntry(slug);
+            if (entry is not null)
+            {
+                if (ExplorerAreaVisibilityPolicy.IsActivable(AccessStore.Get(entry.PluginId).State))
+                {
+                    _activePlugin = entry.Plugin;
+                    SetActiveArea(slug, entry.Label);
+                    return;
+                }
+
+                // The address asks for something the gate will not admit. The
+                // address stays as it is - it is a statement of intent, and the
+                // area opens the moment a gate admits it - but the caller is told
+                // why they are looking at something else.
+                _unreachableNotice = entry.UnreachableNotice;
+            }
+        }
+
+        SetActiveArea(ExplorerRouteSegments.Explore, _homeEntry?.Label ?? HomeLabel);
+    }
+
+    private void ResolveActiveAreaAndRender()
+    {
+        ResolveActiveArea();
+        StateHasChanged();
+    }
+
+    private void SetActiveArea(string slug, string label)
+    {
+        if (string.Equals(_activeSlug, slug, StringComparison.Ordinal) && _areaContext is not null)
+        {
+            return;
+        }
+
+        _activeSlug = slug;
+        _activeLabel = label;
+        _activeTabElementId = ExplorerShellRegions.AreaTabElementId(slug);
+
+        // Cascaded to the area's own content, so a plugin's sub-surface strip can
+        // avoid repeating the rail's word for the area it is nested in. Rebuilt
+        // only when the area changes, so the cascade is stable across the
+        // re-renders a gate report causes.
+        _areaContext = new ExplorerAreaContext(slug, label);
+    }
+
+    private AreaEntry? FindEntry(string slug)
+    {
+        // Indexed rather than a dictionary lookup: the area set is a handful of
+        // entries, and this runs only when the route or a gate changes.
+        for (var i = 0; i < _entries.Length; i++)
+        {
+            if (string.Equals(_entries[i].Slug, slug, StringComparison.Ordinal))
+            {
+                return _entries[i];
+            }
+        }
+
+        return null;
+    }
+
+    private Task ActivateAreaAsync(string slug)
+    {
+        if (string.Equals(slug, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
+        {
+            // Switching area drops the selection, because a selection names
+            // something inside the area being left. Returning to Explore should
+            // therefore find the tree that was open rather than an empty panel the
+            // caller has to choose from again, so the remembered selection is put
+            // back when the address carries none of its own.
+            var target = Router.Current.WithArea(ExplorerRouteSegments.Explore);
+            target = RestoreRememberedSelection(target);
+            Router.NavigateTo(target);
+
+            // The compact catalog drawer belongs to the home surface, so leaving
+            // and returning must not restore a scrim the caller never reopened.
+            return SetCatalogOpenAsync(false);
+        }
+
+        var entry = FindEntry(slug);
+        if (entry is null)
         {
             return Task.CompletedTask;
         }
 
-        _activePlugin = null;
-        StateHasChanged();
+        var state = AccessStore.Get(entry.PluginId).State;
+        if (state == ExplorerPluginAccessState.AuthenticationRequired)
+        {
+            // A recoverable state, so offer the remedy the entry advertises
+            // instead of an inert grey-out. The entry stays where it is until the
+            // sign-in lands and the gate re-probes.
+            Login?.Open();
+            return Task.CompletedTask;
+        }
 
-        // The compact catalog drawer belongs to the home surface, so leaving and
-        // returning must not restore a scrim the caller never reopened.
+        if (!ExplorerAreaVisibilityPolicy.IsActivable(state))
+        {
+            return Task.CompletedTask;
+        }
+
+        Router.NavigateTo(Router.Current.WithArea(slug));
         return SetCatalogOpenAsync(false);
     }
 
-    private void Activate(IExplorerPlugin plugin)
+    /// <summary>
+    /// Puts the remembered selection back into <paramref name="route"/> when it
+    /// carries none, so returning to the catalog finds what was open.
+    /// </summary>
+    /// <remarks>
+    /// Only ever fills a gap: a route that already names a selection is returned
+    /// untouched, so an explicit address still wins. A remembered selection that
+    /// no longer resolves is handled where every other unresolvable selection is -
+    /// the catalog explains it rather than showing an empty panel.
+    /// </remarks>
+    private ExplorerRoute RestoreRememberedSelection(ExplorerRoute route)
     {
-        var access = AccessStore.Get(plugin.Descriptor.PluginId);
-        if (access.State == ExplorerPluginAccessState.AuthenticationRequired)
+        if (route.HasSelection)
         {
-            // A recoverable state, so offer the remedy instead of an inert
-            // grey-out. The tab stays where it is until the sign-in lands and the
-            // gate re-probes.
-            Login?.Open();
-            return;
+            return route;
         }
 
-        if (!access.IsAllowed || ReferenceEquals(_activePlugin, plugin))
+        if (_lastSelectionId.Length != 0)
         {
-            return;
+            return route.WithSelection(_lastSelectionKind, _lastSelectionId);
         }
 
-        _activePlugin = plugin;
-        StateHasChanged();
-    }
-
-    // ---- the area strip's overflow menu -------------------------------------
-
-    private async Task ActivateHomeFromOverflowAsync()
-    {
-        await SetOverflowOpenAsync(false);
-        await ActivateHomeAsync();
-    }
-
-    private async Task ActivateFromOverflowAsync(IExplorerPlugin plugin)
-    {
-        await SetOverflowOpenAsync(false);
-        Activate(plugin);
-    }
-
-    private Task ToggleOverflowAsync() => SetOverflowOpenAsync(!IsOverflowOpen);
-
-    private Task OnOverflowKeyDown(KeyboardEventArgs args) =>
-        string.Equals(args.Key, "Escape", StringComparison.Ordinal)
-            ? SetOverflowOpenAsync(false)
-            : Task.CompletedTask;
-
-    private Task SetOverflowOpenAsync(bool isOpen)
-    {
-        if (IsOverflowOpen == isOpen)
+        if (Services.GetService(typeof(IExplorerShellPreferences)) is not IExplorerShellPreferences preferences)
         {
-            return Task.CompletedTask;
+            return route;
         }
 
-        IsOverflowOpen = isOpen;
-        return IsOverflowOpenChanged.HasDelegate ? IsOverflowOpenChanged.InvokeAsync(isOpen) : Task.CompletedTask;
+        var remembered = preferences.GetRememberedRoute();
+        return remembered.HasSelection
+            ? route.WithSelection(remembered.Kind, remembered.Id)
+            : route;
     }
 
     // ---- the compact catalog drawer -----------------------------------------
-
     private Task ToggleCatalogAsync() => SetCatalogOpenAsync(!IsCatalogOpen);
 
     private Task CloseCatalogAsync() => SetCatalogOpenAsync(false);
@@ -502,25 +777,53 @@
         await AccessRefresher.RefreshAsync();
     }
 
+    private void OnRouteChanged(ExplorerRoute route) =>
+        InvokeAsync(() => OnRouteChangedAsync(route));
+
+    private async Task OnRouteChangedAsync(ExplorerRoute route)
+    {
+        // Picking an item in the compact drawer is the drawer's whole purpose, and
+        // it reveals a detail surface the drawer is sitting on top of. Leaving it
+        // open hides the thing the caller just asked to see, and its overlay takes
+        // the pointer events meant for the surface beneath - so the controls in
+        // that header cannot be operated at all until the drawer is dismissed by
+        // hand.
+        //
+        // Keyed on the selection changing rather than on any route change, so
+        // moving between surfaces of the SAME selection does not dismiss a drawer
+        // the caller deliberately reopened.
+        var selection = route.HasSelection ? route.Kind + "/" + route.Id : null;
+        var selectionMoved = !string.Equals(selection, _lastSelection, StringComparison.Ordinal);
+        _lastSelection = selection;
+
+        if (route.HasSelection)
+        {
+            _lastSelectionKind = route.Kind;
+            _lastSelectionId = route.Id;
+        }
+
+        if (selectionMoved && selection is not null && IsCatalogOpen)
+        {
+            await SetCatalogOpenAsync(false);
+        }
+
+        _resolveActiveArea();
+    }
+
     private void OnAccessChanged(ExplorerPluginAccessChange change)
     {
-        // The strip reads only plugin-level decisions, so a plugin's scoped
+        // The rail reads only plugin-level decisions, so a plugin's scoped
         // sub-capability changing is not a reason to re-render the shell.
         if (change.Key.Scope is not null)
         {
             return;
         }
 
-        // If the active plugin just stopped being allowed (for example after
-        // sign-out), fall back to the always-available home surface.
-        if (_activePlugin is not null
-            && !change.Access.IsAllowed
-            && string.Equals(change.Key.PluginId, _activePlugin.Descriptor.PluginId, StringComparison.Ordinal))
-        {
-            _activePlugin = null;
-        }
-
-        InvokeAsync(_render);
+        // A gate that has just withdrawn the active area (for example after
+        // sign-out), or has just admitted the one the address asks for, changes
+        // which area the address resolves to - so the resolution runs again
+        // rather than only the render.
+        InvokeAsync(_resolveActiveArea);
     }
 
     private void OnAuthenticationChanged() => _ = InvokeAsync(_refresh);
@@ -548,48 +851,188 @@
         }
     }
 
+    /// <summary>Detaches from the access store, the host state, the session and the router.</summary>
     public void Dispose()
     {
         AccessStore.Changed -= OnAccessChanged;
         HostState.Changed -= OnHostChanged;
         Auth.AuthenticationChanged -= OnAuthenticationChanged;
+        Router.RouteChanged -= OnRouteChanged;
     }
 
     /// <summary>
-    /// One tab's pre-computed render state: the plugin it activates, its label,
-    /// the two advisory tooltips, and the activation callback. Built once at
-    /// mount so a render reads fields instead of allocating.
+    /// One area's pre-computed render state: the plugin it opens, its route
+    /// slug, its label, the two tab items it can be offered as, and the shared
+    /// vocabulary's copy for each way it can refuse. Built once at mount so a
+    /// render reads fields instead of allocating.
     /// </summary>
-    private sealed class AreaTab
+    /// <remarks>
+    /// The one thing that is <em>not</em> fixed at mount is the remedy. A
+    /// refusal must name the permission the caller is missing and who issues it,
+    /// and only the gate knows those; they travel on the decision and can change
+    /// between probes. <see cref="ApplyRemedy"/> therefore composes the sentence
+    /// when the gate's answer changes, and a render that finds it unchanged
+    /// costs one struct comparison.
+    /// </remarks>
+    private sealed class AreaEntry
     {
-        public AreaTab(AppShell shell, IExplorerPlugin plugin)
+        private ExplorerAccessRemedy _remedy = ExplorerAccessRemedy.None;
+        private bool _remedyApplied;
+
+        private AreaEntry(
+            IExplorerPlugin? plugin,
+            string pluginId,
+            string slug,
+            string label,
+            ExplorerStateMessage deniedMessage,
+            string? unreachableNotice,
+            LatticeTabItem allowedTab,
+            LatticeTabItem signInTab,
+            string helpId)
         {
             Plugin = plugin;
-            PluginId = plugin.Descriptor.PluginId;
-            Label = plugin.Descriptor.Label;
-            DeniedTitle = $"{Label} is not available for your account.";
-            SignInTitle = $"{Label} requires you to sign in.";
-            Activate = EventCallback.Factory.Create(shell, () => shell.Activate(plugin));
-            ActivateFromOverflow = EventCallback.Factory.Create(
-                shell, () => shell.ActivateFromOverflowAsync(plugin));
+            PluginId = pluginId;
+            Slug = slug;
+            Label = label;
+            DeniedMessage = deniedMessage;
+            DeniedRemedy = deniedMessage.Remedy;
+            UnreachableNotice = unreachableNotice;
+            AllowedTab = allowedTab;
+            SignInTab = signInTab;
+            HelpId = helpId;
+            ExplanationElementId = LatticeHelp.ExplanationElementId(helpId);
+            LabelElementId = helpId + "-label";
         }
 
-        public IExplorerPlugin Plugin { get; }
+        /// <summary>The shell's own home surface, which is never gated.</summary>
+        public static AreaEntry ForHome(string label)
+        {
+            var tab = new LatticeTabItem(ExplorerRouteSegments.Explore, label);
+            return new AreaEntry(
+                plugin: null,
+                pluginId: string.Empty,
+                slug: ExplorerRouteSegments.Explore,
+                label: label,
 
+                // Never rendered - the home surface has no gate - but composed
+                // from the same source as every other entry so there is exactly
+                // one shape of refusal in the shell.
+                deniedMessage: ExplorerAccessCopy.Denied(label),
+                unreachableNotice: null,
+                allowedTab: tab,
+                signInTab: tab,
+                helpId: ExplorerShellRegions.AreaHelpPrefix + ExplorerRouteSegments.Explore);
+        }
+
+        /// <summary>A contributed area, with the copy for every way its gate can refuse.</summary>
+        public static AreaEntry ForPlugin(IExplorerPlugin plugin)
+        {
+            var pluginId = plugin.Descriptor.PluginId;
+            var label = plugin.Descriptor.Label;
+
+            // The slug the address carries, derived the way every consumer
+            // derives it, so the rail and the router agree on the spelling. The
+            // home area reserves 'explore', and a contributed plugin whose id
+            // happens to end in that segment would otherwise collide with it -
+            // two rail tabs with one element id, and an address that resolves to
+            // the wrong surface. Falling back to the whole id keeps such a
+            // plugin addressable rather than shadowed.
+            var slug = ExplorerRouteSlug.FromIdentifier(pluginId);
+            if (string.Equals(slug, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
+            {
+                slug = ExplorerRouteSlug.Normalize(pluginId);
+            }
+
+            // Both presentations are composed once. An entry is offered as
+            // exactly one of them per render, chosen by the gate, so a render
+            // never builds a tab item. The sign-in tab's description is the
+            // shared module's single-string form, because a tab has room for a
+            // description and not for a panel.
+            var allowedTab = new LatticeTabItem(slug, label);
+            var signInTab = new LatticeTabItem(slug, label)
+            {
+                Description = ExplorerAccessCopy.Describe(ExplorerAccessCopy.SignInRequired(label)),
+            };
+
+            return new AreaEntry(
+                plugin,
+                pluginId,
+                slug,
+                label,
+                ExplorerAccessCopy.Denied(label),
+                ExplorerRailCopy.UnreachableAddressNotice(label),
+                allowedTab,
+                signInTab,
+                ExplorerShellRegions.AreaHelpPrefix + slug);
+        }
+
+        /// <summary>The plugin this entry opens, or null for the home surface.</summary>
+        public IExplorerPlugin? Plugin { get; }
+
+        /// <summary>The plugin id the access store is keyed by. Empty for the home surface.</summary>
         public string PluginId { get; }
 
+        /// <summary>The canonical route slug the address carries for this area.</summary>
+        public string Slug { get; }
+
+        /// <summary>The area's display label.</summary>
         public string Label { get; }
 
-        public string DeniedTitle { get; }
+        /// <summary>The tab item offered when the area is reachable.</summary>
+        public LatticeTabItem AllowedTab { get; }
 
-        public string SignInTitle { get; }
-
-        public EventCallback Activate { get; }
+        /// <summary>The tab item offered when the area is one sign-in away.</summary>
+        public LatticeTabItem SignInTab { get; }
 
         /// <summary>
-        /// Activates the plugin from the overflow menu, closing the menu first so
-        /// it never outlives the choice that was made in it.
+        /// The shared vocabulary's refusal for this area: its headline, its
+        /// explanation, and the remedy label every refusal is introduced by.
         /// </summary>
-        public EventCallback ActivateFromOverflow { get; }
+        public ExplorerStateMessage DeniedMessage { get; }
+
+        /// <summary>
+        /// What to do about the refusal. The gate's own remedy - the permission
+        /// that is missing and who issues it - once one has been reported, and
+        /// the shared vocabulary's general remedy until then.
+        /// </summary>
+        public string? DeniedRemedy { get; private set; }
+
+        /// <summary>Why the address could not be honoured, or null for the home surface.</summary>
+        public string? UnreachableNotice { get; }
+
+        /// <summary>The element-id prefix of this entry's denial disclosure.</summary>
+        public string HelpId { get; }
+
+        /// <summary>The id of the disclosure's explanation, for aria-describedby.</summary>
+        public string ExplanationElementId { get; }
+
+        /// <summary>The id of the demoted entry's own label element.</summary>
+        public string LabelElementId { get; }
+
+        /// <summary>
+        /// Adopts the remedy the gate reported with its decision, so the refusal
+        /// names the missing permission and its audience rather than repeating
+        /// the area's own name.
+        /// </summary>
+        /// <remarks>
+        /// Called once per demoted entry per render. The comparison is a
+        /// two-reference struct equality and the sentence is composed only when
+        /// the gate's answer actually changed, so a steady-state render
+        /// allocates nothing. An unspecified remedy falls back to the shared
+        /// vocabulary's general remedy rather than to nothing: a refusal that
+        /// states no remedy is the defect this whole path exists to prevent.
+        /// </remarks>
+        /// <param name="remedy">The remedy the gate attached to its denial.</param>
+        public void ApplyRemedy(ExplorerAccessRemedy remedy)
+        {
+            if (_remedyApplied && _remedy == remedy)
+            {
+                return;
+            }
+
+            _remedyApplied = true;
+            _remedy = remedy;
+            DeniedRemedy = remedy.Describe() ?? DeniedMessage.Remedy;
+        }
     }
 }

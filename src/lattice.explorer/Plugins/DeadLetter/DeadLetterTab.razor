@@ -20,11 +20,12 @@
         <button type="button" class="lx-btn" disabled="@_loading" @onclick="ReloadAsync">
             @(_loading ? "Loading..." : "Refresh")
         </button>
-        @if (_count > 0)
+        @if (_countBadgeCount > 0)
         {
-            <span class="lx-deadletter-count" title="Dead-lettered items held for this tree">
-                @_count dead-lettered
-            </span>
+            @* The readable badge from the shared vocabulary ("3 dead-lettered"),
+               composed on the load path, not a bare count with its meaning
+               hidden in a title attribute. *@
+            <SelectionBadgeList Badges="_countBadges" Count="_countBadgeCount" />
         }
         else if (_loaded)
         {
@@ -34,16 +35,9 @@
 
     <div class="lx-deadletter-body @(IsCompact ? "is-stacked" : null)">
         <div class="lx-deadletter-list">
-            @if (_loading && _entries.Count == 0)
+            @if (ListState is not null)
             {
-                <div class="lx-selection-state">Loading dead-letter queue...</div>
-            }
-            else if (_error is not null)
-            {
-                <div class="lx-selection-state lx-selection-state-error">
-                    <span>@_error</span>
-                    <button type="button" class="lx-btn-link" @onclick="ReloadAsync">Try again</button>
-                </div>
+                <SelectionStateView Message="ListState" OnAction="_reload" />
             }
             else
             {
@@ -68,7 +62,7 @@
         <div class="lx-deadletter-detail">
             @if (_selected is null)
             {
-                <div class="lx-selection-state">Select a dead-lettered item to inspect it.</div>
+                <SelectionStateView Message="NoEntrySelected" />
             }
             else
             {

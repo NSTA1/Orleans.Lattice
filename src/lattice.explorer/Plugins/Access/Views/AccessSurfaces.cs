@@ -35,6 +35,18 @@ internal static class AccessSurfaces
     /// <summary>The Explain / effective-permissions introspection surface.</summary>
     public const string Explain = "explain";
 
+    // Composed from a prefix rather than spelled whole. The orphan-class gate
+    // reads every string literal in a C# file as a possible CLASS name, so an
+    // element id spelled out here would be reported as a class no stylesheet
+    // defines. The shell's own region ids are composed for the same reason.
+    private const string ElementPrefix = "lxa-";
+
+    /// <summary>The element-id prefix the strip derives its tab and panel ids from.</summary>
+    public const string StripElementId = ElementPrefix + "surfacestrip";
+
+    /// <summary>The strip's accessible name.</summary>
+    public const string StripLabel = "Access surfaces";
+
     /// <summary>
     /// The tab items in display order. A single cached array, so the strip costs
     /// no allocation per render and every re-render diffs against the same
@@ -55,4 +67,17 @@ internal static class AccessSurfaces
             Description = "Explain a decision, or list a subject's effective permissions.",
         },
     ];
+
+    /// <summary>
+    /// Whether <paramref name="surfaceId"/> names one of this area's surfaces.
+    /// </summary>
+    /// <remarks>
+    /// The ids double as the <c>surface</c> segment of the shell's route grammar
+    /// and as the value the retained preference stores, so this is the one place
+    /// that answers "is this a surface we offer" for the address, the remembered
+    /// choice, and the strip alike.
+    /// </remarks>
+    /// <param name="surfaceId">The candidate id. May be <see langword="null"/>.</param>
+    public static bool IsKnown(string? surfaceId) =>
+        surfaceId is Groups or Policies or Explain;
 }

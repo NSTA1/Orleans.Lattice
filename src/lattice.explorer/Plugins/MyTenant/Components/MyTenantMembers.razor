@@ -98,12 +98,22 @@
             Cell = row =>@<button type="button"
                                  class="lx-btn lxm-destructive-action"
                                  disabled="@(State.Busy || !State.CanRemoveAdminSubject(row))"
-                                 title="@(State.CanRemoveAdminSubject(row) ? null : MyTenantWorkspace.LastAdminSubjectRefusal)"
-                                 @onclick="Remove(row)">Remove</button>,
+                                 @onclick="Remove(row)">Remove<span class="lx-visually-hidden">@RemovalRule(row)</span></button>,
         };
 
         return [subject, action];
     }
+
+    /// <summary>
+    /// The last-admin rule as a phrase that reads on from the control's label, or
+    /// <see langword="null"/> when the control is not refused, so the reason a
+    /// disabled Remove cannot fire travels in the control's own accessible name.
+    /// </summary>
+    private string? RemovalRule(string subject) =>
+        State.CanRemoveAdminSubject(subject) ? null : LastAdminSubjectSuffix;
+
+    private const string LastAdminSubjectSuffix =
+        " - " + MyTenantWorkspace.LastAdminSubjectRefusal;
 
     /// <summary>
     /// The removal callback for one admin subject, bound once and reused on

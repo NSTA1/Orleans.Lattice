@@ -2,6 +2,7 @@ using Grpc.Core;
 using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Access;
 
@@ -17,8 +18,18 @@ namespace Orleans.Lattice.Explorer.Access;
 public sealed class AuthAdminCapabilityService(
     IAuthAdminClient client,
     IExplorerPluginAccessStore store,
-    IExplorerAuthSession session) : IAuthAdminCapabilityService
+    IExplorerAuthSession session) : ExplorerPluginAccessGate, IAuthAdminCapabilityService
 {
+    private const string NoGrantReason =
+        "Your account is not authorized to administer access on this cluster.";
+
+    /// <summary>
+    /// The grant a refused caller is missing, and who issues it. Cached, so
+    /// attaching it to a denial costs nothing per probe.
+    /// </summary>
+    private static readonly ExplorerAccessRemedy MissingGrant =
+        ExplorerAccessRemedy.Requiring("Admin", ExplorerVocabulary.GrantAudience);
+
     private readonly IAuthAdminClient _client = client ?? throw new ArgumentNullException(nameof(client));
 
     private readonly IExplorerPluginAccessStore _store =
@@ -54,12 +65,16 @@ public sealed class AuthAdminCapabilityService(
     public ExplorerAccessAuthenticationMode AuthenticationMode => _authenticationMode;
 
     /// <inheritdoc />
-    public async ValueTask<ExplorerPluginAccess> ProbeAsync(
-        IExplorerPluginHostContext context,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
+    public override ExplorerAccessRemedy Remedy => MissingGrant;
 
+    /// <inheritdoc />
+    protected override bool IsCallerAuthenticated => _session.IsAuthenticated;
+
+    /// <inheritdoc />
+    protected override async ValueTask<ExplorerPluginAccessFacts> EvaluateAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken)
+    {
         var snapshot = await ProbeInternalAsync(cancellationToken).ConfigureAwait(false);
 
         _authenticationMode = snapshot.AuthenticationMode;
@@ -70,15 +85,18 @@ public sealed class AuthAdminCapabilityService(
 
         if (snapshot.Allowed)
         {
-            return ExplorerPluginAccess.Allowed;
+            return ExplorerPluginAccessFacts.Granted;
         }
 
+        // The probe already distinguished an unauthenticated connection from a
+        // genuine refusal, so it reports the sharper fact and the contract
+        // agrees with it rather than re-deriving the state from the session.
         return snapshot.AuthenticationRequired
-            ? ExplorerPluginAccess.AuthenticationRequired
-            : ExplorerPluginAccess.Denied;
+            ? ExplorerPluginAccessFacts.CredentialMissing()
+            : ExplorerPluginAccessFacts.Withhold(NoGrantReason);
     }
 
-    private async Task<AccessCapabilitySnapshot> ProbeInternalAsync(CancellationToken cancellationToken)
+    private async ValueTask<AccessCapabilitySnapshot> ProbeInternalAsync(CancellationToken cancellationToken)
     {
         var outcome = await ProbeAdminAsync(cancellationToken).ConfigureAwait(false);
         if (outcome != AdminProbeOutcome.Allowed)
@@ -95,17 +113,20 @@ public sealed class AuthAdminCapabilityService(
         return await ProbeAccessModelAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<AdminProbeOutcome> ProbeAdminAsync(CancellationToken cancellationToken)
+    private async ValueTask<AdminProbeOutcome> ProbeAdminAsync(CancellationToken cancellationToken)
     {
         try
         {
             // A light, read-only list is the coarse gate: reaching it (even with an
             // empty page) means the control plane accepts the caller as an
             // administrator. It has no side effects, so it is safe to run on mount.
-            await _client
+            var page = await _client
                 .ListGroupsAsync(new AuthPageRequest { PageSize = 1 }, cancellationToken)
                 .ConfigureAwait(false);
-            return AdminProbeOutcome.Allowed;
+
+            // A seam that answered nothing proved nothing: an absent response is
+            // not an admission, so it fails closed rather than granting.
+            return page is null ? AdminProbeOutcome.Denied : AdminProbeOutcome.Allowed;
         }
         catch (LatticeAuthorizationDeniedException)
         {
@@ -144,11 +165,16 @@ public sealed class AuthAdminCapabilityService(
         }
     }
 
-    private async Task<AccessCapabilitySnapshot> ProbeAccessModelAsync(CancellationToken cancellationToken)
+    private async ValueTask<AccessCapabilitySnapshot> ProbeAccessModelAsync(CancellationToken cancellationToken)
     {
         try
         {
             var model = await _client.GetAccessModelAsync(cancellationToken).ConfigureAwait(false);
+            if (model is null)
+            {
+                return AccessCapabilitySnapshot.AdminWithoutModel;
+            }
+
             return new AccessCapabilitySnapshot(
                 Allowed: true,
                 AuthenticationRequired: false,

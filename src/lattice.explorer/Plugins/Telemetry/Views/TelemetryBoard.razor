@@ -18,32 +18,38 @@
     @if (State.Unavailable)
     {
         @*
-            No telemetry facade on this cluster, so there is nothing to chart
-            and nothing to explain away. The shell already hides an unavailable
-            plugin's entry; this keeps the body empty if it is rendered anyway.
+            No telemetry backend on this cluster, so there is nothing to chart.
+            The shell hides an unavailable area's rail entry and collects its
+            label into the "why can I not see everything?" affordance, so this is
+            the second half of the same answer: it explains what a backend is and
+            what its absence means, for anyone who reached the body anyway
+            (a direct address, or an embedded mount with no rail above it).
         *@
+        <TelemetryStateBlock Message="UnavailableMessage" Class="lxt-muted" />
+        <LatticeHelp Id="@TelemetryVocabulary.BackendId"
+                     Term="@TelemetryVocabulary.Backend.Label"
+                     Explanation="@TelemetryVocabulary.Backend.Explanation" />
     }
     else if (!State.Allowed)
     {
-        @if (State.AuthenticationRequired)
-        {
-            <p class="lxt-status is-denied" role="alert">
-                You are not signed in to the cluster, so its telemetry is unavailable.
-                The connection is unauthenticated - sign in to read it.
-            </p>
-        }
-        else
-        {
-            <p class="lxt-status is-denied" role="status">
-                @(State.AccessReason ?? "You are not permitted to read this cluster's telemetry.")
-            </p>
-        }
+        @*
+            A refusal, and the kind is picked rather than defaulted: an
+            unauthenticated connection is recoverable by signing in and is
+            announced assertively because it is actionable now, where a refusal
+            of a signed-in caller is a polite status naming the grant they lack.
+        *@
+        <div role="@(State.AuthenticationRequired ? "alert" : "status")">
+            <TelemetryStateBlock Message="RefusedMessage" Class="lxt-status is-denied" />
+        </div>
     }
     else if (State.Catalog.IsEmpty)
     {
-        <p class="lxt-muted" role="status">
-            This cluster offers no telemetry queries, so there is nothing to chart.
-        </p>
+        <div role="status">
+            <TelemetryStateBlock Message="EmptyMessage" Class="lxt-muted" />
+        </div>
+        <LatticeHelp Id="@TelemetryVocabulary.MetricCatalogId"
+                     Term="@TelemetryVocabulary.MetricCatalog.Label"
+                     Explanation="@TelemetryVocabulary.MetricCatalog.Explanation" />
     }
     else
     {
@@ -72,7 +78,19 @@
             <section class="lxt-panel-body" aria-label="@query.Title">
                 <header class="lxt-panel-head">
                     <h3 class="lxt-panel-title">@query.Title</h3>
-                    <span class="lxt-badge @ScopeBadgeClass" title="@State.Caption.Text">@ScopeBadge</span>
+                    @*
+                        The caption used to sit in a title attribute, which a
+                        keyboard or touch caller can never reach. The badge is
+                        the short form, the caption its accessible expansion, and
+                        the term itself is explained by the disclosure beside it.
+                    *@
+                    <span class="lxt-badge @ScopeBadgeClass">
+                        <span aria-hidden="true">@ScopeBadge</span>
+                        <span class="lx-visually-hidden">@State.Caption.Text</span>
+                    </span>
+                    <LatticeHelp Id="@TelemetryVocabulary.ScopeId"
+                                 Term="@TelemetryVocabulary.Scope.Label"
+                                 Explanation="@TelemetryVocabulary.Scope.Explanation" />
                 </header>
 
                 <p class="lxt-panel-description">@query.Description</p>
@@ -98,8 +116,36 @@
     private const string NotEvaluatedText = "Nothing has been read yet.";
     private const string NoSeriesText = "This query matched no series over the window requested.";
 
+    /// <summary>
+    /// The grant a refused caller is missing, named as the cluster names it, so
+    /// a refusal points at the permission rather than at the area label the
+    /// caller can already see.
+    /// </summary>
+    private const string MissingTelemetryGrant = "Telemetry";
+
+    // Frozen singletons from the shared copy, so a board that renders one of
+    // these on every gate change composes nothing.
+    private static readonly ExplorerStateMessage Unavailable =
+        ExplorerStateCopy.Unavailable(ExplorerSubjects.TelemetrySignals);
+
+    private static readonly ExplorerStateMessage Empty =
+        ExplorerStateCopy.Empty(ExplorerSubjects.TelemetrySignals);
+
+    private static readonly ExplorerStateMessage SignInRequired =
+        ExplorerStateCopy.SignInRequired(ExplorerSubjects.TelemetrySignals);
+
+    private static readonly ExplorerStateMessage NotPermitted =
+        ExplorerStateCopy.NotPermitted(ExplorerSubjects.TelemetrySignals, MissingTelemetryGrant);
+
     /// <summary>The workspace this board reads and drives.</summary>
     [Parameter, EditorRequired] public TelemetryWorkspace State { get; set; } = default!;
+
+    private static ExplorerStateMessage UnavailableMessage => Unavailable;
+
+    private static ExplorerStateMessage EmptyMessage => Empty;
+
+    private ExplorerStateMessage RefusedMessage =>
+        State.AuthenticationRequired ? SignInRequired : NotPermitted;
 
     // A degraded scope is styled as a qualification rather than sharing the
     // confident styling of a scope that was served exactly as asked.

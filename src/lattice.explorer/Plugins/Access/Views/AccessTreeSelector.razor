@@ -12,7 +12,6 @@
         <span class="lxa-treepanel-title">Trees</span>
         <button type="button"
                 class="lxa-refresh"
-                title="Refresh trees"
                 aria-label="Refresh trees"
                 disabled="@(State.TreesLoading || !State.Allowed)"
                 @onclick="State.RefreshTreesAsync">
@@ -66,7 +65,10 @@
                                     }
                                     @if (tree.ShardCount is int shards)
                                     {
-                                        <span class="lxa-badge" title="Shard count">@shards sh</span>
+                                        <span class="lxa-badge">
+                                            <span aria-hidden="true">@shards sh</span>
+                                            <span class="lx-visually-hidden">@shards @ShardCountLabel</span>
+                                        </span>
                                     }
                                 </span>
                             }
@@ -83,6 +85,13 @@
     // re-renders on every selection and every load.
     private const string ItemClass = "lxa-navitem";
     private const string SelectedItemClass = "lxa-navitem is-selected";
+
+    /// <summary>
+    /// What the shard badge's number means, taken from the shared glossary
+    /// rather than reworded, and read once rather than per row.
+    /// </summary>
+    private static readonly string ShardCountLabel =
+        ExplorerGlossary.Get(ExplorerTermIds.ShardCount).Label;
 
     private readonly Dictionary<string, EventCallback> _select = new(StringComparer.Ordinal);
 

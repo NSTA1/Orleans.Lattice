@@ -1,4 +1,5 @@
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Selection;
 using Orleans.Lattice.Explorer.Tests.Plugins;
@@ -106,7 +107,8 @@ public sealed class DetailPanelTests
         {
             Assert.That(tab.Disabled, Is.False);
             Assert.That(tab.IsActive, Is.True);
-            Assert.That(tab.Title, Is.EqualTo("Alpha"), "an allowed surface carries no advisory tooltip");
+            Assert.That(tab.Title, Is.Null,
+                "an allowed surface carries no advisory tooltip; the label is not an explanation");
             Assert.That(harness.ActiveView, Is.EqualTo(typeof(AlphaProbeView)));
         });
     }
@@ -122,7 +124,11 @@ public sealed class DetailPanelTests
         Assert.Multiple(() =>
         {
             Assert.That(tab.Disabled, Is.True, "a denial greys out rather than hides");
-            Assert.That(tab.Title, Is.EqualTo("Alpha is not available for your account."));
+            Assert.That(
+                tab.Title,
+                Is.EqualTo(ExplorerAccessCopy.Describe(ExplorerAccessCopy.Denied("Alpha"))),
+                "the refusal comes from the shared vocabulary, not from prose written here");
+            Assert.That(tab.Title, Does.Contain("Ask an operator"), "and it states its remedy");
             Assert.That(harness.ActiveView, Is.Null, "a denied surface renders no content");
             Assert.That(harness.Views.Mounted, Is.Empty, "and its view is never even mounted");
         });
@@ -163,7 +169,10 @@ public sealed class DetailPanelTests
         Assert.Multiple(() =>
         {
             Assert.That(tab.Disabled, Is.False, "a recoverable state must offer its remedy");
-            Assert.That(tab.Title, Is.EqualTo("Alpha requires you to sign in."));
+            Assert.That(
+                tab.Title,
+                Is.EqualTo(ExplorerAccessCopy.Describe(ExplorerAccessCopy.SignInRequired("Alpha"))));
+            Assert.That(tab.Title, Does.Contain("Sign in"), "and it names the action that recovers it");
             Assert.That(login.IsVisible, Is.True, "clicking it prompts a sign-in");
             Assert.That(harness.ActiveView, Is.Null, "and does not render the surface");
         });
@@ -184,19 +193,27 @@ public sealed class DetailPanelTests
     }
 
     [Test]
-    public async Task An_unprobed_surface_is_denied_before_any_gate_answers()
+    public async Task An_unprobed_surface_is_denied_but_is_not_captioned_as_refused()
     {
-        // Nothing has been filed for the plugin yet. The store's fail-closed
-        // default must show through rather than an admission - the per-selection
-        // tier gains exactly the posture the area tier already had.
+        // The decision stays fail-closed; the caption is not entitled to that
+        // default. Rendering it as a refusal disabled every tab under a denial
+        // nothing had established, and a strip whose tabs are all disabled is not
+        // operable at all - so the surfaces were unreachable until the probes
+        // happened to land. This mirrors the area tier, which was corrected first.
         using var harness = Harness(new Surface(Plugin("a", "Alpha", typeof(AlphaProbeView)), Access: null));
         await harness.RenderAsync();
         await harness.SelectAsync(Tree);
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Tab("Alpha").Disabled, Is.True);
-            Assert.That(harness.ActiveView, Is.Null);
+            Assert.That(
+                harness.Tab("Alpha").Disabled,
+                Is.False,
+                "a surface nobody has probed has not been refused");
+            Assert.That(
+                harness.ActiveView,
+                Is.Null,
+                "showing the tab plainly must not activate its view before the gate answers");
         });
     }
 

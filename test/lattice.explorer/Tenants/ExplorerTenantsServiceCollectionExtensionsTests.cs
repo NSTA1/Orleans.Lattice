@@ -152,6 +152,61 @@ public sealed class ExplorerTenantsServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddExplorerTenants_supplies_the_real_accessible_tenant_source()
+    {
+        // The one-source-of-truth seam. Without it the shell's tenant picker
+        // falls back to the navigation core's fail-closed default, which reports
+        // only the tenant already in force - so the picker and this area's list
+        // are two disconnected views of the same question.
+        var services = Composed();
+
+        var descriptor = services.Last(d => d.ServiceType == typeof(IExplorerAccessibleTenantSource));
+
+        Assert.That(descriptor.ImplementationType, Is.EqualTo(typeof(TenantsAccessibleTenantSource)));
+    }
+
+    [Test]
+    public void The_real_accessible_tenant_source_wins_over_the_fail_closed_default()
+    {
+        // Registered before AddExplorerTenantView, so it wins that method's
+        // TryAdd rather than losing the race the way a later registration would.
+        var services = Composed();
+
+        var descriptors = services
+            .Where(d => d.ServiceType == typeof(IExplorerAccessibleTenantSource))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(descriptors, Has.Length.EqualTo(1));
+            Assert.That(
+                descriptors[0].ImplementationType,
+                Is.EqualTo(typeof(TenantsAccessibleTenantSource)));
+        });
+    }
+
+    [Test]
+    public void A_head_that_already_supplied_its_own_accessible_tenant_source_keeps_it()
+    {
+        var services = new ServiceCollection();
+        services.TryAddScoped<IExplorerTenantOperatorGate, StubOperatorGate>();
+        services.AddScoped<IExplorerAccessibleTenantSource, StubAccessibleTenantSource>();
+        services.AddExplorerTenants();
+
+        var descriptor = services.Last(d => d.ServiceType == typeof(IExplorerAccessibleTenantSource));
+
+        Assert.That(descriptor.ImplementationType, Is.EqualTo(typeof(StubAccessibleTenantSource)));
+    }
+
+    /// <summary>A head-supplied source, to prove the registration is TryAdd-based.</summary>
+    private sealed class StubAccessibleTenantSource : IExplorerAccessibleTenantSource
+    {
+        public ValueTask<IReadOnlyList<ExplorerTenantId>> GetAccessibleTenantsAsync(
+            CancellationToken cancellationToken = default) =>
+            new(Array.Empty<ExplorerTenantId>());
+    }
+
+    [Test]
     public void AddExplorerTenants_does_not_register_the_plugin()
     {
         // Registering the feature and surfacing the area are separate opt-ins,

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using NSubstitute;
@@ -27,9 +28,18 @@ namespace Orleans.Lattice.Explorer.Tests.Plugins;
 /// <para>
 /// So each test below renders the real component over a controlled domain
 /// surface and asserts the migrated class name is in the markup the user would
-/// receive. Driving a tab into its error state is deliberate: the retry control
-/// is the <c>lx-btn-link</c> call site, and that variant is the one shared by
-/// the most surfaces, so it is the one most worth pinning.
+/// receive. Driving a tab into its error state is deliberate: it is where a
+/// surface offers its recovery control, and that control is the shared button
+/// primitive.
+/// </para>
+/// <para>
+/// Issue #1855 moved the recovery control from the inline <c>lx-btn-link</c>
+/// variant onto the shared state block, where the action is the block's own
+/// button (<c>lx-btn</c>) rather than a link beside a sentence. The link
+/// variant is still the right shape for a retry that sits inline in a list, so
+/// it keeps a call site and a test of its own below - dropping that assertion
+/// entirely would have left the variant unguarded, which is the exact failure
+/// this fixture was written to prevent.
 /// </para>
 /// </remarks>
 [TestFixture]
@@ -50,7 +60,7 @@ public sealed class MigratedPrimitiveRenderTests
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("lx-btn"), "the refresh control is the design system's button");
-            Assert.That(html, Does.Contain("lx-btn-link"), "the retry control is the link-styled variant");
+            Assert.That(html, Does.Contain("lx-selection-message-action"), "the retry control is the state block's action");
             Assert.That(html, Does.Contain(Boom));
         });
     }
@@ -69,7 +79,7 @@ public sealed class MigratedPrimitiveRenderTests
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("lx-btn"));
-            Assert.That(html, Does.Contain("lx-btn-link"));
+            Assert.That(html, Does.Contain("lx-selection-message-action"));
         });
     }
 
@@ -88,7 +98,7 @@ public sealed class MigratedPrimitiveRenderTests
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("lx-btn"));
-            Assert.That(html, Does.Contain("lx-btn-link"));
+            Assert.That(html, Does.Contain("lx-selection-message-action"));
         });
     }
 
@@ -103,11 +113,12 @@ public sealed class MigratedPrimitiveRenderTests
             {
                 ["SelectedKey"] = "orders/1",
                 ["Error"] = Boom,
+                ["OnRetry"] = EventCallback.Empty,
             });
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("lx-btn-link"));
+            Assert.That(html, Does.Contain("lx-btn"));
             Assert.That(html, Does.Contain(Boom));
         });
     }
@@ -123,7 +134,27 @@ public sealed class MigratedPrimitiveRenderTests
             surface,
             SelectionViewRenderHarness.TagIndex());
 
-        Assert.That(html, Does.Contain("lx-btn-link"));
+        Assert.That(html, Does.Contain("lx-selection-message-action"));
+    }
+
+    [Test]
+    public async Task The_tag_index_member_list_renders_the_design_systems_link_button()
+    {
+        // The inline retry inside a list is still the link-styled variant, so
+        // this is what keeps `lx-btn-link` guarded now that the surfaces' block
+        // states use the full button.
+        var html = await SelectionViewRenderHarness.RenderComponentAsync<TagIndexMembers>(
+            new Dictionary<string, object?>
+            {
+                ["Tag"] = "eu-west",
+                ["Error"] = Boom,
+            });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain("lx-btn-link"));
+            Assert.That(html, Does.Contain(Boom));
+        });
     }
 
     [Test]

@@ -12,7 +12,7 @@
            value="@_value" @oninput="OnInput" @onkeyup="OnKeyUp" @onblur="OnBlurAsync" />
     @if (!string.IsNullOrEmpty(_value))
     {
-        <button type="button" class="lx-data-search-clear" title="Clear filter"
+        <button type="button" class="lx-data-search-clear" aria-label="Clear filter"
                 disabled="@Disabled" @onclick="ClearAsync">&times;</button>
     }
 </div>

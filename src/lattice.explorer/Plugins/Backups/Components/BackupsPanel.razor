@@ -1,18 +1,23 @@
 @*
-    The Backups plugin's view: the area frame, the sub-tab strip, and the
+    The Backups plugin's view: the area frame, the sub-surface strip, and the
     dialogs. Every region of the surface is its own component, and every piece
     of state and every operation lives in this component's partials, so no file
     in the plugin carries more than one concern.
 
-    The panel takes exactly one service from the host - the per-plugin host
-    context factory - and resolves its declared IBackupsDomain from the context
-    it returns, so its reach is what BackupsAreaPlugin declares and nothing more
-    (epic decision D3).
+    The panel takes exactly one cluster-facing service from the host - the
+    per-plugin host context factory - and resolves its declared IBackupsDomain
+    from the context it returns, so its reach into the cluster is what
+    BackupsAreaPlugin declares and nothing more (epic decision D3). The two
+    shell-state services it also injects reach nothing in a cluster: they carry
+    where the caller is and where they were last time.
 *@
 
 <section class="lx-backups" aria-label="Backups">
     <header class="lx-backups-header">
         <button type="button" class="lx-btn" disabled="@Busy" @onclick="ReloadAsync">Refresh</button>
+        <LatticeHelp Id="@BackupsVocabulary.ScopeStatusId"
+                     Term="@BackupsVocabulary.ScopeStatus.Label"
+                     Explanation="@BackupsVocabulary.ScopeStatus.Explanation" />
     </header>
 
     @if (LastResult is { } result)
@@ -21,36 +26,47 @@
     }
 
     @*
-        aria-selected takes the literal string "true" or "false": it is an
-        enumerated ARIA attribute, not an HTML boolean one. Handing Blazor a bool
-        emits aria-selected="" for the active tab and omits the attribute
-        entirely for the others, so a screen-reader user cannot tell which tab is
-        selected. Before the restore completes neither tab is active, and both
-        must then say "false" rather than say nothing.
+        The area's own sub-surfaces, rendered through the design system's single
+        tab primitive in its subordinate variant. That is the presentation the
+        shell reserves for a plugin's own surfaces, so this strip reads as
+        sitting below the rail that opened the area rather than as a fourth peer
+        strip - and the primitive supplies the roving tabindex, the arrow keys,
+        the enumerated aria-selected and the aria-controls relationship that the
+        hand-rolled strip it replaces had to restate for itself.
     *@
-    <div class="lx-tabstrip" role="tablist" aria-label="Backups tabs">
-        <button type="button" role="tab"
-                class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "is-active" : null)"
-                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.New ? "true" : "false")"
-                @onclick="@(() => SetSubTabAsync(BackupsSubTab.New))">New Backup</button>
-        <button type="button" role="tab"
-                class="lx-tab @(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "is-active" : null)"
-                aria-selected="@(_subTabRestored && _activeSubTab == BackupsSubTab.Existing ? "true" : "false")"
-                @onclick="@(() => SetSubTabAsync(BackupsSubTab.Existing))">Existing Backups</button>
-    </div>
+    <LatticeAdaptiveTabs Tabs="BackupsSurfaces.Tabs"
+                         ActiveId="@ActiveSurfaceId"
+                         OnSelect="SelectSurface"
+                         Label="@BackupsSurfaces.StripLabel"
+                         Variant="LatticeTabsVariant.Subordinate"
+                         Id="@BackupsSurfaces.StripElementId"
+                         PanelId="@BackupsSurfaces.PanelElementId"
+                         Class="lx-backups-surfaces" />
 
-    @if (!_subTabRestored)
-    {
-        <div class="lx-backups-body" aria-busy="true"></div>
-    }
-    else if (_activeSubTab == BackupsSubTab.New)
-    {
-        <BackupsCaptureForm Owner="this" />
-    }
-    else
-    {
-        <BackupsCatalogue Owner="this" />
-    }
+    <div class="lx-backups-surface"
+         role="tabpanel"
+         id="@BackupsSurfaces.PanelElementId"
+         aria-busy="@(SurfaceRestored ? "false" : "true")">
+        @if (!SurfaceRestored)
+        {
+            @*
+                The retained surface has not resolved yet, so neither body is the
+                one to render. Saying so beats rendering an empty panel: a caller
+                who never gets past this - browser storage unreachable, script
+                disabled - is looking at a real state with a next step rather
+                than at a blank area.
+            *@
+            <BackupsStateBlock Message="RestoringMessage" />
+        }
+        else if (ActiveSubTab == BackupsSubTab.New)
+        {
+            <BackupsCaptureForm Owner="this" />
+        }
+        else
+        {
+            <BackupsCatalogue Owner="this" />
+        }
+    </div>
 
     <BackupsDeleteDialog Owner="this" />
     <BackupsRestoreDialog Owner="this" />

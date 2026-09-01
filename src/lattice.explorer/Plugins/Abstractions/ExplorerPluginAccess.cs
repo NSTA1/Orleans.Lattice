@@ -1,8 +1,9 @@
 namespace Orleans.Lattice.Explorer.Plugins;
 
 /// <summary>
-/// The outcome of one plugin access probe: a state plus an optional
-/// human-readable reason the shell may surface as a tooltip.
+/// The outcome of one plugin access probe: a state, an optional human-readable
+/// reason, and - for a denial - the structured remedy that says what to do about
+/// it.
 /// <para>
 /// This is a <see langword="readonly"/> <see langword="record"/>
 /// <see langword="struct"/> so a decision costs no allocation: the store keeps
@@ -32,9 +33,15 @@ public readonly record struct ExplorerPluginAccess
         = new(ExplorerPluginAccessState.Unavailable, reason: null);
 
     private ExplorerPluginAccess(ExplorerPluginAccessState state, string? reason)
+        : this(state, reason, ExplorerAccessRemedy.None)
+    {
+    }
+
+    private ExplorerPluginAccess(ExplorerPluginAccessState state, string? reason, ExplorerAccessRemedy remedy)
     {
         State = state;
         Reason = reason;
+        Remedy = remedy;
     }
 
     /// <summary>The resolved access state. <see cref="ExplorerPluginAccessState.Denied"/> by default.</summary>
@@ -46,6 +53,15 @@ public readonly record struct ExplorerPluginAccess
     /// supplied. Advisory display text only; never parsed.
     /// </summary>
     public string? Reason { get; }
+
+    /// <summary>
+    /// What a refused caller should do about a denial: the grant they are
+    /// missing and who issues it, as structured data rather than a composed
+    /// sentence, so the shell owns the wording and the gate owns the facts.
+    /// <see cref="ExplorerAccessRemedy.None"/> for every non-denial and for a
+    /// denial that names no specific grant.
+    /// </summary>
+    public ExplorerAccessRemedy Remedy { get; }
 
     /// <summary>Whether the plugin is reachable and interactive.</summary>
     public bool IsAllowed => State == ExplorerPluginAccessState.Allowed;
@@ -73,6 +89,22 @@ public readonly record struct ExplorerPluginAccess
     /// <param name="reason">The advisory explanation, or <see langword="null"/>.</param>
     public static ExplorerPluginAccess Deny(string? reason) =>
         reason is null ? Denied : new ExplorerPluginAccess(ExplorerPluginAccessState.Denied, reason);
+
+    /// <summary>
+    /// Returns a denied result carrying <paramref name="reason"/> and the
+    /// structured <paramref name="remedy"/> that names the missing grant and who
+    /// issues it, so the shell can render an actionable denial rather than a
+    /// bare "not available for your account".
+    /// </summary>
+    /// <param name="reason">The advisory explanation, or <see langword="null"/>.</param>
+    /// <param name="remedy">
+    /// The remedy, or <see cref="ExplorerAccessRemedy.None"/> when the denial
+    /// names no specific grant.
+    /// </param>
+    public static ExplorerPluginAccess Deny(string? reason, ExplorerAccessRemedy remedy) =>
+        reason is null && !remedy.IsSpecified
+            ? Denied
+            : new ExplorerPluginAccess(ExplorerPluginAccessState.Denied, reason, remedy);
 
     /// <summary>
     /// Returns an authentication-required result carrying

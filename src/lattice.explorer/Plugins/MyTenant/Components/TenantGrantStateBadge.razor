@@ -3,12 +3,13 @@
 
     Grant state is load-bearing: only Active authorizes anything. A pending
     grant is an offer nobody has accepted and confers no access at all, so it
-    never borrows the styling of a live one, and the badge carries the sentence
-    saying so as its title.
+    never borrows the styling of a live one, and the sentence saying so travels
+    with the badge as part of its accessible name rather than in a title
+    attribute a keyboard or touch caller can never reach.
 *@
 
-<span class="@TenantGrantLabels.BadgeClass(State)" title="@TenantGrantLabels.Description(State)">
-    @TenantGrantLabels.Label(State)
+<span class="@TenantGrantLabels.BadgeClass(State)">
+    @TenantGrantLabels.Label(State)<span class="lx-visually-hidden"> - @TenantGrantLabels.Description(State)</span>
 </span>
 
 @code {

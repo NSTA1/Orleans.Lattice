@@ -13,16 +13,16 @@
     row it is keyboard reachable and announces its pressed state.
 *@
 
-@if (Owner.Pager.Current.Status == BackupOperationStatus.Denied)
+@if (Owner.CatalogueState is { } state)
 {
+    @*
+        No list to show, and the reason matters: a refusal names the grant that
+        would open it, a failure says the read did not complete. Neither is
+        rendered as an empty panel, which would assert the cluster holds no
+        backups - something that in both cases nobody has established.
+    *@
     <div class="lx-backups-body">
-        <p class="lx-backups-empty">You are not permitted to list backups here.</p>
-    </div>
-}
-else if (Owner.Pager.Current.Status == BackupOperationStatus.Failed)
-{
-    <div class="lx-backups-body">
-        <p class="lx-backups-empty">@Owner.Pager.Current.Message</p>
+        <BackupsStateBlock Message="state" Class="lx-backups-empty" />
     </div>
 }
 else
@@ -106,7 +106,14 @@ else
         {
             Header = "Created",
             IsNumericOrCode = true,
-            Cell = row =>@<span title="@row.CreatedTitle">@row.Created</span>,
+
+            // The exact instant is a visually-hidden companion rather than a
+            // title attribute: a title is unreachable by keyboard and by touch,
+            // which is exactly the defect this area was carrying.
+            Cell = row =>@<text>
+                <span aria-hidden="true">@row.Created</span>
+                <span class="lx-visually-hidden">@row.CreatedTitle</span>
+            </text>,
         };
 
         if (!withHealth)

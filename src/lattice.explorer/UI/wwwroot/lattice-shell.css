@@ -138,6 +138,61 @@ code {
     min-height: 0;
 }
 
+/*
+  The shell frame: the area rail beside the working surface. A row, not a
+  column, because the primary tier is a rail - see the rail section below for
+  why that is a hierarchy decision rather than a taste one.
+*/
+.lx-shell-frame {
+    display: flex;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+/*
+  The bypass. Off-screen until it takes focus, at which point it paints as a
+  real control at the top of the shell: a bypass a sighted keyboard caller
+  cannot see is a bypass they cannot trust (WCAG SC 2.4.1, and SC 2.4.11 for
+  not letting it hide under the banner).
+
+  Not `display: none` and not `visibility: hidden`: both remove it from the tab
+  order, which is the one thing it must be in.
+*/
+.lx-shell-skip {
+    position: absolute;
+    top: var(--lx-space-2);
+    left: var(--lx-space-2);
+    z-index: var(--lx-layer-menu);
+    padding: var(--lx-space-4) var(--lx-space-6);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-semibold);
+    text-decoration: none;
+
+    /* Clipped rather than moved off-canvas, so the browser still scrolls to it
+       and screen readers still announce it in place. */
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+    width: 1px;
+    height: 1px;
+}
+
+.lx-shell-skip:focus,
+.lx-shell-skip:focus-visible {
+    clip-path: none;
+    width: auto;
+    height: auto;
+    outline: var(--lx-focus-outline-width) solid var(--lx-color-accent);
+    outline-offset: var(--lx-focus-outline-offset);
+    color: var(--lx-color-text);
+}
+
 /* ==========================================================================
    Brand bar
    ========================================================================== */
@@ -162,11 +217,31 @@ code {
     color: var(--lx-color-text-dim);
 }
 
+/*
+  The banner's trailing group, pushed to the end as one run so the bar cannot
+  split when a region is contributed or withheld.
+
+  The scope control (#1851) leads, because it changes what every surface below
+  shows. The view settings (#1852) follow in their own region rather than inside
+  the identity control, because a setting reached only through a sign-out menu is
+  a setting nobody finds. Both are empty until a feature registers against the
+  placement, and an empty region takes no width because the group is a flex row
+  with no fixed cells.
+*/
+.lx-shell-brand-trailing {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-5);
+    margin-left: auto;
+    padding-left: var(--lx-space-4);
+}
+
+.lx-shell-brand-scope,
+.lx-shell-brand-settings,
 .lx-shell-brand-auth {
     display: inline-flex;
     align-items: center;
-    margin-left: auto;
-    padding-left: var(--lx-space-4);
+    gap: var(--lx-space-4);
 }
 
 .lx-shell-cluster {
@@ -366,48 +441,44 @@ code {
     border-bottom: 1px solid var(--lx-color-border);
 }
 
+/*
+  The catalog pane's heading: level two, below the surface title. Styled to the
+  weight it deserves visually while keeping the outline a screen-reader caller
+  navigates by.
+*/
+.lx-shell-nav-title {
+    margin: 0;
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
 .lx-shell-nav-actions {
     display: flex;
     align-items: center;
     gap: var(--lx-space-4);
 }
 
+/*
+  Tier two: the catalog kind. The segmented variant of the tab primitive already
+  draws the sunken bordered track and the filled active option, so all that is
+  left here is to make it fill the pane. The hand-rolled copy this replaced -
+  .lx-shell-toggle-option and its states - is gone with it.
+*/
 .lx-shell-nav-toggle {
-    display: flex;
     width: 100%;
-    padding: 2px;
-    border: 1px solid var(--lx-color-border);
-    border-radius: var(--lx-radius-sm);
-    background: var(--lx-color-surface-sunken);
-}
-
-.lx-shell-toggle-option {
-    flex: 1;
-    padding: 0.3rem var(--lx-space-4);
-    border: none;
-    border-radius: 3px;
     background: transparent;
-    color: var(--lx-color-text-muted);
-    font-size: 0.8rem;
-    font-weight: var(--lx-weight-semibold);
-    letter-spacing: 0.02em;
-    cursor: pointer;
-    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
-                background var(--lx-motion-fast) var(--lx-motion-ease);
 }
 
-.lx-shell-toggle-option:hover {
-    color: var(--lx-color-text);
+.lx-shell-nav-toggle .lx-tabstrip {
+    flex: 1;
 }
 
-.lx-shell-toggle-option.is-active {
-    background: var(--lx-color-accent);
-    color: var(--lx-color-accent-contrast);
-}
-
-.lx-shell-toggle-option:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+.lx-shell-nav-toggle .lx-tab {
+    flex: 1;
+    justify-content: center;
 }
 
 .lx-shell-nav-refresh {
@@ -458,6 +529,21 @@ code {
     padding: var(--lx-space-7) var(--lx-space-5);
     color: var(--lx-color-text-muted);
     font-size: var(--lx-text-small);
+}
+
+/*
+  The state's one-line summary. An empty catalog now says WHICH of the several
+  reasons it is empty for, so the summary is a real heading for the sentences
+  under it rather than the whole message.
+*/
+.lx-shell-nav-state-headline {
+    margin: 0;
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-shell-nav-state p {
+    margin: 0;
 }
 
 .lx-shell-nav-error {
@@ -610,6 +696,21 @@ code {
     gap: var(--lx-space-6);
     padding: 0 var(--lx-space-7);
     border-bottom: 1px solid var(--lx-color-border);
+
+    /*
+    A flex item's default min-width is auto, so without this the header refuses to
+    shrink below the intrinsic width of its content and grows wider than the pane
+    that holds it. At a phone width that pushes the tab strip's overflow control
+    past the right edge of the viewport, where it cannot be scrolled into view and
+    so cannot be operated at all - the strip offers a menu holding every surface
+    that did not fit, and the one control that opens it is off-screen.
+
+    It depends on text metrics, so it reproduces on some platforms and not others,
+    which is exactly how it survived: the surfaces fit on the machine it was
+    authored on. The strip itself already clips and shrinks; this lets the header
+    around it do the same.
+    */
+    min-width: 0;
 }
 
 .lx-shell-detail-tabs {
@@ -617,6 +718,37 @@ code {
     min-width: 0;
     border-bottom: none;
     background: transparent;
+}
+
+/*
+  The detail pane's heading: level two, below the surface title, and the level
+  a plugin surface's own h3 sections then sit under. Styled to the weight it
+  deserves visually while keeping the outline a screen-reader caller navigates
+  by - a heading is structure, not size.
+*/
+.lx-shell-detail-heading {
+    /*
+    Allowed to shrink, and to truncate when it must.
+
+    It used to refuse (flex-shrink: 0), which reads as protecting the heading and
+    actually spends the header's whole width on it: at a phone width a long
+    selection name pushed the surface strip's overflow control past the right edge
+    of the viewport, where it cannot be scrolled to and so cannot be opened. That
+    trades a readable caption for an unreachable control, which is the wrong way
+    round - the caption is decoration and repeats the title below it, while the
+    control is the only way to reach the surfaces that did not fit.
+    */
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin: 0;
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 .lx-shell-detail-title {
@@ -743,6 +875,30 @@ code {
     font-size: 0.8rem;
 }
 
+/*
+    The tenant scope control's two live regions carry no class, deliberately:
+    they are announced by role, and the orphan-class gate fails any class with no
+    rule here. They are addressed as descendants instead.
+
+    :empty matters. Both regions are always present so a screen reader observes a
+    change in an existing region rather than a new one appearing - but an empty
+    flex child still earns its share of the row's gap, so without this the
+    control carried two slivers of dead space whenever it had nothing to say.
+*/
+.lx-shell-tenant-switch [role="status"],
+.lx-shell-tenant-switch [role="alert"] {
+    color: var(--lx-color-text-muted);
+}
+
+.lx-shell-tenant-switch [role="alert"] {
+    color: var(--lx-color-danger);
+}
+
+.lx-shell-tenant-switch [role="status"]:empty,
+.lx-shell-tenant-switch [role="alert"]:empty {
+    display: none;
+}
+
 .lx-shell-tenant-alltenants {
     display: inline-flex;
     align-items: center;
@@ -769,54 +925,173 @@ code {
 }
 
 /* ==========================================================================
-   Area strip
+   Area rail - tier one
 
-   The top-level area switcher the plugin host renders its registered areas
-   into.
+   The primary navigation tier, and a rail rather than a strip on purpose.
+
+   The shell has four navigation tiers. When all four were horizontal strips of
+   near-identical appearance, none of them signalled its place in the hierarchy,
+   and the top tier competed with the others for the same scarce inline width -
+   so a gate that disabled two areas displaced a live one into an overflow menu.
+   A column has no such scarcity: every area renders, nothing is displaced, and
+   setting an entry aside costs nothing.
+
+   The four tiers are given four shapes, all from the one tab primitive:
+
+     1. areas          vertical rail, this section
+     2. catalog kind   segmented toggle, in the catalog header
+     3. detail surface underlined strip, over a selection
+     4. sub-surfaces   subordinate strip, quieter and tighter still
    ========================================================================== */
 
-.lx-shell-areastrip {
+.lx-shell-rail {
+    /*
+      A shell-local measure, not a design token: the token layer publishes the
+      shared values (colour, radius, motion, font, elevation, layering) and the
+      catalog pane's own width, and one rail's width is neither shared nor
+      reusable. Wide enough for the longest area label at the body size, narrow
+      enough that the working surface keeps the page.
+    */
+    --lx-shell-rail-width: 13rem;
+
     display: flex;
-    align-items: stretch;
-    gap: var(--lx-space-2);
-    min-width: 0;
-    padding: 0 var(--lx-space-6);
-    border-bottom: 1px solid var(--lx-color-border);
+    flex-direction: column;
+    flex-shrink: 0;
+    width: var(--lx-shell-rail-width);
+    min-height: 0;
+    padding: var(--lx-space-5) 0;
+    border-right: 1px solid var(--lx-color-border);
     background: var(--lx-color-surface);
 }
 
-.lx-shell-area-tab {
-    padding: 0.6rem 1.1rem;
-    border: none;
-    border-bottom: 2px solid transparent;
+/* The strip fills the rail and scrolls within it; the footer stays put. */
+.lx-shell-rail-strip {
+    flex: 1;
+    min-height: 0;
     background: transparent;
-    color: var(--lx-color-text-muted);
-    font-size: var(--lx-text-body);
-    font-weight: var(--lx-weight-semibold);
-    cursor: pointer;
-    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
-                border-color var(--lx-motion-fast) var(--lx-motion-ease);
 }
 
-.lx-shell-area-tab:hover:not(:disabled) {
+/*
+  STATE IS NOT CARRIED BY HUE. An inactive entry is a legal foreground, so it is
+  already dark enough that no coloured accent can reach 3:1 against it at any
+  brightness - even pure white barely clears it. The rail therefore spends all
+  three of the state cues the token layer provides: a dedicated luminance ladder
+  (selected vs rest foreground), a weight step, and a leading-edge indicator. Any
+  one of them alone would be a single point of failure; together the selection
+  survives greyscale, a colour-vision difference, and a forced-colours palette.
+*/
+.lx-shell-rail-strip .lx-tab {
+    color: var(--lx-color-state-rest-fg);
+    font-weight: var(--lx-weight-state-rest);
+    border-inline-start-width: var(--lx-state-indicator-thickness);
+}
+
+.lx-shell-rail-strip .lx-tab:hover:not(:disabled) {
     color: var(--lx-color-text);
 }
 
-.lx-shell-area-tab.is-active {
-    border-bottom-color: var(--lx-color-accent);
-    color: var(--lx-color-accent);
+.lx-shell-rail-strip .lx-tab.is-active {
+    color: var(--lx-color-state-selected-fg);
+    font-weight: var(--lx-weight-state-selected);
+    border-inline-start-color: var(--lx-color-state-selected-indicator);
+    background: var(--lx-color-surface-selected);
 }
 
-.lx-shell-area-tab:focus-visible {
-    outline: none;
-    color: var(--lx-color-accent);
-    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+/*
+  Kept as the rail's second class because it is the name the area switcher has
+  always carried, and the accessibility lane addresses the rail through it. It
+  contributes no geometry of its own - .lx-shell-rail owns that - so the two can
+  never disagree about the shape.
+*/
+.lx-shell-areastrip {
+    min-width: 0;
 }
 
-.lx-shell-area-tab:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+.lx-shell-rail-divider {
+    flex-shrink: 0;
+    height: 1px;
+    margin: var(--lx-space-5) var(--lx-space-5);
+    border: none;
+    background: var(--lx-color-border);
 }
+
+/*
+  The demoted group: areas the caller cannot open.
+
+  Kept visible on purpose. A caller who cannot see that the product has a
+  Backups area cannot ask an administrator to grant it, so a refusal is set
+  aside rather than deleted - lower in the column, quieter, and inert. It is
+  deliberately NOT a second tab list: a strip whose every tab is disabled has no
+  tab to put in the tab sequence, so it would announce the tabs pattern while
+  being unable to implement it. A labelled group of inert names, each with its
+  own explanation, is what these entries actually are.
+*/
+.lx-shell-rail-demoted {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    gap: var(--lx-space-2);
+    padding: 0 var(--lx-space-5);
+}
+
+.lx-shell-rail-group-label {
+    padding: var(--lx-space-2) 0;
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-micro);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.lx-shell-rail-demoted-entry {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+    min-height: var(--lx-target-min);
+}
+
+.lx-shell-rail-demoted-label {
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-state-rest);
+}
+
+.lx-shell-rail-footer {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    gap: var(--lx-space-4);
+    margin-top: var(--lx-space-5);
+    padding: var(--lx-space-5) var(--lx-space-5) 0;
+    border-top: 1px solid var(--lx-color-border);
+}
+
+.lx-shell-rail-preference {
+    display: flex;
+    align-items: center;
+    gap: var(--lx-space-4);
+    min-height: var(--lx-target-min);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    cursor: pointer;
+}
+
+.lx-shell-rail-preference input[type="checkbox"] {
+    width: var(--lx-space-7);
+    height: var(--lx-space-7);
+    accent-color: var(--lx-color-accent);
+    cursor: pointer;
+}
+
+.lx-shell-rail-preference input[type="checkbox"]:focus-visible {
+    outline: var(--lx-focus-outline-width) solid var(--lx-color-accent);
+    outline-offset: var(--lx-focus-outline-offset);
+}
+
+/* ==========================================================================
+   Working surface
+   ========================================================================== */
 
 .lx-shell-area-content {
     display: flex;
@@ -824,3 +1099,77 @@ code {
     min-width: 0;
     min-height: 0;
 }
+
+/*
+  The main landmark, and the skip link's destination. It belongs to the frame
+  rather than to the surface inside it, so an area plugin that replaces the
+  working surface inherits it instead of leaving the document without one.
+*/
+.lx-shell-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.lx-shell-main:focus-visible {
+    outline: var(--lx-focus-outline-width) solid var(--lx-color-accent);
+    outline-offset: calc(-1 * var(--lx-focus-outline-width));
+}
+
+/*
+  The one level-1 heading: what the caller is looking at. Styled down rather
+  than marked down - a heading outline is how a screen-reader caller navigates,
+  and it must not be traded away for a visual preference.
+*/
+.lx-shell-surface-title {
+    flex-shrink: 0;
+    margin: 0;
+    padding: var(--lx-space-5) var(--lx-shell-padding-inline);
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface);
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-title);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-tight);
+}
+
+.lx-shell-surface-notice {
+    flex-shrink: 0;
+    margin: 0;
+    padding: var(--lx-space-4) var(--lx-shell-padding-inline);
+    border-bottom: 1px solid var(--lx-color-border);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-small);
+}
+
+.lx-shell-workspace {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* ==========================================================================
+   Sub-surfaces - tier four
+
+   An area plugin's own surfaces, rendered through AreaSubSurfaceTabs so they
+   wear the subordinate variant. Quieter and tighter than the strip that
+   selected the surface they sit inside, which is the whole point: the tier a
+   control belongs to should be legible without reading its labels.
+   ========================================================================== */
+
+.lx-shell-subsurface {
+    display: flex;
+    min-width: 0;
+    padding: var(--lx-space-4) var(--lx-shell-padding-inline);
+}
+
+.lx-shell-subsurface-strip {
+    min-width: 0;
+    background: transparent;
+    border-bottom: none;
+}
+

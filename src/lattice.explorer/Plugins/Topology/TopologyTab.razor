@@ -33,7 +33,10 @@
         }
         @if (_truncated)
         {
-            <span class="lx-topology-trunc" title="Depth or node budget reached">truncated</span>
+            <span class="lx-topology-trunc">truncated</span>
+            <LatticeHelp Term="Truncated graph"
+                         Explanation="@TruncatedExplanation"
+                         Class="lx-topology-trunc-help" />
         }
         <div class="lx-topology-legend" aria-hidden="true">
             <span class="lx-topology-legend-label">load</span>
@@ -44,30 +47,26 @@
         </div>
     </div>
 
-    @if (_loading && _graph is null)
+    @if (State is not null)
     {
-        <div class="lx-topology-state">Loading topology...</div>
-    }
-    else if (_error is not null)
-    {
-        <div class="lx-topology-state lx-topology-error">
-            <span>@_error</span>
-            <button type="button" class="lx-btn-link" @onclick="LoadAsync">Try again</button>
-        </div>
-    }
-    else if (_graph is null || _graph.Nodes.Count == 0)
-    {
-        <div class="lx-topology-state">No structure reported for this id.</div>
+        <SelectionStateView Message="State" OnAction="_reload" />
     }
     else
     {
+        var graph = _graph!;
         <div class="lx-topology-canvas">
+            @*
+                role="group" rather than role="img": an image has no exposed
+                descendants, and the expandable nodes below are real controls, so
+                declaring the graph an image would hide every one of them from a
+                screen reader while leaving them clickable with a mouse.
+            *@
             <svg @ref="_svg"
                  class="lx-topo-svg"
                  viewBox="@_homeViewBox"
                  preserveAspectRatio="xMidYMid meet"
-                 role="img" aria-label="Tree topology graph">
-                @foreach (var edge in _graph.Edges)
+                 role="group" aria-label="Tree topology graph">
+                @foreach (var edge in graph.Edges)
                 {
                     var from = _points[edge.FromId];
                     var to = _points[edge.ToId];
@@ -75,23 +74,28 @@
                           x1="@F(from.X)" y1="@F(from.Y)"
                           x2="@F(to.X)" y2="@F(to.Y)" />
                 }
-                @foreach (var node in _graph.Nodes)
+                @foreach (var node in graph.Nodes)
                 {
-                    var p = _points[node.Node.NodeId];
                     var expandable = node.Node.HasMoreChildren;
+                    var visual = _visuals[node.Node.NodeId];
+                    @*
+                        An expandable node is a control, so it is a button that
+                        the keyboard can reach and activate. It used to respond
+                        to a click alone, which made the whole expansion path
+                        mouse-only (WCAG SC 2.1.1). Its name, its transform and
+                        its glyphs are all composed on the layout pass, never
+                        here: this loop runs for every node on every render.
+                    *@
                     <g class="lx-topo-node @(expandable ? "is-expandable" : null) @(node.Node.SplitInProgress ? "is-splitting" : null)"
-                       transform="@($"translate({F(p.X)},{F(p.Y)})")"
-                       @onclick="@(() => OnNodeClickAsync(node.Node))">
-                        <title>@NodeTooltip(node)</title>
+                       transform="@visual.Transform"
+                       role="@(expandable ? "button" : null)"
+                       tabindex="@(expandable ? "0" : null)"
+                       aria-label="@visual.Label"
+                       @onclick="@(() => OnNodeClickAsync(node.Node))"
+                       @onkeydown="@(args => OnNodeKeyDownAsync(args, node.Node))">
+                        <title>@visual.Label</title>
                         <circle class="lx-topo-dot lx-topo-load-@node.LoadBucket" r="@F(RadialLayout.NodeRadius)" />
-                        @if (node.LeafBadge > 0)
-                        {
-                            @((MarkupString)$"<text class=\"lx-topo-badge\" x=\"0\" y=\"4\">{node.LeafBadge}</text>")
-                        }
-                        @if (expandable)
-                        {
-                            @((MarkupString)$"<text class=\"lx-topo-expand\" x=\"0\" y=\"{F(RadialLayout.NodeRadius + 12)}\">+</text>")
-                        }
+                        @visual.Glyphs
                     </g>
                 }
             </svg>

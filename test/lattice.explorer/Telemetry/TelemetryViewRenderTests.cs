@@ -9,6 +9,8 @@ using Orleans.Lattice.Explorer.Plugins.Telemetry.Views;
 using Orleans.Lattice.Explorer.Plugins.Telemetry.Workspace;
 using Orleans.Lattice.Explorer.Tests.DesignSystem;
 
+using Orleans.Lattice.Explorer.Core.Vocabulary;
+
 namespace Orleans.Lattice.Explorer.Tests.Telemetry;
 
 /// <summary>
@@ -296,19 +298,32 @@ public sealed class TelemetryViewRenderTests
         Assert.Multiple(() =>
         {
             Assert.That(html, Does.Contain("role=\"alert\""));
-            Assert.That(html, Does.Contain("sign in"));
+            Assert.That(
+                html,
+                Does.Contain(ExplorerStateCopy.SignInRequired(ExplorerSubjects.TelemetrySignals).Explanation),
+                "a recoverable refusal is worded as an invitation, from the shared vocabulary");
         });
     }
 
     [Test]
-    public async Task A_denial_renders_the_reason_the_gate_gave()
+    public async Task A_denial_names_the_missing_permission_rather_than_repeating_the_surface_label()
     {
+        // The board no longer echoes the gate's raw reason string. A refusal is
+        // worded by the shared vocabulary and names the grant the caller lacks,
+        // because "Telemetry is not available for your account" tells them only
+        // what they can already see.
         using var harness = TelemetryWorkspaceHarness.Create(
             access: ExplorerPluginAccess.Deny("you may not read telemetry"));
 
         var html = await RenderBoardAsync(harness.Workspace);
+        var expected = ExplorerStateCopy.NotPermitted(ExplorerSubjects.TelemetrySignals, "Telemetry");
 
-        Assert.That(html, Does.Contain("you may not read telemetry"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(html, Does.Contain(expected.Explanation));
+            Assert.That(html, Does.Contain("Telemetry"), "the refusal names the permission");
+            Assert.That(html, Does.Contain("role=\"status\""));
+        });
     }
 
     [Test]
@@ -321,8 +336,15 @@ public sealed class TelemetryViewRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("no telemetry queries"));
+            Assert.That(
+                html,
+                Does.Contain(ExplorerStateCopy.Empty(ExplorerSubjects.TelemetrySignals).Explanation),
+                "an empty catalogue is Empty, not a refusal and not an outage");
             Assert.That(html, Does.Not.Contain("<select"));
+            Assert.That(
+                html,
+                Does.Contain(TelemetryVocabulary.MetricCatalog.Explanation),
+                "the term the caller is being told about is explained at the point of use");
         });
     }
 

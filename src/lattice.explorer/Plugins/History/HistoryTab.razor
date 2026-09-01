@@ -22,10 +22,8 @@
             <div class="lx-history-live">
                 <span class="lx-history-live-dot lx-history-live-dot-@HistoryFormat.LiveDotClass(_connectionState)"></span>
                 <span class="lx-history-live-label">@HistoryFormat.LiveLabel(_connectionState)</span>
-                <span class="lx-history-live-note"
-                      title="The live feed only carries changes emitted while this surface is open: it extends the timeline forward from now and is not a substitute for durable retention of past changes. New rows show kind, time and origin first, then upgrade to the value diff or CRDT members once the durable backfill arrives.">
-                    forward-only
-                </span>
+                <span class="lx-history-live-note">forward-only</span>
+                <LatticeHelp Term="Forward-only live feed" Explanation="@LiveFeedExplanation" />
             </div>
 
             <label class="lx-history-order">
@@ -40,42 +38,21 @@
         <div class="lx-history-hint lx-history-error">Live updates stopped: @_liveError</div>
     }
 
-    @if (_key is null)
+    @if (State is not null)
     {
-        <div class="lx-history-state">Select a key in the Data tab to see its revision history.</div>
-    }
-    else if (_loading && _timeline is null)
-    {
-        <div class="lx-history-state">Loading history...</div>
-    }
-    else if (_error is not null)
-    {
-        <div class="lx-history-state lx-history-error">
-            <span>@_error</span>
-        </div>
-    }
-    else if (_timeline is null)
-    {
-        <div class="lx-history-state">No history loaded.</div>
-    }
-    else if (_timeline.Status == StateQueryStatus.TreeNotFound)
-    {
-        <div class="lx-history-state">Tree not found (it may have been deleted since the catalog was listed).</div>
-    }
-    else if (_timeline.Status == StateQueryStatus.KeyNotFound || !_timeline.HasRows)
-    {
-        <div class="lx-history-state">No revisions recorded for <code>@_key</code>.</div>
+        <SelectionStateView Message="State" OnAction="_reload" />
     }
     else
     {
-        var t = _timeline;
+        var t = _timeline!;
         <div class="lx-history-head">
-            <code class="lx-history-key" title="@_key">@_key</code>
+            <code class="lx-history-key">@_key</code>
             @if (t.ActiveRetentionMode is { } mode)
             {
-                <span class="lx-history-badge lx-history-badge-retention" title="Active retention mode for this key">
+                <span class="lx-history-badge lx-history-badge-retention">
                     @HistoryFormat.RetentionBadge(mode, t.ActiveValueRetained)
                 </span>
+                <LatticeHelp Term="Retention mode" Explanation="@RetentionExplanation" />
             }
             <span class="lx-history-badge lx-history-badge-bound">@HistoryFormat.BoundBadge(t.Bound)</span>
         </div>

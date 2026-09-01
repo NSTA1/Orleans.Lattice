@@ -128,7 +128,7 @@ steps**. Blazor-host detection and the web-asset contribution are resolved durin
 **restore**, so a Dockerfile that restores from the `.csproj` alone and then runs
 `dotnet publish --no-restore` can silently drop `blazor.web.js`. The console then
 renders server-side but its interactive circuit never starts: **Sign in does
-nothing, tabs stay greyed, and the console reports "Access to the state API was
+nothing, area entries stay inert, and the console reports "Access to the state API was
 denied"** even though the endpoint is reachable.
 
 To keep the asset in a containerized isolated host:

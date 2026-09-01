@@ -10,13 +10,16 @@
     }
     else
     {
+        @* Said once, for everyone, rather than as a per-row title attribute -
+           which was invisible on touch, unreachable by keyboard, and composed a
+           string per tree on every render pass. *@
+        <p class="lx-tagindex-hint">Choose a tree to open its data surface.</p>
         <ul class="lx-tagindex-treelist">
             @foreach (var tree in Trees)
             {
                 <li>
                     <button type="button"
                             class="lx-tagindex-treelink"
-                            title="@($"Open {tree}")"
                             @onclick="@(() => OnOpenTree.InvokeAsync(tree))">
                         @tree
                     </button>

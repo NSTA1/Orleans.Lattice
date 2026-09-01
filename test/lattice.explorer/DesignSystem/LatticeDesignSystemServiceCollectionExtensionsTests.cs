@@ -95,6 +95,8 @@ public sealed class LatticeDesignSystemServiceCollectionExtensionsTests
 
         public bool IsMeasured => true;
 
+        public int? MeasuredWidth => null;
+
         public event Action<Orleans.Lattice.Explorer.DesignSystem.Tokens.LatticeBreakpoint>? BreakpointChanged
         {
             add { }

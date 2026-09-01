@@ -9,7 +9,7 @@
 @if (State.Effective is { } effective)
 {
     <h3 class="lxa-title">
-        Effective permissions for '<span title="@effective.SubjectId">@State.Labels.Label(effective.SubjectId)</span>'
+        Effective permissions for '<span>@State.Labels.Label(effective.SubjectId)<span class="lx-visually-hidden">, id @effective.SubjectId</span></span>'
     </h3>
     @if (effective.GroupIds.Count > 0)
     {
@@ -17,7 +17,7 @@
             @for (var i = 0; i < effective.GroupIds.Count; i++)
             {
                 var gid = effective.GroupIds[i];
-                <span title="@gid">@State.Labels.Label(gid)</span>@(i < effective.GroupIds.Count - 1 ? ", " : string.Empty)
+                <span>@State.Labels.Label(gid)<span class="lx-visually-hidden">, id @gid</span></span>@(i < effective.GroupIds.Count - 1 ? ", " : string.Empty)
             }
         </p>
     }

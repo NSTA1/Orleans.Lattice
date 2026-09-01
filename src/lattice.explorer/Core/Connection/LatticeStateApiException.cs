@@ -32,4 +32,20 @@ public sealed class LatticeStateApiException : Exception
     /// than (or alongside) a plain reconnect.
     /// </summary>
     public bool RequiresAuthentication { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the server refused an <em>authenticated</em>
+    /// caller for want of a grant (gRPC <c>PermissionDenied</c>), as opposed to
+    /// refusing an anonymous one for want of a credential
+    /// (<c>Unauthenticated</c>).
+    /// </summary>
+    /// <remarks>
+    /// <see cref="RequiresAuthentication"/> is true for both, because both are
+    /// answered by the same reconnect-or-sign-in affordance. They are different
+    /// situations to a reader, though: signing in fixes one and cannot fix the
+    /// other, so a surface that offers "sign in" to a caller who is already
+    /// signed in sends them round a loop. Surfaces that explain a refusal use
+    /// this to pick between "you are not signed in" and "you lack the grant".
+    /// </remarks>
+    public bool IsPermissionDenied { get; init; }
 }

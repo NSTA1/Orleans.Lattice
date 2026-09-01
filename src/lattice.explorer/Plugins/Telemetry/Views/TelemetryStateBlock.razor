@@ -1,0 +1,28 @@
+@*
+    One rendering of the shared state vocabulary's message shape, so every
+    "nothing to show" in this area says what happened and what to do next in the
+    same words and the same order.
+
+    The caller owns the live-region role, because whether a state is polite
+    status or an assertive alert depends on whether the caller caused it.
+*@
+
+@if (Message is { } message)
+{
+    <div class="lxt-state @Class">
+        <p class="lxt-state-headline"><strong>@message.Headline</strong></p>
+        <p class="lxt-state-explanation">@message.Explanation</p>
+        @if (!string.IsNullOrEmpty(message.Remedy))
+        {
+            <p class="lxt-state-remedy"><strong>@message.RemedyLabel</strong> @message.Remedy</p>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The message to render, or <see langword="null"/> to render nothing.</summary>
+    [Parameter, EditorRequired] public ExplorerStateMessage? Message { get; set; }
+
+    /// <summary>An extra class for the wrapper, so a caller can place the block.</summary>
+    [Parameter] public string? Class { get; set; }
+}

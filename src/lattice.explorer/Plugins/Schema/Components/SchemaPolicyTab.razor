@@ -87,7 +87,7 @@
                         var label = _draftRuleLabels[i];
                         <li>
                             <button type="button" class="lx-schema-btn lx-schema-btn-icon lx-schema-danger"
-                                    title="Remove rule" aria-label="Remove rule"
+                                    aria-label="Remove rule"
                                     disabled="@(!Session.Can(SchemaCapability.ManagePolicy))"
                                     @onclick="@(() => RemoveDraftRule(index))">x</button>
                             <span class="lx-schema-rulelabel">@label</span>

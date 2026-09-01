@@ -58,16 +58,9 @@ else
 
         <div class="lx-data-body @(IsCompact ? "is-stacked" : null)">
             <div class="lx-data-keys">
-                @if (_loading && CurrentEntries.Count == 0)
+                @if (ListState is not null)
                 {
-                    <div class="lx-selection-state">Loading entries...</div>
-                }
-                else if (_error is not null)
-                {
-                    <div class="lx-selection-state lx-selection-state-error">
-                        <span>@_error</span>
-                        <button type="button" class="lx-btn-link" @onclick="_refresh">Try again</button>
-                    </div>
+                    <SelectionStateView Message="ListState" OnAction="_refresh" />
                 }
                 else
                 {
