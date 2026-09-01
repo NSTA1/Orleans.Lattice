@@ -41,44 +41,68 @@ public sealed class DeepLinkJourneyTests : JourneyTestBase
     public async Task Back_and_forward_walk_the_areas_that_were_visited()
     {
         var page = await OpenAtAsync("", ExpandedWidth);
+
+        // Record every main-frame navigation. Reading the address after Back cannot
+        // tell the two failure modes apart - Back never moving, versus Back moving to
+        // the bare surface and the shell restoring the remembered area over it within
+        // one circuit round trip - because both read back as the area address. The
+        // navigation sequence distinguishes them: a restore appears as an extra entry.
+        var navigations = new List<string>();
+        page.FrameNavigated += (_, frame) =>
+        {
+            if (frame == page.MainFrame)
+            {
+                navigations.Add(new Uri(frame.Url).PathAndQuery);
+            }
+        };
+
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.AssertActiveAreaAsync(page, "Explore");
 
         await JourneyShell.OpenAreaAsync(page, JourneyWorkbenchPlugin.AreaLabel);
+        var beforeBack = navigations.Count;
 
         await page.GoBackAsync();
-        await JourneyShell.AssertActiveAreaAsync(page, "Explore");
+        var landed = new Uri(page.Url).PathAndQuery;
+
+        try
+        {
+            await JourneyShell.AssertActiveAreaAsync(page, "Explore");
+        }
+        catch (Exception ex)
+        {
+            var after = navigations.Skip(beforeBack).ToArray();
+            Assert.Fail(
+                "Going back from the workbench area did not return to Explore. The address "
+                + $"immediately after Back was '{landed}'. Navigations since Back: "
+                + (after.Length == 0
+                    ? "<none, so Back never moved the address>"
+                    : "[" + string.Join(" -> ", after) + "]")
+                + Environment.NewLine + "Whole navigation history: ["
+                + string.Join(" -> ", navigations) + "]"
+                + Environment.NewLine + ex.Message);
+        }
 
         await page.GoForwardAsync();
         await JourneyShell.AssertActiveAreaAsync(page, JourneyWorkbenchPlugin.AreaLabel);
     }
 
     /// <summary>
-    /// <b>Currently red, and deliberately so.</b> Opening a tree does not put it in the
-    /// address, and an address naming a tree does not open it, so a specific view
-    /// cannot be shared or bookmarked.
+    /// Copying the address of an opened tree and entering it fresh must arrive at that
+    /// same view: the tree selected and its detail surface resolved.
     /// <para>
-    /// <b>Evidence.</b> Selecting a catalog row leaves the address at <c>/</c>, and
-    /// entering <c>/explore/trees/{id}</c> fresh renders the detail panel's "Nothing
-    /// selected" state. The mechanism is that nothing joins the two halves the epic
-    /// built: the route grammar carries <c>/explore/{kind}/{id}/{surface}</c> and the
-    /// preference contract declares <c>shell.selection</c> and <c>shell.surface</c>, but
-    /// <c>ExplorerRoute.WithSelection</c> is called from exactly one place in the whole
-    /// product - <c>ExplorerShellPreferences</c> reading its own remembered value back -
-    /// and neither <c>UI/Navigation/NavigationPanel.razor</c> nor
-    /// <c>UI/Detail/DetailPanel.razor</c> resolves <c>IExplorerShellRouter</c> at all.
-    /// Both still hold their state in the older ad hoc <c>IUiPreferenceStore</c> keys
-    /// (<c>nav-selected</c>, <c>detail-plugin</c>), which is why a selection survives a
-    /// reload but never reaches the address.
+    /// This is the epic's share-a-link promise end to end, and it is the case that
+    /// exposed the selection round trip. Producing the address and consuming it are
+    /// separate mechanisms - the shell can write a correct URL and still discard the
+    /// intent when the address is entered cold - so both halves are asserted, in order,
+    /// with the failure naming which one held.
     /// </para>
     /// <para>
-    /// #1847's handoff flagged moving those writes onto the shell-state contract as an
-    /// open item for "P1/P2", but those issues own <c>Plugins/**</c> while the two files
-    /// are shell-owned <c>UI/**</c>, so no issue in the epic had the lane to do it.
-    /// </para>
-    /// <para>
-    /// It fails against pre-epic code too, for the stronger reason that the route
-    /// grammar it depends on did not exist.
+    /// <b>The identity is established before the link is opened, deliberately.</b>
+    /// Signing in is a real form POST that redirects home, so signing in <i>after</i>
+    /// arriving would discard the very address under test and measure nothing. A person
+    /// sharing a link is already signed in, or signs in and then follows it; both land
+    /// here.
     /// </para>
     /// </summary>
     [Test]
@@ -92,19 +116,40 @@ public sealed class DeepLinkJourneyTests : JourneyTestBase
         // they are looking at.
         var shared = new Uri(page.Url).PathAndQuery;
         Assert.That(shared, Does.Contain(JourneyCatalogReader.OrdersTree),
-            "Opening a tree left the address at '" + shared + "', which names no selection, so there "
-            + "is nothing for a person to copy and share. ExplorerRoute.WithSelection is never called "
-            + "by the shell: NavigationPanel and DetailPanel hold the selection in ad hoc "
-            + "IUiPreferenceStore keys and resolve no IExplorerShellRouter.");
+            $"Opening a tree left the address at '{shared}', which names no selection, so there is "
+            + "nothing for a person to copy and share.");
 
-        // Step two: and pasting it into a fresh session must arrive at that same view.
-        var fresh = await OpenAtAsync(shared.TrimStart('/'), ExpandedWidth);
-        await ExplorerShell.SignInAsync(fresh, JourneyWorld.PlatformAdmin);
+        // Step two: entering that address cold must arrive at the same view. The new
+        // page is opened in the SAME browser context, so it carries the credential
+        // already established rather than needing a sign-in that would redirect away
+        // from the address being tested.
+        var fresh = await page.Context.NewPageAsync();
+        await fresh.GotoAsync(new Uri(BaseUri, shared.TrimStart('/')).ToString());
+        await ExplorerShell.WaitForShellReadyAsync(fresh);
+        await ExplorerShell.AssertShellRenderedAsync(fresh);
+        await ExplorerShell.AssertSignedInAsync(fresh, JourneyWorld.PlatformAdmin);
+
+        // The address must survive the trip: a shell that silently rewrote it back to
+        // the bare surface would fail the assertions below for the wrong reason.
+        Assert.That(new Uri(fresh.Url).PathAndQuery, Does.Contain(JourneyCatalogReader.OrdersTree),
+            "The shared address was rewritten on arrival, so the link no longer names the tree it "
+            + "was copied for. Observed: " + await JourneyShell.DescribeCatalogStateAsync(fresh));
 
         // The surface first, then the catalog's marking, so a partial adoption - the
         // address and the detail panel agreeing while the catalog still shows nothing
         // selected - is distinguishable from the tree never opening at all.
-        await Assertions.Expect(fresh.Locator(JourneyShell.DetailTabSelector).First).ToBeVisibleAsync();
+        try
+        {
+            await Assertions.Expect(fresh.Locator(JourneyShell.DetailTabSelector).First).ToBeVisibleAsync();
+        }
+        catch (PlaywrightException ex)
+        {
+            Assert.Fail(
+                "The shared address was reproduced, but no detail surface resolved for it, so the "
+                + "link lands on an empty panel."
+                + Environment.NewLine + await JourneyShell.DescribeCatalogStateAsync(fresh)
+                + Environment.NewLine + ex.Message);
+        }
 
         try
         {
