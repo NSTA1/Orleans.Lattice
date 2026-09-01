@@ -124,6 +124,21 @@ internal sealed class TreeShardSplitGrain(
 
         if (state.State.Complete) state.State.Complete = false;
 
+        // Serialise behind any migration already in flight on the source
+        // shard. A shard carries a single migration record, and an online
+        // consolidation opens its donor-side shadow-write window through the
+        // same primitive, so a split that ran here would re-aim the fold's
+        // window and strand the folded slots. The consolidation coordinator
+        // already refuses symmetrically. This check is the cheap one - it
+        // spares a refused split a freshly-allocated physical shard index and
+        // a persisted intent; ShardRootGrain.BeginSplitAsync is what enforces
+        // it atomically.
+        var sourceShard = grainFactory.GetGrain<IShardRootGrain>(
+            $"{await GetPhysicalTreeIdAsync()}/{sourceShardIndex}");
+        if (await sourceShard.IsSplittingAsync())
+            throw new InvalidOperationException(
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a migration is already in progress on it.");
+
         await InitiateSplitStateAsync(sourceShardIndex);
         await StartCoordinatorAsync();
     }
@@ -206,7 +221,31 @@ internal sealed class TreeShardSplitGrain(
         // Kick off shadow-writing on the source shard.
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
-        await source.BeginSplitAsync(targetShardIndex, movedSlots, currentMap.Slots.Length);
+        try
+        {
+            await source.BeginSplitAsync(targetShardIndex, movedSlots, currentMap.Slots.Length);
+        }
+        catch (InvalidOperationException)
+        {
+            // The source shard acquired a migration record between the
+            // pre-check in SplitAsync and this call - an online consolidation
+            // taking it as a donor, in practice. Unwind the intent just
+            // persisted rather than leaving this coordinator InProgress with
+            // no reminder anchored on it: SplitAsync short-circuits on
+            // InProgress, so a half-committed intent would make this shard
+            // permanently unsplittable, and resuming later would drive a slot
+            // plan the other migration has since invalidated.
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.OperationId = prevOperationId;
+            state.State.Phase = prevPhase;
+            state.State.SourceShardIndex = prevSourceShardIndex;
+            state.State.TargetShardIndex = prevTargetShardIndex;
+            state.State.MovedSlots = prevMovedSlots;
+            state.State.OriginalShardMap = prevOriginalShardMap;
+            await state.WriteStateAsync();
+            throw;
+        }
 
         // Retroactive shadow-forward of in-flight prepared
         // mutations. The shadow-forward window opened by BeginSplitAsync

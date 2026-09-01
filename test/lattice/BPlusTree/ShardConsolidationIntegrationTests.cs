@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class ShardConsolidationIntegrationTests
+public partial class ShardConsolidationIntegrationTests
 {
     private FourShardClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
