@@ -156,12 +156,17 @@ public partial class ShardHealingOrchestratorGrainTests
     }
 
     [Test]
-    public async Task A_tree_in_the_measured_damage_shape_converges()
+    public async Task A_tree_in_a_severely_over_split_shape_converges()
     {
-        // The shape the epic exists to repair: the measured deployment ran three
-        // vector trees to over a thousand physical shards against a base of 64.
-        // Modelled at the same order of magnitude of damage with the real
-        // planner and the real decision core.
+        // A severely over-split tree - an order of magnitude past its base -
+        // driven through the real planner and the real decision core, to show
+        // convergence holds at scale rather than only for a handful of folds.
+        //
+        // This was originally described as "the measured damage shape" after the
+        // figure that founded the epic. That figure counts LEAF GRAINS, not
+        // physical shards, and S14 measured the real deployment at exactly its
+        // base 64 physical shards on every tree - so no such damage was ever
+        // observed in production. The scale here is a deliberate stress case.
         var h = CreateGrain(physicalShardCount: 64, baseShardCount: 8, virtualShardCount: 256);
 
         var counts = await HealToSettlementAsync(h);
