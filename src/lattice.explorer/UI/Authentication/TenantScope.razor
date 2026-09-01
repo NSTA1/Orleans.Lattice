@@ -118,17 +118,17 @@
     private const string DefaultTenantHelpId = "lx-tenant-scope-default";
     private const string HostClass = "lx-shell-tenant-switch";
 
-    // The glossary term for the reserved default tenant if the vocabulary module
-    // defines one, and the general definition of a tenant until it does. Probed
-    // rather than written here, because a second wording for one concept is the
-    // defect the shared vocabulary exists to close.
-    private const string DefaultTenantTermId = "default-tenant";
-
     private static readonly ExplorerTerm ActiveTenantTerm = ExplorerGlossary.Get(ExplorerTermIds.ActiveTenant);
     private static readonly ExplorerTerm AllTenantsTerm = ExplorerGlossary.Get(ExplorerTermIds.AllTenants);
 
-    private static readonly ExplorerTerm DefaultTenantTerm =
-        ExplorerGlossary.Find(DefaultTenantTermId) ?? ExplorerGlossary.Get(ExplorerTermIds.Tenant);
+    // The reserved default tenant: the one owning every un-prefixed tree, which
+    // always exists and cannot be suspended or deleted. This was probed by string
+    // id with a fallback to the general tenant definition while the vocabulary
+    // module and this control were built in parallel; the term now exists, so it
+    // is resolved by the typed constant like every other term here. A second
+    // wording for one concept is the defect the shared vocabulary exists to close,
+    // and so is a second spelling of one term id.
+    private static readonly ExplorerTerm DefaultTenantTerm = ExplorerGlossary.Get(ExplorerTermIds.DefaultTenant);
 
     // Composed once: LatticeHelp.ExplanationElementId concatenates, and these are
     // read on every render pass.
