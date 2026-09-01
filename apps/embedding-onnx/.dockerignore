@@ -1,0 +1,8 @@
+# Build-context exclusions for this image. The build context is THIS directory,
+# so the repository-root .dockerignore does not apply here.
+**/bin/
+**/obj/
+**/TestResults/
+
+# The covering test project is a build-time gate, not part of the image.
+tests/
