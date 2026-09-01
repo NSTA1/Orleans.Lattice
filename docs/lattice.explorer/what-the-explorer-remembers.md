@@ -82,8 +82,11 @@ to someone else.
 ## The division of labour with the URL
 
 The URL carries where you are. Preferences carry how you like it and where you
-were last time. Arriving at a bare `/` restores the remembered view; an explicit
-URL always wins. See
+were last time. An explicit URL always wins. Arriving at a bare `/` restores the
+remembered view, but only once, when you enter the console: a later `/` within the
+same session is taken at face value, including one you reach by pressing Back.
+Otherwise leaving an area would be impossible - Back would return you to the home
+address and the restore would put you straight back where you came from. See
 [The Explorer navigation model](navigation-model.md#where-the-url-ends-and-preferences-begin).
 
 ## See also

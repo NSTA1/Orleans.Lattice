@@ -33,8 +33,6 @@ namespace Orleans.Lattice.Explorer.UI.Pages;
 /// </remarks>
 public partial class Home
 {
-    private bool _restoreApplied;
-
     /// <summary>
     /// The area route value. Declared because the templates name it, but never
     /// read: the address is parsed from <see cref="NavigationManager.Uri"/> by
@@ -62,6 +60,9 @@ public partial class Home
     [Inject]
     private IExplorerShellPreferences Preferences { get; set; } = default!;
 
+    [Inject]
+    private IExplorerShellEntryGate EntryGate { get; set; } = default!;
+
     /// <inheritdoc />
     protected override Task OnInitializedAsync() => HydrateAndSettleAsync();
 
@@ -82,7 +83,7 @@ public partial class Home
     {
         await Preferences.EnsureLoadedAsync();
 
-        if (_restoreApplied || !Preferences.IsLoaded)
+        if (!Preferences.IsLoaded)
         {
             // Still unhydrated: leave the shell on whatever the address says and
             // try again after the first render. Restoring from an unhydrated
@@ -90,7 +91,15 @@ public partial class Home
             return;
         }
 
-        _restoreApplied = true;
+        // Claimed from the session rather than from a field on this page. The
+        // router destroys and recreates this page on every navigation away and
+        // back, so a field here would mean "once per page instance" - which reads
+        // as "every time you return to '/'", and made Back out of an area bounce
+        // straight into it again.
+        if (!EntryGate.TryClaimEntry())
+        {
+            return;
+        }
 
         var entry = ExplorerShellEntryPolicy.Decide(
             Router.Status,

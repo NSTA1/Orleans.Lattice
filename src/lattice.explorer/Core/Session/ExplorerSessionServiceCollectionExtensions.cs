@@ -77,6 +77,10 @@ public static class ExplorerSessionServiceCollectionExtensions
 
         services.TryAddScoped<IExplorerShellPreferences, ExplorerShellPreferences>();
 
+        // Scoped, so the single restore opportunity it records belongs to the
+        // session rather than to whichever page happens to claim it.
+        services.TryAddScoped<IExplorerShellEntryGate, ExplorerShellEntryGate>();
+
         return services.AddExplorerNavigation();
     }
 }

@@ -113,9 +113,13 @@ precedence, which only helps when a competing literal endpoint actually exists.
 ## Where the URL ends and preferences begin
 
 The URL carries *where you are*. Preferences carry *how you like it* and *where
-you were last time*. Landing on a bare `/` restores the remembered view; an
-explicit URL always wins over what was remembered. A single policy arbitrates
-this once per session entry, so the two never disagree.
+you were last time*. An explicit URL always wins over what was remembered.
+Landing on a bare `/` restores the remembered view, but only on entry to the
+console. A single policy arbitrates this once per session, so the two never
+disagree - and so a later `/` is honoured rather than overridden. That second
+half is load-bearing: Back out of an area returns you to the home address, and a
+restore that fired again there would put you straight back into the area you were
+trying to leave, making browser history impossible to walk.
 
 See [What the Explorer remembers](what-the-explorer-remembers.md).
 
