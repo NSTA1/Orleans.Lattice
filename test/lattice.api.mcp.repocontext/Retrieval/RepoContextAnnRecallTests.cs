@@ -108,7 +108,7 @@ public sealed class RepoContextAnnRecallTests
         // background build is disabled, so the measurement never races a task.
         using var registry = new RepoContextAnnIndexRegistry(
             factory,
-            new RepoContextAnnOptions { AutoBuild = false },
+            new RepoContextAnnOptions(),
             NullLogger<RepoContextAnnIndexRegistry>.Instance);
         await registry.EnsureBuiltAsync(RepoId, Space, cancellationToken);
 

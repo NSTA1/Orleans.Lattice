@@ -68,6 +68,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TreeAdmin.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin" />
     <InternalsVisibleTo Include="Orleans.Lattice.Api.TenantAdmin.Tests" />
+    <InternalsVisibleTo Include="Orleans.Lattice.Api.Mcp.RepoContext" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.AzureTable.Tests" />
     <InternalsVisibleTo Include="Orleans.Lattice.Storage.File" />

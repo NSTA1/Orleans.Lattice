@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -119,6 +120,22 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<RepoContextAnnIndexRegistry>();
         services.TryAddSingleton<IRepoContextAnnIndex>(
             sp => sp.GetRequiredService<RepoContextAnnIndexRegistry>());
+
+        // The build scheduler and its startup sweep. The index build is what makes
+        // queries fast, so arming it from a query made the acceleration reachable
+        // only from the thing it accelerates: nothing resumed it after a process
+        // death, and an idle repository never built at all. The sweep arms a durable
+        // reminder-anchored coordinator per (repository, embedding space) with no
+        // traffic whatsoever, and the coordinator survives a restart. TryAdd means a
+        // host or test harness can substitute the scheduler.
+        services.TryAddSingleton(sp => new RepoContextAnnIndexScheduler(
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetRequiredService<RepoContextIndexingOptions>(),
+            sp.GetRequiredService<ILogger<RepoContextAnnIndexScheduler>>(),
+            sp.GetService<IEmbeddingProvider>()));
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, RepoContextAnnIndexSweepService>());
+
         services.TryAddSingleton<IRepoContextSemanticIndex>(sp =>
         {
             var exact = sp.GetRequiredService<ExactKnnSemanticIndex>();

@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 
 /// <summary>
 /// A silo-free rig for the approximate retrieval plane: an in-memory store of
-/// record, an in-memory durable store, and a registry wired to both, with the
-/// background build disabled so every test drives the build itself and no
+/// record, an in-memory durable store, and a registry wired to both. The plane
+/// starts no work of its own, so every test drives the build itself and no
 /// assertion depends on a clock, a delay, or a race with a background task.
 /// <para>
 /// Rebuilding the registry over the same <see cref="Factory"/> is a process
@@ -55,12 +55,14 @@ internal sealed class AnnPlaneFixture : IDisposable
     public InMemoryVectorIndexStore Store => Factory.For(RepoId, Space).Store;
 
     /// <summary>
-    /// The rig's default plane options: no background build, and a training
-    /// threshold low enough that a handful of vectors produces a real partitioning.
+    /// The rig's default plane options: a training threshold low enough that a
+    /// handful of vectors produces a real partitioning. Nothing disables a
+    /// background build, because there is none - the plane builds only when a
+    /// caller advances it, so every assertion here is deterministic without a
+    /// clock, a delay, or a race.
     /// </summary>
     public static RepoContextAnnOptions DefaultOptions() => new()
     {
-        AutoBuild = false,
         MinimumTrainingCount = 8,
         PartitionCount = 4,
         Probes = 4,

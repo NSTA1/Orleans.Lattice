@@ -53,15 +53,6 @@ internal sealed class RepoContextAnnOptions
     public double RetrainAfterUpdateFraction { get; init; } = 0.25;
 
     /// <summary>
-    /// Whether the plane drives its own background build when an index is first
-    /// opened. Left <see langword="true"/> in a host so an existing deployment
-    /// heals itself with no operator action; set <see langword="false"/> in a test
-    /// that drives <c>BuildStepAsync</c> explicitly, so no assertion ever depends
-    /// on a clock or on a race with a background task.
-    /// </summary>
-    public bool AutoBuild { get; init; } = true;
-
-    /// <summary>
     /// The distance metric the index ranks with. Cosine reproduces the exact
     /// path's ordering under both normalization conventions: for a unit-L2 space
     /// the cosine similarity and the dot product the exact ranker uses are the

@@ -70,3 +70,40 @@ The heal is a **cure, not a mask**. Every vector-plane write and coverage probe 
 
 Re-derivation is **fail-closed**. It applies only to the two rebuildable vector projections (`repo-context-vector-metadata` and `repo-context-vector-membership`). The write-once, content-addressed payload tree is excluded (it has no in-place deletes and cannot be re-derived by a drop-and-re-embed), and every store-of-record tree - structural, symbol, agent memory - is refused outright: resetting one of those would be real data loss. A refused fall-off is still surfaced (logged and metered) but never auto-reset.
 
+
+## Scheduling the approximate index build
+
+The approximate index is what makes a semantic query sub-linear in the corpus, and building it means streaming that corpus once. **The build is scheduled, not triggered by traffic.** It used to be armed by a declining query through a fire-and-forget background task, which put the work that accelerates queries behind a query: the task died with the process with nothing to resume it, the first query after a restart both paid the un-indexed cost and was the trigger, and a repository nobody queried never indexed itself at all.
+
+Scheduling now sits on the same reminder-anchored coordinator pattern the tree coordinators use. One internal coordinator grain exists per `(repository, embedding space)` pair, keyed by the repository and the space's fingerprint:
+
+- Its **phase timer** advances the build by exactly one bounded slice per tick, so a query arriving mid-build is answered by the exact scan immediately rather than queueing behind the build.
+- Its **keep-alive reminder** reactivates it after a silo restart while work remains, and its activation hook re-arms the pump - so a build interrupted by a process death resumes on the restart itself. The reminder is the retry, and a durable one, which is why there is no in-process retry loop.
+- Orleans' **single-threaded activation** is what keeps two builds off one index, in place of an in-process flag that a process death forgets.
+- On reaching `Ready` it unregisters its reminder and deactivates, so a converged repository costs nothing.
+
+A **startup sweep** arms a coordinator for every registered repository and re-sweeps periodically, so a restored volume with no client traffic at all converges to a serving index, and a repository onboarded later is picked up. The self-index grain also arms it directly when it drives an indexing pass, so a freshly onboarded repository converges on that pass rather than on the following sweep.
+
+Arming is idempotent. A coordinator that finds its index already built still performs one step, which **reloads the persisted index into the process** rather than leaving that for the next query - the reload is roughly twenty times cheaper than a rebuild, and paying it off the request path is the point.
+
+**Kill switch.** `LATTICE_REPOCONTEXT_ANN_INDEX_SCHEDULING=false` turns scheduling off. The off state is honest rather than a fall-back to the old behaviour: nothing is scheduled, an index that is not already built is never built, and every semantic query is answered by the exact scan with complete recall. Setting `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL=exact` implies the same thing, because such a host maintains no index at all.
+
+**Multi-silo note.** A coordinator is a single cluster-wide activation, and the in-memory index a query is served from is per silo. On a multi-silo host the coordinator's silo is warmed with no query; another silo opens its own handle on its first query, which is a **reload** of the already-built index rather than a rebuild. The expensive half - streaming the corpus - is paid once, off the request path, whichever silo hosts the coordinator.
+
+## How a superseded index is retired
+
+There are three distinct transitions, and all three are now handled.
+
+1. **No index to index (adoption).** An existing deployment starts with no index. Until one is built, queries are answered by the exact scan with complete recall, and `retrievalPath` reports which path answered. No operator action, no migration step.
+2. **Generation to generation, within one embedding space (retrain or rebuild).** A generation covers a whole partitioning, so a retrain writes a **fresh** generation and flips the manifest to it rather than editing the live one. The manifest is written last by every flush, so it is the atomic swap point: the previous generation stays queryable until the flip, and a crash mid-write leaves it live rather than a half-built one. The superseded generation is then retired by prefix delete.
+3. **Space to space, that is a new model or dimension.** The index prefix is keyed by `(repository, embedding space)`, so a model change produces a wholly separate index. That separation is deliberate - retirement works by prefix delete, so two spaces sharing a prefix would delete each other's generations - but it left the abandoned space resident forever: invisible to queries, harmless to correctness, and hundreds of megabytes per abandoned space.
+
+The build coordinator closes the third case, because it is the only component that knows which space is *current* for a repository. On reaching `Ready` it retires the sibling prefixes of its own repository whose space fingerprint is not the live one.
+
+Three properties make that safe:
+
+- **Strictly after `Ready`.** Until the replacement can answer, the space it replaces is the only thing a failed re-embed could fall back to.
+- **Repository-scoped and bounded.** Every space a repository has been indexed under is a sibling in one contiguous ordinal range, because the repository sorts *before* the space fingerprint in the key. The walk therefore reads one key per space and skips a whole space in a single hop, rather than enumerating hundreds of thousands of records - and it is keys-only, so it never reads the very data it exists to remove. Another repository's index is never in reach.
+- **Abort-resilient.** The walk goes through the resilient scan wrapper, because a reclaimed remote enumerator yields a short result, and a short result here reads as "no more spaces" - silently leaving a superseded index behind.
+
+**Kill switch.** `LATTICE_REPOCONTEXT_ANN_INDEX_RECLAMATION=false` keeps superseded spaces, which is the setting to use when an operator wants a previous space retained for a deliberate roll-back.

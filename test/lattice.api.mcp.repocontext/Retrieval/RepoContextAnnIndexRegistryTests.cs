@@ -61,7 +61,6 @@ public sealed class RepoContextAnnIndexRegistryTests
         // there is a real mid-build window to observe rather than an inferred one.
         using var fixture = new AnnPlaneFixture(new RepoContextAnnOptions
         {
-            AutoBuild = false,
             MinimumTrainingCount = 8,
             PartitionCount = 4,
             Probes = 4,
@@ -107,7 +106,6 @@ public sealed class RepoContextAnnIndexRegistryTests
     {
         using var fixture = new AnnPlaneFixture(new RepoContextAnnOptions
         {
-            AutoBuild = false,
             // Above the corpus, so the build legitimately finishes with no partitioning.
             MinimumTrainingCount = 4_096,
         });
@@ -299,7 +297,6 @@ public sealed class RepoContextAnnIndexRegistryTests
     {
         using var fixture = new AnnPlaneFixture(new RepoContextAnnOptions
         {
-            AutoBuild = false,
             MinimumTrainingCount = 8,
             PartitionCount = 4,
             Probes = 4,
@@ -361,7 +358,6 @@ public sealed class RepoContextAnnIndexRegistryTests
     {
         using var fixture = new AnnPlaneFixture(new RepoContextAnnOptions
         {
-            AutoBuild = false,
             MinimumTrainingCount = 8,
             PartitionCount = 4,
             Probes = 4,
