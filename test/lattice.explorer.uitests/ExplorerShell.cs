@@ -36,7 +36,21 @@ internal static class ExplorerShell
     /// second) so a loaded CI agent does not flake, while still failing in bounded
     /// time if the circuit never establishes.
     /// </summary>
-    internal const float CircuitReadyTimeoutMs = 30_000;
+    /// <remarks>
+    /// Raised from thirty seconds because thirty was not in fact generous enough on
+    /// a shared runner: a journey shard stands up its own in-process head and drives
+    /// it through every case, and a later case would wait the budget out and fail
+    /// with the shell never reporting itself measured. Which case that happened to
+    /// be moved from run to run, which is contention rather than any one case being
+    /// wrong, and it made the whole lane's result unreadable - a genuine regression
+    /// would have looked identical.
+    /// <para>
+    /// This weakens no assertion. The shell either becomes interactive or the case
+    /// still fails; the budget only decides how long a slow agent is given to get
+    /// there. The load itself is addressed separately, by sharding the journeys.
+    /// </para>
+    /// </remarks>
+    internal const float CircuitReadyTimeoutMs = 90_000;
 
     /// <summary>
     /// How long a bounded DOM read of the rail may take. Every read here goes through
