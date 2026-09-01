@@ -39,6 +39,14 @@ internal static class ExplorerShell
     internal const float CircuitReadyTimeoutMs = 30_000;
 
     /// <summary>
+    /// How long a bounded DOM read of the rail may take. Every read here goes through
+    /// a locator rather than <see cref="IPage.EvaluateAsync{T}(string, object?)"/>,
+    /// which has no timeout at all and so turns one wedged circuit into a run-killing
+    /// hang instead of a single failed test.
+    /// </summary>
+    internal const float RailReadTimeoutMs = 15_000;
+
+    /// <summary>
     /// The username the harness signs in as. The seeded endpoint is deliberately
     /// unreachable, so nothing validates this pair against a server: the sign-in
     /// exercises the shell's authenticated <i>rendering</i> path, which is what the
@@ -80,11 +88,14 @@ internal static class ExplorerShell
         }
         """;
 
-    /// <summary>Reads every area-strip tab label from a single DOM snapshot.</summary>
+    /// <summary>Reads every area-strip tab label and the demoted-entry count in one DOM snapshot.</summary>
     private const string AreaLabelsScript =
         """
-        () => Array.from(document.querySelectorAll('.lx-shell-areastrip [role=tab]'))
-            .map(tab => (tab.textContent || '').trim())
+        () => ({
+            tabs: Array.from(document.querySelectorAll('.lx-shell-areastrip [role=tab]'))
+                .map(tab => (tab.textContent || '').trim()),
+            demoted: document.querySelectorAll('.lx-shell-rail-demoted-entry').length,
+        })
         """;
 
     /// <summary>The viewport width that lands squarely inside <paramref name="breakpoint"/>'s band.</summary>
@@ -290,14 +301,40 @@ internal static class ExplorerShell
         // pre-settle strip can address an element that no longer exists by the time it
         // is read, and Playwright then waits out its whole action timeout on a tab that
         // is never coming back.
-        var labels = await page.EvaluateAsync<string[]>(AreaLabelsScript);
+        //
+        // Bounded, and through a locator: IPage.EvaluateAsync has no timeout, so a
+        // wedged circuit here would hang the whole run rather than fail one test.
+        var rail = await page.Locator(":root").EvaluateAsync<AreaRailSnapshot>(
+            AreaLabelsScript,
+            arg: null,
+            new LocatorEvaluateOptions { Timeout = RailReadTimeoutMs });
 
-        Assert.That(labels.Length, Is.GreaterThan(1),
-            "The area strip offered fewer than two areas, so an 'every area' sweep would be "
-            + "indistinguishable from a home-only sweep. Either the plugin catalogue failed to "
-            + "register or every gate withheld its area.");
+        // ANTI-VACUITY, re-expressed. The original premise was "at least two tabs",
+        // which stopped describing a healthy rail the moment the navigation redesign
+        // began demoting a refused area to an inert entry below a divider rather than
+        // to a disabled tab. On a head with no cluster exactly one area is activable
+        // and the rest are demoted, which is now the CORRECT rendering - so counting
+        // tabs alone fails a rail that is working perfectly.
+        //
+        // What still has to be proved is that the rail rendered its whole picture
+        // rather than a half-initialised one: the shell registers several areas, so a
+        // rail showing only a single entry of any kind means the plugin catalogue did
+        // not register or no gate has reported yet, and a sweep over it would be
+        // indistinguishable from a home-only sweep.
+        var entries = rail.Tabs.Length + rail.Demoted;
 
-        return labels;
+        Assert.That(entries, Is.GreaterThan(1),
+            $"The rail rendered {entries} area entr{(entries == 1 ? "y" : "ies")} in total "
+            + $"({rail.Tabs.Length} activable, {rail.Demoted} demoted), so it has not rendered the "
+            + "area set this shell registers and an 'every area' sweep over it would prove nothing. "
+            + "Either the plugin catalogue failed to register or no gate has reported yet.");
+
+        Assert.That(rail.Tabs, Is.Not.Empty,
+            "The rail offered no activable area at all. The home surface is never gated, so it must "
+            + "always be offered; a rail with nothing to open means the shell did not render its own "
+            + "home entry.");
+
+        return rail.Tabs;
     }
 
     /// <summary>
@@ -357,6 +394,11 @@ internal static class ExplorerShell
     private static async Task<string> ResolveThemeAsync(IPage page, ExplorerTheme theme)
     {
         await Assertions.Expect(page.Locator(ShellSelector)).ToBeAttachedAsync();
-        return await page.EvaluateAsync<string>(ApplyThemeScript, ThemeAttributeValue(theme));
+        return await page.Locator(":root").EvaluateAsync<string>(
+            ApplyThemeScript,
+            ThemeAttributeValue(theme),
+            new LocatorEvaluateOptions { Timeout = RailReadTimeoutMs });
     }
 }
+
+

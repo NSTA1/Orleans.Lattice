@@ -35,7 +35,7 @@ public sealed partial class AccessibilityStructureTests
     {
         var normal = await OpenHomeAsync(LatticeBreakpoint.Expanded);
         await ExplorerShell.AssertShellRenderedAsync(normal);
-        var baseline = await normal.EvaluateAsync<double>(LongestMotionProbe);
+        var baseline = await normal.Locator(":root").EvaluateAsync<double>(LongestMotionProbe);
 
         Assert.That(baseline, Is.GreaterThan(NeutralisedMotionMs),
             $"The control measurement found no motion to neutralise ({baseline}ms), so the "
@@ -52,7 +52,7 @@ public sealed partial class AccessibilityStructureTests
             ReducedMotion = ReducedMotion.Reduce,
         });
         await ExplorerShell.AssertShellRenderedAsync(reduced);
-        var neutralised = await reduced.EvaluateAsync<double>(LongestMotionProbe);
+        var neutralised = await reduced.Locator(":root").EvaluateAsync<double>(LongestMotionProbe);
 
         Assert.That(neutralised, Is.LessThanOrEqualTo(NeutralisedMotionMs),
             $"With prefers-reduced-motion: reduce the shell still animates for {neutralised}ms "
@@ -103,22 +103,34 @@ public sealed partial class AccessibilityStructureTests
     private const string LongestMotionProbe =
         """
         () => {
-            const el = document.querySelector('.lx-shell-area-tab') || document.querySelector('.lx-shell');
-            if (!el) {
-                return -1;
-            }
-
-            const style = getComputedStyle(el);
-            const toMilliseconds = value => value.split(',')
+            // Scan the whole rendered shell rather than one named element.
+            //
+            // The probe used to read '.lx-shell-area-tab', a class the navigation
+            // redesign deleted when the hand-rolled area strip moved onto the shared
+            // tab primitive; it then fell back to '.lx-shell', which has never
+            // animated, so the control measured 0ms and the guard correctly reported
+            // that it was no longer guarding anything. Pinning a selector makes this
+            // probe fail on a rename rather than on a regression, so it does not pin
+            // one: it asks whether the shell animates ANYWHERE, which is the actual
+            // subject and is immune to a class moving.
+            let longest = 0;
+            const toMilliseconds = value => (value || '').split(',')
                 .map(part => part.trim())
                 .filter(Boolean)
                 .map(part => part.endsWith('ms') ? parseFloat(part) : parseFloat(part) * 1000)
                 .filter(number => !Number.isNaN(number));
 
-            const durations = toMilliseconds(style.transitionDuration)
-                .concat(toMilliseconds(style.animationDuration));
+            for (const el of document.querySelectorAll('.lx-shell, .lx-shell *')) {
+                const style = getComputedStyle(el);
+                for (const duration of toMilliseconds(style.transitionDuration)) {
+                    if (duration > longest) { longest = duration; }
+                }
+                for (const duration of toMilliseconds(style.animationDuration)) {
+                    if (duration > longest) { longest = duration; }
+                }
+            }
 
-            return durations.length === 0 ? 0 : Math.max.apply(null, durations);
+            return longest;
         }
         """;
 
@@ -169,3 +181,4 @@ public sealed partial class AccessibilityStructureTests
         }
         """;
 }
+

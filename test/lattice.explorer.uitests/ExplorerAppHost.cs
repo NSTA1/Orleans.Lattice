@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -121,6 +122,29 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         configureServices?.Invoke(builder.Services);
 
         builder.Services.AddLatticeExplorerWeb();
+
+        // Do not retain a circuit whose browser has gone away.
+        //
+        // This is the difference between a lane that runs in one process and one that
+        // dies part way through. Every UI test opens one to three fresh browser
+        // contexts, and closing a context only drops the SignalR connection: Blazor
+        // Server then keeps the whole circuit - every component instance, every
+        // captured render tree, the scoped services behind them - alive for
+        // DisconnectedCircuitRetentionPeriod (three minutes by default), up to
+        // DisconnectedCircuitMaxRetained (a hundred). A suite of forty browser tests
+        // therefore accumulates dozens of live circuits inside the in-process head at
+        // once, and the test host is killed for memory long before the suite ends -
+        // which reads as "Test host process crashed" with no test result to blame,
+        // and is why every fixture passes alone while the whole lane aborts.
+        //
+        // Nothing under test depends on reconnection, so retaining nothing is both
+        // safe and much closer to what these tests mean: each test gets a genuinely
+        // new circuit, and the previous one is collected as soon as its page closes.
+        builder.Services.Configure<CircuitOptions>(options =>
+        {
+            options.DisconnectedCircuitMaxRetained = 0;
+            options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(1);
+        });
 
         var app = builder.Build();
 

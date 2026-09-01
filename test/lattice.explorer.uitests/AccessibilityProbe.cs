@@ -16,6 +16,13 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// </summary>
 internal static class AccessibilityProbe
 {
+    /// <summary>
+    /// How long a single probe evaluation may take. Generous for a script that only
+    /// walks the DOM, and short enough that a wedged circuit fails one test instead of
+    /// holding the whole run open.
+    /// </summary>
+    private const float ProbeTimeoutMs = 15_000;
+
     /// <summary>A probe's report: what it looked at, and what was wrong.</summary>
     /// <param name="Examined">How many candidate elements the probe evaluated.</param>
     /// <param name="Problems">One line per violated expectation; empty when clean.</param>
@@ -29,12 +36,27 @@ internal static class AccessibilityProbe
     /// Evaluates <paramref name="script"/> - which must return
     /// <c>{ examined: number, problems: string[] }</c> - and marshals the result.
     /// </summary>
+    /// <remarks>
+    /// Evaluated through a locator with an explicit timeout, never through
+    /// <see cref="IPage.EvaluateAsync{T}(string, object?)"/>, which has <b>no timeout at
+    /// all</b>. A probe runs against a page that has just been driven, and a page whose
+    /// Blazor circuit has wedged never returns - which turns one test's failure into a
+    /// run-killing hang at the blame collector's inactivity timeout, with no test
+    /// result to point at. Bounding it here means a wedged page fails its own test and
+    /// the rest of the run continues.
+    /// </remarks>
     /// <param name="page">The page to evaluate in.</param>
     /// <param name="script">The probe script.</param>
     /// <param name="argument">An optional argument passed to the probe.</param>
     internal static async Task<Report> RunAsync(IPage page, string script, object? argument = null)
     {
-        var raw = await page.EvaluateAsync<JsonElement>(script, argument);
+        ArgumentNullException.ThrowIfNull(page);
+
+        var raw = await page.Locator(":root").EvaluateAsync<JsonElement>(
+            script,
+            argument,
+            new LocatorEvaluateOptions { Timeout = ProbeTimeoutMs });
+
         var examined = raw.GetProperty("examined").GetInt32();
         var problemsJson = raw.GetProperty("problems");
         var count = problemsJson.GetArrayLength();

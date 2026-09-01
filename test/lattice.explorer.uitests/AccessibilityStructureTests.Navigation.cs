@@ -316,7 +316,7 @@ public sealed partial class AccessibilityStructureTests
     /// point is reset without clicking, which would itself move focus somewhere.
     /// </summary>
     private static Task ResetFocusAsync(IPage page) =>
-        page.EvaluateAsync(
+        page.Locator(":root").EvaluateAsync(
             """
             () => {
                 if (document.activeElement instanceof HTMLElement) {
@@ -331,7 +331,7 @@ public sealed partial class AccessibilityStructureTests
     /// its tabs.
     /// </summary>
     private static Task<int> FocusedTabIndexAsync(IPage page, int stripIndex) =>
-        page.EvaluateAsync<int>(
+        page.Locator(":root").EvaluateAsync<int>(
             """
             index => {
                 const strips = document.querySelectorAll('[role=tablist]');
@@ -471,3 +471,4 @@ public sealed partial class AccessibilityStructureTests
         }
         """;
 }
+
