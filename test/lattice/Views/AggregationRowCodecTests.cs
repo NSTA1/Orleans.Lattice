@@ -266,4 +266,65 @@ public class AggregationRowCodecTests
             Assert.That(AggregationRowCodec.EncodeFoldInverse(entries), Is.EqualTo(ReferenceFoldInverse(entries)));
         }
     }
+
+    // The decoders must read the legacy BinaryReader wire format byte-for-byte,
+    // so these tests decode buffers produced by the reference BinaryWriter (not
+    // by the codec's own encoder) and assert the decoded value matches. This
+    // pins the span-based RowReader decode path against the persisted format
+    // across empty, unicode, null-member, long-string and empty-collection inputs.
+
+    [Test]
+    public void DecodeMembership_reads_reference_binaryreader_format()
+    {
+        foreach (var row in MembershipCases())
+        {
+            var decoded = AggregationRowCodec.DecodeMembership(ReferenceMembership(row));
+            Assert.Multiple(() =>
+            {
+                Assert.That(decoded.GroupKey, Is.EqualTo(row.GroupKey));
+                Assert.That(decoded.Numeric, Is.EqualTo(row.Numeric));
+                Assert.That(decoded.Member, Is.EqualTo(row.Member));
+            });
+        }
+    }
+
+    [Test]
+    public void DecodeInverse_reads_reference_binaryreader_format()
+    {
+        var entries = new Dictionary<string, AggregationRowCodec.MemberEntry>(StringComparer.Ordinal)
+        {
+            ["s1"] = new(1.5, "m1"),
+            ["s2"] = new(2.5, null),
+            [Unicode] = new(double.MinValue, Unicode),
+            [LongAscii] = new(0.0, LongAscii),
+        };
+
+        var decoded = AggregationRowCodec.DecodeInverse(ReferenceInverse(entries));
+
+        Assert.That(decoded, Is.EquivalentTo(entries));
+    }
+
+    [Test]
+    public void DecodeFoldInverse_reads_reference_binaryreader_format()
+    {
+        var ts = new HybridLogicalClock { WallClockTicks = 123, Counter = 4 };
+        var entries = new Dictionary<string, AggregationRowCodec.FoldMember>(StringComparer.Ordinal)
+        {
+            ["s1"] = new(new byte[] { 9, 8, 7 }, ts),
+            ["s2"] = new(Array.Empty<byte>(), HybridLogicalClock.Zero),
+            [Unicode] = new(new byte[300], new HybridLogicalClock { WallClockTicks = long.MaxValue, Counter = int.MaxValue }),
+        };
+
+        var decoded = AggregationRowCodec.DecodeFoldInverse(ReferenceFoldInverse(entries));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.Keys, Is.EquivalentTo(entries.Keys));
+            foreach (var (key, entry) in entries)
+            {
+                Assert.That(decoded[key].Value, Is.EqualTo(entry.Value));
+                Assert.That(decoded[key].Timestamp, Is.EqualTo(entry.Timestamp));
+            }
+        });
+    }
 }
