@@ -20,6 +20,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Membership` | `src/lattice.membership/Orleans.Lattice.Membership.csproj` |
 | `Orleans.Lattice.Membership.Entra` | `src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj` |
 | `Orleans.Lattice.Membership.Entra.Graph` | `src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj` |
+| `Orleans.Lattice.Membership.Oidc` | `src/lattice.membership.oidc/Orleans.Lattice.Membership.Oidc.csproj` |
 | `Orleans.Lattice.Auth` | `src/lattice.auth/Orleans.Lattice.Auth.csproj` |
 | `Orleans.Lattice.Api.Auth` | `src/lattice.api.auth/Orleans.Lattice.Api.Auth.csproj` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj` |
@@ -90,6 +91,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Membership` | `lattice.membership-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership.Entra` | `lattice.membership.entra-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership.Entra.Graph` | `lattice.membership.entra.graph-v<X.Y.Z>` |
+| `Orleans.Lattice.Membership.Oidc` | `lattice.membership.oidc-v<X.Y.Z>` |
 | `Orleans.Lattice.Auth` | `lattice.auth-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth` | `lattice.api.auth-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `lattice.api.auth.grpc-v<X.Y.Z>` |
