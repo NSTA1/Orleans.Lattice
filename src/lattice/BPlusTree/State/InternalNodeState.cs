@@ -24,8 +24,19 @@ internal sealed class InternalNodeState
     /// <summary>The logical clock for this grain.</summary>
     [Id(2)] public HybridLogicalClock Clock { get; set; }
 
-    /// <summary>Whether this node's children are leaves (<c>true</c>) or internal nodes (<c>false</c>).</summary>
-    [Id(3)] public bool ChildrenAreLeaves { get; set; } = true;
+    /// <summary>
+    /// Whether this node's children are leaves (<c>true</c>) or internal nodes (<c>false</c>).
+    /// <para>
+    /// Deliberately has NO property initializer, for the reason documented on
+    /// <c>ShardRootState.RootIsLeaf</c>: the grain-storage serializer omits members
+    /// equal to the type default, so an initializer would resurrect an omitted
+    /// <c>false</c> as <c>true</c> and make a node with INTERNAL children claim leaf
+    /// children - blind-casting an internal node to <c>IBPlusLeafGrain</c> on the read
+    /// path (issue 899 / issue 1883). Both <c>InitializeAsync</c> overloads assign this
+    /// explicitly, so the default is only ever observed on a node that has no children.
+    /// </para>
+    /// </summary>
+    [Id(3)] public bool ChildrenAreLeaves { get; set; }
 
     /// <summary>The tree this node belongs to. Used to resolve named <see cref="Orleans.Lattice.LatticeOptions"/>.</summary>
     [Id(4)] public string? TreeId { get; set; }
