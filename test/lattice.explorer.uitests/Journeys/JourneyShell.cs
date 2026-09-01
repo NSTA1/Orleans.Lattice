@@ -23,6 +23,9 @@ internal static class JourneyShell
     /// <summary>The group holding areas a gate has refused this caller.</summary>
     internal const string DemotedGroupSelector = ".lx-shell-rail-demoted";
 
+    /// <summary>The rail once every area gate has reported.</summary>
+    internal const string SettledRailSelector = ".lx-shell-rail[data-lx-rail-settled='true']";
+
     /// <summary>One refused area's entry, carrying its label and its remedy disclosure.</summary>
     internal const string DemotedEntrySelector = ".lx-shell-rail-demoted-entry";
 
@@ -276,16 +279,28 @@ internal static class JourneyShell
             .Filter(new LocatorFilterOptions { HasTextString = label });
 
     /// <summary>
-    /// Asserts the rail has genuinely settled: it offers at least two areas and has
-    /// resolved at least one refusal into the demoted group. Both halves are needed
-    /// before any claim about what the rail does or does not contain, because the rail
-    /// re-renders as each gate reports and an early read sees neither.
+    /// Waits until the rail has genuinely settled - every area's gate has reported -
+    /// and offers at least one area.
     /// </summary>
+    /// <remarks>
+    /// This used to wait for the demoted group to be visible, on the reasoning that a
+    /// settled rail has resolved at least one refusal into it. That was inverted. The
+    /// access store reads a fail-closed <c>Denied</c> for a key nobody has probed yet,
+    /// so the rail opened with EVERY area demoted and emptied the group as the probes
+    /// landed: the group was visible precisely while the rail was unsettled, and on a
+    /// signed-out shell - where a refusal is a sign-in prompt and stays prominent
+    /// rather than demoted - it was correctly empty once settled, so the wait could
+    /// never succeed.
+    /// <para>
+    /// The shell now publishes the fact directly, so this waits on the rail's own
+    /// statement rather than inferring it from a side effect.
+    /// </para>
+    /// </remarks>
     /// <param name="page">The page to check.</param>
     internal static async Task AssertRailSettledAsync(IPage page)
     {
         await Assertions.Expect(page.Locator(RailTabSelector).First).ToBeVisibleAsync();
-        await Assertions.Expect(page.Locator(DemotedGroupSelector)).ToBeVisibleAsync();
+        await Assertions.Expect(page.Locator(SettledRailSelector)).ToBeAttachedAsync();
     }
 
     /// <summary>

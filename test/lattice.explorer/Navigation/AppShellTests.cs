@@ -217,18 +217,36 @@ public sealed class AppShellTests
     }
 
     [Test]
-    public async Task An_unprobed_plugin_is_denied_before_any_gate_answers()
+    public async Task An_unprobed_plugin_is_denied_but_is_not_captioned_as_refused()
     {
-        // The gate never completes, so nothing has been filed for it yet. The
-        // store's fail-closed default must show through rather than an admission.
+        // Two different questions, and they must not share an answer. The DECISION
+        // for an unprobed plugin stays fail-closed - that is a security property and
+        // is asserted here alongside the caption so the two cannot drift apart.
+        //
+        // The CAPTION is not entitled to that default. Rendering it as a refusal made
+        // the rail open with the area demoted under a remedy naming a permission no
+        // gate had said was missing - a confident, wrong sentence that then vanished
+        // as the probe landed. So an unprobed area is shown plainly, and the rail
+        // reports itself unsettled until its gates answer.
         var hanging = ControllableExplorerPluginAccessGate.Hanging();
         using var harness = ShellHarness.Create(Plugin("a", "Alpha", hanging));
         await harness.RenderAsync();
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore" }));
-            Assert.That(harness.DemotedLabels, Is.EqualTo(new[] { "Alpha" }));
+            Assert.That(
+                harness.Store.Get("a").State,
+                Is.EqualTo(ExplorerPluginAccessState.Denied),
+                "the decision must stay fail-closed until a gate answers");
+            Assert.That(
+                harness.DemotedLabels,
+                Is.Empty,
+                "an area nobody has probed has not been refused, so it must not be captioned as refused");
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Alpha" }));
+            Assert.That(
+                harness.RailSettledAttribute,
+                Is.EqualTo("false"),
+                "the rail must report that it is still waiting on a gate");
         });
     }
 
@@ -639,8 +657,13 @@ public sealed class AppShellTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(harness.DemotedLabels, Is.EqualTo(new[] { "Slow" }));
-            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Fast" }));
+            // The point of the case: the fast gate's answer lands regardless of the
+            // slow one. The slow area is shown plainly rather than captioned as a
+            // refusal it has not received, and the rail reports itself unsettled so
+            // nothing reads its contents as final.
+            Assert.That(harness.DemotedLabels, Is.Empty);
+            Assert.That(harness.Buttons.Select(b => b.Text), Is.EqualTo(new[] { "Explore", "Slow", "Fast" }));
+            Assert.That(harness.RailSettledAttribute, Is.EqualTo("false"));
         });
     }
 
@@ -724,6 +747,12 @@ public sealed class AppShellTests
         public AppShell Shell { get; private set; } = null!;
 
         public ExplorerPluginAccessStore Store { get; }
+
+        /// <summary>
+        /// What the rail publishes about whether every area gate has reported.
+        /// </summary>
+        public string? RailSettledAttribute =>
+            Renderer.ElementAttribute(_componentId, "nav", "data-lx-rail-settled");
 
         /// <summary>The shell's route model, which is where the active area now lives.</summary>
         public IExplorerShellRouter Router => _provider.GetRequiredService<IExplorerShellRouter>();

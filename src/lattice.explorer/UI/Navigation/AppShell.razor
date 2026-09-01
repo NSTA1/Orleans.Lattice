@@ -52,7 +52,9 @@
 @{ BuildRail(); }
 
 <div class="lx-shell-frame">
-    <nav class="lx-shell-rail lx-shell-areastrip" aria-label="@AreaRailLandmarkLabel">
+    <nav class="lx-shell-rail lx-shell-areastrip"
+         aria-label="@AreaRailLandmarkLabel"
+         data-lx-rail-settled="@(_railPending ? "false" : "true")">
         <LatticeAdaptiveTabs Tabs="_railTabs"
                              ActiveId="@_activeSlug"
                              OnSelect="_activateArea"
@@ -246,6 +248,11 @@
     private readonly List<LatticeTabItem> _railTabs = [];
     private int[] _demoted = NoSlots;
     private int _demotedCount;
+
+    // True while at least one area's gate has not reported. Published as
+    // data-lx-rail-settled so a caller - a test, or anything driving the shell -
+    // can wait for the rail to mean something instead of racing its probes.
+    private bool _railPending;
 
     private IExplorerPlugin? _activePlugin;
     private string _activeSlug = ExplorerRouteSegments.Explore;
@@ -497,6 +504,7 @@
     {
         _railTabs.Clear();
         _demotedCount = 0;
+        _railPending = false;
         _unavailableLabels?.Clear();
 
         // The home surface is the shell's own and is always reachable, so it is
@@ -509,6 +517,20 @@
         for (var i = 0; i < _entries.Length; i++)
         {
             var entry = _entries[i];
+
+            // An area nobody has probed yet is not a refused area. Reading the
+            // store's fail-closed default as a caption opened the rail with every
+            // entry demoted under a remedy naming a permission no gate had said was
+            // missing, which then vanished as the probes landed. Show it plainly
+            // until its gate actually answers; the server, not this rail, is what
+            // refuses an area the caller may not open.
+            if (!AccessStore.HasReported(entry.PluginId))
+            {
+                _railTabs.Add(entry.AllowedTab);
+                _railPending = true;
+                continue;
+            }
+
             var access = AccessStore.Get(entry.PluginId);
             var state = access.State;
 

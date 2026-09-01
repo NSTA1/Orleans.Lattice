@@ -35,6 +35,13 @@ public sealed class ExplorerPluginAccessStore : IExplorerPluginAccessStore
     }
 
     /// <inheritdoc />
+    public bool HasReported(string pluginId)
+    {
+        ArgumentNullException.ThrowIfNull(pluginId);
+        return _entries.ContainsKey(new ExplorerPluginAccessKey(pluginId, Scope: null));
+    }
+
+    /// <inheritdoc />
     public ExplorerPluginAccess Get(string pluginId, string scope)
     {
         ArgumentNullException.ThrowIfNull(pluginId);
