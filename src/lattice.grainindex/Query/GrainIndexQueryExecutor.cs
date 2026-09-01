@@ -111,7 +111,11 @@ internal sealed class GrainIndexQueryExecutor
 
         for (var i = 1; i < clauses.Length && candidates.Count > 0; i++)
         {
-            var survivors = new Dictionary<string, GrainIndexMatch>(StringComparer.Ordinal);
+            // Every survivor is a key already present in candidates, so the
+            // driving set's current size is a tight upper bound; presizing to it
+            // removes the survivor dictionary's grow-from-empty rehash churn on
+            // each intersect pass of a multi-clause AND query.
+            var survivors = new Dictionary<string, GrainIndexMatch>(candidates.Count, StringComparer.Ordinal);
             await foreach (var match in ScanAsync(clauses[i], pageSize, execution, payloads: false, cancellationToken).ConfigureAwait(false))
             {
                 if (candidates.TryGetValue(match.GrainKey, out var driving))
