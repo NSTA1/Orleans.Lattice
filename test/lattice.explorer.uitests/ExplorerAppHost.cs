@@ -137,25 +137,22 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         // which reads as "Test host process crashed" with no test result to blame,
         // and is why every fixture passes alone while the whole lane aborts.
         //
-        // Retaining NOTHING fixed that and introduced something worse, because it
-        // conflates two different disconnects. A closed context is gone for good and
-        // should be collected at once - but a circuit whose socket blips while its
-        // test is still running is not gone, and with nothing retained the server
-        // destroys it instantly and the client can never reconnect. The page then sits
-        // on "Reconnecting..." for the rest of the test: it still renders its
-        // prerendered markup, so it looks alive in a screenshot, while every
-        // interactive element is dead. That surfaces as a handful of focus stops where
-        // there should be dozens, arrow keys that move nothing, and journey assertions
-        // that time out against a frozen shell - load-dependent, so it passes locally
-        // and fails on a loaded CI runner, and varies run to run.
+        // Nothing under test depends on reconnection, so retaining nothing is both
+        // safe and much closer to what these tests mean: each test gets a genuinely
+        // new circuit, and the previous one is collected as soon as its page closes.
         //
-        // A small non-zero retention keeps both properties: a blip can recover, and at
-        // most a few circuits are ever held, for seconds rather than minutes, so they
-        // cannot accumulate.
+        // Tried at four retained for thirty seconds, on the theory that a socket
+        // blip mid-test would otherwise destroy a circuit the client could have
+        // recovered. That was reasoning rather than evidence, and the measured
+        // behaviour went the other way: the journey shards began failing with the
+        // shell never reporting itself measured - a circuit that never establishes
+        // at all, which is what memory pressure in this head looks like, and is the
+        // very failure retaining nothing exists to prevent. Reverted; do not raise
+        // it again without measuring the head's memory first.
         builder.Services.Configure<CircuitOptions>(options =>
         {
-            options.DisconnectedCircuitMaxRetained = 4;
-            options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(30);
+            options.DisconnectedCircuitMaxRetained = 0;
+            options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(1);
 
             // Say what actually went wrong. A server-side exception on a Blazor circuit
             // otherwise reaches the browser as "There was an unhandled exception on the
