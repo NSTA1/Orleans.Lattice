@@ -1,0 +1,730 @@
+{
+  "schemaVersion": 2,
+  "kind": "coldstart-rig/cohort",
+  "cohortId": "cohort-20260901T115339Z",
+  "generatedUtc": "2026-09-01T12:19:58.6925366Z",
+  "hostContext": {
+    "dockerCpus": 16,
+    "dockerMemoryBytes": 29249163264,
+    "runningContainers": 2,
+    "foreignContainers": 2,
+    "foreignContainerNames": [
+      "repocontextcontainer-repocontext-1",
+      "repocontextcontainer-embedder-1"
+    ],
+    "contended": true
+  },
+  "imageUnderTest": {
+    "mcpImage": "repocontext-mcp:coldstart-rig",
+    "mcpImageId": "sha256:3327bd5d7207ccb0d671f7ee3fd01dd6492509706903e1c395ee8fdec54064c1",
+    "embedderImage": "rc-embedder:coldstart-rig",
+    "embedderImageId": "sha256:38a1382f7ca8ec7fee3d8ab1f00901356a61f2d292493405172b55e44cf9756e",
+    "sourceMcpImage": "repocontext-mcp:local",
+    "builtFrom": {
+      "image": "repocontext-mcp:coldstart-208bffafed69",
+      "imageId": "sha256:3327bd5d7207ccb0d671f7ee3fd01dd6492509706903e1c395ee8fdec54064c1",
+      "gitRef": "HEAD",
+      "commitSha": "208bffafed69d58cbc35ee08cc68bfb130d8bd85",
+      "builtUtc": "09/01/2026 11:51:06",
+      "matchesTestedImage": true
+    }
+  },
+  "liveDeployment": {
+    "pinBeforeCohort": {
+      "status": "clean",
+      "drifted": false,
+      "checked": true,
+      "container": "repocontextcontainer-repocontext-1",
+      "imageReference": "repocontext-mcp:local",
+      "pinnedImageId": "sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0",
+      "tagImageId": "sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0",
+      "message": "Live image pin is CLEAN: container 'repocontextcontainer-repocontext-1' and tag 'repocontext-mcp:local' are both sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0."
+    },
+    "pinAfterCohort": {
+      "status": "clean",
+      "drifted": false,
+      "checked": true,
+      "container": "repocontextcontainer-repocontext-1",
+      "imageReference": "repocontext-mcp:local",
+      "pinnedImageId": "sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0",
+      "tagImageId": "sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0",
+      "message": "Live image pin is CLEAN: container 'repocontextcontainer-repocontext-1' and tag 'repocontext-mcp:local' are both sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0."
+    },
+    "postCondition": {
+      "checked": true,
+      "container": "repocontextcontainer-repocontext-1",
+      "pinnedImageIdBefore": "sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0",
+      "pinnedImageIdAfter": "sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0",
+      "unchanged": true,
+      "driftBefore": false,
+      "driftAfter": false,
+      "message": "Live container 'repocontextcontainer-repocontext-1' is still pinned to sha256:7a8318c485c2aae9fa0a7ff62f76acafebb55396b71aa6f5ecaabaf139c057c0; the cohort did not touch it."
+    }
+  },
+  "configuration": {
+    "project": "lattice-coldstart",
+    "hostPort": 18080,
+    "mcpImage": "repocontext-mcp:coldstart-rig",
+    "embedderImage": "rc-embedder:coldstart-rig",
+    "masterVolume": "lattice-coldstart-master",
+    "workVolume": "lattice-coldstart-work",
+    "repoId": "lattice",
+    "semanticQuery": "where is the readiness health probe wired",
+    "warmQueryCount": 5,
+    "scenarios": [
+      "first-boot",
+      "graceful-restart",
+      "sigkill-restart"
+    ],
+    "runs": 3,
+    "queryFromLive": false,
+    "skipClone": false,
+    "skipWarmup": false
+  },
+  "runs": [
+    {
+      "runIndex": 1,
+      "scenarios": [
+        {
+          "scenario": "first-boot",
+          "runIndex": 1,
+          "containerStartedAtUtc": "2026-09-01T11:57:01.8673781Z",
+          "liveSeconds": 4.736,
+          "readySeconds": 94.096,
+          "firstQuerySeconds": 105.507,
+          "firstSemanticQuerySeconds": 105.507,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 11382.8,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 9171.4,
+            "p50": 22595.4,
+            "p95": 35999.6,
+            "max": 35999.6,
+            "mean": 21678.5,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 849.5,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 222.895,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 435,
+              "PeakCpuPercent": 149.89,
+              "MeanCpuPercent": 6.86,
+              "PeakMemoryBytes": 777833677,
+              "MeanMemoryBytes": 764488318
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 435,
+              "PeakCpuPercent": 906.76,
+              "MeanCpuPercent": 302.96,
+              "PeakMemoryBytes": 4517231854,
+              "MeanMemoryBytes": 2996958901
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 1209,
+            "WarningLines": 196,
+            "ErrorLines": 329,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-first-boot-run1.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-first-boot-run1.csv"
+        },
+        {
+          "scenario": "graceful-restart",
+          "runIndex": 1,
+          "containerStartedAtUtc": "2026-09-01T12:01:19.2352833Z",
+          "liveSeconds": 4.765,
+          "readySeconds": 148.0,
+          "firstQuerySeconds": 165.133,
+          "firstSemanticQuerySeconds": 165.133,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 17131.7,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 6131.0,
+            "p50": 8811.8,
+            "p95": 19705.6,
+            "max": 19705.6,
+            "mean": 10367.5,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 1131.5,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 282.476,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 555,
+              "PeakCpuPercent": 918.4,
+              "MeanCpuPercent": 20.55,
+              "PeakMemoryBytes": 776889958,
+              "MeanMemoryBytes": 763931826
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 555,
+              "PeakCpuPercent": 1491.13,
+              "MeanCpuPercent": 540.78,
+              "PeakMemoryBytes": 4119947379,
+              "MeanMemoryBytes": 2664273691
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 1381,
+            "WarningLines": 67,
+            "ErrorLines": 371,
+            "ReplayOverBudgetWarnings": 0,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 31,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-graceful-restart-run1.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-graceful-restart-run1.csv"
+        },
+        {
+          "scenario": "sigkill-restart",
+          "runIndex": 1,
+          "containerStartedAtUtc": "2026-09-01T12:06:08.8237083Z",
+          "liveSeconds": 4.117,
+          "readySeconds": 69.585,
+          "firstQuerySeconds": 70.188,
+          "firstSemanticQuerySeconds": 70.188,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 601.8,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 203.7,
+            "p50": 219.1,
+            "p95": 228.8,
+            "max": 228.8,
+            "mean": 217.6,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 1514.3,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 72.538,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 137,
+              "PeakCpuPercent": 377.16,
+              "MeanCpuPercent": 18.35,
+              "PeakMemoryBytes": 777623962,
+              "MeanMemoryBytes": 764291738
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 137,
+              "PeakCpuPercent": 2242.9,
+              "MeanCpuPercent": 673.54,
+              "PeakMemoryBytes": 3091302711,
+              "MeanMemoryBytes": 1160541231
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 1075,
+            "WarningLines": 127,
+            "ErrorLines": 217,
+            "ReplayOverBudgetWarnings": 126,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-sigkill-restart-run1.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-sigkill-restart-run1.csv"
+        }
+      ]
+    },
+    {
+      "runIndex": 2,
+      "scenarios": [
+        {
+          "scenario": "first-boot",
+          "runIndex": 2,
+          "containerStartedAtUtc": "2026-09-01T12:07:49.5061682Z",
+          "liveSeconds": 4.713,
+          "readySeconds": 73.634,
+          "firstQuerySeconds": 87.075,
+          "firstSemanticQuerySeconds": 87.075,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 13439.0,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 214.7,
+            "p50": 23338.9,
+            "p95": 29640.5,
+            "max": 29640.5,
+            "mean": 18108.3,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 975.4,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 178.605,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 349,
+              "PeakCpuPercent": 219.09,
+              "MeanCpuPercent": 8.12,
+              "PeakMemoryBytes": 778148250,
+              "MeanMemoryBytes": 764526076
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 349,
+              "PeakCpuPercent": 900.15,
+              "MeanCpuPercent": 307.53,
+              "PeakMemoryBytes": 4576287654,
+              "MeanMemoryBytes": 3001939712
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 1013,
+            "WarningLines": 196,
+            "ErrorLines": 245,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-first-boot-run2.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-first-boot-run2.csv"
+        },
+        {
+          "scenario": "graceful-restart",
+          "runIndex": 2,
+          "containerStartedAtUtc": "2026-09-01T12:11:25.6220936Z",
+          "liveSeconds": 4.443,
+          "readySeconds": 55.397,
+          "firstQuerySeconds": 56.19,
+          "firstSemanticQuerySeconds": 56.19,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 792.1,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 203.7,
+            "p50": 233.1,
+            "p95": 333.3,
+            "max": 333.3,
+            "mean": 264.4,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 1501.7,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 58.469,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 111,
+              "PeakCpuPercent": 345.66,
+              "MeanCpuPercent": 17.07,
+              "PeakMemoryBytes": 772485939,
+              "MeanMemoryBytes": 761058350
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 111,
+              "PeakCpuPercent": 848.51,
+              "MeanCpuPercent": 420.69,
+              "PeakMemoryBytes": 3098818904,
+              "MeanMemoryBytes": 1544058049
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 627,
+            "WarningLines": 2,
+            "ErrorLines": 186,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-graceful-restart-run2.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-graceful-restart-run2.csv"
+        },
+        {
+          "scenario": "sigkill-restart",
+          "runIndex": 2,
+          "containerStartedAtUtc": "2026-09-01T12:12:29.7475192Z",
+          "liveSeconds": 4.194,
+          "readySeconds": 50.022,
+          "firstQuerySeconds": 50.482,
+          "firstSemanticQuerySeconds": 50.482,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 458.7,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 182.7,
+            "p50": 193.9,
+            "p95": 195.7,
+            "max": 195.7,
+            "mean": 191.7,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 1486.4,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 52.36,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 98,
+              "PeakCpuPercent": 222.89,
+              "MeanCpuPercent": 14.49,
+              "PeakMemoryBytes": 771961651,
+              "MeanMemoryBytes": 761261896
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 98,
+              "PeakCpuPercent": 955.05,
+              "MeanCpuPercent": 477.43,
+              "PeakMemoryBytes": 3077344068,
+              "MeanMemoryBytes": 1193525240
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 595,
+            "WarningLines": 2,
+            "ErrorLines": 170,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-sigkill-restart-run2.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-sigkill-restart-run2.csv"
+        }
+      ]
+    },
+    {
+      "runIndex": 3,
+      "scenarios": [
+        {
+          "scenario": "first-boot",
+          "runIndex": 3,
+          "containerStartedAtUtc": "2026-09-01T12:13:57.6986737Z",
+          "liveSeconds": 7.285,
+          "readySeconds": 96.829,
+          "firstQuerySeconds": 107.866,
+          "firstSemanticQuerySeconds": 107.866,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 11035.3,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 6334.3,
+            "p50": 21056.3,
+            "p95": 30672.4,
+            "max": 30672.4,
+            "mean": 20143.6,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 1275.9,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 209.814,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 404,
+              "PeakCpuPercent": 772.66,
+              "MeanCpuPercent": 12.81,
+              "PeakMemoryBytes": 775421952,
+              "MeanMemoryBytes": 761890131
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 404,
+              "PeakCpuPercent": 1231.34,
+              "MeanCpuPercent": 349.07,
+              "PeakMemoryBytes": 4396972769,
+              "MeanMemoryBytes": 2847029104
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 1137,
+            "WarningLines": 196,
+            "ErrorLines": 297,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-first-boot-run3.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-first-boot-run3.csv"
+        },
+        {
+          "scenario": "graceful-restart",
+          "runIndex": 3,
+          "containerStartedAtUtc": "2026-09-01T12:17:53.3651842Z",
+          "liveSeconds": 3.897,
+          "readySeconds": 47.278,
+          "firstQuerySeconds": 47.66,
+          "firstSemanticQuerySeconds": 47.66,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 381.2,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 164.1,
+            "p50": 167.2,
+            "p95": 171.2,
+            "max": 171.2,
+            "mean": 167.9,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 866.9,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 49.339,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 90,
+              "PeakCpuPercent": 227.95,
+              "MeanCpuPercent": 12.44,
+              "PeakMemoryBytes": 771542221,
+              "MeanMemoryBytes": 762000179
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 90,
+              "PeakCpuPercent": 939.78,
+              "MeanCpuPercent": 382.61,
+              "PeakMemoryBytes": 2946347565,
+              "MeanMemoryBytes": 1298381383
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 585,
+            "WarningLines": 2,
+            "ErrorLines": 162,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-graceful-restart-run3.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-graceful-restart-run3.csv"
+        },
+        {
+          "scenario": "sigkill-restart",
+          "runIndex": 3,
+          "containerStartedAtUtc": "2026-09-01T12:18:46.8560784Z",
+          "liveSeconds": 3.797,
+          "readySeconds": 45.229,
+          "firstQuerySeconds": 45.711,
+          "firstSemanticQuerySeconds": 45.711,
+          "semanticAchieved": true,
+          "firstQueryAttempts": 1,
+          "firstQueryDurationMs": 481.0,
+          "firstQueryOk": true,
+          "firstQueryError": null,
+          "retrievalMode": "semantic",
+          "warmQueryMs": {
+            "count": 5,
+            "min": 168.2,
+            "p50": 179.8,
+            "p95": 210.2,
+            "max": 210.2,
+            "mean": 184.0,
+            "modes": [
+              "semantic"
+            ]
+          },
+          "listReposMs": 2749.6,
+          "listReposOk": true,
+          "quiesced": true,
+          "quiesceSeconds": 47.496,
+          "peakCpuPercent": null,
+          "peakMemoryBytes": null,
+          "resources": [
+            {
+              "Container": "lattice-coldstart-embedder-1",
+              "Samples": 91,
+              "PeakCpuPercent": 276.29,
+              "MeanCpuPercent": 16.14,
+              "PeakMemoryBytes": 769235354,
+              "MeanMemoryBytes": 762096971
+            },
+            {
+              "Container": "lattice-coldstart-repocontext-1",
+              "Samples": 91,
+              "PeakCpuPercent": 941.17,
+              "MeanCpuPercent": 513.23,
+              "PeakMemoryBytes": 3124588708,
+              "MeanMemoryBytes": 1447538842
+            }
+          ],
+          "logCounters": {
+            "TotalLines": 567,
+            "WarningLines": 2,
+            "ErrorLines": 150,
+            "ReplayOverBudgetWarnings": 1,
+            "ProjectionStaleFailures": 0,
+            "DroppedMessages": 0,
+            "CursorPublishFailures": 0
+          },
+          "logPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\log-sigkill-restart-run3.txt",
+          "statsPath": "C:\\dev\\lattice\\benchmark\\.run\\coldstart-rig\\cohorts\\cohort-20260901T115339Z\\stats-sigkill-restart-run3.csv"
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "scenario": "first-boot",
+      "samples": 3,
+      "firstQuerySeconds": [
+        105.507,
+        87.075,
+        107.866
+      ],
+      "firstQuerySecondsMin": 87.075,
+      "firstQuerySecondsMax": 107.866,
+      "firstQuerySecondsMean": 100.149,
+      "firstQueryRelativeSpreadPct": 20.76,
+      "firstSemanticQuerySeconds": [
+        105.507,
+        87.075,
+        107.866
+      ],
+      "firstSemanticQuerySecondsMean": 100.149,
+      "firstSemanticRelativeSpreadPct": 20.76,
+      "semanticAchievedCount": 3,
+      "readySecondsMean": 88.186,
+      "readyRelativeSpreadPct": 26.3,
+      "retrievalModes": [
+        "semantic"
+      ]
+    },
+    {
+      "scenario": "graceful-restart",
+      "samples": 3,
+      "firstQuerySeconds": [
+        165.133,
+        56.19,
+        47.66
+      ],
+      "firstQuerySecondsMin": 47.66,
+      "firstQuerySecondsMax": 165.133,
+      "firstQuerySecondsMean": 89.661,
+      "firstQueryRelativeSpreadPct": 131.02,
+      "firstSemanticQuerySeconds": [
+        165.133,
+        56.19,
+        47.66
+      ],
+      "firstSemanticQuerySecondsMean": 89.661,
+      "firstSemanticRelativeSpreadPct": 131.02,
+      "semanticAchievedCount": 3,
+      "readySecondsMean": 83.558,
+      "readyRelativeSpreadPct": 120.54,
+      "retrievalModes": [
+        "semantic"
+      ]
+    },
+    {
+      "scenario": "sigkill-restart",
+      "samples": 3,
+      "firstQuerySeconds": [
+        70.188,
+        50.482,
+        45.711
+      ],
+      "firstQuerySecondsMin": 45.711,
+      "firstQuerySecondsMax": 70.188,
+      "firstQuerySecondsMean": 55.46,
+      "firstQueryRelativeSpreadPct": 44.13,
+      "firstSemanticQuerySeconds": [
+        70.188,
+        50.482,
+        45.711
+      ],
+      "firstSemanticQuerySecondsMean": 55.46,
+      "firstSemanticRelativeSpreadPct": 44.13,
+      "semanticAchievedCount": 3,
+      "readySecondsMean": 54.945,
+      "readyRelativeSpreadPct": 44.33,
+      "retrievalModes": [
+        "semantic"
+      ]
+    }
+  ]
+}
