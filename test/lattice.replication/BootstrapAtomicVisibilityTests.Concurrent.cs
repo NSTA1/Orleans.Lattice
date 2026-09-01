@@ -88,6 +88,7 @@ public partial class BootstrapAtomicVisibilityTests
                 LatticeSnapshotProviderUnitTests.TestOptions());
             var transport = new LatticeRemoteSnapshotService(
                 producerProvider,
+                new StubReplicationContext(siteA, LatticeMergeMode.LwwRegister),
                 NullLogger<LatticeRemoteSnapshotService>.Instance);
             ReceiverSiloConfigurator.Transport = transport;
             ReceiverSiloConfigurator.ClusterId = siteB;
