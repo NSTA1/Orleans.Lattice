@@ -261,11 +261,6 @@
     // it belongs to cannot apply counts over a newer one.
     private int _loadGeneration;
 
-    // The selection the route names and the catalog has not yet resolved to an
-    // item. Empty string means "the route names no selection", which is a real
-    // instruction (clear it) and therefore distinct from null ("nothing to do").
-    private string? _pendingSelectionId;
-
     // The plugin host's projected tenant scope, resolved optionally: the catalog
     // is scoped by tenant, so a switch has to re-read it in place rather than
     // waiting for a reload. A head with no plugin host simply never re-scopes.
@@ -386,7 +381,6 @@
             // Storage is still unreachable. Open on the addressed (or default)
             // kind anyway rather than holding the toggle blank forever.
             _restored = true;
-            _pendingSelectionId = Router.Current.Id;
         }
 
         await ReloadAsync();
@@ -429,7 +423,6 @@
         _restored = true;
         _kind = KindFor(kindSlug);
         SyncKindIdentity();
-        _pendingSelectionId = route.Id;
         return true;
     }
 
@@ -507,7 +500,7 @@
         {
             _loading = false;
             RebuildBadges();
-            ApplyPendingSelection();
+            ApplyRouteSelection();
             Announce();
             StateHasChanged();
         }
@@ -563,32 +556,46 @@
     }
 
     /// <summary>
-    /// Resolves the selection the route names against the rows that have just
-    /// loaded. A remembered or linked id is a hint, not an authority: an id the
-    /// catalog does not hold simply leaves the selection alone rather than
-    /// pointing a surface at something that is not there.
+    /// Reconciles what is selected against what the <em>address</em> asks for,
+    /// using the rows currently loaded.
     /// </summary>
-    private void ApplyPendingSelection()
+    /// <remarks>
+    /// <para>
+    /// The id is read from the route on every call rather than held as a one-shot
+    /// token, and that is the whole point. A token was consumed by the first load
+    /// that did not contain the row - and on a fresh deep link the first load
+    /// routinely does not: the catalog is read under the caller's tenant scope,
+    /// which is established <em>after</em> mount, so the first read can answer
+    /// under the fail-closed scope and see nothing. The rows then arrived on the
+    /// reload that followed the scope refresh, by which time the link's intent had
+    /// been thrown away - the shell sat on the right URL with nothing selected and
+    /// no detail surface. The same happens whenever the row is simply not on the
+    /// first page.
+    /// </para>
+    /// <para>
+    /// Reading the route instead makes this idempotent: every load reconciles
+    /// again, so the selection lands the moment the row appears, and an address
+    /// that stops naming the id stops asking for it. A row that never appears (a
+    /// deleted tree) still degrades to "nothing selected" rather than pointing a
+    /// surface at something that is not there - the address is a request, not a
+    /// promise - but the request is no longer silently forgotten.
+    /// </para>
+    /// <para>
+    /// Being idempotent is also why no "a read is in flight" guard is needed: a
+    /// reload clears the rows first, so a call landing mid-load matches nothing
+    /// and changes nothing, and the load's own completion reconciles again.
+    /// </para>
+    /// </remarks>
+    private void ApplyRouteSelection()
     {
-        var id = _pendingSelectionId;
-        if (id is null)
+        if (!_restored)
         {
+            // The panel has not taken its opening state yet; the mount path reads
+            // the route when it does.
             return;
         }
 
-        if (_loading)
-        {
-            // A read is in flight, so there is nothing to match against yet.
-            // Consuming the id here would silently discard the selection a deep
-            // link or a restore asked for - the in-flight load applies it against
-            // the rows it returns. This is the ordering a real cluster produces
-            // and an instant catalog never does: the address arrives (entry-policy
-            // restore, or a link followed mid-load) while the first read is still
-            // outstanding.
-            return;
-        }
-
-        _pendingSelectionId = null;
+        var id = Router.Current.Id;
 
         if (id.Length == 0)
         {
@@ -808,8 +815,6 @@
             return;
         }
 
-        _pendingSelectionId = route.Id;
-
         var kind = KindFor(route.Kind);
         if (route.Kind.Length != 0 && kind != _kind)
         {
@@ -819,7 +824,7 @@
             return;
         }
 
-        ApplyPendingSelection();
+        ApplyRouteSelection();
         StateHasChanged();
     }
 
