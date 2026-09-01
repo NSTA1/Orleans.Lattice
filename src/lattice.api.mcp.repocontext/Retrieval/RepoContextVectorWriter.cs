@@ -82,6 +82,29 @@ internal sealed class RepoContextVectorWriter
     internal const string MemoryKeyMarkerPrefix = "memkey-";
 
     /// <summary>
+    /// The exact key range a memory-key lookup scans: the membership prefix
+    /// narrowed by <see cref="MemoryKeyMarkerPrefix"/>.
+    /// <para>
+    /// Exposed as its own function so the RANGE is directly assertable. Filtering
+    /// markers out inside the loop makes the lookup's *result* correct whether the
+    /// scan is narrow or wide, so a test that only checks the returned keys passes
+    /// either way and guards nothing - the difference is purely cost, and cost is
+    /// what matters here: the membership tree carries one record per embedded
+    /// source (tens of thousands of files and symbols on a real repository) against
+    /// a few hundred memory markers, and this lookup runs on every reconcile pass.
+    /// </para>
+    /// <para>
+    /// The narrowing is sound because the collection component is percent-encoded
+    /// with only '%' and '/' escaped, so the literal marker survives at the head of
+    /// the encoded key and bounds the range exactly.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository identity.</param>
+    /// <returns>The bounded scan prefix.</returns>
+    internal static string MemoryKeysScanPrefix(string repoId)
+        => RepoContextKeys.VectorMembershipsPrefix(repoId) + MemoryKeyMarkerPrefix;
+
+    /// <summary>
     /// The width, in digits, of the zero-padded unit ordinal embedded in a
     /// presence key. Fixed-width so the lexical key order matches the numeric unit
     /// order, and wide enough for the chunker's per-file cap.
@@ -577,7 +600,17 @@ internal sealed class RepoContextVectorWriter
         ArgumentNullException.ThrowIfNull(repoId);
 
         var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-        var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
+
+        // Scan ONLY the marker's own key range, not the whole membership prefix.
+        // The collection component is percent-encoded but only '%' and '/' are
+        // escaped, so the literal marker survives at the head of the encoded key
+        // and bounds the range exactly. This matters enormously: the membership
+        // tree carries one record per embedded source, which on a real repository
+        // is tens of thousands of files and symbols, while the memory markers
+        // number in the hundreds. Walking the whole prefix here would add a
+        // full-tree scan to EVERY reconcile pass - over the very tree whose
+        // cold-start replay is already the bottleneck - to find a small subset.
+        var prefix = MemoryKeysScanPrefix(repoId);
         var keys = new HashSet<string>(StringComparer.Ordinal);
 
         await foreach (var entry in EnumerateMembershipPagedAsync(tree, prefix, cancellationToken)

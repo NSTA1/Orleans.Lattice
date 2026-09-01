@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
@@ -585,9 +587,21 @@ internal sealed partial class BPlusLeafGrain
                         // allocate a params object[] and box partition,
                         // checkpoint, and the budget on every over-budget
                         // activation even when warnings are filtered out.
+                        //
+                        // Also THROTTLE per (tree, partition). A cold start on a
+                        // large volume re-activates these leaves continuously,
+                        // and one warning per attempt buried a real deployment
+                        // in 5,752 identical lines in fifteen minutes - enough
+                        // to make the log useless for spotting the faults mixed
+                        // in among them. The counter above already records every
+                        // occurrence, so the log's job is only to say the
+                        // condition is happening and let an operator find the
+                        // checkpoint; the rate is a metric concern, not a
+                        // logging one.
                         var overBudgetLogger = ResolveLogger();
                         if (overBudgetLogger is not null
-                            && overBudgetLogger.IsEnabled(LogLevel.Warning))
+                            && overBudgetLogger.IsEnabled(LogLevel.Warning)
+                            && ShouldLogOverBudgetReplay(treeId, partition))
                         {
                             overBudgetLogger.LogWarning(
                                 "Leaf projection for tree '{TreeId}' partition {Partition} is replaying beyond "
@@ -745,6 +759,50 @@ internal sealed partial class BPlusLeafGrain
         int Partition,
         long Offset,
         LatticeMutation Mutation);
+
+    /// <summary>
+    /// The minimum interval between over-budget replay warnings for one
+    /// (tree, partition). Chosen so a cold start reports each replaying partition
+    /// roughly once a minute rather than once per re-activation attempt.
+    /// </summary>
+    private static readonly TimeSpan OverBudgetLogInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Last-logged timestamps for the over-budget replay warning, keyed by tree and
+    /// partition. Static because the point is to suppress across the repeated
+    /// ACTIVATIONS of the same leaf - per-activation state would reset every time
+    /// and suppress nothing. Bounded by the number of (tree, partition) pairs, which
+    /// is the leaf count, not the attempt count.
+    /// </summary>
+    private static readonly ConcurrentDictionary<(string TreeId, int Partition), long> OverBudgetLogStamps = new();
+
+    /// <summary>
+    /// True when the over-budget replay warning for this leaf is due again.
+    /// Suppression is deliberately best-effort under races: two silos may each emit
+    /// one line, which is fine - the goal is to stop a re-activation storm flooding
+    /// the log, not to guarantee exactly-once logging. The metric remains the exact
+    /// count. Internal so the suppression itself is testable rather than only
+    /// observable through log output.
+    /// </summary>
+    /// <param name="treeId">The tree the leaf belongs to.</param>
+    /// <param name="partition">The leaf partition.</param>
+    /// <returns><see langword="true"/> when the warning should be emitted.</returns>
+    internal static bool ShouldLogOverBudgetReplay(string treeId, int partition)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var key = (treeId, partition);
+        if (!OverBudgetLogStamps.TryGetValue(key, out var last))
+        {
+            return OverBudgetLogStamps.TryAdd(key, now);
+        }
+
+        if (Stopwatch.GetElapsedTime(last, now) < OverBudgetLogInterval)
+        {
+            return false;
+        }
+
+        return OverBudgetLogStamps.TryUpdate(key, now, last);
+    }
 
     /// <summary>
     /// Replay-scoped ledger of the WAL offsets whose mutations were deferred

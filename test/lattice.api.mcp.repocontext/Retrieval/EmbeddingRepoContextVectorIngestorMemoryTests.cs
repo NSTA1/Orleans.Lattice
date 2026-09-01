@@ -467,9 +467,72 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
         });
     }
 
+    /// <summary>
+    /// The memory-key lookup must scan only the marker's own key range, never the
+    /// whole membership prefix. The membership tree carries one record per embedded
+    /// source - tens of thousands of files and symbols on a real repository - while
+    /// the memory markers number in the hundreds, and this lookup runs on EVERY
+    /// reconcile pass. Widening it would put a full-tree scan on the hot path, over
+    /// the very tree whose cold-start replay is already the bottleneck.
+    /// <para>
+    /// This asserts the SCAN RANGE, not the returned keys. The lookup filters
+    /// markers inside its loop, so its result is correct whether the scan is narrow
+    /// or wide - a test over the result passes either way and guards nothing. Only
+    /// the range distinguishes the two.
+    /// </para>
+    /// </summary>
     [Test]
-    public async Task Marking_no_memory_keys_is_a_no_op()
+    public void The_memory_key_scan_range_is_bounded_by_the_marker()
     {
+        var prefix = RepoContextVectorWriter.MemoryKeysScanPrefix(RepoId);
+        var membershipPrefix = RepoContextKeys.VectorMembershipsPrefix(RepoId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prefix, Is.EqualTo(membershipPrefix + RepoContextVectorWriter.MemoryKeyMarkerPrefix),
+                "The scan is narrowed to the marker's own range.");
+            Assert.That(prefix, Is.Not.EqualTo(membershipPrefix),
+                "and is strictly narrower than the whole membership prefix, which would be a full-tree scan.");
+            Assert.That(prefix, Does.StartWith(membershipPrefix),
+                "while still sitting inside the membership key space.");
+        });
+    }
+
+    /// <summary>
+    /// The result-level companion to the range assertion above: ordinary source-id
+    /// membership must not surface as a memory key.
+    /// </summary>
+    [Test]
+    public async Task Loading_memory_keys_ignores_ordinary_source_membership()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        // A file and a symbol source, recorded the ordinary way, plus one memory key.
+        await writer.AddMembersAsync(
+            RepoId,
+            new[] { RepoContextKeys.File(RepoId, "src/Foo.cs"), RepoContextKeys.Symbol(RepoId, "Acme.Foo") },
+            Ct);
+        var memoryKey = RepoContextKeys.Memory(RepoId, "gotchas", "only-me");
+        await writer.MarkMemoryEmbeddedAsync(RepoId, new[] { memoryKey }, Ct);
+
+        var memoryKeys = await writer.LoadEmbeddedMemoryKeysAsync(RepoId, Ct);
+        var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(memoryKeys, Is.EquivalentTo(new[] { memoryKey }),
+                "Only the memory marker is returned - the file and symbol members are outside the scanned range.");
+            Assert.That(members, Has.Count.EqualTo(2),
+                "and the ordinary membership set still holds exactly the file and the symbol,");
+            Assert.That(members, Does.Not.Contain(VectorCodec.SourceId(memoryKey)),
+                "with the memory marker excluded from it rather than double-counted.");
+        });
+    }
+
+    [Test]
+    public async Task Marking_no_memory_keys_is_a_no_op()    {
         await using var harness = await RepoContextMcpHarness.StartAsync(
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
