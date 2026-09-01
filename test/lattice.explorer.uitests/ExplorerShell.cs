@@ -50,7 +50,7 @@ internal static class ExplorerShell
     /// there. The load itself is addressed separately, by sharding the journeys.
     /// </para>
     /// </remarks>
-    internal const float CircuitReadyTimeoutMs = 90_000;
+    internal const float CircuitReadyTimeoutMs = 30_000;
 
     /// <summary>
     /// How long a bounded DOM read of the rail may take. Every read here goes through
