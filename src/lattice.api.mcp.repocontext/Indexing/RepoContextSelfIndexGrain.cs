@@ -38,6 +38,7 @@ internal sealed class RepoContextSelfIndexGrain(
     IRepoIndexRunAuthority runAuthority,
     TimeProvider timeProvider,
     RepoContextIndexingOptions options,
+    RepoContextAnnIndexScheduler annIndexScheduler,
     ILogger<RepoContextSelfIndexGrain> logger,
     [PersistentState("repoContextSelfIndex", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
     IPersistentState<RepoContextSelfIndexState> state) : IRepoContextSelfIndexGrain, IRemindable, IGrainBase
@@ -93,6 +94,14 @@ internal sealed class RepoContextSelfIndexGrain(
         // credential-stamped, single-flight background pass, so this call is exactly
         // the run the self-index scan would otherwise re-drive.
         var progress = await runner.StartIndexAsync(request).ConfigureAwait(true);
+
+        // Arm the approximate index's durable build coordinator for this repository
+        // as soon as it has vectors worth indexing. The startup sweep would pick it
+        // up on its next pass anyway; doing it here makes a freshly onboarded
+        // repository converge on the pass that produced its vectors rather than on
+        // the following sweep interval. Idempotent and non-fatal - a failure here
+        // must never fail onboarding, and the sweep is the backstop.
+        await TryArmAnnIndexAsync().ConfigureAwait(true);
 
         // Space the first periodic reconcile one interval past this onboarding pass:
         // onboarding already reconciled the whole tree, so an immediate reconcile
@@ -325,6 +334,27 @@ internal sealed class RepoContextSelfIndexGrain(
         // so many repositories' reconciles stay desynchronised in steady state.
         var jitterTicks = (long)(Random.Shared.NextDouble() * options.ReconcileIntervalJitter.Ticks);
         state.State.NextReconcileAfterTicks = nowTicks + options.ReconcileInterval.Ticks + jitterTicks;
+    }
+
+    /// <summary>
+    /// Arms the approximate index's build coordinator for this repository, if the
+    /// plane is scheduled at all. Never throws: indexing must not fail because a
+    /// derived index could not be scheduled, and the periodic sweep re-arms it.
+    /// </summary>
+    private async Task TryArmAnnIndexAsync()
+    {
+        try
+        {
+            await annIndexScheduler.TryArmAsync(RepoId, CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Repo {RepoId}: failed to arm the approximate-index build coordinator (non-fatal); the periodic "
+                + "sweep will retry.",
+                RepoId);
+        }
     }
 
     private async Task RegisterKeepaliveAsync()

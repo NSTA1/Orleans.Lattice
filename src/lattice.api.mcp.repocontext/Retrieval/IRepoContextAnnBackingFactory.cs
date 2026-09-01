@@ -33,4 +33,31 @@ internal interface IRepoContextAnnBackingFactory
     /// <param name="space">The embedding space the index covers.</param>
     /// <returns>The durable store.</returns>
     IVectorIndexStore CreateStore(string repoId, EmbeddingSpaceTag space);
+
+    /// <summary>
+    /// Retires every sibling index prefix of one repository whose embedding-space
+    /// fingerprint is not <paramref name="liveSpace"/>'s, and reports how many were
+    /// retired.
+    /// <para>
+    /// A model, dimension, or normalization change is a new embedding space and so
+    /// a wholly separate index under a separate prefix. That separation is
+    /// deliberate - retirement works by prefix delete, so two spaces sharing a
+    /// prefix would delete each other's generations - but it leaves the abandoned
+    /// space resident forever: invisible to queries, harmless to correctness, and
+    /// unbounded in size. This is the only thing that reclaims it.
+    /// </para>
+    /// <para>
+    /// An implementation must never place the live prefix, or anything outside the
+    /// repository's own index root, in reach of the delete, and must treat an
+    /// interrupted enumeration as a failure rather than as a short key list - a
+    /// short list here is a partial delete that silently leaves a superseded space
+    /// behind.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
+    /// <param name="liveSpace">The embedding space whose index must be preserved.</param>
+    /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <returns>How many superseded space prefixes were retired.</returns>
+    Task<int> ReclaimSupersededSpacesAsync(
+        string repoId, EmbeddingSpaceTag liveSpace, CancellationToken cancellationToken);
 }

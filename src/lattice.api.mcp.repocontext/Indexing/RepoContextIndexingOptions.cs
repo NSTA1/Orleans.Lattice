@@ -45,6 +45,12 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="SemanticRetrieval"/>.</summary>
     public const string SemanticRetrievalKey = "LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL";
 
+    /// <summary>Environment variable overriding <see cref="AnnIndexScheduling"/>.</summary>
+    public const string AnnIndexSchedulingKey = "LATTICE_REPOCONTEXT_ANN_INDEX_SCHEDULING";
+
+    /// <summary>Environment variable overriding <see cref="AnnIndexReclamation"/>.</summary>
+    public const string AnnIndexReclamationKey = "LATTICE_REPOCONTEXT_ANN_INDEX_RECLAMATION";
+
     /// <summary>The <see cref="SemanticRetrieval"/> value selecting the persisted approximate index (the default).</summary>
     public const string SemanticRetrievalApproximate = "approximate";
 
@@ -134,6 +140,62 @@ internal sealed class RepoContextIndexingOptions
         RepoContextSemanticRetrievalMode.Approximate;
 
     /// <summary>
+    /// Whether the approximate index build is scheduled by its own durable,
+    /// reminder-anchored coordinator grain: one per <c>(repository, embedding
+    /// space)</c>, armed by a startup sweep over the registered repositories so an
+    /// idle box converges with no query at all, and resumed by its keep-alive
+    /// reminder after a process death.
+    /// <para>
+    /// Default-on, per the epic's promotion rule. Setting it to
+    /// <see langword="false"/> leaves the plane with no scheduler at all: an index
+    /// that is not already built is never built, every semantic query is answered
+    /// by the exact scan with complete recall, and no reminder or coordinator
+    /// activation exists. That is the honest off state - it is not a fall-back to
+    /// the query-armed background build, which this option replaced precisely
+    /// because it was not crash-safe and never started on an idle repository.
+    /// </para>
+    /// <para>
+    /// Resolved from <see cref="AnnIndexSchedulingKey"/>; an absent or unrecognised
+    /// value falls back to the default (fail-closed to the chosen default, never to
+    /// a path nobody asked for).
+    /// </para>
+    /// </summary>
+    public bool AnnIndexScheduling { get; init; } = true;
+
+    /// <summary>
+    /// Whether an index that has just reached <c>Ready</c> retires the sibling key
+    /// prefixes of its own repository whose embedding-space fingerprint is no
+    /// longer the live one.
+    /// <para>
+    /// A model, dimension, or normalization change is a new embedding space and
+    /// therefore a wholly separate index under a separate prefix - deliberately, so
+    /// the two never delete each other's generations. Nothing otherwise reclaims
+    /// the abandoned one: it is invisible to queries, harmless to correctness, and
+    /// permanently resident, at hundreds of megabytes per abandoned space.
+    /// </para>
+    /// <para>
+    /// The reclamation runs strictly <b>after</b> the replacement index is
+    /// <c>Ready</c>, so a re-embed that fails part way can still fall back to the
+    /// previous space's index. Default-on with this switch to turn it off, which is
+    /// the setting to use when an operator wants to keep a superseded index for a
+    /// deliberate roll-back. Resolved from <see cref="AnnIndexReclamationKey"/>; an
+    /// absent or unrecognised value falls back to the default.
+    /// </para>
+    /// </summary>
+    public bool AnnIndexReclamation { get; init; } = true;
+
+    /// <summary>
+    /// Whether the approximate-index build coordinator should run at all: its own
+    /// switch must be on <b>and</b> the host must actually be serving semantic
+    /// retrieval approximately. A host configured
+    /// <see cref="RepoContextSemanticRetrievalMode.Exact"/> maintains no index by
+    /// design, so scheduling a build for it would spend the whole corpus streaming
+    /// on an index nothing would ever query.
+    /// </summary>
+    public bool AnnIndexSchedulingEnabled =>
+        AnnIndexScheduling && SemanticRetrieval == RepoContextSemanticRetrievalMode.Approximate;
+
+    /// <summary>
     /// Resolves the options from environment variables, falling back to the defaults (the
     /// original behaviour) for any variable that is absent or malformed.
     /// </summary>
@@ -151,6 +213,29 @@ internal sealed class RepoContextIndexingOptions
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
             Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),
             SemanticRetrieval = ReadSemanticRetrieval(SemanticRetrievalKey, defaults.SemanticRetrieval),
+            AnnIndexScheduling = ReadBoolean(AnnIndexSchedulingKey, defaults.AnnIndexScheduling),
+            AnnIndexReclamation = ReadBoolean(AnnIndexReclamationKey, defaults.AnnIndexReclamation),
+        };
+    }
+
+    /// <summary>
+    /// Reads a boolean switch, accepting the usual spellings on both sides and
+    /// falling back to <paramref name="fallback"/> for anything else, so a typo can
+    /// never silently disable a default-on mechanism.
+    /// </summary>
+    private static bool ReadBoolean(string key, bool fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "true" or "1" or "yes" or "on" or "enabled" => true,
+            "false" or "0" or "no" or "off" or "disabled" => false,
+            _ => fallback,
         };
     }
 

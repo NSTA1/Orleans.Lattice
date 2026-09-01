@@ -1,12 +1,12 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
+using Orleans.Lattice.Vector.Persistence;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 
 /// <summary>
 /// Regression coverage for the convergence defect that stopped an approximate
-/// index ever reaching <c>Ready</c> on a real deployment (#1844), even after the
-/// enumerator-abort defect was fixed.
+/// index ever reaching <c>Ready</c> on a real deployment (#1844), re-expressed
+/// against the scheduler that replaced the background build (#1872).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,9 +22,15 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// Measured on a restored copy of the live deployment: a corpus of roughly 35,800
 /// vectors faulted about once per flush boundary with a 30-second Orleans
 /// response timeout against a saturated shard root. Query-gated re-arming
-/// therefore converted a TRANSIENT fault into PERMANENT non-convergence - the
-/// index sat at one flush of 4,096 vectors and never reached Ready, so query cost
-/// stayed proportional to corpus size and cold start could not improve.
+/// therefore converted a TRANSIENT fault into PERMANENT non-convergence.
+/// </para>
+/// <para>
+/// The in-place retry loop that first answered it is gone, and so is the
+/// background task: the durable coordinator's phase timer is the retry, and its
+/// keep-alive reminder makes that retry survive a process death. What these tests
+/// drive is therefore exactly what the coordinator's pump drives - one bounded
+/// step per tick, faults absorbed - so they are deterministic rather than timed,
+/// with no clock, no delay, and no background task anywhere in the suite.
 /// </para>
 /// <para>
 /// The second half is the cost of the shortfall probe. It is an O(corpus) key
@@ -36,6 +42,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 [TestFixture]
 public sealed class RepoContextAnnIndexBuildConvergenceTests
 {
+    /// <summary>
+    /// A ceiling on pump ticks, so a genuinely non-converging build fails the test
+    /// instead of looping. It is not a timeout: every tick is a real bounded build
+    /// step, so the count is deterministic for a given corpus and batch size.
+    /// </summary>
+    private const int MaxTicks = 512;
+
     private CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
 
     private static float[] Query()
@@ -47,7 +60,6 @@ public sealed class RepoContextAnnIndexBuildConvergenceTests
 
     private static RepoContextAnnOptions BuildOptions() => new()
     {
-        AutoBuild = true,
         MinimumTrainingCount = 8,
         PartitionCount = 4,
         Probes = 4,
@@ -62,21 +74,25 @@ public sealed class RepoContextAnnIndexBuildConvergenceTests
         fixture.SeedRing(64);
 
         // Three consecutive faults, which is more than the single attempt the old
-        // implementation allowed and fewer than the in-place retry budget, so the
-        // test distinguishes "absorbs a transient" from "retries forever".
+        // implementation allowed, so the test distinguishes "absorbs a transient"
+        // from "gives up on the first one".
         fixture.Source.FailNextEnumerations(3, static () => new TimeoutException(
             "Response did not arrive on time in 00:00:30 for message: GetSortedEntriesBatchAsync"));
 
-        // The first query arms the background build and is answered by the exact
-        // path, exactly as an unbuilt deployment behaves.
-        await fixture.SearchAsync(Query(), 5, Ct);
+        var ticks = await PumpAsync(fixture, Ct);
 
-        var serving = await WaitForServingAsync(fixture, TimeSpan.FromSeconds(120));
-
-        Assert.That(serving, Is.True,
-            "A build interrupted by a transient store fault must resume from its checkpoint and reach Ready. "
-            + "Tearing the build down and waiting for a query to re-arm it turns a transient fault into "
-            + "permanent non-convergence on a corpus large enough to fault once per flush.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(ticks, Is.LessThan(MaxTicks),
+                "A build interrupted by a transient store fault must resume from its checkpoint and reach Ready. "
+                + "Abandoning it and waiting for a query to re-arm it turns a transient fault into permanent "
+                + "non-convergence on a corpus large enough to fault once per flush.");
+            Assert.That(
+                fixture.Registry.TryGetProgress(AnnPlaneFixture.RepoId, AnnPlaneFixture.Space, out var progress)
+                && progress.Phase == VectorIndexBuildPhase.Ready,
+                Is.True,
+                "the pump must leave the index Ready, not merely stop faulting");
+        });
     }
 
     [Test]
@@ -93,12 +109,12 @@ public sealed class RepoContextAnnIndexBuildConvergenceTests
         fixture.Source.FailNextEnumerations(3, static () => new TimeoutException(
             "Response did not arrive on time in 00:00:30 for message: GetSortedEntriesBatchAsync"));
 
-        await fixture.SearchAsync(Query(), 5, Ct);
-        var serving = await WaitForServingAsync(fixture, TimeSpan.FromSeconds(120));
+        var ticks = await PumpAsync(fixture, Ct);
 
         Assert.Multiple(() =>
         {
-            Assert.That(serving, Is.True, "the build must reach Ready for this assertion to mean anything");
+            Assert.That(ticks, Is.LessThan(MaxTicks),
+                "the build must reach Ready for this assertion to mean anything");
             Assert.That(fixture.Source.CountCalls, Is.LessThanOrEqualTo(1),
                 "The O(corpus) shortfall probe must be paid at most once for a build, not once per attempt. "
                 + "Scaling it with the retry count is what let a corpus large enough to fault per flush spend "
@@ -112,8 +128,7 @@ public sealed class RepoContextAnnIndexBuildConvergenceTests
         using var fixture = new AnnPlaneFixture(BuildOptions());
         fixture.SeedRing(64);
 
-        await fixture.SearchAsync(Query(), 5, Ct);
-        Assert.That(await WaitForServingAsync(fixture, TimeSpan.FromSeconds(120)), Is.True);
+        Assert.That(await PumpAsync(fixture, Ct), Is.LessThan(MaxTicks));
 
         // Restart: the next open RESTORES from durable state rather than building,
         // which is the one case where the count is the only way to learn whether
@@ -121,27 +136,39 @@ public sealed class RepoContextAnnIndexBuildConvergenceTests
         fixture.Restart();
         fixture.Source.Set("vec-999999", "repo/acme/file/new.cs", Query());
 
-        await fixture.SearchAsync(Query(), 5, Ct);
-        Assert.That(await WaitForServingAsync(fixture, TimeSpan.FromSeconds(120)), Is.True);
+        Assert.That(await PumpAsync(fixture, Ct), Is.LessThan(MaxTicks));
 
         Assert.That(fixture.Source.CountCalls, Is.GreaterThan(0),
             "A restored index did not stream the corpus in this process, so it must probe rather than assume.");
     }
 
-    private static async Task<bool> WaitForServingAsync(AnnPlaneFixture fixture, TimeSpan timeout)
+    /// <summary>
+    /// Drives the plane exactly as the build coordinator's phase pump does: one
+    /// bounded step per tick, with a faulting step swallowed and left to the next
+    /// tick rather than tearing anything down. Returns the tick count, which
+    /// reaches <see cref="MaxTicks"/> only when the build never converges.
+    /// </summary>
+    private static async Task<int> PumpAsync(AnnPlaneFixture fixture, CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        for (var tick = 1; tick <= MaxTicks; tick++)
         {
-            var outcome = await fixture.SearchAsync(Query(), 5, CancellationToken.None);
-            if (outcome.State != RepoContextAnnServingState.Bootstrapping)
+            try
             {
-                return true;
+                var progress = await fixture.Registry
+                    .BuildStepAsync(AnnPlaneFixture.RepoId, AnnPlaneFixture.Space, cancellationToken);
+                if (progress.Phase == VectorIndexBuildPhase.Ready)
+                {
+                    return tick;
+                }
             }
-
-            await Task.Delay(100, CancellationToken.None);
+            catch (Exception)
+            {
+                // Exactly what CoordinatorGrain does with a faulting phase tick: log
+                // it and leave the timer running. The next tick resumes the build
+                // from its last checkpoint.
+            }
         }
 
-        return false;
+        return MaxTicks;
     }
 }

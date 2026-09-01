@@ -24,8 +24,6 @@ public sealed class RepoContextAnnOptionsTests
                 "Zero means the index chooses from the corpus size; a fixed count makes query cost linear again.");
             Assert.That(options.Probes, Is.Zero,
                 "Zero means the index chooses its probe budget, which scans a shrinking fraction as it grows.");
-            Assert.That(options.AutoBuild, Is.True,
-                "An existing deployment must heal itself with no operator action.");
             Assert.That(options.Metric, Is.EqualTo(VectorDistanceMetric.Cosine),
                 "Cosine reproduces the exact ranker's ordering under both normalization conventions.");
             Assert.That(options.IngestBatchSize, Is.GreaterThan(0));

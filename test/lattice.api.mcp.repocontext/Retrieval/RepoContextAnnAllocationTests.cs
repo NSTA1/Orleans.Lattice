@@ -43,7 +43,6 @@ public sealed class RepoContextAnnAllocationTests
     {
         var fixture = new AnnPlaneFixture(new RepoContextAnnOptions
         {
-            AutoBuild = false,
             MinimumTrainingCount = 8,
             PartitionCount = 4,
             Probes = 4,

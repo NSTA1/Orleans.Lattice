@@ -26,6 +26,13 @@ internal sealed class InMemoryVectorIndexStore : IVectorIndexStore
     /// <summary>How many prefix scans have been issued against the store.</summary>
     public int Scans { get; private set; }
 
+    /// <summary>
+    /// An ordinal-ordered snapshot of every key currently held. Exposed so a test
+    /// double can walk the keyspace the way the real Lattice-backed store does,
+    /// without going through the value-carrying scan.
+    /// </summary>
+    public IReadOnlyList<string> Keys => [.. _records.Keys];
+
     /// <inheritdoc />
     public Task<byte[]?> ReadAsync(string key, CancellationToken cancellationToken = default)
     {

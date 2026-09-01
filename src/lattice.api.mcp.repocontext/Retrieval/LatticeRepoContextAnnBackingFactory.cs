@@ -39,7 +39,9 @@ internal sealed class LatticeRepoContextAnnBackingFactory : IRepoContextAnnBacki
     /// exclusively inside the index tree. The space contributes a stable
     /// fingerprint of its model, dimension, and normalization convention, so two
     /// spaces never share a prefix and the prefix never carries a model id
-    /// verbatim into a key.
+    /// verbatim into a key. The layout itself lives on
+    /// <see cref="RepoContextAnnIndexKeys"/>, which also owns the sibling-space
+    /// enumeration the reclamation walk depends on.
     /// </summary>
     /// <param name="repoId">The repository. Must not be <see langword="null"/>.</param>
     /// <param name="space">The embedding space.</param>
@@ -48,9 +50,7 @@ internal sealed class LatticeRepoContextAnnBackingFactory : IRepoContextAnnBacki
     internal static string KeyPrefix(string repoId, EmbeddingSpaceTag space)
     {
         ArgumentNullException.ThrowIfNull(repoId);
-        var fingerprint = VectorCodec.SourceId(
-            $"{space.ModelId}|{space.Dimension}|{space.Normalization}");
-        return $"repo/{repoId}/{RepoContextAnnOptions.KeyPrefixRoot}{fingerprint}/";
+        return RepoContextAnnIndexKeys.IndexPrefix(repoId, space);
     }
 
     /// <inheritdoc />
@@ -65,5 +65,98 @@ internal sealed class LatticeRepoContextAnnBackingFactory : IRepoContextAnnBacki
     {
         ArgumentNullException.ThrowIfNull(repoId);
         return new LatticeVectorIndexStore(_grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorIndex));
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// The walk is a <b>skip scan</b>, not an enumeration. Every space a repository
+    /// has been indexed under is a sibling in one contiguous ordinal range beneath
+    /// <see cref="RepoContextAnnIndexKeys.RepositoryRoot"/>, so reading the single
+    /// first key at or after the cursor names a whole space, and the cursor then
+    /// jumps to the exclusive upper bound of that space's prefix. The cost is
+    /// therefore one bounded read per space the repository has ever used - two or
+    /// three - rather than one per persisted record, of which there are hundreds of
+    /// thousands.
+    /// </para>
+    /// <para>
+    /// It is a <b>keys-only</b> walk for the same reason: the values under this
+    /// root are the index's own vector chunks, and streaming them to learn a
+    /// fingerprint would read the very hundreds of megabytes the reclamation exists
+    /// to remove.
+    /// </para>
+    /// <para>
+    /// It is walked through the abort-resilient
+    /// <see cref="LatticeExtensions.ScanKeysAsync"/> rather than the raw stream,
+    /// because a reclaimed remote enumerator yields a SHORT result, and a short
+    /// result here reads as "no more spaces" - so an abort would silently leave a
+    /// superseded index behind rather than failing. Cancellation and enumeration
+    /// aborts propagate; the caller treats a fault as "not reclaimed" and retries
+    /// on a later pass.
+    /// </para>
+    /// </remarks>
+    public async Task<int> ReclaimSupersededSpacesAsync(
+        string repoId, EmbeddingSpaceTag liveSpace, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorIndex);
+        var root = RepoContextAnnIndexKeys.RepositoryRoot(repoId);
+        var rootEnd = LatticeKeyRange.PrefixUpperBound(root);
+        var livePrefix = RepoContextAnnIndexKeys.IndexPrefix(repoId, liveSpace);
+
+        var cursor = root;
+        var retired = 0;
+        while (cursor is not null && (rootEnd is null || string.CompareOrdinal(cursor, rootEnd) < 0))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var observed = await FirstKeyAsync(tree, cursor, rootEnd, cancellationToken).ConfigureAwait(false);
+            if (observed is null)
+            {
+                break;
+            }
+
+            if (!RepoContextAnnIndexKeys.TrySpacePrefix(root, observed, out var spacePrefix))
+            {
+                // A key under the root that names no space. It is not this plane's
+                // to delete, so step past exactly it and carry on rather than
+                // guessing at a prefix that could span every space.
+                cursor = LatticeKeyRange.PrefixUpperBound(observed);
+                continue;
+            }
+
+            if (!string.Equals(spacePrefix, livePrefix, StringComparison.Ordinal))
+            {
+                var spaceEnd = LatticeKeyRange.PrefixUpperBound(spacePrefix);
+                if (spaceEnd is not null)
+                {
+                    await tree.DeleteRangeAsync(spacePrefix, spaceEnd, cancellationToken).ConfigureAwait(false);
+                    retired++;
+                }
+            }
+
+            cursor = LatticeKeyRange.PrefixUpperBound(spacePrefix);
+        }
+
+        return retired;
+    }
+
+    /// <summary>
+    /// Reads the single first key in a half-open range, or <see langword="null"/>
+    /// when the range is empty. Enumerating one key and stopping is what keeps the
+    /// reclamation walk proportional to the number of spaces rather than to the
+    /// number of records.
+    /// </summary>
+    private static async Task<string?> FirstKeyAsync(
+        ILattice tree, string startInclusive, string? endExclusive, CancellationToken cancellationToken)
+    {
+        var keys = tree.ScanKeysAsync(startInclusive, endExclusive, cancellationToken: cancellationToken);
+        await foreach (var key in keys.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            return key;
+        }
+
+        return null;
     }
 }
