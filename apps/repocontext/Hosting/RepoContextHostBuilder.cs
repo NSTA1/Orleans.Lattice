@@ -79,8 +79,6 @@ public static class RepoContextHostBuilder
 
         PrepareDataPaths(config);
 
-        ConfigureContainerLogging(builder.Logging);
-
         // The container's single application listener: the MCP port, bound on all
         // interfaces so it is reachable on the container network.
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
@@ -133,6 +131,17 @@ public static class RepoContextHostBuilder
                 silo.AddLatticeScalingSignal();
             }
         });
+
+        // Configure our log filters AFTER UseOrleans, deliberately. Filter rules
+        // are evaluated by longest matching category prefix and, among equals, the
+        // LAST rule registered wins - so a rule Orleans registers for one of its
+        // own categories during UseOrleans silently overrides an identical rule we
+        // added earlier. That is not hypothetical: with this call sited before
+        // UseOrleans the Orleans.Runtime.CallbackData filter took effect while the
+        // Orleans.Messaging one did not, which is a confusing half-working state to
+        // debug. Registering last makes our intent win regardless of what the
+        // framework configures for itself.
+        ConfigureContainerLogging(builder.Logging);
 
         // The local-trusted credential bridge must be registered BEFORE AddLatticeMcp
         // so its TryAdd-registered HttpContext bridge is skipped and ours wins.
@@ -302,6 +311,15 @@ public static class RepoContextHostBuilder
         // clear on its own.
         logging.AddFilter("Orleans.Runtime.CallbackData", LogLevel.Error);
         logging.AddFilter("Orleans.Messaging", LogLevel.Error);
+
+        // The runtime's companion to the above: while a request is outstanding past
+        // its deadline, Orleans polls the target activation and logs the reply at
+        // INFORMATION as "Received status update for pending request", one line per
+        // poll carrying a full activation and task-scheduler dump. It is a
+        // diagnostic about an already-reported slow call, so it adds no fact the
+        // callback and messaging lines did not, and it ran to 502 lines in ten
+        // minutes on a real cold start. Keep warnings and above.
+        logging.AddFilter("Orleans.Runtime.InsideRuntimeClient", LogLevel.Warning);
     }
 
     /// <summary>
