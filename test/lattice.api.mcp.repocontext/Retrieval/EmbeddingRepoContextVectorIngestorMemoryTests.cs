@@ -531,6 +531,45 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
         });
     }
 
+    /// <summary>
+    /// <c>CountEmbeddedAsync</c> feeds <c>embeddedVectorCount</c> on every
+    /// <c>repocontext_list_repos</c> call and computes it by walking the whole
+    /// membership prefix and decoding every row, which on a real repository is over
+    /// 81,000 records on the slowest tree in the store - the direct cause of the
+    /// "list_repos times out after a restart" symptom in issue #1819. The result is
+    /// memoized against the vector cache's generation, which membership writes
+    /// already advance.
+    /// <para>
+    /// Both halves are asserted: a repeat with no intervening write returns the same
+    /// count (the memo is live), and a count taken after a write reflects it (the
+    /// memo is invalidated). Asserting only the first would pass on a memo that never
+    /// refreshes, which is far worse than no memo at all.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task The_embedded_count_is_memoized_but_refreshes_after_a_write()
+    {
+        await using var harness = await RepoContextMcpHarness.StartAsync(
+            new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
+        var first = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var repeat = await writer.CountEmbeddedAsync(RepoId, Ct);
+
+        await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/B.cs") }, Ct);
+        var afterWrite = await writer.CountEmbeddedAsync(RepoId, Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(1), "One member is counted,");
+            Assert.That(repeat, Is.EqualTo(1), "a repeat with no write agrees,");
+            Assert.That(afterWrite, Is.EqualTo(2),
+                "and a write advances the cache generation, so the next count re-scans "
+                + "rather than serving a stale memo.");
+        });
+    }
+
     [Test]
     public async Task Marking_no_memory_keys_is_a_no_op()    {
         await using var harness = await RepoContextMcpHarness.StartAsync(

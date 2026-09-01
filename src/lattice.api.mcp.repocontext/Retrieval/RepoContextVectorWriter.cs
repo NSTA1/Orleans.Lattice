@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Orleans.Serialization;
 
@@ -126,6 +127,25 @@ internal sealed class RepoContextVectorWriter
     private readonly RepoContextVectorCache _cache;
     private readonly RepoContextVectorPlaneReDeriver _reDeriver;
     private readonly IRepoContextAnnIndex? _annIndex;
+
+    /// <summary>
+    /// Memoized embedded-source counts per repository, keyed by the cache generation
+    /// they were scanned at.
+    /// <para>
+    /// <c>CountEmbeddedAsync</c> feeds <c>embeddedVectorCount</c> on every
+    /// <c>repocontext_list_repos</c> call, and it computes that by walking the WHOLE
+    /// membership prefix and JSON-decoding every row - over 81,000 records on a real
+    /// repository, on the largest and slowest tree in the store. That is the direct
+    /// cause of the "list_repos times out on first call after a restart" symptom in
+    /// issue #1819: a diagnostic field was paying a full-tree scan per call.
+    /// </para>
+    /// <para>
+    /// Membership writes already invalidate the vector cache, which advances the
+    /// repository's generation, so that generation is exactly the right key: an
+    /// unchanged membership set serves the memo, and any write forces a re-scan.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, EmbeddedCountMemo> _countMemo = new();
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
@@ -1043,6 +1063,15 @@ internal sealed class RepoContextVectorWriter
 
         return GuardMembershipAsync(async () =>
         {
+            // Capture the generation BEFORE the scan, exactly as the candidate cache
+            // does, so a membership write that lands mid-scan supersedes this result
+            // instead of caching a stale count.
+            var generation = _cache.CaptureGeneration(repoId);
+            if (_countMemo.TryGetValue(repoId, out var memo) && memo.Generation == generation)
+            {
+                return memo.Count;
+            }
+
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
             var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
@@ -1064,9 +1093,21 @@ internal sealed class RepoContextVectorWriter
                 }
             }
 
+            // Stamped with the generation this scan ran against. A membership write
+            // that landed mid-scan has already advanced the generation, so the next
+            // read captures a newer one, misses this entry, and re-scans - a stale
+            // count is never served rather than being detected and discarded.
+            _countMemo[repoId] = new EmbeddedCountMemo(generation, enabled);
             return enabled;
         }, cancellationToken);
     }
+
+    /// <summary>
+    /// A memoized embedded-source count and the cache generation it was computed at.
+    /// </summary>
+    /// <param name="Generation">The <see cref="RepoContextVectorCache"/> generation the count was scanned at.</param>
+    /// <param name="Count">The counted live embedded sources.</param>
+    private readonly record struct EmbeddedCountMemo(long Generation, long Count);
 
     /// <summary>
     /// The dot-authoring replica identity for a membership flag enable. When the host
