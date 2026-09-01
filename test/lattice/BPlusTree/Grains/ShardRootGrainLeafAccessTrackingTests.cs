@@ -65,12 +65,12 @@ public class ShardRootGrainLeafAccessTrackingTests
         return new Harness(grain, state, cache, leafId);
     }
 
-    // ---- default-off posture
+    // ---- default-on posture
 
     [Test]
-    public void LeafCachePreWarmCount_defaults_to_zero()
+    public void LeafCachePreWarmCount_defaults_to_the_pre_warm_fan_out_width()
     {
-        Assert.That(new LatticeOptions().LeafCachePreWarmCount, Is.Zero);
+        Assert.That(new LatticeOptions().LeafCachePreWarmCount, Is.EqualTo(8));
     }
 
     [Test]
@@ -84,7 +84,7 @@ public class ShardRootGrainLeafAccessTrackingTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That(LatticeOptions.DefaultLeafCachePreWarmCount, Is.Zero);
+            Assert.That(LatticeOptions.DefaultLeafCachePreWarmCount, Is.EqualTo(8));
             Assert.That(LatticeOptions.DefaultLeafAccessModelFlushIntervalMs, Is.EqualTo(30_000));
             Assert.That(LatticeOptions.MaxLeafCachePreWarmCount, Is.EqualTo(64));
         });

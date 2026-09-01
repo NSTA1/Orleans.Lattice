@@ -764,6 +764,50 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     Task CompleteSplitAsync();
 
+    /// <summary>
+    /// Lifts this shard's permanent moved-away seal for
+    /// <paramref name="sortedSlots"/> - both the shard-level
+    /// <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.MovedAwaySlots"/>
+    /// record and the matching per-leaf seal - and returns the number of slots
+    /// actually reclaimed.
+    /// <para>
+    /// Called by the online consolidation coordinator on the <b>survivor</b>
+    /// shard immediately before the routing map is re-pointed onto it. A
+    /// survivor is very often the shard the donor was originally split out of,
+    /// so it still refuses the very slots it is about to own again; without
+    /// this call the reclaimed keys would be permanently unreachable, the map
+    /// routing readers to the survivor and the survivor routing them back to
+    /// the retired donor.
+    /// </para>
+    /// <para>
+    /// Idempotent: reclaiming a slot that is not sealed is a no-op and
+    /// contributes nothing to the returned count, so a re-driven consolidation
+    /// converges. Slots recorded under a different virtual shard count are
+    /// left untouched. Throws
+    /// <see cref="InvalidOperationException"/> when an adaptive split on this
+    /// shard is actively migrating one of the requested slots away.
+    /// </para>
+    /// </summary>
+    /// <param name="sortedSlots">Sorted, distinct virtual slots to reclaim.</param>
+    /// <param name="virtualShardCount">Virtual shard count the slots are expressed in.</param>
+    Task<int> ReclaimSlotsAsync(int[] sortedSlots, int virtualShardCount);
+
+    /// <summary>
+    /// Clears an in-flight slot-migration record on this shard without
+    /// promoting its slots into the permanent moved-away map, restoring the
+    /// shard to the state it had before the migration began.
+    /// <para>
+    /// Used by the consolidation coordinator to honour a cancel at a boundary
+    /// strictly before the routing map flips.
+    /// <see cref="CompleteSplitAsync"/> is not usable there: it retires the
+    /// slots permanently, which is exactly the record an abandoned operation
+    /// must not leave behind. No-op when no migration is in flight; throws
+    /// <see cref="InvalidOperationException"/> once the migration has reached
+    /// the reject phase, at which point it is no longer reversible.
+    /// </para>
+    /// </summary>
+    Task AbortSplitAsync();
+
     /// <summary>Returns <c>true</c> if this shard is currently participating in an adaptive split as source.</summary>
     Task<bool> IsSplittingAsync();
 

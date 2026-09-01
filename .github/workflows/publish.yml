@@ -43,6 +43,7 @@ on:
       #   lattice.api.telemetry.grpc-v9.4.0
       #   lattice.schema-v7.9.0
       #   lattice.scaling-v7.9.0
+      #   lattice.vector-v9.5.0
       #   lattice.tenancy-v8.0.0
       #   lattice.explorer.core-v7.9.1
       #   lattice.explorer.ui-v7.9.1
@@ -110,6 +111,7 @@ on:
       - 'lattice.api.telemetry.grpc-v*'
       - 'lattice.schema-v*'
       - 'lattice.scaling-v*'
+      - 'lattice.vector-v*'
       - 'lattice.tenancy-v*'
       - 'lattice.explorer.core-v*'
       - 'lattice.explorer.ui-v*'

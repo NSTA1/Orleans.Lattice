@@ -70,6 +70,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Caching.AzureBlob` | `src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj` |
 | `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` |
 | `Orleans.Lattice.GrainIndex` | `src/lattice.grainindex/Orleans.Lattice.GrainIndex.csproj` |
+| `Orleans.Lattice.Vector` | `src/lattice.vector/Orleans.Lattice.Vector.csproj` |
 
 ## Tag shape
 
@@ -139,6 +140,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Caching.AzureBlob` | `lattice.caching.azureblob-v<X.Y.Z>` |
 | `Orleans.Lattice.Scaling` | `lattice.scaling-v<X.Y.Z>` |
 | `Orleans.Lattice.GrainIndex` | `lattice.grainindex-v<X.Y.Z>` |
+| `Orleans.Lattice.Vector` | `lattice.vector-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
 

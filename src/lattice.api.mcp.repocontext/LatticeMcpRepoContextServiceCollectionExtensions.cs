@@ -104,7 +104,40 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddSingleton<RepoContextVectorPlaneReDeriver>();
         services.TryAddSingleton<RepoContextVectorWriter>();
         services.TryAddSingleton<RepoContextEmbeddingGapScanner>();
-        services.TryAddSingleton<IRepoContextSemanticIndex, ExactKnnSemanticIndex>();
+
+        // The retrieval plane. The approximate index is the default: it is persisted,
+        // so a restart reloads it instead of re-scanning every stored vector, and its
+        // query cost is sub-linear in the corpus rather than proportional to it. The
+        // brute-force exact scan stays registered either way - it answers while an
+        // index is still building, and it remains the correctness oracle the recall
+        // measurements are taken against. A host selects between them with
+        // RepoContextIndexingOptions.SemanticRetrieval; whichever answers, the
+        // response says which guarantee it carries through its retrieval path.
+        services.TryAddSingleton<ExactKnnSemanticIndex>();
+        services.TryAddSingleton<RepoContextAnnOptions>();
+        services.TryAddSingleton<IRepoContextAnnBackingFactory, LatticeRepoContextAnnBackingFactory>();
+        services.TryAddSingleton<RepoContextAnnIndexRegistry>();
+        services.TryAddSingleton<IRepoContextAnnIndex>(
+            sp => sp.GetRequiredService<RepoContextAnnIndexRegistry>());
+        services.TryAddSingleton<IRepoContextSemanticIndex>(sp =>
+        {
+            var exact = sp.GetRequiredService<ExactKnnSemanticIndex>();
+            return sp.GetRequiredService<RepoContextIndexingOptions>().SemanticRetrieval
+                == RepoContextSemanticRetrievalMode.Exact
+                ? exact
+                : new AnnRepoContextSemanticIndex(
+                    sp.GetRequiredService<IRepoContextAnnIndex>(),
+                    exact,
+                    sp.GetRequiredService<ILogger<AnnRepoContextSemanticIndex>>());
+        });
+
+        // The shared vector-plane readiness signal. It is fed at the single seam every
+        // query funnels through (the search service, once per call) and read by the
+        // host's readiness probe, so a box that cannot serve semantic retrieval stops
+        // reporting itself fully ready. TryAdd means a host or test harness can
+        // substitute one with a different fault hold-down.
+        services.TryAddSingleton(sp =>
+            new RepoContextRetrievalReadinessState(sp.GetRequiredService<TimeProvider>()));
         services.TryAddSingleton<RepoContextSearchService>(sp =>
             new RepoContextSearchService(
                 sp.GetRequiredService<IGrainFactory>(),
@@ -113,7 +146,14 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
                 sp.GetRequiredService<RepoContextStore>(),
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetRequiredService<ILogger<RepoContextSearchService>>(),
-                sp.GetService<IEmbeddingProvider>()));
+                sp.GetService<IEmbeddingProvider>(),
+                sp.GetRequiredService<RepoContextRetrievalReadinessState>()));
+
+        // The warmup driver behind the host's vector-plane readiness probe: it drives a
+        // real semantic query so readiness reports demonstrated capability instead of
+        // waiting for traffic an orchestrator will not route to a not-ready box. TryAdd
+        // means a host or test harness can substitute it.
+        services.TryAddSingleton<IRepoContextRetrievalWarmup, RepoContextRetrievalWarmup>();
 
         services.TryAddSingleton<RepoContextBootstrapService>();
         services.TryAddSingleton(TimeProvider.System);

@@ -217,6 +217,7 @@ public sealed class RepoContextResponseCostTests
             RepoId = "lattice",
             Task = "format a widget label",
             Mode = "semantic",
+            RetrievalPath = RepoContextRetrievalPath.SemanticExact,
             Detail = "slices",
             BudgetTokens = 100_000,
             TotalTokens = packed.TotalTokens,

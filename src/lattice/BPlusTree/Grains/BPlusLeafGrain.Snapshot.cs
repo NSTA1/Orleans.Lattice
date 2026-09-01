@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
@@ -167,7 +168,7 @@ internal sealed partial class BPlusLeafGrain
         if (perPartition is null || perPartition.Length == 0)
         {
             // Legacy blob: only partition 0 coverage is known.
-            perPartition = new[] { blob.SnapshotOffset };
+            perPartition = new[] { blob.ScalarOffsetOrSentinel() };
         }
 
         var current = _durableSnapshotOffsetsByPartition;
@@ -240,13 +241,56 @@ internal sealed partial class BPlusLeafGrain
         {
             // Single-threaded copy of the cache rows under the grain
             // turn. EnumerateRows yields the SortedDictionary's
-            // key-ordered KeyValuePair sequence; the resulting list is
+            // key-ordered KeyValuePair sequence; the resulting buffer is
             // a self-contained value snapshot that survives subsequent
             // foreground mutations on this activation.
-            var rows = new List<LeafSnapshotRow>(Cache.Count);
-            foreach (var kv in Cache.EnumerateRows())
+            //
+            // The buffer is rented rather than allocated: it exists only to
+            // hand an ordered span to the encoder, so it must not outlive the
+            // capture. Draining the cache before reading Count keeps the two
+            // consistent (EnumerateRows materialises any deferred rows first).
+            var cacheRows = Cache.EnumerateRows();
+            var rowCount = Cache.Count;
+            var buffer = ArrayPool<LeafSnapshotRow>.Shared.Rent(rowCount);
+            IReadOnlyList<LeafSnapshotRow> legacyRows = Array.Empty<LeafSnapshotRow>();
+            byte[]? encodedRows;
+            try
             {
-                rows.Add(new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key)));
+                var written = 0;
+                foreach (var kv in cacheRows)
+                {
+                    if (written == rowCount)
+                    {
+                        break;
+                    }
+
+                    buffer[written++] = new LeafSnapshotRow(kv.Key, kv.Value, Cache.GetMergeMode(kv.Key));
+                }
+
+                var rows = new ReadOnlySpan<LeafSnapshotRow>(buffer, 0, written);
+                if (resolved.LeafSnapshotBinaryEncodingEnabled)
+                {
+                    // Compact binary frame: one allocation, raw value bytes, no
+                    // per-row serializer envelope. A blob captured this way
+                    // leaves the legacy Rows slot empty, which is how the lazy
+                    // rewrite happens - the next natural capture of a leaf
+                    // whose durable blob is still legacy simply persists the
+                    // frame instead, with no migration pass anywhere.
+                    encodedRows = LeafSnapshotCodec.Encode(rows);
+                }
+                else
+                {
+                    encodedRows = null;
+                    var copy = new LeafSnapshotRow[written];
+                    rows.CopyTo(copy);
+                    legacyRows = copy;
+                }
+            }
+            finally
+            {
+                // Rows hold references (key strings, value arrays); clear on
+                // return so a pooled buffer cannot pin a released snapshot.
+                ArrayPool<LeafSnapshotRow>.Shared.Return(buffer, clearArray: true);
             }
 
             // Per-partition coverage. Under the default WalPartitions = 8
@@ -263,8 +307,9 @@ internal sealed partial class BPlusLeafGrain
 
             var blob = new LeafSnapshotBlob
             {
-                SnapshotOffset = checkpoint,
-                Rows = rows,
+                SnapshotOffset = LeafSnapshotBlob.NormalizeScalarOffset(checkpoint),
+                Rows = legacyRows,
+                EncodedRows = encodedRows,
                 CapturedAtTicks = DateTime.UtcNow.Ticks,
                 // Snapshot row footprint matches the leaf-state byte formula
                 // by construction (the snapshot is a copy of the cache), so
@@ -558,6 +603,19 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // Reject a blob whose row payload cannot be read in full - a truncated
+        // or corrupt binary frame, or a legacy row list with a null key -
+        // BEFORE anything treats it as durable. This must happen ahead of
+        // RecordDurableSnapshotCoverage: reporting coverage for a prefix the
+        // blob cannot actually reproduce is precisely what would authorise the
+        // coverage-gated WAL GC to trim the last durable copy of that prefix.
+        // An unreadable blob is "no snapshot", so the activation falls through
+        // to the ordinary WAL replay with its own fall-off guards intact.
+        if (!blob.ValidateRowPayload())
+        {
+            return false;
+        }
+
         // A loaded blob is durable regardless of whether it repopulates the
         // cache below. Record its coverage NOW - on both the accept and the
         // decline path - so the coverage-gated durable pin
@@ -568,7 +626,7 @@ internal sealed partial class BPlusLeafGrain
         RecordDurableSnapshotCoverage(blob);
 
         var checkpoint = state.State.ProjectionCheckpointOffset;
-        if (blob.SnapshotOffset <= checkpoint)
+        if (blob.ScalarOffsetOrSentinel() <= checkpoint)
         {
             // The snapshot is at or behind the persisted partition-0
             // checkpoint. Historically this always declined ("we already
@@ -599,15 +657,40 @@ internal sealed partial class BPlusLeafGrain
         // would also re-fold the digest incrementally on every row.
         // We instead invalidate the digest below and let the lazy
         // full-walk recompute it.
-        Cache.Clear();
-        // Defensive: LeafSnapshotBlob.Rows is documented "never null"
-        // and defaults to Array.Empty, but the setter is public and a
-        // partially-deserialised blob could surface null. Treat null
-        // as an empty row set rather than NPE-ing on the foreach.
-        var rows = blob.Rows;
-        if (rows is not null)
+        //
+        // Bounded hydration (issue #1839). When the blob carries a binary
+        // frame and partial hydration is enabled, attach the frame as the
+        // cache's lazily hydrated backing instead of decoding it: the cache
+        // then reports the whole snapshot's row count, footprint and live
+        // count immediately, and materialises entry ranges out of the frame
+        // only as reads require them. Activation cost stops being a function
+        // of blob size. The attach can decline (a legacy row list, or a frame
+        // whose rows are not strictly ascending and therefore not safely
+        // seekable), and declining simply falls through to the full decode
+        // below - the pre-#1839 behaviour, byte for byte.
+        //
+        // This changes nothing about coverage. RecordDurableSnapshotCoverage
+        // ran above off the blob's own offsets, and a capture materialises
+        // every row before it writes, so a partially hydrated leaf can never
+        // stamp coverage for rows it does not hold.
+        var hydrationOptions = await GetOptionsAsync();
+        var attached = false;
+        if (hydrationOptions.LeafPartialHydrationEnabled
+            && blob.HasBinaryRowPayload()
+            && blob.EncodedRows is { Length: > 0 } frame)
         {
-            foreach (var row in rows)
+            attached = Cache.TryAttachSnapshot(frame, hydrationOptions.LeafHydrationResidentBytes);
+        }
+
+        if (!attached)
+        {
+            Cache.Clear();
+            // Encoding-agnostic streaming decode. A binary blob decodes each row
+            // straight into the cache with no intermediate row collection; a
+            // legacy blob walks its row list exactly as before. The payload was
+            // validated above, so a mid-stream parse failure is impossible here
+            // and would throw rather than silently truncate the snapshot.
+            foreach (var row in blob.EnumerateRows())
             {
                 Cache.StoreRow(row.Key, row.Value);
                 if (row.MergeMode is { } mode)
@@ -644,7 +727,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            state.State.ProjectionCheckpointOffset = blob.SnapshotOffset;
+            state.State.ProjectionCheckpointOffset = blob.ScalarOffsetOrSentinel();
         }
 
         // Invalidate the digest so EnsureProjectionHashInitialized's

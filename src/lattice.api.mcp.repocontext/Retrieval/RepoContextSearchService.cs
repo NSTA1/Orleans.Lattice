@@ -16,7 +16,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// keyword/structural scan over the records the structural walk already captured
 /// (<see cref="RepoContextKeywordSearch"/>) rather than throwing. The
 /// <see cref="RepoContextSearchResult.Mode"/> tells the caller which path
-/// answered.
+/// answered, and the additive <see cref="RepoContextSearchResult.RetrievalPath"/>
+/// tells it <b>why</b> - separating an intended keyword-only deployment from a real
+/// vector-plane capability loss, which <c>mode</c> alone cannot distinguish.
+/// </para>
+/// <para>
+/// <b>It is the readiness seam.</b> Every query funnels through here, so the
+/// resolved retrieval path is folded into the shared
+/// <see cref="RepoContextRetrievalReadinessState"/> exactly once per call. The
+/// host's vector-plane readiness component therefore reports what retrieval
+/// actually did rather than what configuration promised.
 /// </para>
 /// </summary>
 internal sealed class RepoContextSearchService
@@ -31,6 +40,7 @@ internal sealed class RepoContextSearchService
     private readonly RepoContextStore _store;
     private readonly TimeProvider _timeProvider;
     private readonly IEmbeddingProvider? _embeddingProvider;
+    private readonly RepoContextRetrievalReadinessState? _readiness;
     private readonly ILogger<RepoContextSearchService> _logger;
 
     /// <summary>Creates the search service.</summary>
@@ -41,6 +51,7 @@ internal sealed class RepoContextSearchService
     /// <param name="timeProvider">The clock used to project remaining life during the keyword scan. Must not be <see langword="null"/>.</param>
     /// <param name="logger">The logger used to record fail-closed fallbacks. Must not be <see langword="null"/>.</param>
     /// <param name="embeddingProvider">The embedding provider, or <see langword="null"/> when the host bound none (search then uses keyword recall).</param>
+    /// <param name="readiness">The shared vector-plane readiness state each resolved retrieval path is folded into, or <see langword="null"/> for an in-process host that publishes no readiness signal.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextSearchService(
         IGrainFactory grainFactory,
@@ -49,7 +60,8 @@ internal sealed class RepoContextSearchService
         RepoContextStore store,
         TimeProvider timeProvider,
         ILogger<RepoContextSearchService> logger,
-        IEmbeddingProvider? embeddingProvider = null)
+        IEmbeddingProvider? embeddingProvider = null,
+        RepoContextRetrievalReadinessState? readiness = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -65,6 +77,7 @@ internal sealed class RepoContextSearchService
         _timeProvider = timeProvider;
         _logger = logger;
         _embeddingProvider = embeddingProvider;
+        _readiness = readiness;
     }
 
     /// <summary>
@@ -75,7 +88,7 @@ internal sealed class RepoContextSearchService
     /// <param name="query">The free-text query. Must be non-empty.</param>
     /// <param name="k">The maximum number of hits to return; clamped to [1, 100], defaulting to 10.</param>
     /// <param name="cancellationToken">Cancels the search.</param>
-    /// <returns>The ranked hits and the mode that produced them.</returns>
+    /// <returns>The ranked hits, the mode that produced them, and the precise retrieval path that answered.</returns>
     public async Task<RepoContextSearchResult> SearchAsync(
         string repoId, string query, int k, CancellationToken cancellationToken)
     {
@@ -83,7 +96,7 @@ internal sealed class RepoContextSearchService
         ArgumentNullException.ThrowIfNull(query);
         var count = k <= 0 ? DefaultResultCount : Math.Min(k, MaxResultCount);
 
-        IReadOnlyList<RepoContextSearchHit>? semantic;
+        SemanticOutcome semantic;
         try
         {
             semantic = await TrySemanticAsync(repoId, query, count, cancellationToken).ConfigureAwait(false);
@@ -98,22 +111,29 @@ internal sealed class RepoContextSearchService
             // embed failure, an index/grain activation fault such as a
             // stale leaf projection, or a same-silo copier gap surfacing a
             // non-copyable exception) must degrade to keyword recall rather
-            // than propagate out of the read-only search tool.
+            // than propagate out of the read-only search tool. The fault is a
+            // degraded semantic index, not an absent embedder, and the
+            // retrieval path says exactly that.
             _logger.LogWarning(
                 ex,
                 "repocontext_search for repository {RepoId} falling back to keyword recall: the semantic path threw.",
                 repoId);
-            semantic = null;
+            semantic = SemanticOutcome.IndexDegraded;
         }
 
-        if (semantic is { Count: > 0 })
+        // One observation per call, at the single seam every query funnels through: the
+        // resolved path is the authoritative statement of what retrieval could do.
+        _readiness?.Observe(semantic.RetrievalPath);
+
+        if (semantic.Hits is { Count: > 0 })
         {
             return new RepoContextSearchResult
             {
                 RepoId = repoId,
                 Query = query,
                 Mode = "semantic",
-                Hits = semantic,
+                RetrievalPath = semantic.RetrievalPath,
+                Hits = semantic.Hits,
             };
         }
 
@@ -146,16 +166,45 @@ internal sealed class RepoContextSearchService
             RepoId = repoId,
             Query = query,
             Mode = keyword.Count > 0 ? "keyword" : "empty",
+            // The keyword cause is reported even on the terminal empty result, so an
+            // operator can still tell an intended keyword-only box from a broken one.
+            RetrievalPath = semantic.RetrievalPath,
             Hits = keyword,
         };
     }
 
-    private async Task<IReadOnlyList<RepoContextSearchHit>?> TrySemanticAsync(
+    /// <summary>
+    /// The outcome of the semantic path: the hits it produced (<see langword="null"/>
+    /// when it did not answer) and the <see cref="RepoContextRetrievalPath"/> value
+    /// describing what happened. A <see langword="readonly"/> record struct with cached
+    /// instances for the three no-answer causes, so reporting a cause costs no
+    /// allocation on the per-query path.
+    /// </summary>
+    /// <param name="Hits">The hydrated hits, or <see langword="null"/> when the semantic path did not answer.</param>
+    /// <param name="RetrievalPath">The resolved retrieval-path value.</param>
+    private readonly record struct SemanticOutcome(
+        IReadOnlyList<RepoContextSearchHit>? Hits,
+        string RetrievalPath)
+    {
+        /// <summary>No embedding provider is bound: an intended keyword-only deployment.</summary>
+        internal static SemanticOutcome NoEmbedder { get; } =
+            new(null, RepoContextRetrievalPath.KeywordNoEmbedder);
+
+        /// <summary>An embedder is bound but the vector plane could not serve the query.</summary>
+        internal static SemanticOutcome VectorPlaneUnavailable { get; } =
+            new(null, RepoContextRetrievalPath.KeywordVectorPlaneUnavailable);
+
+        /// <summary>The semantic index ran but is degraded: it threw, or ranked candidates that no longer hydrate.</summary>
+        internal static SemanticOutcome IndexDegraded { get; } =
+            new(null, RepoContextRetrievalPath.KeywordIndexDegraded);
+    }
+
+    private async Task<SemanticOutcome> TrySemanticAsync(
         string repoId, string query, int k, CancellationToken cancellationToken)
     {
         if (_embeddingProvider is null)
         {
-            return null;
+            return SemanticOutcome.NoEmbedder;
         }
 
         if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
@@ -163,7 +212,7 @@ internal sealed class RepoContextSearchService
             _logger.LogInformation(
                 "repocontext_search for repository {RepoId} falling back to keyword recall: the embedding provider is unavailable.",
                 repoId);
-            return null;
+            return SemanticOutcome.VectorPlaneUnavailable;
         }
 
         var embed = await _embeddingProvider
@@ -175,7 +224,7 @@ internal sealed class RepoContextSearchService
                 "repocontext_search for repository {RepoId} falling back to keyword recall: the query embedding did not succeed ({Error}).",
                 repoId,
                 embed.Error ?? "no vector returned");
-            return null;
+            return SemanticOutcome.VectorPlaneUnavailable;
         }
 
         var querySpace = EmbeddingSpaceTag.FromSpace(embed.Space);
@@ -189,7 +238,10 @@ internal sealed class RepoContextSearchService
             .ConfigureAwait(false);
         if (matches.Count == 0)
         {
-            return null;
+            // The index answered but holds nothing to compare in this embedding space:
+            // the plane is empty, mid-replay, or re-deriving after a fall-off. That is a
+            // vector-plane availability fact, not a degraded index.
+            return SemanticOutcome.VectorPlaneUnavailable;
         }
 
         var hits = new List<RepoContextSearchHit>(k);
@@ -222,7 +274,17 @@ internal sealed class RepoContextSearchService
             });
         }
 
-        return hits;
+        if (hits.Count == 0)
+        {
+            // The index ranked candidates but not one of them still hydrates from the
+            // store of record: the index has drifted from its sources.
+            return SemanticOutcome.IndexDegraded;
+        }
+
+        // Re-validate the bound index's own declaration against the local vocabulary
+        // rather than trusting it: an unrecognised value reports the weaker
+        // (approximate) recall claim instead of over-promising completeness.
+        return new SemanticOutcome(hits, RepoContextRetrievalPath.NormalizeSemantic(_index.RetrievalPath));
     }
 
     private async Task<IReadOnlyList<RepoContextSearchHit>> KeywordAsync(

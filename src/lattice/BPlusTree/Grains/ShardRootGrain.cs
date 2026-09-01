@@ -24,7 +24,14 @@ internal sealed partial class ShardRootGrain(
 {
     IGrainContext IGrainBase.GrainContext => context;
 
-    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    /// <summary>
+    /// Runs the one-time activation repair for a persisted <c>RootIsLeaf</c> flag
+    /// baked <c>true</c> over an internal root (issue 899 / issue 1883). Returns a
+    /// completed task without allocating on every shard that has nothing to repair,
+    /// which after the population has drained is every shard. See
+    /// <c>ShardRootGrain.RootFlagHeal.cs</c> for why activation is the seam.
+    /// </summary>
+    Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken) => HealBakedRootIsLeafFlagAsync();
 
     async Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {

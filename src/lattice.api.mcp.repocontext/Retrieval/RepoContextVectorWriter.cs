@@ -90,6 +90,7 @@ internal sealed class RepoContextVectorWriter
     private readonly ILatticeReplicationContext _replication;
     private readonly RepoContextVectorCache _cache;
     private readonly RepoContextVectorPlaneReDeriver _reDeriver;
+    private readonly IRepoContextAnnIndex? _annIndex;
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
@@ -97,13 +98,15 @@ internal sealed class RepoContextVectorWriter
     /// <param name="replication">The replication context that reports whether, and in what merge mode, the membership tree is replicated. Must not be <see langword="null"/>.</param>
     /// <param name="cache">The warm decoded-candidate cache invalidated after every local mutation. Must not be <see langword="null"/>.</param>
     /// <param name="reDeriver">The vector-plane self-healer that detects, meters, and re-derives a rebuildable vector tree that fell terminally off its write-ahead log. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    /// <param name="annIndex">The approximate retrieval plane kept in step with every local mutation, or <see langword="null"/> when the host binds the exact scan and no index is maintained.</param>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public RepoContextVectorWriter(
         IGrainFactory grainFactory,
         Serializer serializer,
         ILatticeReplicationContext replication,
         RepoContextVectorCache cache,
-        RepoContextVectorPlaneReDeriver reDeriver)
+        RepoContextVectorPlaneReDeriver reDeriver,
+        IRepoContextAnnIndex? annIndex = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(serializer);
@@ -115,6 +118,7 @@ internal sealed class RepoContextVectorWriter
         _replication = replication;
         _cache = cache;
         _reDeriver = reDeriver;
+        _annIndex = annIndex;
     }
 
     // ── Vector-plane self-heal guards ──────────────────────────────────────
@@ -171,6 +175,11 @@ internal sealed class RepoContextVectorWriter
         var tag = EmbeddingSpaceTag.FromSpace(space);
         var sourceId = VectorCodec.SourceId(sourceKey);
 
+        // Only materialised when an approximate plane is bound: with the exact scan
+        // configured there is no index to keep in step and the write path stays
+        // exactly as it was.
+        var updates = _annIndex is null ? null : new List<RepoContextAnnVectorUpdate>(vectors.Count);
+
         var keep = new HashSet<string>(StringComparer.Ordinal);
         for (var unit = 0; unit < vectors.Count; unit++)
         {
@@ -183,13 +192,25 @@ internal sealed class RepoContextVectorWriter
             await WritePayloadAsync(repoId, contentAddress, tag, payload, cancellationToken).ConfigureAwait(false);
             await WriteMetadataAsync(repoId, vectorId, sourceKey, contentAddress, tag, cancellationToken)
                 .ConfigureAwait(false);
+            updates?.Add(new RepoContextAnnVectorUpdate(vectorId, sourceKey, vectors[unit]));
         }
 
-        await RetireStaleAsync(repoId, sourceId, keep, cancellationToken).ConfigureAwait(false);
+        var retired = await RetireStaleAsync(repoId, sourceId, keep, cancellationToken).ConfigureAwait(false);
 
         // The metadata/payload trees the exact-kNN gather scans just changed for this
         // repository, so drop any warm cached candidate set precisely and immediately.
         _cache.Invalidate(repoId);
+
+        // The same seam keeps the approximate index in step. It runs after the store
+        // of record has landed and after the retirements are known, so the index can
+        // never be ahead of the source, and a superseded vector is dropped before its
+        // replacement is added.
+        if (_annIndex is not null)
+        {
+            await _annIndex
+                .ApplyWriteAsync(repoId, tag, updates!, retired, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         // Membership is recorded by the caller once per embed batch (see
         // AddMembersAsync), not per store: a batch's presence keys land in a single
@@ -238,6 +259,14 @@ internal sealed class RepoContextVectorWriter
 
         var sourceId = VectorCodec.SourceId(sourceKey);
 
+        // With an approximate plane bound, the identifiers the range delete is about
+        // to remove are collected first with a key-only walk of this one source's
+        // prefix - no value is transferred - so the index can drop them and can
+        // never return a vector the store of record no longer holds.
+        var retired = _annIndex is null
+            ? Array.Empty<string>()
+            : await ListVectorIdsAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+
         await DeleteVectorsAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
         await RemoveMemberAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
 
@@ -249,6 +278,51 @@ internal sealed class RepoContextVectorWriter
         // The metadata tree the exact-kNN gather scans just lost this source's
         // vectors, so drop any warm cached candidate set precisely and immediately.
         _cache.Invalidate(repoId);
+
+        if (_annIndex is not null && retired.Count > 0)
+        {
+            // A retirement is space-agnostic: a vector identifier is unique within a
+            // repository, so it is applied to every embedding space the plane holds
+            // an index for, and is a no-op in the ones that never held it.
+            await _annIndex.ApplyRetirementAsync(repoId, retired, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Lists the live vector identifiers of one source with a key-only walk of its
+    /// presence-key prefix, so no metadata value crosses the grain boundary.
+    /// </summary>
+    /// <remarks>
+    /// Uses the abort-resilient <see cref="LatticeExtensions.ScanKeysAsync"/> rather
+    /// than the raw <see cref="ILattice.KeysAsync"/> stream. This range is one
+    /// source's vectors and so is normally small, but the raw stream surfaces
+    /// <c>EnumerationAbortedException</c> when the remote enumerator is reclaimed
+    /// (silo failover, cold start, idle expiry), and here that would surface as a
+    /// retirement that silently listed FEWER identifiers than exist - leaving
+    /// orphaned vectors behind rather than failing loudly.
+    /// </remarks>
+    private async Task<IReadOnlyList<string>> ListVectorIdsAsync(
+        string repoId, string sourceId, CancellationToken cancellationToken)
+    {
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMetadata);
+        var prefix = $"{RepoContextKeys.VectorsPrefix(repoId)}{sourceId}.";
+        var endExclusive = RepoContextPortability.PrefixUpperBound(prefix);
+
+        var ids = new List<string>();
+        await foreach (var key in tree
+            .ScanKeysAsync(prefix, endExclusive, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (RepoContextKeys.TryParse(key, out var parsed)
+                && parsed.Kind == RepoContextRecordKind.VectorMetadata
+                && parsed.VectorId is not null)
+            {
+                ids.Add(parsed.VectorId);
+            }
+        }
+
+        return ids;
     }
 
     private Task DeleteVectorsAsync(string repoId, string sourceId, CancellationToken cancellationToken)
@@ -318,7 +392,7 @@ internal sealed class RepoContextVectorWriter
             await tree.SetAsync(key, _serializer.SerializeToArray(merged), cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
-    private Task RetireStaleAsync(
+    private Task<List<string>> RetireStaleAsync(
         string repoId, string sourceId, IReadOnlySet<string> keep, CancellationToken cancellationToken)
         => GuardMetadataAsync(async () =>
         {
@@ -327,6 +401,7 @@ internal sealed class RepoContextVectorWriter
 
             string? token = null;
             var stale = new List<string>();
+            var retiredIds = new List<string>();
             do
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -342,6 +417,7 @@ internal sealed class RepoContextVectorWriter
                         && !keep.Contains(parsed.VectorId))
                     {
                         stale.Add(record.Key);
+                        retiredIds.Add(parsed.VectorId);
                     }
                 }
 
@@ -353,6 +429,8 @@ internal sealed class RepoContextVectorWriter
             {
                 await tree.DeleteAsync(key, cancellationToken).ConfigureAwait(false);
             }
+
+            return retiredIds;
         }, cancellationToken);
 
     /// <summary>

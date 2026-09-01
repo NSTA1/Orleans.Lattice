@@ -470,6 +470,95 @@
       ]
     },
     {
+      "id": 61,
+      "title": "Consolidations committed (rate)",
+      "description": "Rate of online shard consolidations committed (orleans.lattice.shard.consolidations_committed), by tree. Each increment is one donor shard retired from the routing map, counted only after the fold's terminal state write is durable. This is the inverse of Splits committed: compare the two to tell a tree that is actually healing from one whose physical shard count is still climbing.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 1000
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (rate(orleans_lattice_shard_consolidations_committed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 62,
+      "title": "Healing backlog (shards above base)",
+      "description": "Physical shards each tree carries above its configured base shard count (orleans.lattice.shard.healing.backlog), sampled once per automatic over-split healing sweep. This is the healing work outstanding: a tree is healed exactly when its series reaches zero, so the count of series at zero is the number of trees healed. Read it with Consolidations committed - backlog says how much damage is left, that panel says whether it is going down. A backlog that is flat and non-zero while Healing decisions shows skewed_load, backpressure, or cooldown is a tree that needs healing and is deliberately being held back, not a stuck orchestrator.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 1000
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree) (orleans_lattice_shard_healing_backlog_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"} / clamp_min(orleans_lattice_shard_healing_backlog_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}, 1)) or vector(0)",
+          "legendFormat": "{{tree}}"
+        }
+      ]
+    },
+    {
+      "id": 63,
+      "title": "Healing decisions by outcome",
+      "description": "Automatic over-split healing sweeps by decision (orleans.lattice.shard.healing.decisions), one increment per tree per sweep. The series currently advancing for a tree is that tree's current healing decision. not_over_split is the healthy steady state; admitted means a fold was started this sweep; skewed_load, backpressure, cooldown, split_in_flight, tree_maintenance and at_capacity are deliberate hold-backs; disabled and admission_closed mean the mechanism is switched off. Use it to tell a tree that never heals because it never needed to from one that never heals because something is blocking it.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 1007
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree, decision) (rate(orleans_lattice_shard_healing_decisions_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[10m])) * 60 or vector(0)",
+          "legendFormat": "{{tree}} {{decision}}"
+        }
+      ]
+    },
+    {
       "id": 10,
       "title": "Coordinator completions (rate)",
       "type": "timeseries",

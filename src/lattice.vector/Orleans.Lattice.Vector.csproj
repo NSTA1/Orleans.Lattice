@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Vector</PackageId>
+    <Version>9.4.0</Version>
+    <Description>Allocation-lean approximate nearest-neighbour vector index for Orleans.Lattice. Ships VectorIndex, an in-memory inverted-file (IVF) index over dense float vectors with first-class deletes, deterministic results, a zero-allocation steady-state query path, and a chunked, version-stamped persistence seam; plus DurableVectorIndex, which persists that index on a Lattice tree, maintains it incrementally, resumes an interrupted background build, and rebuilds a corrupt or version-incompatible one rather than serving it. The algorithmic core in the Orleans.Lattice.Vector namespace has no Orleans dependency; only the Orleans.Lattice.Vector.Persistence namespace binds to a Lattice tree.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Vector.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
+    <PackageReference Include="System.Numerics.Tensors" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -2607,7 +2607,9 @@ internal sealed partial class BPlusLeafGrain(
         // per leaf per page) so it sized the initial array to the
         // expected emission, not the worst-case.
         var keys = new List<string>(capacity: Math.Min(Cache.Count, 256));
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (key, lww) in Cache.EnumerateRange(
+            MaxOrdinal(startInclusive, afterExclusive),
+            MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null)))
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
                 break;
@@ -2687,7 +2689,9 @@ internal sealed partial class BPlusLeafGrain(
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        foreach (var (key, lww) in Cache.EnumerateRows())
+        foreach (var (key, lww) in Cache.EnumerateRange(
+            MaxOrdinal(startInclusive, afterExclusive),
+            MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null)))
         {
             if (endExclusive is not null && string.Compare(key, endExclusive, StringComparison.Ordinal) >= 0)
                 break;

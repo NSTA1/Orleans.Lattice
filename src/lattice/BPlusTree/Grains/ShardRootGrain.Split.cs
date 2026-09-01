@@ -66,15 +66,34 @@ internal sealed partial class ShardRootGrain
         await PrepareForOperationAsync();
 
         var existing = state.State.SplitInProgress;
-        if (existing is not null
-            && existing.ShadowTargetShardIndex == targetShardIndex
-            && existing.VirtualShardCount == virtualShardCount
-            && existing.MovedSlots.Length == movedSlots.Length
-            && (existing.Phase == ShardSplitPhase.BeginShadowWrite || existing.Phase == ShardSplitPhase.Drain))
+        if (existing is not null && HasSameAim(existing, targetShardIndex, movedSlots, virtualShardCount))
         {
-            // Idempotent re-entry - verify slot set matches.
-            if (SlotsEqual(existing.MovedSlots, movedSlots))
+            // Idempotent re-entry: a coordinator re-asserting the window it
+            // already owns after a crash between persisting intent and
+            // reaching this shard.
+            if (existing.Phase == ShardSplitPhase.BeginShadowWrite || existing.Phase == ShardSplitPhase.Drain)
                 return;
+        }
+        else if (existing is not null)
+        {
+            // A shard carries exactly one migration record, and both an
+            // adaptive split and an online consolidation open their
+            // shadow-write window through this method. Silently re-aiming the
+            // record at a second target loses acknowledged writes: the
+            // in-flight migration's slots stop being shadow-forwarded to its
+            // target, its reject-phase freeze then fences the *other*
+            // migration's slots instead of its own, and CompleteSplitAsync
+            // promotes the wrong slot set into MovedAwaySlots - so the shard
+            // keeps accepting and serving writes on slots the routing map has
+            // already handed to someone else, orphaning them.
+            //
+            // Refusing is the contract both coordinators already document and
+            // both callers already handle. It is enforced here rather than in
+            // the callers because this grain is non-reentrant, so the check
+            // and the write happen in one turn and no caller-side
+            // check-then-act window can slip between them.
+            throw new InvalidOperationException(
+                $"Shard {MyShardIndex} of tree '{TreeId}' already has a migration in progress to shard {existing.ShadowTargetShardIndex} (phase {existing.Phase}); it cannot be re-aimed at shard {targetShardIndex} until that migration completes or is aborted.");
         }
 
         // Defensive: validate every slot is in [0, virtualShardCount).
@@ -625,6 +644,19 @@ internal sealed partial class ShardRootGrain
             if (copy[i] != sortedExisting[i]) return false;
         return true;
     }
+
+    /// <summary>
+    /// Whether <paramref name="existing"/> describes the same migration as the
+    /// incoming target, slot set and virtual shard count - that is, whether an
+    /// incoming <see cref="BeginSplitAsync"/> is a re-assertion of the window
+    /// already open rather than an attempt to re-aim it somewhere else.
+    /// </summary>
+    private static bool HasSameAim(
+        ShardSplitInProgress existing, int targetShardIndex, int[] movedSlots, int virtualShardCount)
+        => existing.ShadowTargetShardIndex == targetShardIndex
+            && existing.VirtualShardCount == virtualShardCount
+            && existing.MovedSlots.Length == movedSlots.Length
+            && SlotsEqual(existing.MovedSlots, movedSlots);
 
     /// <inheritdoc />
     public async Task<int> MarkLeavesMovedAwayAsync(int[] sortedMovedSlots, int virtualShardCount)

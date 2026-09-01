@@ -1,0 +1,61 @@
+{
+  "SnapshotOffset": 41,
+  "Rows": [
+    {
+      "Key": "vec/0001",
+      "Value": {
+        "Value": "ABEiMwD/",
+        "Timestamp": {
+          "WallClockTicks": 638500000000000001,
+          "Counter": 3
+        },
+        "IsTombstone": false,
+        "ExpiresAtTicks": 0,
+        "OriginClusterId": null,
+        "VectorClock": null,
+        "IsMigrated": false
+      },
+      "MergeMode": null
+    },
+    {
+      "Key": "vec/0002",
+      "Value": {
+        "Value": "QUJD",
+        "Timestamp": {
+          "WallClockTicks": 638500000000000002,
+          "Counter": 0
+        },
+        "IsTombstone": false,
+        "ExpiresAtTicks": 638600000000000000,
+        "OriginClusterId": "cluster-west",
+        "VectorClock": null,
+        "IsMigrated": true
+      },
+      "MergeMode": 1
+    },
+    {
+      "Key": "vec/0003",
+      "Value": {
+        "Value": null,
+        "Timestamp": {
+          "WallClockTicks": 638500000000000003,
+          "Counter": 1
+        },
+        "IsTombstone": true,
+        "ExpiresAtTicks": 0,
+        "OriginClusterId": null,
+        "VectorClock": null,
+        "IsMigrated": false
+      },
+      "MergeMode": null
+    }
+  ],
+  "CapturedAtTicks": 638500000000000009,
+  "SnapshotBytes": 0,
+  "SnapshotOffsetsByPartition": [
+    41,
+    77,
+    -1,
+    -1
+  ]
+}

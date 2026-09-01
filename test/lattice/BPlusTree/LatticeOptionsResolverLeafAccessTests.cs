@@ -89,14 +89,15 @@ public class LatticeOptionsResolverLeafAccessTests
     }
 
     [Test]
-    public void GetLeafAccessTrackingSettings_is_disabled_by_default()
+    public void GetLeafAccessTrackingSettings_is_enabled_by_default()
     {
         var settings = Build(new LatticeOptions()).GetLeafAccessTrackingSettings("t");
 
         Assert.Multiple(() =>
         {
-            Assert.That(settings.IsEnabled, Is.False);
-            Assert.That(settings, Is.EqualTo(LeafAccessTrackingSettings.Disabled));
+            Assert.That(settings.IsEnabled, Is.True);
+            Assert.That(settings.PreWarmCount, Is.EqualTo(LatticeOptions.DefaultLeafCachePreWarmCount));
+            Assert.That(settings.FlushIntervalMs, Is.EqualTo(LatticeOptions.DefaultLeafAccessModelFlushIntervalMs));
         });
     }
 

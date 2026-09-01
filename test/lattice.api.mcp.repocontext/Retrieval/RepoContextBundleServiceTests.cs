@@ -68,6 +68,44 @@ public sealed partial class RepoContextBundleServiceTests
     }
 
     [Test]
+    public async Task Build_carries_the_retrieval_path_alongside_the_unchanged_mode()
+    {
+        // No embedder is bound, so the bundle is served by keyword recall. The legacy
+        // mode value stays exactly as it was, and the additive retrieval path reports the
+        // cause - an intended keyword-only deployment, not a capability loss.
+        const string path = "src/Widget.cs";
+        const string body = "namespace Acme; public sealed class Widget { } // widget lattice bundle";
+        var service = BuildService((path, body, 4096L));
+
+        var result = await service.BuildAsync(
+            RepoId, "widget", 10, 10_000, RepoContextContextDetail.Slices, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Mode, Is.EqualTo("keyword"), "The legacy mode value is unchanged.");
+            Assert.That(result.RetrievalPath, Is.EqualTo(RepoContextRetrievalPath.KeywordNoEmbedder));
+        });
+    }
+
+    [Test]
+    public async Task Build_carries_the_retrieval_path_onto_an_empty_bundle()
+    {
+        // Even when the search matched nothing, the cause must ride along: an operator
+        // needs to tell "nothing matched on a healthy keyword-only box" from "nothing
+        // matched because the vector plane is down".
+        var service = BuildService(("src/Widget.cs", "class Widget { }", 10L));
+
+        var result = await service.BuildAsync(
+            RepoId, "zzzznomatchzzzz", 10, 10_000, RepoContextContextDetail.Slices, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Entries, Is.Empty);
+            Assert.That(result.RetrievalPath, Is.EqualTo(RepoContextRetrievalPath.KeywordNoEmbedder));
+        });
+    }
+
+    [Test]
     public async Task Build_never_exceeds_the_budget_across_many_files()
     {
         var service = BuildService(

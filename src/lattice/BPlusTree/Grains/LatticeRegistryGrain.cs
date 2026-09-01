@@ -180,7 +180,7 @@ internal sealed class LatticeRegistryGrain(
     /// <para>
     /// An alias transplants a logical identity onto another tree's physical
     /// shards, and every data-plane access gate on the
-    /// <see cref="Orleans.Lattice.BPlusTree.ILattice"/> facade is evaluated
+    /// <see cref="Orleans.Lattice.ILattice"/> facade is evaluated
     /// against the <em>logical</em> id before the alias is resolved (the
     /// physical shard and leaf grains enforce no policy of their own). Without
     /// this guard a caller holding admin rights on any ordinary tree could

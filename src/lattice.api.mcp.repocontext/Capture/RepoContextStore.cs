@@ -828,7 +828,11 @@ internal sealed class RepoContextStore
             ?? throw new McpException("The repository id produced an unbounded delete range.");
 
         long deleted = 0;
-        foreach (var treeName in RepoContextTrees.All)
+        // The local-derived trees are swept too: the approximate index is not
+        // replicated, but it holds this repository's data under the same key
+        // prefix, and leaving it behind would outlive the repository and be loaded
+        // again by a later repository registered under the same id.
+        foreach (var treeName in RepoContextTrees.AllIncludingLocalDerived)
         {
             cancellationToken.ThrowIfCancellationRequested();
             // The resilient drain reopens a fresh delete-range cursor across a

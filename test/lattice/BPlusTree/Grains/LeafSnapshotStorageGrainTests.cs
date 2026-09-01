@@ -8,7 +8,7 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 [TestFixture]
-public sealed class LeafSnapshotStorageGrainTests
+public sealed partial class LeafSnapshotStorageGrainTests
 {
     private static (LeafSnapshotStorageGrain grain, FakePersistentState<LeafSnapshotBlob> state) CreateGrain(
         FakePersistentState<LeafSnapshotBlob>? state = null)

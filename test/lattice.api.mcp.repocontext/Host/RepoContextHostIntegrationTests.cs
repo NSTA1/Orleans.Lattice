@@ -84,16 +84,38 @@ public sealed class RepoContextHostIntegrationTests
         return RepoContextHostBuilder.Build(builder, config);
     }
 
+    /// <summary>
+    /// Waits for the host's <b>actual</b> readiness contract by polling
+    /// <c>/health/ready</c> until it returns 200, exactly as an orchestrator does.
+    /// <para>
+    /// It deliberately does not wait on any single readiness component. The endpoint
+    /// is the conjunction of the lifecycle-phase check and the vector-plane retrieval
+    /// check, and the lifecycle half flips as soon as the access grant is seeded -
+    /// well before the retrieval warmup has proven the plane can serve. Waiting on one
+    /// component would therefore be a weaker precondition than this helper's name
+    /// claims, and would silently drift again the next time the composition changes.
+    /// </para>
+    /// </summary>
     private static async Task WaitForReadyAsync(WebApplication app)
     {
-        var readiness = app.Services.GetRequiredService<RepoContextReadinessState>();
+        using var client = app.GetTestServer().CreateClient();
         var deadline = DateTime.UtcNow.AddSeconds(60);
-        while (!readiness.IsReady && DateTime.UtcNow < deadline)
+
+        HttpStatusCode status;
+        do
         {
+            status = (await client.GetAsync(RepoContextHostBuilder.ReadinessPath, Ct)).StatusCode;
+            if (status == HttpStatusCode.OK)
+            {
+                return;
+            }
+
             await Task.Delay(100, Ct);
         }
+        while (DateTime.UtcNow < deadline);
 
-        Assert.That(readiness.IsReady, Is.True, "The host did not reach readiness within the timeout.");
+        Assert.Fail(
+            $"The host did not report ready within the timeout: {RepoContextHostBuilder.ReadinessPath} last returned {status}.");
     }
 
     [Test]
@@ -264,6 +286,30 @@ public sealed class RepoContextHostIntegrationTests
             var client = app.GetTestServer().CreateClient();
 
             await WaitForReadyAsync(app);
+
+            // Pin WHICH arm of the retrieval readiness machine makes this
+            // configuration ready, so a regression that leaves the box permanently
+            // 503 fails here with a clear cause rather than as a mute timeout.
+            // This fixture always binds an embedding provider (the host registers the
+            // Onyx client unconditionally), so the keyword-only arm cannot fire; it is
+            // the "no repositories indexed, so there is nothing the plane could fail to
+            // serve" arm that reaches Serving.
+            var retrieval = app.Services.GetRequiredService<RepoContextRetrievalReadinessState>();
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    app.Services.GetService<IEmbeddingProvider>(),
+                    Is.Not.Null,
+                    "The host binds an embedding provider unconditionally, so the keyword-only readiness arm is not what makes this configuration ready.");
+                Assert.That(
+                    retrieval.Phase,
+                    Is.EqualTo(RepoContextRetrievalReadinessPhase.Serving),
+                    "An indexed-nothing host reaches retrieval readiness through the Serving arm; Building here would mean the endpoint never returns 200.");
+                Assert.That(
+                    retrieval.TimeToReady,
+                    Is.Not.Null,
+                    "Reaching a ready phase must stamp the time-to-retrieval-ready figure the cold-start work is measured by.");
+            });
 
             var live = await client.GetAsync(RepoContextHostBuilder.LivenessPath, Ct);
             var ready = await client.GetAsync(RepoContextHostBuilder.ReadinessPath, Ct);
