@@ -1298,10 +1298,13 @@ internal sealed class LatticeStateQuery(
         }
 
         var shardCount = await ResolveShardCountAsync(registry, bindTreeId).ConfigureAwait(false);
-        var rootNodes = new List<NodeStateSummary>();
 
         var startShard = request.ShardIndex ?? 0;
         var endShard = request.ShardIndex.HasValue ? request.ShardIndex.Value + 1 : shardCount;
+
+        // One root summary per scanned shard (budget permitting), so the scanned
+        // shard span is a tight upper bound on the result - pre-size to it.
+        var rootNodes = new List<NodeStateSummary>(Math.Max(0, endShard - startShard));
 
         for (var shardIndex = startShard; shardIndex < endShard; shardIndex++)
         {
