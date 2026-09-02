@@ -33,6 +33,108 @@ public partial class BPlusLeafGrainTests
         return CreateGrain(state, commitLog: commitLog);
     }
 
+    // --- batched WAL append on the leaf CRDT path ---
+
+    /// <summary>Builds an OR-Set add delta for one element, for the batch tests.</summary>
+    private static byte[] OrSetAddDelta(string element) =>
+        JsonLatticeSerializer<OrSetDelta>.Default.Serialize(new OrSetDelta
+        {
+            Adds = new[]
+            {
+                new OrSetDeltaDot { Element = Encoding.UTF8.GetBytes(element), ReplicaId = "r1", Counter = 1 },
+            },
+            Removes = Array.Empty<OrSetDeltaDot>(),
+        });
+
+    /// <summary>
+    /// The whole point of the batched CRDT apply (#1921): N deltas must reach the
+    /// commit log as ONE batched dispatch, not N per-key appends. Asserted by call
+    /// count rather than by timing, so it cannot pass on a slow machine or fail on
+    /// a loaded one, and it fails loudly if a future change reinstates the per-key
+    /// loop.
+    /// </summary>
+    [Test]
+    public async Task CrdtApplyMany_collapses_per_key_wal_appends_into_a_single_batched_call()
+    {
+        var writer = new FakeCommitLogWriter();
+        var grain = CreateCrdtGrain(commitLog: writer);
+
+        var deltas = new List<KeyValuePair<string, byte[]>>();
+        for (var i = 0; i < 12; i++)
+        {
+            deltas.Add(new($"k{i:D2}", OrSetAddDelta($"e{i}")));
+        }
+
+        await grain.ApplyCrdtDeltaManyAsync(deltas, LatticeMergeMode.OrSet);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(writer.AppendManyCallCount, Is.EqualTo(1),
+                "A CRDT batch must dispatch as a single batched commit-log call.");
+            Assert.That(writer.AppendCount, Is.EqualTo(12),
+                "Every delta must still be present in the WAL append capture.");
+        });
+    }
+
+    /// <summary>
+    /// Equivalence at the leaf: the batched path must leave the same projection a
+    /// per-key loop would. Paired with the call-count guard above so the batch
+    /// cannot "win" by simply dropping work.
+    /// </summary>
+    [Test]
+    public async Task CrdtApplyMany_produces_the_same_state_as_a_per_key_loop()
+    {
+        var batched = CreateCrdtGrain();
+        var looped = CreateCrdtGrain();
+
+        var deltas = new List<KeyValuePair<string, byte[]>>();
+        for (var i = 0; i < 8; i++)
+        {
+            deltas.Add(new($"k{i:D2}", OrSetAddDelta($"e{i}")));
+        }
+
+        await batched.ApplyCrdtDeltaManyAsync(deltas, LatticeMergeMode.OrSet);
+        foreach (var (key, delta) in deltas)
+        {
+            await looped.ApplyCrdtDeltaAsync(key, LatticeMergeMode.OrSet, delta);
+        }
+
+        foreach (var (key, _) in deltas)
+        {
+            var fromBatch = await batched.GetAsync(key);
+            var fromLoop = await looped.GetAsync(key);
+            Assert.That(fromBatch, Is.Not.Null, $"Key '{key}' should exist after the batch.");
+            Assert.That(Encoding.UTF8.GetString(fromBatch!), Is.EqualTo(Encoding.UTF8.GetString(fromLoop!)),
+                $"Key '{key}' should fold to the same state either way.");
+        }
+    }
+
+    [Test]
+    public void CrdtApplyMany_null_batch_throws()
+    {
+        var grain = CreateCrdtGrain();
+        Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await grain.ApplyCrdtDeltaManyAsync(null!, LatticeMergeMode.OrSet));
+    }
+
+    [Test]
+    public async Task CrdtApplyMany_empty_batch_writes_nothing()
+    {
+        var writer = new FakeCommitLogWriter();
+        var grain = CreateCrdtGrain(commitLog: writer);
+
+        var split = await grain.ApplyCrdtDeltaManyAsync(
+            new List<KeyValuePair<string, byte[]>>(), LatticeMergeMode.OrSet);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(split, Is.Null);
+            Assert.That(writer.AppendManyCallCount, Is.EqualTo(0),
+                "An empty batch must not reach the commit log at all.");
+            Assert.That(writer.AppendCount, Is.EqualTo(0));
+        });
+    }
+
     // ── reject paths ───────────────────────────────────────────
 
     [Test]

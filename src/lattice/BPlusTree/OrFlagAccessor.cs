@@ -140,6 +140,18 @@ public readonly record struct OrFlagAccessor
     }
 
     /// <summary>Mints the enable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
+    /// <summary>
+    /// Mints the enable delta for <paramref name="flag"/>'s next unused dot on
+    /// <paramref name="replicaId"/>. Internal so the batched
+    /// <c>CrdtLatticeExtensions.EnableManyAsync</c> / <c>StageEnableManyAsync</c>
+    /// helpers can mint N deltas from one batched read instead of N per-key
+    /// reads, without duplicating the dot-allocation rule.
+    /// </summary>
+    internal static OrFlagDelta EnableDeltaFor(OrFlag flag, string replicaId) => EnableDelta(flag, replicaId);
+
+    /// <summary>Decodes a stored OR-Flag row, treating an absent row as empty.</summary>
+    internal static OrFlag DecodeFlag(byte[]? bytes) => Decode(bytes);
+
     private static OrFlagDelta EnableDelta(OrFlag flag, string replicaId)
     {
         var counter = NextCounter(flag, replicaId);

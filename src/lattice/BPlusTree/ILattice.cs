@@ -144,6 +144,50 @@ public interface ILattice : IGrainWithStringKey
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Applies multiple typed CRDT deltas, fanning out to shards in parallel and
+    /// collapsing each leaf's slice into a single batched commit-log dispatch.
+    /// The CRDT counterpart of
+    /// <see cref="SetManyAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>,
+    /// and the batched counterpart of
+    /// <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>.
+    /// <para>
+    /// Applying N deltas one at a time costs N full traversals with N commit-log
+    /// appends; this collapses them to one batched RPC per leaf, which is what
+    /// makes a wide CRDT write viable on a large tree.
+    /// </para>
+    /// <para>
+    /// <b>Not atomic.</b> A partial failure leaves the batch half-applied with no
+    /// compensating rollback, exactly as
+    /// <see cref="SetManyAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>.
+    /// Because every entry folds a CRDT delta rather than overwriting a value, a
+    /// caller retry converges instead of clobbering a concurrent writer. Use the
+    /// staged cross-tree atomic path
+    /// (<see cref="LatticeAtomicWriteBuilder.SetMany(System.Collections.Generic.IEnumerable{LatticeStagedCrdtWrite})"/>)
+    /// when all-or-nothing semantics are required.
+    /// </para>
+    /// </summary>
+    /// <param name="deltas">
+    /// The key / Orleans-serialised typed delta DTO byte pairs to apply. Must not
+    /// be <see langword="null"/>.
+    /// </param>
+    /// <param name="mode">
+    /// The CRDT merge mode declaring the typed shape of every delta in the batch.
+    /// A tree resolves exactly one CRDT shape, so the mode is declared once per
+    /// batch rather than per entry; mixing shapes within a tree converges locally
+    /// but diverges at replication.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the batch before it is dispatched.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="deltas"/> is <see langword="null"/>.</exception>
+    /// <exception cref="System.ArgumentException">
+    /// <paramref name="mode"/> is <see cref="LatticeMergeMode.LwwRegister"/>; use
+    /// <see cref="SetManyAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/> for LWW writes.
+    /// </exception>
+    Task ApplyCrdtDeltaManyAsync(
+        List<KeyValuePair<string, byte[]>> deltas,
+        LatticeMergeMode mode,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Conditional bulk write: writes each entry only if the key's
     /// <b>current</b> stored value satisfies the server-side predicate IR
     /// <paramref name="predicate"/> (a compare-then-set guard evaluated once,

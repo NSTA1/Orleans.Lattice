@@ -441,6 +441,23 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task MergeManyAsync(Dictionary<string, Orleans.Lattice.Primitives.LwwValue<byte[]>> entries, bool isCrossShardMigration = false);
 
     /// <summary>
+    /// Batched typed CRDT delta apply: buckets the batch by routed leaf,
+    /// dispatches one batched RPC per leaf in parallel, and promotes any
+    /// resulting splits sequentially. The CRDT counterpart of
+    /// <see cref="SetManyAsync"/>.
+    /// <para>
+    /// <b>Not atomic.</b> A partial failure leaves the batch half-applied; the
+    /// CRDT fold makes a caller retry converge rather than clobber.
+    /// </para>
+    /// </summary>
+    /// <param name="deltas">The key / typed-delta-bytes pairs to apply.</param>
+    /// <param name="mode">
+    /// The CRDT merge mode for the whole batch. A tree resolves exactly one CRDT
+    /// shape, so the mode is per batch rather than per entry.
+    /// </param>
+    Task ApplyCrdtDeltaManyAsync(List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode);
+
+    /// <summary>
     /// Records that ownership of the given <paramref name="sortedMovedSlots"/>
     /// has migrated away from this shard. Walks the leaf chain
     /// (starting from <see cref="GetLeftmostLeafIdAsync"/>) and calls

@@ -644,6 +644,25 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false);
 
     /// <summary>
+    /// Applies a batch of typed CRDT deltas in one grain call, collapsing the
+    /// per-key WAL round-trip into a single batched commit-log dispatch. The
+    /// batched counterpart of
+    /// <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[])"/>, and the
+    /// CRDT counterpart of <see cref="SetManyAsync"/>.
+    /// <para>
+    /// <b>Not atomic.</b> A partial failure leaves the batch half-applied. Every
+    /// entry folds a CRDT delta, so a retried batch converges rather than
+    /// clobbering.
+    /// </para>
+    /// </summary>
+    /// <param name="deltas">The key / typed-delta-bytes pairs to apply.</param>
+    /// <param name="mode">
+    /// The CRDT merge mode for the whole batch. A tree resolves exactly one CRDT
+    /// shape, so the mode is per batch rather than per entry.
+    /// </param>
+    Task<SplitResult?> ApplyCrdtDeltaManyAsync(List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode);
+
+    /// <summary>
     /// Clears all persistent state for this grain and deactivates it.
     /// Used during tree purge to permanently remove leaf data.
     /// </summary>

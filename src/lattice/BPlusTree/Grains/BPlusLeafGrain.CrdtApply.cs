@@ -161,7 +161,29 @@ internal sealed partial class BPlusLeafGrain
         ApplyCrdtDeltaAsync(key, mode, deltaBytes, expiresAtTicks: 0);
 
     /// <inheritdoc />
-    public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    public Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks) =>
+        ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+
+    /// <summary>
+    /// Applies one typed CRDT delta. Shared by the single-key entry point and
+    /// the batched <see cref="ApplyCrdtDeltaManyAsync"/> path.
+    /// <para>
+    /// <paramref name="batch"/> selects which of them is running and is the
+    /// only behavioural difference between the two. When it is
+    /// <see langword="null"/> this is a single-key apply: the WAL record is
+    /// appended immediately, the split predicate is evaluated, and the
+    /// projection digest is published upward - exactly as before. When it is
+    /// non-null the caller is batching, so the record is accumulated for one
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/>
+    /// dispatch and the split check and digest publish are deferred to the end
+    /// of the batch. Every other step - shape resolution, the typed fold, the
+    /// HLC stamp, the eager/deferred row path, the expiry join, and both
+    /// observer publications - is identical on both paths, so a batched apply
+    /// is per-key indistinguishable from N single-key applies.
+    /// </para>
+    /// </summary>
+    private async Task<CrdtApplyResult> ApplyCrdtDeltaCoreAsync(
+        string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks, List<WalRecord>? batch)
     {
         EnsureInternalOrigin(LatticeOperation.CrdtApply);
         ArgumentNullException.ThrowIfNull(key);
@@ -315,7 +337,14 @@ internal sealed partial class BPlusLeafGrain
                     mode,
                     postMergeEntry,
                     deltaBytes);
-                await writer.AppendAsync(record);
+                if (batch is null)
+                {
+                    await writer.AppendAsync(record);
+                }
+                else
+                {
+                    batch.Add(record);
+                }
             }
 
             // step 5a (apply) - merge the post-merge state into the leaf
@@ -370,7 +399,14 @@ internal sealed partial class BPlusLeafGrain
                     mode,
                     postMergeEntry,
                     deltaBytes);
-                await writer.AppendAsync(record);
+                if (batch is null)
+                {
+                    await writer.AppendAsync(record);
+                }
+                else
+                {
+                    batch.Add(record);
+                }
             }
 
             var buffer = _crdtSerializeBuffer ??= new System.Buffers.ArrayBufferWriter<byte>();
@@ -457,7 +493,7 @@ internal sealed partial class BPlusLeafGrain
 
         var options = await GetOptionsAsync();
         SplitResult? splitResult = null;
-        if (Cache.Count > options.MaxLeafKeys)
+        if (batch is null && Cache.Count > options.MaxLeafKeys)
         {
             splitResult = await SplitAsync();
         }
@@ -482,10 +518,98 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // step 6 (digest) - propagate the projection-hash delta upward
-        // so the chained subtree fold stays current.
-        await PublishDigestUpwardAsync();
+        // so the chained subtree fold stays current. Deferred to the end of a
+        // batch: the fold is cumulative, so one publish after every per-key
+        // apply has landed carries the same result as N publishes.
+        if (batch is null)
+        {
+            await PublishDigestUpwardAsync();
+        }
 
         return new CrdtApplyResult { Version = stamp, Split = splitResult };
+    }
+
+    /// <summary>
+    /// Applies a batch of typed CRDT deltas in one grain call, collapsing the
+    /// per-key WAL round-trip into a single
+    /// <see cref="Orleans.Lattice.BPlusTree.Grains.ICommitLogWriter.AppendManyAsync"/>
+    /// dispatch, so an N-key batch pays one commit-log RPC instead of N.
+    /// <para>
+    /// Every key is applied through the same core the single-key path uses, so
+    /// the typed fold, HLC stamp, expiry join, digest fold, and both observer
+    /// publications are per-key identical. Only three things are hoisted out of
+    /// the loop: the WAL append (one batched dispatch), the split predicate
+    /// (evaluated once after every apply has landed, exactly as
+    /// <c>CommitSetManyAsync</c> does), and the upward digest publish (the fold
+    /// is cumulative, so one publish carries the same result as N).
+    /// </para>
+    /// <para>
+    /// <b>Not atomic.</b> A partial failure leaves the batch half-applied, the
+    /// same contract as <see cref="SetManyAsync"/>. Because every entry folds a
+    /// CRDT delta, a re-applied batch converges rather than clobbering, so a
+    /// caller retry is safe in a way the LWW batch's is not.
+    /// </para>
+    /// </summary>
+    /// <param name="deltas">The key / typed-delta-bytes pairs to apply.</param>
+    /// <param name="mode">
+    /// The CRDT merge mode for the whole batch. A tree resolves exactly one CRDT
+    /// shape (see <c>ILatticeMergeModeResolver.Resolve(treeId)</c>), so a batch
+    /// carries one mode rather than one per entry - mixing shapes in a single
+    /// tree converges locally but diverges at replication, so the API does not
+    /// offer the footgun.
+    /// </param>
+    public async Task<SplitResult?> ApplyCrdtDeltaManyAsync(
+        List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
+    {
+        EnsureInternalOrigin(LatticeOperation.CrdtApply);
+        ArgumentNullException.ThrowIfNull(deltas);
+        if (deltas.Count == 0)
+        {
+            return null;
+        }
+
+        using var commitScope = EnterCommitScope();
+
+        // Sized to the batch: one record per entry, appended once below. The
+        // per-key core adds to this instead of dispatching its own append.
+        var walEntries = new List<WalRecord>(deltas.Count);
+        foreach (var (key, deltaBytes) in deltas)
+        {
+            await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks: 0, walEntries);
+        }
+
+        if (walEntries.Count > 0)
+        {
+            var writer = ResolveCommitLogWriter();
+            if (writer is not null)
+            {
+                // ToArray is one copy per BATCH (not per key), and it is
+                // deliberate: AppendManyAsync takes an ArraySegment, and the
+                // obvious way to avoid the copy - a reusable WalRecord[] field on
+                // the grain, as _crdtSerializeBuffer does for bytes - is NOT safe
+                // here. This grain carries [AlwaysInterleave] methods, so a second
+                // turn can interleave at any await inside the fill loop above and
+                // would share that buffer. Per-call state is the correctness
+                // requirement; the copy is what it costs. It is dwarfed by the
+                // N-1 commit-log round trips the batch removes.
+                await writer.AppendManyAsync(
+                    new ArraySegment<WalRecord>(walEntries.ToArray(), 0, walEntries.Count));
+            }
+        }
+
+        // One split check for the whole batch, after every per-key apply has
+        // landed - the same shape CommitSetManyAsync uses, and it produces the
+        // SplitResult the per-key loop would have produced for whichever entry
+        // pushed the leaf over the bound.
+        var options = await GetOptionsAsync();
+        SplitResult? splitResult = null;
+        if (Cache.Count > options.MaxLeafKeys)
+        {
+            splitResult = await SplitAsync();
+        }
+
+        await PublishDigestUpwardAsync();
+        return splitResult;
     }
 
     /// <summary>

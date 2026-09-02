@@ -47,5 +47,33 @@ await beta.DisableAsync(cancellationToken);
 bool isOn = await beta.IsEnabledAsync(cancellationToken);
 ```
 
+## Marking many flags at once
+
+Enabling flags one at a time costs two round trips per key - a read to mint the
+enable dot, then the apply. `EnableManyAsync` reads every current flag in one
+batched call, mints all the deltas from that snapshot, and applies them through a
+single batched CRDT write, so a presence- or membership-marking pass costs one
+round trip per leaf rather than two per key.
+
+```csharp verify
+// Mark a whole batch of feature flags on in one write.
+string[] keys = ["tenant:5:beta", "tenant:6:beta", "tenant:7:beta"];
+await tree.EnableManyAsync(keys, "cluster-A", cancellationToken);
+
+// Enabling is idempotent under OR-Flag merge, so a retried batch converges
+// rather than clobbering a concurrent writer.
+await tree.EnableManyAsync(keys, "cluster-A", cancellationToken);
+```
+
+The batch is **not atomic**: a partial failure leaves it half-applied. When the
+marks must land all-or-nothing, stage them instead and hand the tokens to the
+cross-tree atomic builder, which mints every delta from the same single batched
+read:
+
+```csharp verify
+IReadOnlyList<LatticeStagedCrdtWrite> staged =
+    await tree.StageEnableManyAsync(["tenant:8:beta", "tenant:9:beta"], "cluster-A", cancellationToken);
+```
+
 See also: its remove-wins mirror [RW-Flag](rwflag.md), the fuller
 [OR-Set](orset.md), and the [CRDT overview](readme.md).

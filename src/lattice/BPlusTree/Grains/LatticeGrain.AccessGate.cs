@@ -255,7 +255,8 @@ internal sealed partial class LatticeGrain
     private ValueTask EnforceEntryWritesAsync(
         IReadOnlyList<KeyValuePair<string, byte[]>> entries,
         IReadOnlyList<string>? additionalDeleteKeys,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LatticeOperation operation = LatticeOperation.Write)
     {
         var gate = AccessGate;
         var deleteCount = additionalDeleteKeys?.Count ?? 0;
@@ -279,7 +280,7 @@ internal sealed partial class LatticeGrain
         }
 
         return LatticeAccessGateEnforcement.EnforceManyPointsAsync(
-            gate, MembershipContext, TreeId, LatticeOperation.Write, keys, cancellationToken);
+            gate, MembershipContext, TreeId, operation, keys, cancellationToken);
     }
 
     /// <summary>
