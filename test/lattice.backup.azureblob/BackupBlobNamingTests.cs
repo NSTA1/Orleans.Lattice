@@ -76,11 +76,119 @@ public class BackupBlobNamingTests
     public void Artifact_blob_names_sort_in_id_order()
     {
         // Azure returns listings in lexicographical blob-name order; because the
-        // prefix is fixed and ids never contain a slash, that is exactly id order.
+        // prefix is fixed, that is exactly id order.
         var ids = new[] { "c", "a", "b" };
         var names = ids.Select(BackupBlobNaming.ArtifactBlobName).OrderBy(n => n, StringComparer.Ordinal).ToArray();
         var recovered = names.Select(n => BackupBlobNaming.ArtifactIdFromBlobName(n)).ToArray();
 
         Assert.That(recovered, Is.EqualTo(new[] { "a", "b", "c" }));
+    }
+
+    /// <summary>
+    /// Ids that would resolve to a blob outside the manifest or artifact prefix.
+    /// The Azure SDK addresses a blob through <see cref="UriBuilder"/>, which
+    /// performs RFC 3986 dot-segment removal, so a <c>..</c> segment silently
+    /// walks up out of the prefix and, with enough segments, out of the
+    /// configured container altogether. Percent-encoded forms collapse
+    /// identically because dot-segment removal happens after percent-decoding.
+    /// </summary>
+    private static readonly string[] EscapingIds =
+    [
+        "../secrets",
+        "../../secrets/keys.json",
+        "a/../../b",
+        "a/../../../../etc/passwd",
+        "%2E%2E/secrets",
+        "%2e%2e%2Fsecrets",
+        ".",
+        "..",
+        "a/./b",
+        "a//b",
+        "/absolute",
+        "a\\..\\b",
+        "back\\slash",
+    ];
+
+    [TestCaseSource(nameof(EscapingIds))]
+    public void ManifestBlobName_rejects_an_id_that_would_escape_its_prefix(string backupId)
+    {
+        Assert.That(
+            () => BackupBlobNaming.ManifestBlobName(backupId),
+            Throws.InstanceOf<ArgumentException>(),
+            $"'{backupId}' must not be concatenated onto the manifest prefix: the blob address "
+            + "would resolve outside it.");
+    }
+
+    [TestCaseSource(nameof(EscapingIds))]
+    public void ArtifactBlobName_rejects_an_id_that_would_escape_its_prefix(string artifactId)
+    {
+        Assert.That(
+            () => BackupBlobNaming.ArtifactBlobName(artifactId),
+            Throws.InstanceOf<ArgumentException>(),
+            $"'{artifactId}' must not be concatenated onto the artifact prefix: the blob address "
+            + "would resolve outside it.");
+    }
+
+    [Test]
+    public void Blob_names_reject_a_control_character()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => BackupBlobNaming.ManifestBlobName("a\nb"), Throws.InstanceOf<ArgumentException>());
+            Assert.That(() => BackupBlobNaming.ArtifactBlobName("a\0b"), Throws.InstanceOf<ArgumentException>());
+        });
+    }
+
+    /// <summary>
+    /// A tenant-composed tree id of the form <c>t/{tenant}/{name}</c> is embedded
+    /// verbatim in every artifact id, so an interior <c>/</c> is legitimate and
+    /// must keep working. Only segments that change the resolved location are
+    /// rejected.
+    /// </summary>
+    [TestCase("t/acme/orders")]
+    [TestCase("t/acme/orders-Full-638000000000000000-0123456789abcdef")]
+    [TestCase("backup-42")]
+    [TestCase("deadbeef")]
+    [TestCase("a.b.c")]
+    [TestCase("...")]
+    public void A_legitimate_id_containing_a_separator_is_accepted_and_round_trips(string id)
+    {
+        var manifest = BackupBlobNaming.ManifestBlobName(id);
+        var artifact = BackupBlobNaming.ArtifactBlobName(id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(manifest, Is.EqualTo(BackupBlobNaming.ManifestPrefix + id));
+            Assert.That(artifact, Is.EqualTo(BackupBlobNaming.ArtifactPrefix + id));
+            Assert.That(BackupBlobNaming.BackupIdFromManifestBlobName(manifest), Is.EqualTo(id));
+            Assert.That(BackupBlobNaming.ArtifactIdFromBlobName(artifact), Is.EqualTo(id));
+        });
+    }
+
+    /// <summary>
+    /// The property that actually matters: whatever name is produced, resolving it
+    /// the way the Azure SDK does must land strictly beneath the container and the
+    /// prefix. This asserts the outcome rather than the validator's internals, so
+    /// it still holds if the validation strategy is ever changed.
+    /// </summary>
+    [TestCaseSource(nameof(EscapingIds))]
+    public void No_accepted_id_can_resolve_outside_its_container_prefix(string hostileId)
+    {
+        string? manifestName = null;
+        try
+        {
+            manifestName = BackupBlobNaming.ManifestBlobName(hostileId);
+        }
+        catch (ArgumentException)
+        {
+            Assert.Pass("The hostile id was rejected before it could be used to address a blob.");
+        }
+
+        var resolved = new UriBuilder("https://account.blob.core.windows.net/container/" + manifestName).Uri;
+
+        Assert.That(
+            resolved.AbsolutePath,
+            Does.StartWith("/container/" + BackupBlobNaming.ManifestPrefix),
+            "An accepted id resolved outside the container's manifest prefix.");
     }
 }

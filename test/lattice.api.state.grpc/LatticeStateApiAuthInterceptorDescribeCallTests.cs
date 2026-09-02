@@ -1,3 +1,7 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Grpc.Core;
+
 namespace Orleans.Lattice.Api.State.Grpc.Tests;
 
 /// <summary>
@@ -258,6 +262,37 @@ public sealed class LatticeStateApiAuthInterceptorDescribeCallTests
     }
 
     [Test]
+    public void GetDeadLetterCount_targets_its_tree()
+    {
+        var result = Describe(
+            LatticeStateGrpcMethods.GetDeadLetterCountMethodName,
+            new DeadLetterCountRequest { TreeId = TreeId });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeStateApiOperation.GetDeadLetterCount));
+            Assert.That(result.TargetTreeId, Is.EqualTo(TreeId),
+                "The dead-letter count is read from a caller-named tree, so the authorizer must see that tree.");
+        });
+    }
+
+    [Test]
+    public void ListDeadLetters_targets_its_tree()
+    {
+        var result = Describe(
+            LatticeStateGrpcMethods.ListDeadLettersMethodName,
+            new DeadLetterQueueRequest { TreeId = TreeId });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeStateApiOperation.ListDeadLetters));
+            Assert.That(result.TargetTreeId, Is.EqualTo(TreeId),
+                "Dead-letter entries carry the key and a preview of the value bytes, so this "
+                + "read must be authorized against the tree it names.");
+        });
+    }
+
+    [Test]
     public void An_unrecognised_method_maps_to_Unknown_with_no_target()
     {
         var result = Describe("SomeFutureRpc", new CatalogRequest { SourceTreeId = TreeId });
@@ -270,5 +305,68 @@ public sealed class LatticeStateApiAuthInterceptorDescribeCallTests
                 "An unmapped method must never default to a benign operation.");
             Assert.That(result.TargetTreeId, Is.EqualTo(TreeId));
         });
+    }
+
+    /// <summary>
+    /// Every enforced gRPC method name the service binds, discovered by reflection
+    /// rather than restated by hand, so adding an RPC without extending the
+    /// operation map fails here instead of silently reaching the authorizer as
+    /// <see cref="LatticeStateApiOperation.Unknown"/>. The auth-scheme
+    /// advertisement is excluded through the same predicate the interceptor uses,
+    /// so the exemption cannot drift apart from the guard.
+    /// </summary>
+    private static IEnumerable<string> EnforcedBoundMethodNames() =>
+        typeof(LatticeStateGrpcMethods)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string)
+                && f.Name.EndsWith("MethodName", StringComparison.Ordinal))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .Where(n => !LatticeStateApiGrpcAuthInterceptor.IsUnauthenticatedMethod(Method(n)))
+            .OrderBy(n => n, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Every bound request type that names a single tree, paired with the method
+    /// that carries it. Discovered from the strongly typed
+    /// <see cref="Method{TRequest, TResponse}"/> properties, so a new tree-scoped
+    /// RPC is enrolled in the guard automatically.
+    /// </summary>
+    private static IEnumerable<TestCaseData> BoundTreeScopedMethods() =>
+        typeof(LatticeStateGrpcMethods)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.PropertyType.IsGenericType
+                && p.PropertyType.GetGenericTypeDefinition() == typeof(Method<,>))
+            .Select(p => (MethodName: p.Name, RequestType: p.PropertyType.GetGenericArguments()[0]))
+            .Where(x => x.RequestType.GetProperty("TreeId")?.PropertyType == typeof(string))
+            .OrderBy(x => x.MethodName, StringComparer.Ordinal)
+            .Select(x => new TestCaseData(x.MethodName, x.RequestType).SetArgDisplayNames(x.MethodName));
+
+    [TestCaseSource(nameof(EnforcedBoundMethodNames))]
+    public void Every_enforced_bound_method_maps_to_a_known_operation(string methodName)
+    {
+        var result = Describe(methodName, new object());
+
+        Assert.That(
+            result.Operation,
+            Is.Not.EqualTo(LatticeStateApiOperation.Unknown),
+            $"'{methodName}' is a bound, enforced RPC but is missing from the operation map, so an "
+            + "authorizer cannot make a per-operation decision about it. Add an arm to "
+            + "LatticeStateApiGrpcAuthInterceptor.DescribeCall.");
+    }
+
+    [TestCaseSource(nameof(BoundTreeScopedMethods))]
+    public void Every_bound_tree_scoped_method_surfaces_its_target_tree(string methodName, Type requestType)
+    {
+        var request = RuntimeHelpers.GetUninitializedObject(requestType);
+        requestType.GetProperty("TreeId")!.SetValue(request, TreeId);
+
+        var result = Describe(methodName, request);
+
+        Assert.That(
+            result.TargetTreeId,
+            Is.EqualTo(TreeId),
+            $"'{methodName}' carries a caller-supplied TreeId but DescribeCall reports no target. "
+            + "A null target means 'not scoped to a single tree', so an authorizer that restricts a "
+            + "caller to a set of trees would skip its tree check entirely. Add an arm to the "
+            + "target switch in LatticeStateApiGrpcAuthInterceptor.DescribeCall.");
     }
 }

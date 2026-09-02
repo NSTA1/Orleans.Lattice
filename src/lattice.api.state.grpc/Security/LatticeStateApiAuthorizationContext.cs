@@ -80,6 +80,20 @@ public enum LatticeStateApiOperation
     /// than have it silently masquerade as a benign catalog operation.
     /// </summary>
     Unknown,
+
+    // The members below are appended after Unknown deliberately: this enum has
+    // implicit ordinals, and inserting them in declaration order would renumber
+    // Unknown and every member after it, silently changing the meaning of a
+    // persisted or logged numeric value.
+
+    /// <summary>The unary <c>GetDeadLetterCount</c> RPC, which counts a tree's dead-lettered writes.</summary>
+    GetDeadLetterCount,
+
+    /// <summary>
+    /// The unary <c>ListDeadLetters</c> RPC, which pages a tree's dead-letter
+    /// queue, including each entry's key and a preview of its value bytes.
+    /// </summary>
+    ListDeadLetters,
 }
 
 /// <summary>
