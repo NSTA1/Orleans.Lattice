@@ -78,6 +78,32 @@ public class ReplicationContentHashTests
     }
 
     [Test]
+    public void Compute_does_not_alias_when_key_contains_nul_and_value_has_zero_bytes()
+    {
+        // Regression: a fixed 0x00 separator is indistinguishable from a NUL
+        // byte appearing inside the content, so {"a\0", value=""} and
+        // {"a", value={0,0}} once produced the identical byte stream and
+        // collided. Length-prefixed framing keeps the partitions distinct.
+        var a = ReplicationContentHash.Compute(MutationKind.Set, "a\0", null, ReadOnlySpan<byte>.Empty);
+        var b = ReplicationContentHash.Compute(MutationKind.Set, "a", null, new byte[] { 0x00, 0x00 });
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
+    public void Compute_does_not_alias_when_value_nul_bridges_key_boundary()
+    {
+        // Regression: a NUL that migrates across the key/value boundary once
+        // aliased. {"a\0", value={'b'}} and {"a", value={0,0,'b'}} produced the
+        // identical separator-delimited byte stream and collided; length
+        // prefixing keeps them distinct.
+        var a = ReplicationContentHash.Compute(MutationKind.Set, "a\0", null, new byte[] { (byte)'b' });
+        var b = ReplicationContentHash.Compute(MutationKind.Set, "a", null, new byte[] { 0x00, 0x00, (byte)'b' });
+
+        Assert.That(a, Is.Not.EqualTo(b));
+    }
+
+    [Test]
     public void Compute_handles_null_key_and_empty_value()
     {
         Assert.That(

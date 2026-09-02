@@ -119,17 +119,28 @@ public static class LatticePredicateTranslator
         Expression argumentExpression;
         if (call.Object is not null)
         {
-            // Instance form: target.Method(argument[, comparison]).
+            // Instance form: target.Method(argument). A second argument is a
+            // StringComparison / ignoreCase / CultureInfo modifier the
+            // evaluator cannot honour - it compares strings ordinally - so
+            // accepting the overload would silently push down a match with
+            // different semantics than the compiled lambda (e.g.
+            // Equals(x, StringComparison.OrdinalIgnoreCase) would run as an
+            // ordinal, case-sensitive comparison). Reject it instead.
             targetExpression = call.Object;
             if (call.Arguments.Count < 1)
                 throw Unsupported($"string method '{call.Method.Name}' with no argument");
+            if (call.Arguments.Count > 1)
+                throw Unsupported($"string method '{call.Method.Name}' with a comparison or culture argument (only the ordinal single-argument overload is supported)");
             argumentExpression = call.Arguments[0];
         }
         else
         {
-            // Static form: string.Equals(a, b[, comparison]).
+            // Static form: string.Equals(a, b). A third argument is a
+            // StringComparison the ordinal evaluator likewise cannot honour.
             if (call.Arguments.Count < 2)
                 throw Unsupported($"static string method '{call.Method.Name}'");
+            if (call.Arguments.Count > 2)
+                throw Unsupported($"static string method '{call.Method.Name}' with a comparison argument (only the ordinal two-argument overload is supported)");
             targetExpression = call.Arguments[0];
             argumentExpression = call.Arguments[1];
         }
