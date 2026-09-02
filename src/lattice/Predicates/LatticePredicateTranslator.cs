@@ -200,7 +200,7 @@ public static class LatticePredicateTranslator
             string s => LatticeConstant.Text(s),
             char c => LatticeConstant.Text(c.ToString()),
             sbyte or byte or short or ushort or int or uint or long => LatticeConstant.Integer(Convert.ToInt64(value)),
-            ulong ul => LatticeConstant.Integer(unchecked((long)ul)),
+            ulong ul => ul <= long.MaxValue ? LatticeConstant.Integer((long)ul) : LatticeConstant.Real(ul),
             float or double => LatticeConstant.Real(Convert.ToDouble(value)),
             decimal d => LatticeConstant.Real((double)d),
             Enum e => LatticeConstant.Integer(Convert.ToInt64(e)),
