@@ -14,6 +14,10 @@ dots it has **observed**. The flag is on whenever at least one enable dot
 survives, so a `Disable` concurrent with an `Enable` it never saw leaves the flag
 **enabled**.
 
+Enabling a flag that is already on is safe to repeat: it does not make the
+stored value grow. Turning the same flag on a million times costs no more space
+than turning it on once.
+
 Use it for: membership rows in a secondary index (a tag/key pair is present or
 not), feature toggles, presence bits - where a concurrent enable should beat a
 concurrent disable.

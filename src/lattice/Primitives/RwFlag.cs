@@ -23,12 +23,6 @@ namespace Orleans.Lattice;
 [Alias(TypeAliases.RwFlag)]
 public sealed class RwFlag : ICrdt<RwFlag>
 {
-    // Below this many tombstone dots a linear scan beats allocating and
-    // populating a HashSet for the membership checks. A flag carries one
-    // dot per concurrent enable/disable, overwhelmingly 1-2 in practice,
-    // so the linear path is the common case; the set is only built once a
-    // flag genuinely accumulates many concurrent dots. Mirrors
-    // OrSet.DotLinearScanThreshold.
     private const int DotLinearScanThreshold = 4;
 
     /// <summary>
@@ -104,6 +98,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         Disables.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
+        Compact();
     }
 
     /// <summary>
@@ -120,30 +115,17 @@ public sealed class RwFlag : ICrdt<RwFlag>
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         Enables.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
-        if (Disables.Count == 0) return false;
         var anyAdded = false;
-        if (Tombstones.Count <= DotLinearScanThreshold || Disables.Count <= DotLinearScanThreshold)
-        {
-            // Tiny tombstone list (the common 0-1-dot case), or few disable
-            // dots to tombstone: a linear Contains against the growing list
-            // beats allocating a HashSet. A flag is typically disabled once or
-            // twice between enables, so the disable side is the small one even
-            // when the tombstone history is long.
-            foreach (var dot in Disables)
-            {
-                if (!Tombstones.Contains(dot)) { Tombstones.Add(dot); anyAdded = true; }
-            }
-            return anyAdded;
-        }
-        var tombSet = OrSetDotSet.Build(Tombstones);
         foreach (var dot in Disables)
         {
-            if (tombSet.Add(dot))
+            if (!OrSetDotCompaction.Covers(Tombstones, in dot))
             {
                 Tombstones.Add(dot);
                 anyAdded = true;
             }
         }
+
+        Compact();
         return anyAdded;
     }
 
@@ -173,6 +155,7 @@ public sealed class RwFlag : ICrdt<RwFlag>
         UnionInto(Enables, other.Enables);
         UnionInto(Disables, other.Disables);
         UnionInto(Tombstones, other.Tombstones);
+        Compact();
     }
 
     /// <summary>Creates a deep copy of this flag.</summary>
@@ -198,32 +181,28 @@ public sealed class RwFlag : ICrdt<RwFlag>
         UnionDots(Enables, delta.Enables);
         UnionDots(Disables, delta.Disables);
         UnionDots(Tombstones, delta.Tombstones);
+        Compact();
     }
 
-    private int LiveDisableCount()
+    /// <summary>
+    /// Collapses this flag's dot history to its bounded normal form: at most one
+    /// enable, disable, and tombstone dot per replica. Idempotent, and never
+    /// changes <see cref="IsEnabled"/>.
+    /// <para>
+    /// Disable dots cancelled by tombstones are retained for causal history; one
+    /// dot per replica on each side already bounds state at O(replicas). Running
+    /// this on every mutation and merge makes the fix self-healing: state written
+    /// by an older build collapses the first time any state or delta merges in.
+    /// </para>
+    /// </summary>
+    private void Compact()
     {
-        if (Disables.Count == 0) return 0;
-        if (Tombstones.Count == 0) return Disables.Count;
-        if (Tombstones.Count <= DotLinearScanThreshold || Disables.Count <= DotLinearScanThreshold)
-        {
-            // Tiny tombstone list, or few disable dots: linear scan beats
-            // hashing. Disables is the small side on any flag that has been
-            // toggled repeatedly, so this keeps IsSet allocation-free there.
-            var liveLinear = 0;
-            foreach (var dot in Disables)
-            {
-                if (!Tombstones.Contains(dot)) liveLinear++;
-            }
-            return liveLinear;
-        }
-        var tombSet = OrSetDotSet.Build(Tombstones);
-        var live = 0;
-        foreach (var dot in Disables)
-        {
-            if (!tombSet.Contains(dot)) live++;
-        }
-        return live;
+        OrSetDotCompaction.CompactMaxPerReplica(Enables);
+        OrSetDotCompaction.CompactMaxPerReplica(Disables);
+        OrSetDotCompaction.CompactMaxPerReplica(Tombstones);
     }
+
+    private int LiveDisableCount() => OrSetDotCompaction.CountLive(Disables, Tombstones);
 
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {

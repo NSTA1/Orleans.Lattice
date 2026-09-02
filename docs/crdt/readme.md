@@ -90,6 +90,14 @@ should mean.
 > value bytes. It is safe only when a single cluster owns each key at a time; use
 > a typed CRDT above whenever concurrent writers can target the same key.
 
+> [!NOTE]
+> **Does a CRDT grow forever?** A reasonable worry: if a set remembers every add
+> so a concurrent remove cannot silently win, does re-adding the same thing over
+> and over bloat it? No. Repeating an operation you have already performed - such
+> as re-enabling a flag that is already on - does not make the stored value
+> bigger. See [Monotonic State Primitives](../lattice/state-primitives.md) for
+> how that is done.
+
 ## How you use them here
 
 Every value in the store is opaque `byte[]`, so the tree cannot guess which CRDT

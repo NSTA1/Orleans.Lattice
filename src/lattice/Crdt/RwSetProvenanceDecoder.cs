@@ -224,16 +224,7 @@ public sealed class RwSetProvenanceDecoder : ICrdtProvenanceDecoder
         for (var i = 0; i < removeDots.Count; i++)
         {
             var dot = removeDots[i];
-            var cancelled = false;
-            for (var j = 0; j < tomb.Count; j++)
-            {
-                if (tomb[j].Counter == dot.Counter && string.Equals(tomb[j].ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
-                {
-                    cancelled = true;
-                    break;
-                }
-            }
-            if (!cancelled) live++;
+            if (!OrSetDotCompaction.Covers(tomb, in dot)) live++;
         }
         return live;
     }

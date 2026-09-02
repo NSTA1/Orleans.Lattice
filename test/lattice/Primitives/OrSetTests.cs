@@ -308,12 +308,17 @@ public class OrSetTests
         var abab = OrSet.Merge(ab, a); // idempotent re-merge with operand
 
         var keyB64 = Convert.ToBase64String(Apple);
-        // Expected: union of {1..50} ∪ {26..75} = {1..75} = 75 unique dots.
-        Assert.That(ab.Adds[keyB64].Count, Is.EqualTo(75));
-        // Commutative: same dot set regardless of order.
-        Assert.That(ba.Adds[keyB64].Count, Is.EqualTo(75));
+        // The old representation kept the full union. The compacted normal
+        // form keeps only r1's newest dot, which is the same observable
+        // add-wins state but bounded at O(replicas).
+        Assert.That(ab.Adds[keyB64].Count, Is.EqualTo(1));
+        Assert.That(ab.Adds[keyB64][0].Counter, Is.EqualTo(75));
+        // Commutative: same compacted dot set regardless of order.
+        Assert.That(ba.Adds[keyB64].Count, Is.EqualTo(1));
+        Assert.That(ba.Adds[keyB64][0].Counter, Is.EqualTo(75));
         // Idempotent: re-merging with one operand does not duplicate.
-        Assert.That(abab.Adds[keyB64].Count, Is.EqualTo(75));
+        Assert.That(abab.Adds[keyB64].Count, Is.EqualTo(1));
+        Assert.That(abab.Adds[keyB64][0].Counter, Is.EqualTo(75));
         Assert.That(ab.Contains(Apple), Is.True);
     }
 }

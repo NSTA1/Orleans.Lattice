@@ -234,8 +234,13 @@ public class OrFlagTests
 
         Assert.Multiple(() =>
         {
+            // Independence is that the clone did not observe the later enable.
+            // The source holds one dot per replica rather than both, because a
+            // replica's later dot supersedes its own earlier one.
             Assert.That(clone.Enables, Has.Count.EqualTo(1));
-            Assert.That(a.Enables, Has.Count.EqualTo(2));
+            Assert.That(clone.Enables[0].Counter, Is.EqualTo(1));
+            Assert.That(a.Enables, Has.Count.EqualTo(1));
+            Assert.That(a.Enables[0].Counter, Is.EqualTo(2));
         });
     }
 
