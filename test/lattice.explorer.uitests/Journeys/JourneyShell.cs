@@ -373,4 +373,61 @@ internal static class JourneyShell
             }
             """);
     }
+
+    /// <summary>
+    /// Measures the overflow menu at the current viewport if one is offered, opening it
+    /// and closing it again, or returns <see langword="null"/> when nothing overflows at
+    /// this width.
+    /// </summary>
+    /// <remarks>
+    /// This exists so "does this width overflow?" and "open its menu" are one decision
+    /// rather than two.
+    /// <para>
+    /// Asking separately - count or wait for the toggle, then call
+    /// <see cref="OpenOverflowMenuAsync"/>, which waits for it again - is a
+    /// time-of-check/time-of-use race, and a real one rather than a theoretical one: the
+    /// toggle is rendered only while its strip reports <c>HasOverflow</c>, and
+    /// <see cref="OverflowToggleSelector"/> matches EVERY strip's toggle, so the answer
+    /// depends on the rail and the detail strip alike. The window between the two waits
+    /// was enough for a strip to lose a tab, stop overflowing, and take the toggle with
+    /// it, after which the second wait timed out on an element the first had genuinely
+    /// seen. Settling both strips first closes the window this races in; asking once
+    /// removes the window itself.
+    /// </para>
+    /// </remarks>
+    /// <param name="page">The page to act on.</param>
+    /// <param name="settleMs">How long to wait for a toggle before concluding there is none.</param>
+    /// <returns>The measured geometry, or <see langword="null"/> when nothing overflows.</returns>
+    internal static async Task<OverflowGeometry?> TryMeasureOverflowMenuAsync(
+        IPage page,
+        float settleMs = 5_000)
+    {
+        var toggle = page.Locator(OverflowToggleSelector).First;
+
+        try
+        {
+            await toggle.WaitForAsync(new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = settleMs,
+            });
+        }
+        catch (PlaywrightException)
+        {
+            return null;
+        }
+        catch (TimeoutException)
+        {
+            // Playwright surfaces a wait timeout as System.TimeoutException here rather
+            // than as a PlaywrightException, so both have to be caught. This is the
+            // ordinary answer, not an error: nothing overflows at this width.
+            return null;
+        }
+
+        var geometry = await OpenOverflowMenuAsync(page);
+
+        // Close it again, so the next width is measured from the same resting state.
+        await toggle.ClickAsync();
+        return geometry;
+    }
 }

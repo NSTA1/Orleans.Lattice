@@ -85,6 +85,13 @@ public sealed class NarrowViewportJourneyTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
 
+        // Settle both strips before measuring overflow: an unprobed area or surface is
+        // rendered enabled and takes space until its gate reports, so the tab counts - and
+        // therefore whether anything overflows - are still moving until then. The toggle
+        // selector spans every strip, so the rail matters here as much as the detail one.
+        await JourneyShell.AssertRailSettledAsync(page);
+        await JourneyShell.AssertDetailStripSettledAsync(page);
+
         var measured = new List<string>();
         var clipped = new List<string>();
 
@@ -96,20 +103,22 @@ public sealed class NarrowViewportJourneyTests : JourneyTestBase
             // stays web-first at every width.
             await Assertions.Expect(page.Locator(JourneyShell.DetailTabSelector).First).ToBeVisibleAsync();
 
-            if (await page.Locator(JourneyShell.OverflowToggleSelector).CountAsync() == 0)
+            // One decision rather than two. Counting the toggle and then opening it in a
+            // separate call leaves a window for the toggle to disappear between the two,
+            // which is a real race here because a strip stops rendering its toggle the
+            // moment it stops overflowing.
+            var geometry = await JourneyShell.TryMeasureOverflowMenuAsync(page);
+            if (geometry is null)
             {
                 continue;
             }
 
-            var geometry = await JourneyShell.OpenOverflowMenuAsync(page);
             measured.Add($"{width}px: {geometry}");
 
             if (!geometry.IsContained)
             {
                 clipped.Add($"{width}px: {geometry}");
             }
-
-            await page.Locator(JourneyShell.OverflowToggleSelector).First.ClickAsync();
         }
 
         Assert.That(measured, Is.Not.Empty,
