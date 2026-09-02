@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -239,6 +239,13 @@ if (string.Equals(suite, "queryproj", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> queryproj (QueryProjectionAllocationBenchmarks)");
     var queryProjSummary = BenchmarkRunner.Run<QueryProjectionAllocationBenchmarks>(config);
     return queryProjSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "readpathtrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> readpathtrims (ReadPathAllocationBenchmarks)");
+    var readPathSummary = BenchmarkRunner.Run<ReadPathAllocationBenchmarks>(config);
+    return readPathSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
