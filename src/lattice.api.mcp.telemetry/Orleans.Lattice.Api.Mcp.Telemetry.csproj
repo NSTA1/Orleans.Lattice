@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Mcp.Telemetry</PackageId>
-    <Version>9.4.1</Version>
+    <Version>9.5.0</Version>
     <Description>Optional, opt-in telemetry add-on for Orleans.Lattice.Api.Mcp. Exposes cluster OpenTelemetry metrics as MCP tools by proxying a read-only Prometheus/PromQL-compatible backend, with a dual-credential trust boundary that stamps the configured backend credential and never forwards the caller's Lattice credential. Registered with AddTelemetryTools(...).</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
