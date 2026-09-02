@@ -347,14 +347,17 @@ internal sealed partial class ShardRootGrain(
             }
         }
 
-        // One batched RPC per distinct leaf. Sequential rather than
-        // parallel: each leaf grain serialises its incoming calls anyway
-        // (Orleans single-threaded reentrancy model), and the saga's
-        // microbench workload has all keys in a single leaf, so the
-        // sequential vs WhenAll distinction is observably identical for
-        // n=1 leaf and trades one Task.WhenAll allocation per call
-        // otherwise. Keep sequential to mirror the existing
-        // TraverseForBatchReadAsync shape.
+        // One batched RPC per distinct leaf, walked sequentially. Unlike the
+        // point-read batch path (TraverseForBatchReadAsync), which fans out
+        // because a scattered probe buckets into many leaves and the summed
+        // latency then breaches the response deadline, this saga path's
+        // workload is single-leaf: the transaction's affected keys were
+        // resolved from one leaf set, so leafBuckets almost always holds one
+        // entry and the fan-out machinery would buy nothing but a
+        // Task.WhenAll allocation per call. Should a genuinely wide,
+        // many-leaf batch ever reach here it would inherit the same
+        // sum-of-round-trips latency, so mirror the read path's fan-out at
+        // that point rather than widening the batch under this shape.
         foreach (var (leafId, bucket) in leafBuckets)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);

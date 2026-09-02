@@ -524,20 +524,63 @@ internal sealed partial class ShardRootGrain
             bucket.Add(key);
         }
 
-        // Batch read from each leaf cache. Presize the merge target to
-        // keys.Count: the loop writes one entry per returned key and the
-        // returned count is bounded above by the number of requested keys
-        // (fewer when some keys are absent), so keys.Count is a tight upper
-        // bound that eliminates the dictionary's geometric grow/rehash chain
-        // on a multi-leaf batch read. Reached only when the batch spans more
-        // than one leaf (the single-leaf case returns from the fast path
-        // above without allocating this dictionary).
-        var result = new Dictionary<string, byte[]>(keys.Count);
+        // Single-bucket shortcut: a multi-level tree whose batch happened to
+        // land entirely on one leaf. Hand the bucket straight to that leaf and
+        // return its own dictionary, skipping the dispatch array, the
+        // Task.WhenAll, and the merge target entirely - the same discipline the
+        // RootIsLeaf fast path above applies one level up.
+        if (leafBuckets.Count == 1)
+        {
+            foreach (var (leafId, bucket) in leafBuckets)
+            {
+                var soleCache = ResolveLeafCacheGrain(leafId);
+                RecordLeafAccess(leafId);
+                return await soleCache.GetManyAsync(bucket);
+            }
+        }
+
+        // Fan out the per-leaf reads in parallel, mirroring the per-leaf
+        // dispatch SetManyLocalOnlyAsync already does on the write path (which
+        // in turn mirrors LatticeGrain's per-shard fan-out). The shard-root
+        // grain is single-activation, so every parallel await resumes on the
+        // same grain turn; the two caches this touches are mutated only in the
+        // sequential resolve pass below, never inside the parallel region, so
+        // the fan-out adds no interleaving hazard the write path does not
+        // already carry.
+        //
+        // This is a correctness fix, not a micro-optimisation. Sequentially
+        // awaiting one leaf at a time makes the call's latency the SUM of every
+        // bucket's round trip, so a batch spanning many leaves - a
+        // point-probe over scattered keys, which is exactly what the
+        // vector-membership probe issues - walks off the end of the Orleans
+        // response deadline and surfaces as a TimeoutException on
+        // ILattice.GetManyAsync rather than as slowness. Fanning out makes the
+        // latency the MAX instead, which is what keeps a wide batch inside the
+        // deadline no matter how scattered the keys are.
+        //
+        // Resolve the leaf-cache reference and record the access for every
+        // bucket FIRST, on the sequential pass: ResolveLeafCacheGrain populates
+        // the reference cache and RecordLeafAccess mutates the access model, so
+        // both stay outside the parallel region by construction.
+        var dispatch = new Task<Dictionary<string, byte[]>>[leafBuckets.Count];
+        var dispatched = 0;
         foreach (var (leafId, bucket) in leafBuckets)
         {
             var cache = ResolveLeafCacheGrain(leafId);
             RecordLeafAccess(leafId);
-            var values = await cache.GetManyAsync(bucket);
+            dispatch[dispatched++] = cache.GetManyAsync(bucket);
+        }
+
+        var fetched = await Task.WhenAll(dispatch);
+
+        // Presize the merge target to keys.Count: the loop writes one entry per
+        // returned key and the returned count is bounded above by the number of
+        // requested keys (fewer when some keys are absent), so keys.Count is a
+        // tight upper bound that eliminates the dictionary's geometric
+        // grow/rehash chain on a multi-leaf batch read.
+        var result = new Dictionary<string, byte[]>(keys.Count);
+        foreach (var values in fetched)
+        {
             foreach (var (k, v) in values)
             {
                 result[k] = v;
