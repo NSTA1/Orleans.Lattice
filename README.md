@@ -5,13 +5,45 @@
 [![NuGet](https://img.shields.io/nuget/v/Orleans.Lattice)](https://www.nuget.org/packages/Orleans.Lattice)
 [![Coverage](https://img.shields.io/codecov/c/github/NSTA1/Orleans.Lattice)](https://codecov.io/gh/NSTA1/Orleans.Lattice)
 
+Orleans.Lattice is a platform for building durable, distributed state systems on
+[Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/).
+
+At its centre is a sorted, horizontally-scalable, conflict-free key-value store
+that runs inside your own cluster. Around it are the concerns a real system
+acquires once it outgrows one machine - storage, identity, governance,
+replication, administration, observability - each implemented as a companion
+package behind a seam in the core, rather than baked into it.
+
+It is local-first. A complete deployment runs on a single machine with no cloud
+dependency, and the same programming model carries through to a globally
+distributed, active-active estate. What changes between those two points is
+which companion packages a host registers, not the code that reads and writes
+data.
+
+### Start here
+
+| If you want to | Go to |
+|---|---|
+| Understand what the platform is and how it is put together | This page |
+| Browse the full capability catalogue | [FEATURES.md](FEATURES.md) |
+| Find the right package for a concern | [PACKAGES.md](PACKAGES.md) |
+| See a production deployment blueprint | [reference-architecture.md](reference-architecture.md) |
+| Write code now | [Quick Start](#quick-start) |
+| Read the day-to-day reference docs | [Documentation](#documentation) |
+
 ## What is it?
 
-Orleans.Lattice is a **sorted, durable, horizontally-scalable key-value store** embedded in your Orleans cluster.
+The core is a **sorted, durable, horizontally-scalable key-value store** embedded
+in your Orleans cluster. Keys are `string`, values are `byte[]`, and typed-value
+helpers layer automatic serialization on top. No external database, no
+coordinator service, no external queue.
 
-Keys are `string`, values are `byte[]`, and typed-value helpers layer automatic serialization on top. No external database, no coordinator service, no external queue.
+The keyspace is split across self-balancing B+ sub-trees that rebalance
+themselves online. The durability boundary is a write-ahead log. Conflict
+resolution is algebraic rather than lock-based or consensus-based, which is what
+lets any cluster accept a write to any key.
 
-It supports:
+The core alone supports:
 
 - Point reads, writes, deletes, and per-entry TTL.
 - Ordered key and entry scans - forward, reverse, and range-bounded.
@@ -21,13 +53,175 @@ It supports:
 - Online resize, online reshard, and online snapshots (offline mode also available).
 - Soft delete with a configurable retention window, and undo of resize within the window.
 - Per-tree event stream, diagnostics, and `System.Diagnostics.Metrics` instruments.
-- Optional cross-cluster replication via the sibling [`Orleans.Lattice.Replication`](docs/lattice.replication/README.md) package.
 
-The name comes from its use of **lattice-based state primitives** - mathematical structures where merges are commutative, associative, and idempotent - which is what makes the system conflict-free and recoverable without distributed locks or consensus (**provided** you use its [CRDT Primitives](docs/crdt/readme.md))
+The name comes from its use of **lattice-based state primitives** - mathematical
+structures where merges are commutative, associative, and idempotent - which is
+what makes the system conflict-free and recoverable without distributed locks or
+consensus (**provided** you use its [CRDT Primitives](docs/crdt/readme.md)).
 
-For a reference deployment blueprint - an active-active, cross-region estate on Azure Container Apps with a durable write-ahead log, cross-region replication, Entra ID auth, MCP endpoints, and a deployed Explorer - see the [reference architecture](reference-architecture.md).
+## Why it exists
 
-## Core Properties
+Every durable distributed system ends up solving the same set of problems:
+sharding, online rebalancing, crash-safe durability, conflict resolution,
+backup, tenancy, identity, replication, and an operator surface. They are
+usually assembled from a database, a cache, a queue, an identity provider, and a
+layer of glue - each with its own operational model, its own failure modes, and
+its own consistency story to reconcile with the others.
+
+Orleans already supplies the hard parts of a distributed runtime: virtual
+actors, single-threaded execution per grain, location transparency, and
+failover. What it does not supply is an ordered, durable, shardable store to put
+underneath them. Orleans.Lattice fills that gap, and takes three positions about
+how:
+
+- **The store lives in the cluster.** State is held by grains in the same
+  process as the code using it, so a read is a grain call rather than a network
+  round trip to a separate tier with its own scaling and failure envelope.
+- **Conflict resolution is algebraic.** Merges are commutative, associative, and
+  idempotent, so convergence needs no distributed lock manager and no consensus
+  round trip. This is what makes active-active writes across regions tractable.
+- **Everything else is a seam.** Storage, identity, governance, replication,
+  administration and observability are companion packages that plug into
+  documented extension points. A host that registers none of them runs the core
+  library alone, with no ambient cost for the features it does not use.
+
+The result is a platform rather than a product: it is not tied to one
+application category, and the deployment topology is a configuration decision
+taken late, not an architecture decision taken up front.
+
+## What you can build
+
+Orleans.Lattice is a substrate for durable distributed state, so the categories
+below are examples of what the same primitives compose into, not a fixed feature
+set.
+
+| Category | Why the platform fits | Relevant capabilities |
+|---|---|---|
+| **Knowledge systems** | Ordered keyspaces with per-key revision history and server-side filtering, so a corpus can be browsed, versioned, and queried without a separate metadata store. | [Change history](FEATURES.md#indexing-search-and-views), [predicate operations](docs/lattice/predicated-operations.md), [tag indexes](docs/lattice/api.md#tag-indexes) |
+| **AI memory systems** | Conflict-free records with per-entry TTL and approximate nearest-neighbour search over vectors held in the same store the records live in. | [Vector search](docs/lattice.vector/README.md), [TTL](docs/lattice/ttl.md), [MCP server](docs/lattice.api.mcp/README.md) |
+| **Digital twins** | One grain per entity with durable, ordered state behind it, converging deterministically when a device and the cloud both write. | [Conflict-free merges](docs/lattice/state-primitives.md), [grain indexes](docs/lattice.grainindex/README.md), [events](docs/lattice/events.md) |
+| **Search and indexing platforms** | Materialised views and tag indexes maintained off the write-ahead log, so secondary access paths are derived rather than hand-maintained. | [Materialised views](docs/lattice/materialised-views.md), [tag indexes](docs/lattice/api.md#tag-indexes), [vector search](docs/lattice.vector/README.md) |
+| **Distributed control planes** | Fail-closed authorization, atomic multi-key writes, fencing-token leases, and a saga coordinator for changes that must apply all-or-nothing. | [Atomic writes](docs/lattice/atomic-writes.md), [atomic action](docs/lattice/atomic-action.md), [distributed lock](docs/lattice/distributed-lock.md) |
+| **Multi-tenant SaaS platforms** | Keyspace-partitioned tenants with per-tenant quotas, metering, rate limiting, and optional region residency, layered on the core through null seams. | [Multi-tenancy](docs/lattice.tenancy/README.md), [schema enforcement](docs/lattice.schema/README.md), [tenant administration](docs/lattice.api.tenantadmin/README.md) |
+| **Collaborative applications** | Active-active replication where any cluster may write any key, with deterministic convergence and no coordinator to elect. | [Cross-cluster replication](docs/lattice.replication/README.md), [state primitives](docs/lattice/state-primitives.md), [change history](docs/lattice/change-history.md) |
+
+## The deployment journey
+
+A deployment grows in three stages. The application code that reads and writes
+data is identical in all three: it resolves `ILattice` and calls it. Each stage
+adds companion packages and configuration, not a rewrite.
+
+### 1. Local
+
+One machine, no cloud account, no external services. This is a first-class
+deployment target, not a degraded development mode.
+
+- **Durability.** The [file write-ahead log](docs/lattice.storage.file/README.md)
+  gives an append-and-fsync log per shard on local disk, with crash-safe
+  reconciliation and background compaction. The in-memory WAL is the default if
+  you do not need durability yet.
+- **Inspection.** The [Explorer console](docs/lattice.explorer/running-the-explorer.md)
+  (in progress) browses trees, topology, data and history over the cluster's
+  gRPC APIs.
+- **AI access.** The [MCP server](docs/lattice.api.mcp/README.md) exposes the
+  cluster's API facades as Model Context Protocol tools an agent can call.
+
+### 2. Team
+
+A shared cluster with real users, so identity, policy and data shape start to
+matter.
+
+- **Identity.** [OIDC](docs/lattice.membership.oidc/README.md) for Okta, Auth0,
+  Keycloak, Ping or Google, or [Entra ID](docs/lattice.membership.entra/README.md)
+  for Microsoft identities, resolving credentials to subjects with transitive
+  group membership.
+- **Authorization.** [Fail-closed, default-deny policy](docs/lattice/security.md)
+  per tree, prefix, or key, enforced on the core data path and on every external
+  API.
+- **Schema.** [Per-tree write validation and value versioning](docs/lattice.schema/README.md),
+  with dead-letter diversion of non-compliant writes and read-time upcasting of
+  stale values.
+- **Tenancy.** [Keyspace-partitioned tenants](docs/lattice.tenancy/README.md) with
+  a lifecycle, per-tenant quotas, metering and rate limiting.
+
+### 3. Global
+
+Multiple regions, each serving reads and writes.
+
+- **Replication.** [Active-active replication](docs/lattice.replication/README.md)
+  between clusters. Any cluster can write to any tree; concurrent updates
+  converge deterministically, and atomic multi-key writes stay all-or-nothing on
+  every peer.
+- **Backup and disaster recovery.** [Causally consistent backup](docs/lattice.backup/README.md)
+  to a shared sink that is the single source of truth, so the catalog rebuilds
+  from it and a backup [cold-restores into a fresh cluster](docs/lattice.backup/disaster-recovery.md).
+- **Autoscaling.** A [cluster-aggregate scaling signal](docs/lattice.scaling/README.md)
+  an external autoscaler such as KEDA can scrape.
+- **Blueprint.** The [reference architecture](reference-architecture.md) is a
+  worked design plus a parameterised deployment kit for an active-active,
+  cross-region estate on Azure Container Apps.
+
+| Stage | Add | Programming model |
+|---|---|---|
+| Local | File WAL, Explorer, MCP | `ILattice` |
+| Team | Membership, Auth, Schema, Tenancy | `ILattice` |
+| Global | Replication, Backup, Scaling | `ILattice` |
+
+## Architecture: a core plus seams
+
+The distinctive structural property of Orleans.Lattice is that major concerns
+are not implemented in the core. Each is a seam the core defines and a companion
+package fills. A host composes the platform it needs by registering packages;
+nothing it leaves out is present at runtime.
+
+```mermaid
+flowchart TD
+    App["Applications<br/>knowledge systems, AI memory, digital twins, search,<br/>control planes, multi-tenant SaaS, collaboration"]
+
+    App --> Explorer["Explorer console<br/>(in progress)"]
+    App --> Apis["API facades<br/>state, data, auth, schema,<br/>backup, tree admin, tenant admin"]
+    App --> Mcp["MCP server<br/>tools for AI agents"]
+
+    Explorer --> Core
+    Apis --> Core
+    Mcp --> Core
+    App -. "in-process ILattice" .-> Core
+
+    Core["Orleans.Lattice core<br/>sharded CRDT B+ tree, write-ahead log,<br/>durability boundary, grain catalogue"]
+
+    Core --> Storage["Storage"]
+    Core --> Identity["Identity"]
+    Core --> Governance["Governance"]
+    Core --> Replication["Replication"]
+    Core --> Administration["Administration"]
+    Core --> Observability["Observability"]
+
+    Storage --> StoragePkgs["Storage.AzureTable<br/>Storage.File<br/>Backup.AzureBlob"]
+    Identity --> IdentityPkgs["Membership<br/>Membership.Oidc<br/>Membership.Entra<br/>Auth"]
+    Governance --> GovernancePkgs["Schema<br/>Tenancy"]
+    Replication --> ReplicationPkgs["Replication<br/>Replication.Grpc"]
+    Administration --> AdminPkgs["Backup<br/>Api.TreeAdmin<br/>Api.TenantAdmin"]
+    Observability --> ObsPkgs["Dashboards<br/>Scaling<br/>Api.Telemetry"]
+```
+
+Three consequences follow from this shape, and they are worth understanding
+before reading the catalogues:
+
+- **Opt-in cost.** A capability you do not register costs nothing. Tenancy, for
+  example, is layered on the core through null seams, so a host without it is
+  byte-for-byte unchanged.
+- **Substitutable implementations.** A seam is a public contract, not an
+  internal detail. Storage backends, identity providers, compression algorithms,
+  backup sinks, and Explorer plugins are all replaceable with your own.
+- **Uniform external surface.** Every external caller - gRPC client, operator
+  console, AI agent - goes through the same transport-agnostic API facades and
+  the same fail-closed authorization gate, so a permission means the same thing
+  whichever surface asks.
+
+The complete inventory lives in [PACKAGES.md](PACKAGES.md), and the capability
+each package delivers is catalogued in [FEATURES.md](FEATURES.md).
+
+## Core properties
 
 - **Self-organising under load.** Hot regions of the keyspace re-balance themselves online - no downtime, no lost writes, no coordination protocol. Cold regions stay cheap.
 - **Strongly consistent from the outside.** Point reads, writes, and ordered scans always see a consistent view of the data, even while the cluster is rebalancing underneath. See [Consistency](docs/lattice/consistency.md) for the per-operation guarantee matrix.
@@ -35,67 +229,7 @@ For a reference deployment blueprint - an active-active, cross-region estate on 
 - **Eventually convergent under failure.** Storage faults, stale routing, and interrupted operations cannot corrupt data; once the fault window closes, the tree converges to the correct state.
 - **No locks, no consensus round-trips.** No Paxos, no Raft, no distributed lock manager. All conflict resolution is algebraic.
 
-Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos-tests.md) that hammer a live cluster with concurrent reads, writes, scans, splits, resizes, and reshards - optionally with random storage-write faults - and assert both live consistency and eventual convergence.
-
-## Features
-
-| Feature | What it gives you | Docs | Sample |
-|---|---|---|---|
-| **Adaptive shard splitting** | Hot shards rebalance themselves online, transparently to callers. No downtime, no dropped writes, no externally-visible API. | [Shard Splitting](docs/lattice/shard-splitting.md) | n/a |
-| **Atomic action** | `IAtomicActionGrain` is a public, generic saga / TCC coordinator keyed by an operation id: it runs an ordered plan of steps (each a forward effect paired with a compensating effect) all-or-nothing, compensating completed steps in strict reverse order when a later step faults. A built-in tree-write step delegates to the verified atomic-write machinery, and the whole saga is crash-recoverable and idempotent. | [Atomic Action](docs/lattice/atomic-action.md) | [sample](samples/AtomicAction/README.md) |
-| **Atomic writes** | `SetManyAtomicAsync` provides all-or-nothing semantics across multiple keys - locally, across shards, and across replicating clusters. An `IGrainFactory.SetManyAtomicAsync` overload extends the same all-or-nothing visibility to a batch spanning multiple trees. No reader ever observes a partial-set state. | [Atomic Writes](docs/lattice/atomic-writes.md) | [sample](samples/AtomicWrites/README.md) |
-| **Autoscaling signal** | A cluster-aggregate, two-axis autoscaling signal an external autoscaler can scrape: a compute-axis replica-demand scalar (`scaleValue`) for KEDA, plus an advisory, signal-only storage-axis per-account WAL rebalance recommendation. Served over an HTTP endpoint and an ASP.NET Core health check, with bundled Grafana panels and KEDA / Azure Container Apps and AKS wiring. | [Autoscaling Signal](docs/lattice.scaling/README.md) | [sample](samples/ClusterScaling/README.md) |
-| **Backup & restore** | Point-in-time backup and restore for a tree: causally consistent full and incremental capture, scheduling with chain retention, an optional cross-tree causal fence, and a fail-closed permission model over a pluggable sink (a durable Azure Blob sink is included). Disaster-recoverable: the sink is the single source of truth, so the catalog rebuilds from it, a backup cold-restores into a fresh cluster, and periodic health monitoring verifies each backup's payload. | [Backup & Restore](docs/lattice.backup/README.md) - [Disaster recovery](docs/lattice.backup/disaster-recovery.md) | [sample](samples/BackupAndRestore/README.md) |
-| **Bulk loading** | One-shot bottom-up build or streaming `IAsyncEnumerable` ingestion. Idempotent and retryable. | [Bulk Loading](docs/lattice/bulk-loading.md) - [Migrating from an External Store](docs/lattice/external-store-migration.md) | [sample](samples/BulkLoading/README.md) |
-| **Change history** | Per-key revision timeline for both tree shapes: successive values (with diffs) for last-writer-wins keys and decoded element-level member changes for CRDT keys. Read it from the core `ScanEntryHistoryAsync`, the read-only State API, or the Explorer's History tab with live-follow. Served from a durable, retention-bounded history view when enabled, or a best-effort retained-WAL-window fallback otherwise. | [Change History](docs/lattice/change-history.md) | [sample](samples/ChangeHistory/README.md) |
-| **Conflict-free merges** | Concurrent writes converge deterministically. | [State Primitives](docs/lattice/state-primitives.md) | [sample](samples/ConflictFreeMerges/README.md) |
-| **Cross-cluster replication** | Active-active replication between Orleans clusters. Any cluster can write to any tree; concurrent updates converge deterministically, and atomic multi-key writes remain all-or-nothing on every peer. | [Replication](docs/lattice.replication/README.md) | [sample](samples/CrossClusterReplication/README.md) |
-| **Diagnostics** | `DiagnoseAsync` returns a per-tree health snapshot: per-shard depth, live keys, tombstones, hotness, and recent splits. | [Diagnostics](docs/lattice/diagnostics.md) - [Troubleshooting](docs/lattice/troubleshooting.md) | [sample](samples/Diagnostics/README.md) |
-| **Distributed lock** | `ILatticeLockGrain` is a FIFO-fair, cluster-wide distributed lock / lease keyed by name, with monotonic fencing tokens so a superseded holder is detectable by the resource it guards, and bounded leases so a crashed holder cannot wedge the lock forever. Non-blocking acquire, renew, release, and try-acquire. | [Distributed Lock](docs/lattice/distributed-lock.md) | [sample](samples/DistributedLock/README.md) |
-| **Durable cursors** | Server-checkpointed iterators that survive silo failovers, client restarts, and topology changes. Resume from the last yielded key automatically. | [Durable Cursors](docs/lattice/durable-cursors.md) | [sample](samples/DurableCursors/README.md) |
-| **Events** | Per-tree `LatticeTreeEvent` Orleans stream with operation-id correlation. | [Events](docs/lattice/events.md) | [sample](samples/Events/README.md) |
-| **Explorer console** | An opt-in, auth-aware web console for a running cluster, installed as an embeddable hosting library (`AddLatticeExplorerWeb` + `MapLatticeExplorer`) or run standalone. Browses trees and their metrics, topology, data and history, and adds capability-gated admin areas - all over the cluster's gRPC APIs, so it never joins cluster membership. The UI is fluent: one layout that reflows between phone, tablet and desktop from a single named breakpoint set. | [Running the Explorer](docs/lattice.explorer/running-the-explorer.md) - [Access](docs/lattice.explorer/managing-access.md) - [Schema](docs/lattice.explorer/managing-schema.md) | [sample](samples/Explorer/README.md) |
-| **Explorer navigation and accessibility** | Primary navigation is a stable left rail with four visually distinct tiers, and every view has a lower-case URL, so deep links, bookmarks, sharing and browser back all work. Areas you lack permission for stay visible but demoted and state the permission they need and who to ask, rather than disappearing or greying out silently. The console remembers your view per user and per cluster, adapts the tenant picker to how many tenants you can actually reach, and lets you choose theme, contrast and density. It targets WCAG 2.1 and 2.2 AA, guarded by a browserless contrast check in the required build plus a browser conformance lane. | [Navigation model](docs/lattice.explorer/navigation-model.md) - [Visibility policy](docs/lattice.explorer/navigation-visibility-policy.md) - [Tenant scope](docs/lattice.explorer/tenant-scope.md) - [Theming](docs/lattice.explorer/theming-and-density.md) - [Accessibility](docs/lattice.explorer/accessibility-conformance.md) | [sample](samples/Explorer/README.md) |
-| **Explorer plugins** | The console is composed of plugins rather than built-in areas. A plugin ships as its own package carrying its own view, the single domain contract that is the whole of its reach, and its own access gate resolving one shared four-state contract; a head surfaces an area by registering it and withholds it by not registering it. Adding an area needs no change to the shell. | [Writing a plugin](docs/lattice.explorer/writing-a-plugin.md) | [sample](samples/Explorer/README.md) |
-| **Fast reads** | Per-silo read cache served via delta replication from the primary leaf. | [Read Caching](docs/lattice/caching.md) | n/a |
-| **Fault-tolerant** | Validated end-to-end against parametrised fault injection. | [Chaos Tests](docs/lattice/chaos-tests.md) | n/a |
-| **Grain indexes** | Opt-in companion package that tracks an Orleans grain's typed state in a lattice tree and answers typed predicate queries over it - "which `User` grains are 18 or over?" - without a hand-maintained secondary index. Properties are named explicitly, grains enrol on activation and on every state write, a reminder-driven backfill onboards dormant grains, a durable outbox retries any failed index write, and a declaration change that would invalidate stored entries is rejected at startup. | [Grain Indexes](docs/lattice.grainindex/README.md) | [sample](samples/GrainIndex/README.md) |
-| **History views** | Opt-in, append-only per-key revision history maintained as an accumulative materialised view: every source mutation is re-keyed into a durable revision row that survives source WAL garbage collection, with live-tunable per-tree retention modes (metadata-only, full-value, hybrid) and an optional age bound. | [History Views](docs/lattice/history-views.md) | [sample](samples/HistoryViews/README.md) |
-| **Identity directory** | A provider-agnostic identity source the Explorer Access area searches and validates against: a searchable, paged subject picker across users and groups, and fail-closed create that blocks unknown or wrong-kind principals. Ships a static in-process roster and a Microsoft Graph-backed Entra provider, or plug in your own. | [Identity-directory providers](docs/lattice.membership/identity-directory-providers.md) - [Access](docs/lattice.explorer/managing-access.md) | [sample](samples/Explorer/README.md) |
-| **Materialised views** | Asynchronous, eventually-consistent views maintained off a source tree's write-ahead log: filter / re-project views (a predicate keeps the matching subset, with an optional value transform and key re-map) and aggregation views (count / sum / min / max / set-union per group). Needs only a WAL-backed lattice, not the replication package. | [Materialised Views](docs/lattice/materialised-views.md) | [sample](samples/MaterialisedViews/README.md) |
-| **MCP server** | Exposes the cluster's API facades as Model Context Protocol tools an AI agent can discover and call over streamable HTTP, fail-closed and scoped to the caller's authorization grants, co-hosted on a silo or as a standalone gRPC-backed remote host. | [MCP Server](docs/lattice.api.mcp/README.md) | [sample](samples/McpServer/README.md) |
-| **MCP telemetry** | Opt-in companion package that exposes the cluster's OpenTelemetry metrics to an AI agent as read-only MCP tools, backed by a Prometheus/PromQL proxy behind a dual-credential trust boundary: unlocked only by a cluster-wide `Telemetry` grant, with a backend credential the agent never sees, an optional metric allow-list, and time-range guardrails. A dynamic-bearer auth mode plus the Azure companion package lets it query an Azure Monitor managed-Prometheus workspace with a rotating managed-identity token. | [MCP Telemetry](docs/lattice.api.mcp.telemetry/README.md) - [Azure token auth](docs/lattice.api.mcp.telemetry.azure/README.md) | [sample](samples/McpTelemetry/README.md) |
-| **Metrics** | `System.Diagnostics.Metrics` instruments published on the `orleans.lattice` meter, ready for OpenTelemetry subscription. | [Metrics](docs/lattice/metrics.md) | [sample](samples/Metrics/README.md) |
-| **Multi-tenancy** | Opt-in tenant isolation across a single-cluster or multi-cluster deployment: a keyspace-partitioned tenant per `t/{tenant}/` prefix, a tenant registry with a create / suspend / resume / delete lifecycle, per-tenant quotas / metering / rate limiting, optional per-tenant region residency, and a fail-closed operator control-plane facade reachable in-process or over gRPC. Turned on by adding the companion packages, with no change to the core tree. | [Multi-tenancy](docs/lattice.tenancy/README.md) | [sample](samples/MultiTenancy/README.md) |
-| **Online reshard** | Grow-only online migration of the physical shard count. | [Online Reshard](docs/lattice/online-reshard.md) | [sample](samples/OnlineReshard/README.md) |
-| **Performance** | Approximate single-silo throughput and per-call latency for point reads, point writes, multi-key batches, and atomic sagas, measured against real Azure Tables. | [Performance: single-silo guide](docs/lattice/performance-single-silo.md) | n/a |
-| **Predicate operations** | Filter typed reads, conditional writes, atomic batches, scans, cursors, and range deletes with an ordinary `Expression<Func<T, bool>>` evaluated server-side; only matching keys or values cross the wire. | [Predicate Operations](docs/lattice/predicated-operations.md) | [sample](samples/PredicateOperations/README.md) |
-| **Projection rebuild** | Cross-silo divergence detection with policy-driven recovery. | [Projection Rebuild](docs/lattice/projection-rebuild.md) | n/a |
-| **Queues** | Typed, cluster-internal FIFO queues backed by a reserved system tree, with optional bounded FIFO eviction. | [Queues](docs/lattice/queues.md) | n/a |
-| **Reference architecture** | A reference blueprint plus a parameterised deployment kit for an active-active, cross-region Orleans.Lattice estate on Azure Container Apps: durable WAL, cross-region replication, a shared Azure Blob backup sink, `lattice.scaling` autoscaling, Entra ID auth, MCP endpoints, a deployed Explorer, and Azure Front Door global ingress. | [Reference Architecture](reference-architecture.md) | [kit](reference-architecture/README.md) |
-| **Repo-context MCP** | An opt-in MCP tools package that gives an AI agent durable, conflict-free context and memory about a codebase: bootstrap onboarding of a repository, structural and symbol recall, free-form memories with optional TTL, exact-kNN semantic search with explainable ranking, structural graph navigation, and a budgeted context bundle with reuse economics and usage accounting - all stored in the CRDT B+ tree and served fail-closed to the authorized agent, packaged for local use as a dedicated Docker container. | [Repo-context MCP](docs/lattice.api.mcp.repocontext/README.md) | [sample](samples/RepoContextContainer/README.md) |
-| **Resize** | Change `MaxLeafKeys` or `MaxInternalChildren` on a live tree, undoable within the retention window. | [Tree Sizing](docs/lattice/tree-sizing.md) | [sample](samples/Resize/README.md) |
-| **Retry policy** | Opt-in retry surface for transient storage faults with caller-supplied idempotency keys. Library default is zero ambient cost. | [Retry Policy](docs/lattice/retry-policy.md) | [sample](samples/RetryPolicy/README.md) |
-| **Runtime replication config** | Enable or disable cross-cluster replication per tree at runtime - through a control API, MCP tools, or gRPC - instead of static boot-time configuration. The per-tree decision is distributed as a replicated CRDT system tree, so every cluster converges on the same enabled state and merge mode, fixed at enable-time and failing closed on ambiguity. | [Runtime replication config](docs/lattice.api.replication/README.md) | [sample](samples/RuntimeReplicationConfig/README.md) |
-| **Scalable writes** | Keys are sharded across many independent sub-trees. No single-root bottleneck. | [Architecture](docs/lattice/architecture.md) | n/a |
-| **Schema enforcement & versioning** | Opt-in companion package that validates every write against a per-tree policy (JSON, UTF-8, size, regex, or a structured predicate) and stamps values with a self-describing schema version, upcasting stale values to the current version on read. Rejected ingest is dead-lettered; existing data migrates via a crash-safe shadow-build. Zero overhead when unused. | [Schema](docs/lattice.schema/README.md) | [sample](samples/SchemaEnforcement/README.md) |
-| **Security** | Opt-in identity, authorization, and enforcement: authenticate callers (JWT, Entra, or a custom scheme), resolve them to subjects with nested-group membership, and enforce fail-closed default-deny policy per tree, prefix, or key on the core data path and the external APIs. | [Security](docs/lattice/security.md) | [sample](samples/Authorization/README.md) |
-| **Snapshots** | Point-in-time copy of a tree - offline (source locked) or online (source available). | [Snapshots](docs/lattice/snapshots.md) | [sample](samples/Snapshots/README.md) |
-| **Snapshot cursors** | Zero-observable-writes server-checkpointed iterators: every page reflects the tree state captured at open time, isolated from foreground writes, sagas, range deletes, and replication. | [Snapshot Cursors](docs/lattice/snapshot-cursors.md) | [sample](samples/SnapshotCursors/README.md) |
-| **Soft delete & recovery** | Trees can be soft-deleted with a configurable retention window. Recovery restores full access; purge permanently removes all data. | [Tree Deletion](docs/lattice/tree-deletion.md) | [sample](samples/SoftDeleteRecovery/README.md) |
-| **State model** | WAL is canonical; leaf state row holds topology + checkpoint only; CRDT keys use delta-only producer-side mutation. | [State Model](docs/lattice/state-model.md) | n/a |
-| **Strongly-consistent scans** | `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` return the exact live key set even during concurrent rebalancing. | [Consistency](docs/lattice/consistency.md) | [sample](samples/StronglyConsistentScans/README.md) |
-| **Tag indexes** | Associate tags with the keys of any tree and query keys back by tag - intersection (`WithAllTags`) and union (`WithAnyTags`), per-key tag CRUD, combined value+tags writes (eventual or atomic), on-demand reconcile, and a multi-tree view yielding `TaggedKey`. | [API Reference](docs/lattice/api.md#tag-indexes) | [sample](samples/TagIndexes/README.md) |
-| **Tenant administration** | Two console surfaces over the tenancy control API, split by privilege: platform operators manage tenant lifecycle, quota, region authorization and the initial admin grant; tenant administrators manage their own membership, cross-tenant grants and region residency, and see usage against a quota they cannot change. | [Tenant admin API](docs/lattice.api.tenantadmin/README.md) | [sample](samples/MultiTenancy/README.md) |
-| **Tenant metrics** | Time-series panels in the console over a backend-neutral telemetry facade. Every answer's tenant scope is derived on the server, never accepted from the caller, and a request that was narrowed is reported as narrowed rather than silently showing less. | [Telemetry API](docs/lattice.api.telemetry/README.md) | [sample](samples/Explorer/README.md) |
-| **Tombstone cleanup** | Background reaping of expired tombstones with crash-safe progress tracking. | [Tombstone Compaction](docs/lattice/tombstone-compaction.md) | n/a |
-| **Tree registry** | Built-in enumeration of all user trees and their per-tree config overrides - no external metadata store required. | [Tree Registry](docs/lattice/tree-registry.md) | [sample](samples/TreeRegistry/README.md) |
-| **TTL on `SetAsync`** | Per-entry time-to-live with absolute server-side expiry, preserved verbatim across splits, snapshots, resize, and replication. | [TTL](docs/lattice/ttl.md) | [sample](samples/Ttl/README.md) |
-| **Vector search** | Approximate nearest-neighbour search over vectors held in a tree, with query cost sub-linear in the corpus instead of proportional to it. The index is persisted on a Lattice tree and loaded back in bounded chunks, so a restart reloads it rather than rebuilding it, and a lazily opened index warms as it serves. Publishes a measured recall target and reports per query whether an approximate or an exact path answered. | [Vector](docs/lattice.vector/README.md) | [sample](samples/VectorSearch/README.md) |
-| **Verified atomic action** | The atomic-action coordinator's step-sequencing and crash-resume decisions - forward progress in order, reverse-order compensation exactly once, and resume-to-a-single-terminal - are driven by a pure, deterministic core that both production and a verification layer execute, so its all-or-nothing-or-compensated safety is machine-checked by a Coyote concurrency tier, not just integration tests. | [Verified Atomic Action](docs/lattice/verified-atomic-action.md) | n/a |
-| **Verified atomic-commit protocol** | The atomic-commit protocol behind atomic writes and online reshard is driven by pure, deterministic cores that both production and a verification layer execute, so its all-or-nothing safety and liveness properties are machine-checked by a Coyote concurrency tier and a TLA+ specification, not just integration tests. | [Verified Atomic-Commit](docs/lattice/verified-atomic-commit.md) | [sample](samples/VerifiedAtomicCommit/README.md) |
-| **Verified distributed lock** | The distributed lock's fencing and admission decisions - monotonic fencing tokens, stale-token rejection, mutual exclusion, and expired-lease reclamation - are driven by a pure, deterministic core that both production and a verification layer execute, so its safety properties are machine-checked by a Coyote concurrency tier, not just integration tests. | [Verified Distributed Lock](docs/lattice/verified-lock.md) | n/a |
-| **Verified WAL concurrency** | The write-ahead log's concurrency seams - the shipping watermark, the GC trim predicate, per-consumer cursor monotonicity, the shard-move fence, the shutdown drain, per-shard offset allocation, the buffer-pin blocked floor, and the resumable placement-move copy - are driven by pure, deterministic cores that both production and a verification layer execute, so their durability-safety properties are machine-checked by a Coyote concurrency tier, not just integration tests. | [Verified WAL](docs/lattice/verified-wal.md) | [sample](samples/VerifiedWalDurability/README.md) |
+Behaviour is validated end-to-end by a suite of [chaos tests](docs/lattice/chaos-tests.md) that hammer a live cluster with concurrent reads, writes, scans, splits, resizes, and reshards - optionally with random storage-write faults - and assert both live consistency and eventual convergence. The concurrency-critical protocols go further: the atomic-commit protocol, the WAL seams, the distributed lock, and the atomic-action coordinator are driven by pure deterministic cores that a [verification tier](FEATURES.md#reliability-and-formal-verification) machine-checks with Coyote and, for atomic commit, a TLA+ specification.
 
 ## Quick Start
 
@@ -125,7 +259,45 @@ siloBuilder
 
 Add cross-cluster replication on top by registering `AddLatticeReplication(...)` alongside the WAL. See the [`Orleans.Lattice.Replication` overview](docs/lattice.replication/README.md) for the full multi-cluster setup.
 
-## Reference
+For a local-first alternative to the Azure Table backend, register the
+[file write-ahead log](docs/lattice.storage.file/README.md) instead and keep the
+whole deployment on one machine.
+
+## RepoContext: an example built on the platform
+
+RepoContext is an MCP server that gives an AI agent durable, conflict-free
+memory about a codebase: a structural record and content digest per file, symbol
+outlines and a reverse cross-reference graph, agent-authored notes and decisions
+with optional TTL, semantic search over embeddings, and a budgeted context
+bundle with reuse accounting. It runs as a single local container.
+
+It is worth reading as a worked example because it composes most of the platform
+at once, and does so without a line of bespoke storage code:
+
+- Every record is a CRDT value on a Lattice tree, so concurrent agents converge
+  without locks and the store inherits durability, TTL and tombstone compaction
+  from the core.
+- [`Orleans.Lattice.Storage.File`](docs/lattice.storage.file/README.md) makes the
+  container restart-durable with no cloud account.
+- [`Orleans.Lattice.Vector`](docs/lattice.vector/README.md) provides the
+  approximate nearest-neighbour index behind semantic search, persisted on a
+  tree so a restart reloads it rather than rebuilding it.
+- [`Orleans.Lattice.Api.Mcp`](docs/lattice.api.mcp/README.md) supplies the
+  agent-facing surface and the fail-closed authorization gate; RepoContext adds
+  no authorization path of its own.
+- [`Orleans.Lattice.Api.Mcp.RepoContext.Replication`](docs/lattice.api.mcp.repocontext.replication/README.md)
+  turns the same store into a multi-cluster one by choosing a per-tree merge
+  mode, which is the [deployment journey](#the-deployment-journey) applied to a
+  real application.
+
+**RepoContext demonstrates Orleans.Lattice. It does not define it.** It is one
+application category among many, and nothing in the platform is shaped around
+it.
+
+See the [Repo-context MCP documentation](docs/lattice.api.mcp.repocontext/README.md)
+and the [container sample](samples/RepoContextContainer/README.md).
+
+## Documentation
 
 Use these documents for day-to-day use and operations:
 
@@ -153,80 +325,12 @@ For internals (the "how"):
 - [WAL Tuning](docs/lattice/wal-tuning.md) - how `WalMaxPendingBatches` and `WalPartitions` interact with a durable backend's throughput envelope; default sizing rules and the storage-account ceiling above which the cap stops helping.
 - [WAL Saturation Signal](docs/lattice/wal-saturation-signal.md) - the per-tree, three-state back-pressure surface (`IWalSaturationSignal`, `IWalSaturationObserver`) that lets callers throttle offered load before silent queueing on the writer-side admission gate.
 
-## Child Packages
+For the complete catalogues:
 
-Each optional add-on has its own documentation set, anchored by a package README that mirrors this one (overview, features, quick start, then API / configuration / architecture references). Most ship as their own NuGet package; any not yet published to NuGet are marked inline:
-
-| Package | Description | Docs |
-|---|---|---|
-| `Orleans.Lattice.Api.Abstractions` | The shared, transport-agnostic API contract: the seven facade service interfaces (state, data, auth, backup, schema, replication, tree administration) and their request/response DTOs, referenced by the facade implementations, the gRPC bindings, and the MCP server without cross-package internal-visibility grants. | [README](docs/lattice.api.abstractions/README.md) |
-| `Orleans.Lattice.Api.Auth` | Transport-agnostic control facade for administering membership and policy and explaining authorization decisions. | [README](docs/lattice.api.auth/README.md) |
-| `Orleans.Lattice.Api.Auth.Grpc` | The code-first gRPC binding and public client for the authorization control facade. | [README](docs/lattice.api.auth.grpc/README.md) |
-| `Orleans.Lattice.Api.Backup` | Transport-agnostic control facade for driving backup capture, restore, catalog listing, chain describe, and retention. | [README](docs/lattice.api.backup/README.md) |
-| `Orleans.Lattice.Api.Backup.Grpc` | The code-first gRPC binding and public client for the backup control facade. | [README](docs/lattice.api.backup.grpc/README.md) |
-| `Orleans.Lattice.Api.Data` | Write-capable external data-plane facade: point set/delete, point and bounded-range reads, and single- and cross-tree atomic batches for non-.NET clients, each authorized through the core gate. | [README](docs/lattice.api.data/README.md) |
-| `Orleans.Lattice.Api.Data.Grpc` | The code-first gRPC binding and public client for the read-write data-plane API. | [README](docs/lattice.api.data.grpc/README.md) |
-| `Orleans.Lattice.Api.Mcp` | Model Context Protocol (MCP) server binding: exposes the transport-agnostic API facades as opt-in, permission-aware MCP tools over an authenticated, fail-closed, default-deny credential bridge, registered with `AddLatticeMcp(...)` and mapped with `MapLatticeMcp()`. | [README](docs/lattice.api.mcp/README.md) |
-| `Orleans.Lattice.Api.Mcp.RepoContext` | Opt-in MCP tools that give an AI agent durable, conflict-free context and memory about a codebase - repository bootstrap, structural and symbol recall, free-form memories with optional TTL, and exact-kNN semantic search - stored in the CRDT B+ tree and served fail-closed, with a container host for local use. **Not yet published to NuGet** - distributed as a ready-to-run Docker container and consumed from source today; see the [container sample](samples/RepoContextContainer/README.md). | [README](docs/lattice.api.mcp.repocontext/README.md) |
-| `Orleans.Lattice.Api.Mcp.RepoContext.Replication` | Opt-in multi-cluster add-on for the repository-context store: `EnableRepoContextMultiCluster(...)` turns on cross-cluster replication for every repository-context tree with the correct per-tree merge mode - the vector-membership presence tree pinned to the add-wins `OrFlag` CRDT so active-active convergence can never silently drop an embedding, the agent-memory tree pinned to `MvRegister` so concurrent cross-cluster memory writes both survive and fold, other trees defaulting to last-writer-wins. A `LATTICE_REPOCONTEXT_INDEXING_ROLE` hub/spoke gate keeps exactly one cluster indexing, and a startup guard rejects an unsafe topology. Takes the `Orleans.Lattice.Replication` dependency so the repo-context core need not. **Not yet published to NuGet** - consumed from source alongside the repository-context package today. | [README](docs/lattice.api.mcp.repocontext.replication/README.md) |
-| `Orleans.Lattice.Api.Mcp.Telemetry` | Opt-in telemetry add-on for the MCP server: exposes cluster OpenTelemetry metrics as MCP tools by proxying a read-only Prometheus/PromQL backend, with a dual-credential trust boundary that stamps the backend credential and never forwards the caller's Lattice credential. | [README](docs/lattice.api.mcp.telemetry/README.md) |
-| `Orleans.Lattice.Api.Mcp.Telemetry.Azure` | Azure managed-identity backend-token provider for the MCP telemetry proxy: supplies a rotating Entra (Azure AD) access token so the telemetry tools can query an Azure Monitor managed-Prometheus endpoint, keeping the Azure identity dependency out of the core telemetry package. | [README](docs/lattice.api.mcp.telemetry.azure/README.md) |
-| `Orleans.Lattice.Api.Replication` | Transport-agnostic control facade for runtime per-tree replication configuration: an authorized operator can enable replication for a tree (fixing its wire merge mode), disable it, and inspect the replicated-tree set, authorized fail-closed through the shared access gate. | [README](docs/lattice.api.replication/README.md) |
-| `Orleans.Lattice.Api.Replication.Grpc` | The code-first gRPC binding and public client for the runtime replication control facade. | [README](docs/lattice.api.replication.grpc/README.md) |
-| `Orleans.Lattice.Api.Schema` | Transport-agnostic control facade for managing schema policy, dead letters, versioning, remediation, and compliance audits. | [README](docs/lattice.api.schema/README.md) |
-| `Orleans.Lattice.Api.Schema.Grpc` | The code-first gRPC binding and public client for the schema control facade. | [README](docs/lattice.api.schema.grpc/README.md) |
-| `Orleans.Lattice.Api.State` | Read-only cluster state-API facade: query, observe, and subscribe to trees, structure, entries, change feeds, and metrics. | [README](docs/lattice.api.state/README.md) |
-| `Orleans.Lattice.Api.State.Grpc` | The code-first gRPC binding and public client for the read-only state API. | [README](docs/lattice.api.state.grpc/README.md) |
-| `Orleans.Lattice.Api.Telemetry` | Backend-neutral telemetry facade: answers a curated set of named queries over a Prometheus-compatible backend, derives each answer's tenant scope on the server, and enforces a fail-closed metric allow-list on the metric names a query will actually evaluate. Callers name a query id and never supply PromQL. | [Docs](docs/lattice.api.telemetry/README.md) |
-| `Orleans.Lattice.Api.Telemetry.Grpc` | gRPC binding for the telemetry facade, for a remote head that cannot enforce tenant scoping locally. References only the shared contract package - a closure asserted over the transitive project graph, package ids, and emitted assembly references - and derives no tenant of its own. | [Docs](docs/lattice.api.telemetry.grpc/README.md) |
-| `Orleans.Lattice.Api.TenantAdmin` | Transport-agnostic operator control facade for tenant administration: create, suspend, resume, and delete tenants (delete cascading the tenant's trees), author per-tenant quotas, and administer per-tenant region residency, plus a fail-closed self-service read surface and an optional tenant-scoped tree-administration surface - all authorized through the shared access gate. | [README](docs/lattice.api.tenantadmin/README.md) |
-| `Orleans.Lattice.Api.TenantAdmin.Grpc` | The code-first gRPC binding and public client for the tenant-administration control facade. | [README](docs/lattice.api.tenantadmin.grpc/README.md) |
-| `Orleans.Lattice.Api.TreeAdmin` | Transport-agnostic control facade for whole-tree administration, composing the existing single-responsibility facades (it wraps the schema control facade by delegation). Exposes a fail-closed per-operation capability probe plus the whole-tree lifecycle surface: create, inspect, and reconfigure trees; alias resolution; delete, recover, and purge; bulk load; restore and revert; reshard, resize, snapshot; WAL placement audit and movement; materialised-view and tag-index management; shard compaction; and history retention. | [README](docs/lattice.api.treeadmin/README.md) |
-| `Orleans.Lattice.Api.TreeAdmin.Grpc` | The code-first gRPC binding and public client for the tree-administration control facade. | [README](docs/lattice.api.treeadmin.grpc/README.md) |
-| `Orleans.Lattice.Auth` | Authorization and enforcement: durable policy store, decision engine, and the fail-closed access gate the data path consults. | [README](docs/lattice.auth/README.md) |
-| `Orleans.Lattice.Backup` | Causally consistent backup and restore: full and incremental capture, scheduling and chain retention, an optional cross-tree causal fence, and a fail-closed permission model over a pluggable sink. | [README](docs/lattice.backup/README.md) |
-| `Orleans.Lattice.Backup.AzureBlob` | The durable Azure Blob Storage sink backend for backup artifacts and manifests. | [README](docs/lattice.backup.azureblob/README.md) |
-| `Orleans.Lattice.Caching.AzureBlob` | A durable Azure Blob Storage `IDistributedCache` for the family, backing the hosted-web Explorer's distributed token cache on a multi-replica host. | [README](docs/lattice.caching.azureblob/README.md) |
-| `Orleans.Lattice.Dashboards` | Bundled Grafana dashboards and provisioning templates for the `orleans.lattice` and `orleans.lattice.replication` meters. | [README](docs/lattice.dashboards/README.md) |
-| `Orleans.Lattice.Explorer.Access` | The Access (membership and access-control) management area for the Explorer: bridges the auth-admin control-API gRPC client into the explorer's navigation and capability model, gated behind a capability probe. Companion to `Explorer.Core`. | [README](docs/lattice.explorer/managing-access.md) |
-| `Orleans.Lattice.Explorer.Backup` | The Backups management area for the Explorer: bridges the backup control-API gRPC client into the explorer's navigation and capability model, gating the area and its per-scope actions behind a capability probe. Companion to `Explorer.Core`. | [README](docs/lattice.explorer/managing-backups.md) |
-| `Orleans.Lattice.Explorer.Core` | Head-agnostic core of the Explorer: the read-only state-API connection seam, configuration store, session, capability model, and the shared catalog, metrics, topology, data, dead-letter, and history navigation services, depending only on the public read-only state-API gRPC client. | [README](docs/lattice.explorer/running-the-explorer.md) |
-| `Orleans.Lattice.Explorer.DesignSystem` | The Explorer design system: the design-token layer, the single named breakpoint set (compact / medium / expanded), and the adaptive shell primitives every plugin is styled against. It has no project dependencies, so a plugin can consume it without taking on the Explorer core or any feature package. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Entra` | Optional Microsoft Entra ID (Azure AD) interactive login provider for the Explorer: an OIDC auth-code + PKCE (or device-code) sign-in that acquires and silently refreshes a bearer token for an auth-enabled State API, keeping the MSAL dependency out of the core explorer. | [README](docs/lattice.explorer.entra/README.md) |
-| `Orleans.Lattice.Explorer.Entra.Web` | Hosted-web Microsoft Entra ID (OpenID Connect) sign-in for the Blazor Server Explorer: wires the ASP.NET auth-code + PKCE cookie flow through Microsoft.Identity.Web and exchanges the browser session for a State API bearer token, without any public API change to the released Explorer. | [README](docs/lattice.explorer.entra.web/README.md) |
-| `Orleans.Lattice.Explorer.Plugins.Abstractions` | The Explorer plugin contract: the descriptor, the surface and selection-kind vocabulary, the access-gate seam, and the host context. A plugin declares its identity, its view, the single domain contract that is the whole of its reach, and its gate; the shell needs no per-plugin knowledge. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Data` | The Data browser plugin: paged key/value browsing for a selected tree or view, with entry detail and tag editing. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.DeadLetter` | The dead-letter plugin: the rejected-envelope queue for a selected tree, with inspection and remediation. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.History` | The change-history plugin: the per-key revision timeline, rendered inline from a selected data row rather than as a tab of its own. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Metrics` | The live-metrics plugin: per-selection counters and rates for a tree or view. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.MyTenant` | The My Tenant plugin, for a tenant administrator: membership and cross-tenant grants, region residency, and usage against quota. Quota is read-only here - setting it is a platform-operator capability. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Selection` | The shared kernel for per-selection plugins: the view base, the plugin key vocabulary, and the nested-surface registry through which one plugin renders another inline without referencing it. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.TagIndex` | The tag-index plugin: browsing a tag index and its members. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Telemetry` | The telemetry plugin: time-series panels over the telemetry facade, mounted both as an operator-facing area and as the metrics section of My Tenant. It renders the tenant scope the server pinned, and says so when a request was narrowed. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Tenancy` | The shared tenancy seam: the tenant-admin control-API client and domain model that the Tenants and My Tenant plugins both operate against. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Tenants` | The Tenants plugin, for a platform operator: tenant lifecycle, quota, region authorization, and the initial tenant-admin grant. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Plugins.Topology` | The topology plugin: the shard and node layout for a selected tree. | [Docs](docs/lattice.explorer/writing-a-plugin.md) |
-| `Orleans.Lattice.Explorer.Schema` | The Schema (enforcement, versioning, remediation, and compliance) management area for the Explorer: bridges the schema control-API gRPC client into the explorer's navigation and capability model, gated behind a capability probe. Companion to `Explorer.Core`. | [README](docs/lattice.explorer/managing-schema.md) |
-| `Orleans.Lattice.Explorer.UI` | Shared Razor component class library for the Explorer: the routable pages, layout, navigation, detail, backup, access, and authentication components (plus packaged static web assets) rendered identically by every explorer head. | [README](docs/lattice.explorer/running-the-explorer.md) |
-| `Orleans.Lattice.Explorer.Web` | Opt-in, auth-aware web console for a running cluster - a tree browser plus capability-gated Backups and Access admin areas over the gRPC APIs (and a Schema area hidden by default) - embeddable via `AddLatticeExplorerWeb` / `MapLatticeExplorer` or run standalone. Composes the shared explorer libraries (`Explorer.Core`, `.UI`, `.Backup`, `.Access`, `.Schema`) into an ASP.NET Core head. | [README](docs/lattice.explorer/README.md) |
-| `Orleans.Lattice.GrainIndex` | Typed grain indexing: track an Orleans grain's typed state in a lattice tree and query it with the server-side predicate surface, without hand-maintaining a secondary index. Properties are declared explicitly with `Include`, grains enrol via an `[Indexed]` state facet, a reminder-driven backfill onboards dormant grains, a durable outbox retries failed index writes, and startup rejects a declaration change that would invalidate stored entries. | [README](docs/lattice.grainindex/README.md) |
-| `Orleans.Lattice.Membership` | Identity directory and credential-to-subject resolution: groups, transitive membership edges, and pluggable authenticators. | [README](docs/lattice.membership/README.md) |
-| `Orleans.Lattice.Membership.Entra` | Microsoft Entra ID (Azure AD) credential authenticator for the membership layer. | [README](docs/lattice.membership.entra/README.md) |
-| `Orleans.Lattice.Membership.Entra.Graph` | Microsoft Graph-backed group-overflow resolver for the Entra authenticator (for subjects whose group claims exceed the token) and the Graph-backed identity directory that the Explorer Access area searches and validates against. | [README](docs/lattice.membership.entra.graph/README.md) |
-| `Orleans.Lattice.Membership.Oidc` | Generic, discovery-document-driven OpenID Connect credential authenticator for the membership layer (Okta, Auth0, Keycloak, Ping, Google). | [README](docs/lattice.membership.oidc/README.md) |
-| `Orleans.Lattice.Replication` | Cross-cluster active-active replication: producer, WAL, shipper, apply, bootstrap, and anti-entropy. | [README](docs/lattice.replication/README.md) |
-| `Orleans.Lattice.Replication.Grpc` | The canonical gRPC push-transport binding for replication. | [README](docs/lattice.replication.grpc/README.md) |
-| `Orleans.Lattice.Scaling` | Cluster-aggregate autoscaling signal: a compute-axis replica-demand scalar for KEDA plus an advisory, signal-only storage-axis WAL rebalance recommendation, served over an HTTP endpoint and an ASP.NET Core health check. | [README](docs/lattice.scaling/README.md) |
-| `Orleans.Lattice.Schema` | Opt-in schema enforcement and versioning companion over the opaque-`byte[]` core: per-tree write validation with dead-letter diversion of non-compliant replicated or restored items, and self-describing value versioning with read-time upcasting. | [README](docs/lattice.schema/README.md) |
-| `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |
-| `Orleans.Lattice.Storage.File` | A durable local-disk write-ahead-log backend: an append-and-fsync log per shard with crash-safe reconciliation and background compaction that rewrites the log to reclaim trimmed space, using the same per-entry record payload encoding as the Azure Table backend. Intended for single-node and containerized deployments. **Not yet published to NuGet** - build from source today. | [README](docs/lattice.storage.file/README.md) |
-| `Orleans.Lattice.Tenancy` | Opt-in multi-tenancy across a single-cluster or multi-cluster deployment: keyspace-partitioned tenants under a `t/{tenant}/` prefix, a tenant registry with a create / suspend / resume / delete lifecycle, per-tenant quotas, usage metering (folded across clusters), and rate limiting under a cluster-converged or per-cluster enforcement scope, and optional per-tenant region residency - layered on the core through null seams so a host without it is byte-for-byte unchanged. | [README](docs/lattice.tenancy/README.md) |
-| `Orleans.Lattice.Vector` | Allocation-lean approximate nearest-neighbour vector index over Lattice-held vectors: an inverted-file core whose query cost is sub-linear in the corpus, persisted on a Lattice tree in bounded chunks with lazy partial load and incremental insert, delete and re-embed maintenance, so a restart reloads the index instead of rebuilding it. Publishes a measured recall target and reports per query whether an approximate or an exact path answered. **Not yet published to NuGet** - build from source today. | [README](docs/lattice.vector/README.md) |
-
-## Releases
-
-See [CHANGELOG.md](CHANGELOG.md) for the per-version notes and [docs/RELEASING.md](docs/RELEASING.md) for the per-package tag-and-publish protocol.
-
+- [FEATURES.md](FEATURES.md) - every capability, grouped by concern, with its docs and sample.
+- [PACKAGES.md](PACKAGES.md) - every package, grouped by the seam it fills.
+- [reference-architecture.md](reference-architecture.md) - the active-active, cross-region deployment blueprint and its parameterised deployment kit.
+- [llms.txt](llms.txt) - the documentation index for AI agents and LLM tooling.
 
 ## Performance Characteristics
 
@@ -242,6 +346,12 @@ Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wik
 | Space | O(n) |
 
 With the default branching factor (~128 children per node), a shard with two million keys is only three levels deep, so a single-key lookup crosses just three grains. Sharding (default 64) reduces per-shard *n* further; cross-shard operations scatter-gather across all shards.
+
+Measured single-silo throughput and latency against real Azure Tables are in the [single-silo performance guide](docs/lattice/performance-single-silo.md).
+
+## Releases
+
+See [CHANGELOG.md](CHANGELOG.md) for the per-version notes and [docs/RELEASING.md](docs/RELEASING.md) for the per-package tag-and-publish protocol.
 
 ## Contributing
 

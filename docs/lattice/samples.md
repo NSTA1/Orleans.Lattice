@@ -4,41 +4,100 @@ Each sample lives under [`samples/`](../../samples) and is a self-contained runn
 
 ## Feature gallery
 
-Minimal, single-feature samples - one per row in the [README feature table](../../README.md#features). Each is an independent console app that hosts a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrates exactly one capability with heavily-commented, before/after output, and carries its own README with a "When to use / When not to use" note. Run any of them with `dotnet run --project samples/<Name>`.
+Minimal, single-feature samples, grouped by the same concerns as the [feature catalogue](../../FEATURES.md). Each is an independent console app that hosts a single-silo in-process cluster (like [HelloWorld](#helloworld)), demonstrates exactly one capability with heavily-commented, before/after output, and carries its own README with a "When to use / When not to use" note. Run any of them with `dotnet run --project samples/<Name>`.
+
+A few samples deploy or compose more than one process and have a detailed section of their own further down: [HelloWorld](#helloworld), [MultiSiteManufacturing](#multisitemanufacturing), [VehicleFleetSimulator](#vehiclefleetsimulator), and [ClusterScaling](#clusterscaling).
+
+### Core Storage and Durability
 
 | Sample | What it shows |
 |---|---|
-| [AtomicAction](../../samples/AtomicAction/README.md) | `IAtomicActionGrain` saga / TCC coordinator running a Lattice tree write and a custom external effect in one all-or-nothing transaction: a committing plan, a rolling-back plan that restores the tree pre-image and releases the external effect, and an idempotent retry. |
 | [AtomicWrites](../../samples/AtomicWrites/README.md) | `SetManyAtomicAsync` all-or-nothing multi-key writes, a failed-guard batch that leaves no partial state, and the cross-tree `IGrainFactory` overload. |
-| [Authorization](../../samples/Authorization/README.md) | Single-silo default-deny authorization with group and nested-group membership: a group nested inside another group, per-tree/prefix/key rules, read-visibility range pruning, and a runtime grant via nesting. |
-| [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
-| [ChangeHistory](../../samples/ChangeHistory/README.md) | Reading a key's revision timeline with `ScanEntryHistoryAsync`. |
-| [ClusterScaling](../../samples/ClusterScaling/README.md) | A deployable Azure Container Apps multi-silo cluster whose replica count is autoscaled by the `Orleans.Lattice.Scaling` compute-axis signal through a KEDA `metrics-api` rule, with a bundled load driver. Deploy-to-Azure, not in-process. |
-| [ConflictFreeMerges](../../samples/ConflictFreeMerges/README.md) | Two CRDT writers converging to the same result regardless of merge order. |
-| [CrossClusterAuthorization](../../samples/CrossClusterAuthorization/README.md) | Two in-process clusters where the reserved membership and authorization-policy system trees converge over gRPC replication, so a grant or revoke authored on one site becomes enforced on the other. |
-| [CrossClusterReplication](../../samples/CrossClusterReplication/README.md) | Two in-process clusters over gRPC where a write on one converges onto the other. |
-| [Diagnostics](../../samples/Diagnostics/README.md) | The `DiagnoseAsync` per-tree health snapshot: shard depth, live keys, tombstones, hotness. |
+| [AtomicAction](../../samples/AtomicAction/README.md) | `IAtomicActionGrain` saga / TCC coordinator running a Lattice tree write and a custom external effect in one all-or-nothing transaction: a committing plan, a rolling-back plan that restores the tree pre-image and releases the external effect, and an idempotent retry. |
 | [DistributedLock](../../samples/DistributedLock/README.md) | `ILatticeLockGrain` FIFO-fair cluster-wide lock / lease: acquire / renew / release with monotonic fencing tokens, non-blocking try-acquire under contention, and a queued waiter granted the instant the holder releases. |
-| [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
-| [EntraAuthorization](../../samples/EntraAuthorization/README.md) | Single-silo authorization driven by a real Microsoft Entra ID identity: the signed-in Azure CLI user's `oid` is the tree owner (sole bootstrap administrator), so the owner writes and reads a value while an anonymous request is denied by the default-deny gate. |
-| [Events](../../samples/Events/README.md) | Subscribing to the per-tree `LatticeTreeEvent` Orleans stream. |
-| [GrainIndex](../../samples/GrainIndex/README.md) | Indexing a grain's typed state and running typed predicate queries over it, including a two-property conjunction and a de-duplicated disjunction. |
-| [HistoryViews](../../samples/HistoryViews/README.md) | An opt-in durable per-key history view whose revisions survive WAL garbage collection. |
-| [MaterialisedViews](../../samples/MaterialisedViews/README.md) | A filter view and a sum-aggregation view maintained off the source tree's WAL. |
-| [Metrics](../../samples/Metrics/README.md) | Reading the `orleans.lattice` meter instruments with a `MeterListener`. |
-| [OnlineReshard](../../samples/OnlineReshard/README.md) | Growing the physical shard count online with reads, writes, and data intact throughout. |
-| [PasswordProtection](../../samples/PasswordProtection/README.md) | A username/password front door for the State API gRPC surface (`AddEnvVarCredentialAuthorizer`) composed with per-tree authorization: a bootstrap admin plus a read-only user, wrong-password and anonymous calls rejected, and one tree hidden from the reader. |
+| [ConflictFreeMerges](../../samples/ConflictFreeMerges/README.md) | Two CRDT writers converging to the same result regardless of merge order. |
+| [StronglyConsistentScans](../../samples/StronglyConsistentScans/README.md) | `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` returning the exact live key set under concurrent writes. |
 | [PredicateOperations](../../samples/PredicateOperations/README.md) | Server-side `Expression<Func<T, bool>>` push-down so only matching keys or values cross the wire. |
-| [Resize](../../samples/Resize/README.md) | Changing `MaxLeafKeys` / `MaxInternalChildren` on a live, populated tree. |
-| [RetryPolicy](../../samples/RetryPolicy/README.md) | An idempotency-keyed retry policy recovering from simulated transient storage faults. |
+| [DurableCursors](../../samples/DurableCursors/README.md) | A server-checkpointed cursor resuming from its last yielded key after a client restart. |
 | [SnapshotCursors](../../samples/SnapshotCursors/README.md) | Strict snapshot isolation: mid-iteration writes stay invisible to an open snapshot cursor. |
 | [Snapshots](../../samples/Snapshots/README.md) | An offline point-in-time copy of a whole tree into an independent destination tree. |
-| [SoftDeleteRecovery](../../samples/SoftDeleteRecovery/README.md) | Soft-deleting a tree within its retention window, recovering it, then purging permanently. |
-| [StronglyConsistentScans](../../samples/StronglyConsistentScans/README.md) | `CountAsync` / `ScanKeysAsync` / `ScanEntriesAsync` returning the exact live key set under concurrent writes. |
-| [TagIndexes](../../samples/TagIndexes/README.md) | Tagging keys and querying them back with `WithAllTags` (intersection) and `WithAnyTags` (union). |
-| [TreeRegistry](../../samples/TreeRegistry/README.md) | Enumerating all user trees and their per-tree configuration overrides. |
+| [BulkLoading](../../samples/BulkLoading/README.md) | Seeding an empty tree via one-shot `BulkLoadAsync` and streaming `IAsyncEnumerable` ingestion. |
+| [OnlineReshard](../../samples/OnlineReshard/README.md) | Growing the physical shard count online with reads, writes, and data intact throughout. |
+| [Resize](../../samples/Resize/README.md) | Changing `MaxLeafKeys` / `MaxInternalChildren` on a live, populated tree. |
 | [Ttl](../../samples/Ttl/README.md) | Per-entry time-to-live: a key visible before its TTL and gone after it expires. |
+| [SoftDeleteRecovery](../../samples/SoftDeleteRecovery/README.md) | Soft-deleting a tree within its retention window, recovering it, then purging permanently. |
+| [TreeRegistry](../../samples/TreeRegistry/README.md) | Enumerating all user trees and their per-tree configuration overrides. |
+| [RetryPolicy](../../samples/RetryPolicy/README.md) | An idempotency-keyed retry policy recovering from simulated transient storage faults. |
+
+### Replication and Distribution
+
+| Sample | What it shows |
+|---|---|
+| [CrossClusterReplication](../../samples/CrossClusterReplication/README.md) | Two in-process clusters over gRPC where a write on one converges onto the other. |
+| [RuntimeReplicationConfig](../../samples/RuntimeReplicationConfig/README.md) | Enabling cross-cluster replication for a tree at runtime through the replication control API, instead of declaring replicated trees statically at boot. |
+
+### Governance
+
+| Sample | What it shows |
+|---|---|
+| [SchemaEnforcement](../../samples/SchemaEnforcement/README.md) | The two opt-in `Orleans.Lattice.Schema` capabilities over the opaque-`byte[]` core: per-tree write validation with dead-letter diversion, and self-describing value versioning with read-time upcasting. |
+| [MultiTenancy](../../samples/MultiTenancy/README.md) | A single-silo tour of multi-tenancy: the tenant registry, the isolation naming seam, and the operator control-plane facade. |
+
+### Identity and Security
+
+| Sample | What it shows |
+|---|---|
+| [Authorization](../../samples/Authorization/README.md) | Single-silo default-deny authorization with group and nested-group membership: a group nested inside another group, per-tree/prefix/key rules, read-visibility range pruning, and a runtime grant via nesting. |
+| [EntraAuthorization](../../samples/EntraAuthorization/README.md) | Single-silo authorization driven by a real Microsoft Entra ID identity: the signed-in Azure CLI user's `oid` is the tree owner (sole bootstrap administrator), so the owner writes and reads a value while an anonymous request is denied by the default-deny gate. |
+| [PasswordProtection](../../samples/PasswordProtection/README.md) | A username/password front door for the State API gRPC surface (`AddEnvVarCredentialAuthorizer`) composed with per-tree authorization: a bootstrap admin plus a read-only user, wrong-password and anonymous calls rejected, and one tree hidden from the reader. |
+| [CrossClusterAuthorization](../../samples/CrossClusterAuthorization/README.md) | Two in-process clusters where the reserved membership and authorization-policy system trees converge over gRPC replication, so a grant or revoke authored on one site becomes enforced on the other. |
+
+### Administration and Operations
+
+#### Operations
+
+| Sample | What it shows |
+|---|---|
+| [BackupAndRestore](../../samples/BackupAndRestore/README.md) | The `Orleans.Lattice.Backup` surface end to end against a single in-process silo, using the default in-cluster backup sink. |
+| [ClusterScaling](../../samples/ClusterScaling/README.md) | A deployable Azure Container Apps multi-silo cluster whose replica count is autoscaled by the `Orleans.Lattice.Scaling` compute-axis signal through a KEDA `metrics-api` rule, with a bundled load driver. Deploy-to-Azure, not in-process. |
+| [Diagnostics](../../samples/Diagnostics/README.md) | The `DiagnoseAsync` per-tree health snapshot: shard depth, live keys, tombstones, hotness. |
+| [Events](../../samples/Events/README.md) | Subscribing to the per-tree `LatticeTreeEvent` Orleans stream. |
+| [Metrics](../../samples/Metrics/README.md) | Reading the `orleans.lattice` meter instruments with a `MeterListener`. |
+| [StateExplorer](../../samples/StateExplorer/README.md) | A console tree-explorer over the read-only state-API gRPC surface from `Orleans.Lattice.Api.State`. |
+
+#### Explorer console (in progress)
+
+**Status: in progress.** The Explorer is under active development, so this sample tracks a surface that is still moving.
+
+| Sample | What it shows |
+|---|---|
+| [Explorer](../../samples/Explorer/README.md) | The opt-in `Orleans.Lattice.Explorer.Web` hosting library co-hosted with a single-silo cluster in one process, so the console can be browsed against live data. **In progress** - the Explorer surface is still moving. |
+
+### AI and MCP
+
+| Sample | What it shows |
+|---|---|
+| [McpServer](../../samples/McpServer/README.md) | A single-silo cluster co-hosted with the Model Context Protocol endpoint from `Orleans.Lattice.Api.Mcp`, exposing the API facades as agent-callable tools. |
+| [McpTelemetry](../../samples/McpTelemetry/README.md) | A single-silo cluster co-hosted with the `Orleans.Lattice.Api.Mcp.Telemetry` add-on, exposing cluster metrics to an agent over a read-only Prometheus-backed proxy. |
+| [RepoContextContainer](../../samples/RepoContextContainer/README.md) | The RepoContext MCP server run as a single restart-durable container alongside its embedding companion. |
+
+### Indexing, Search and Views
+
+| Sample | What it shows |
+|---|---|
+| [MaterialisedViews](../../samples/MaterialisedViews/README.md) | A filter view and a sum-aggregation view maintained off the source tree's WAL. |
+| [HistoryViews](../../samples/HistoryViews/README.md) | An opt-in durable per-key history view whose revisions survive WAL garbage collection. |
+| [ChangeHistory](../../samples/ChangeHistory/README.md) | Reading a key's revision timeline with `ScanEntryHistoryAsync`. |
+| [TagIndexes](../../samples/TagIndexes/README.md) | Tagging keys and querying them back with `WithAllTags` (intersection) and `WithAnyTags` (union). |
+| [GrainIndex](../../samples/GrainIndex/README.md) | Indexing a grain's typed state and running typed predicate queries over it, including a two-property conjunction and a de-duplicated disjunction. |
+| [VectorSearch](../../samples/VectorSearch/README.md) | Approximate nearest-neighbour search with `Orleans.Lattice.Vector`: sub-linear query cost, honest per-query reporting of the path that answered, and first-class deletes. |
+
+### Reliability and Formal Verification
+
+| Sample | What it shows |
+|---|---|
 | [VerifiedAtomicCommit](../../samples/VerifiedAtomicCommit/README.md) | A concurrent snapshot reader (`GetManyAsync`) races a flipping atomic saga and never observes a torn view - the all-or-nothing property the atomic-commit cores, Coyote models, and TLA+ spec machine-check. |
+| [VerifiedWalDurability](../../samples/VerifiedWalDurability/README.md) | The WAL garbage collector trimming only entries every consumer has durably acked - the durability property the WAL cores and their Coyote models machine-check. |
 
 ## HelloWorld
 

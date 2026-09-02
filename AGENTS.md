@@ -6,11 +6,26 @@ detailed rules under `.github/` - when they disagree, `.github/` wins.
 
 ## What this project is
 
-Orleans.Lattice is a distributed B+ tree built on Microsoft Orleans: a sharded,
-CRDT-backed key-value store where every key is a `string` and every value is
-`byte[]`. The keyspace is split across self-balancing sub-trees whose durability
-boundary is a write-ahead log (WAL); conflict resolution is algebraic (no locks,
-no consensus). See [README.md](README.md) for the capability overview and
+Orleans.Lattice is a platform for building durable, distributed state systems on
+Microsoft Orleans. At its centre is a sharded, CRDT-backed key-value store where
+every key is a `string` and every value is `byte[]`: the keyspace is split across
+self-balancing B+ sub-trees whose durability boundary is a write-ahead log (WAL),
+and conflict resolution is algebraic (no locks, no consensus).
+
+Around that core, the concerns a system acquires once it outgrows one machine -
+storage, identity, governance, replication, administration, observability - are
+companion packages that fill documented seams rather than core features. A host
+that registers none of them runs the core library alone.
+
+It is local-first. A complete deployment runs on a single machine with no cloud
+dependency, and the same `ILattice` programming model carries through to a
+globally distributed, active-active estate; what changes between those two points
+is which companion packages a host registers, not the code that reads and writes
+data.
+
+See [README.md](README.md) for the platform overview and the Local -> Team ->
+Global deployment journey, [FEATURES.md](FEATURES.md) for the capability
+catalogue, [PACKAGES.md](PACKAGES.md) for the package inventory, and
 [llms.txt](llms.txt) for a documentation index.
 
 ## Finding things in the repo
@@ -44,9 +59,10 @@ promoted to `gotchas` / `conventions` / `decisions` when it closes.
   gRPC bindings, auth and membership, backup, storage backends, schema, scaling,
   caching, dashboards, and the Explorer) are **not enumerated here** to avoid
   drift. The authoritative, maintained inventory - one row per shipped package,
-  with a one-line description and a docs link - is the **Child Packages** table
-  in [README.md](README.md#child-packages). Consult it to learn what a package
-  is; it is updated whenever a package is added.
+  with a one-line description and a docs link - is
+  [PACKAGES.md](PACKAGES.md), grouped by the seam each package fills. Consult it
+  to learn what a package is; it is updated whenever a package is added. The
+  matching capability catalogue is [FEATURES.md](FEATURES.md).
 - `test/<package>/` - the NUnit test project for each `src/<package>/`.
 - `docs/<package>/` - Markdown documentation for each package (plus a docs-only
   `docs/crdt/` conceptual topic with no `src/`/`test/` counterpart).
@@ -54,7 +70,7 @@ promoted to `gotchas` / `conventions` / `decisions` when it closes.
 
 Convention: package `foo` has code at `src/foo/`, tests at `test/foo/`, docs at
 `docs/foo/`. CI discovers packages from this layout automatically. Note the
-Child Packages table lists some packages at finer (per-assembly) granularity
+PACKAGES.md inventory lists some packages at finer (per-assembly) granularity
 than `src/` - for example the single `src/lattice.explorer/` directory ships
 several `Orleans.Lattice.Explorer.*` assemblies.
 
