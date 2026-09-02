@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests;
 [TestFixture]
 public sealed class RepoContextToolHandlerValidationTests
 {
-    private static void AssertRejects(TestDelegate call, string parameterName)
+    private static void AssertRejects(Action call, string parameterName)
         => Assert.That(
             call,
             Throws.InstanceOf<McpException>().With.Message.Contains($"'{parameterName}'"),

@@ -1946,6 +1946,123 @@ internal sealed partial class LatticeGrain(
             cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task ApplyCrdtDeltaManyAsync(
+        List<KeyValuePair<string, byte[]>> deltas,
+        LatticeMergeMode mode,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfSystemTree();
+        ThrowIfUserOriginSystemDataTree();
+        ThrowIfProtectedView();
+        ThrowIfShuttingDown();
+        ThrowIfCrdtWriteViolatesReplicationMode(mode);
+        ArgumentNullException.ThrowIfNull(deltas);
+        if (mode == LatticeMergeMode.LwwRegister)
+        {
+            throw new ArgumentException(
+                "ApplyCrdtDeltaManyAsync does not accept LatticeMergeMode.LwwRegister; "
+                + "use SetManyAsync for LWW writes.",
+                nameof(mode));
+        }
+
+        {
+            var sizeOptions = Options;
+            if (sizeOptions.MaxKeyLength is not null || sizeOptions.MaxValueSizeBytes is not null)
+            {
+                foreach (var entry in deltas)
+                {
+                    if (entry.Key is not null)
+                    {
+                        ValidateWriteSize(entry.Key, entry.Value);
+                    }
+                }
+            }
+        }
+
+        EnforceAdmissionControl();
+        // Enforced as CrdtApply, not Write: the batch must clear the same
+        // operation the single-key ApplyCrdtDeltaAsync clears, or batching would
+        // silently widen what a caller is authorised to do.
+        await EnforceEntryWritesAsync(deltas, null, cancellationToken, LatticeOperation.CrdtApply);
+        await ThrowIfWriteNotAdmittedAsync(cancellationToken);
+        if (WriteInterceptionActive)
+        {
+            deltas = await InterceptEntriesAsync(LatticeOperation.CrdtApply, deltas, atomic: false, cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        LatticeTransactionContext.EnsureCurrent();
+        await EnsureCompactionReminderAsync();
+        await EnsureMonitorAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (deltas.Count == 0)
+        {
+            return;
+        }
+
+        await RetryOnStaleRoutingAsync(
+            (self: this, deltas, mode),
+            static args => args.self.ApplyCrdtDeltaManyAsyncCore(args.deltas, args.mode),
+            cancellationToken);
+
+        if (await _eventsGate.IsEnabledAsync(grainFactory, TreeId, Options))
+        {
+            foreach (var entry in deltas)
+            {
+                await PublishEventAsync(LatticeTreeEventKind.Set, entry.Key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Routes a CRDT batch: buckets by physical shard and fans out one batched
+    /// RPC per shard, mirroring <see cref="SetManyAsyncCore"/>'s shape including
+    /// its single-shard fast path (the dominant case, which avoids the bucketing
+    /// dictionary and the per-shard list copy entirely).
+    /// </summary>
+    private async Task ApplyCrdtDeltaManyAsyncCore(List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
+    {
+        var (physicalTreeId, shardMap) = await GetRoutingAsync();
+
+        var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
+        if (physicalShardCount == 1)
+        {
+            // Every delta provably resolves to the one shard, so route the
+            // caller's list straight through as the single bucket.
+            var soleShard = GetShardGrainByIndex(physicalTreeId, shardMap.Resolve(deltas[0].Key));
+            await ShardActivationRetry.RunAsync(() => soleShard.ApplyCrdtDeltaManyAsync(deltas, mode));
+            return;
+        }
+
+        var expectedPerShard = Math.Max(4, deltas.Count / physicalShardCount);
+        var bucketCapacity = Math.Min(expectedPerShard, 256);
+        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
+        foreach (var entry in deltas)
+        {
+            var idx = shardMap.Resolve(entry.Key);
+            if (!shardBuckets.TryGetValue(idx, out var bucket))
+            {
+                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
+                shardBuckets[idx] = bucket;
+            }
+
+            bucket.Add(entry);
+        }
+
+        var tasks = new List<Task>(shardBuckets.Count);
+        foreach (var (shardIdx, bucket) in shardBuckets)
+        {
+            var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
+            // Per-shard retry wrap: one shard's cold-start seed timeout retries
+            // only that shard, not the whole fan-out.
+            tasks.Add(ShardActivationRetry.RunAsync(() => shard.ApplyCrdtDeltaManyAsync(bucket, mode)));
+        }
+
+        await Task.WhenAll(tasks);
+    }
+
     public async Task<byte[]?> GetOrSetAsync(string key, byte[] value, CancellationToken cancellationToken = default)
     {
         ThrowIfSystemTree();

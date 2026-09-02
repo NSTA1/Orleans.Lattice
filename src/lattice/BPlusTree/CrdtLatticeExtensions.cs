@@ -11,6 +11,147 @@ namespace Orleans.Lattice;
 public static class CrdtLatticeExtensions
 {
     /// <summary>
+    /// Enables many OR-Flags in one batched write: reads every current flag with
+    /// a single <see cref="ILattice.GetManyAsync(List{string}, System.Threading.CancellationToken)"/>,
+    /// mints each key's enable delta from that snapshot, and applies them all
+    /// through one
+    /// <see cref="ILattice.ApplyCrdtDeltaManyAsync(List{KeyValuePair{string, byte[]}}, LatticeMergeMode, System.Threading.CancellationToken)"/>.
+    /// <para>
+    /// This is the batched replacement for a per-key
+    /// <c>lattice.OrFlag(key).EnableAsync(replicaId)</c> loop, which costs two
+    /// round trips per key (a read to mint the delta, then the apply). Presence
+    /// or membership marking - the motivating workload - is exactly that loop.
+    /// </para>
+    /// <para>
+    /// <b>Not atomic</b>, like the underlying batch. Enabling is idempotent under
+    /// OR-Flag merge semantics, so a retried batch converges.
+    /// </para>
+    /// </summary>
+    /// <param name="lattice">The OR-Flag-mode tree holding the flags.</param>
+    /// <param name="keys">The keys to enable. An empty collection is a no-op.</param>
+    /// <param name="replicaId">The replica identity minting the enable dots.</param>
+    /// <param name="cancellationToken">Cancels the read or the batched apply.</param>
+    /// <exception cref="System.ArgumentNullException">
+    /// <paramref name="lattice"/>, <paramref name="keys"/>, or <paramref name="replicaId"/> is <see langword="null"/>.
+    /// </exception>
+    public static async Task EnableManyAsync(
+        this ILattice lattice,
+        IReadOnlyCollection<string> keys,
+        string replicaId,
+        CancellationToken cancellationToken = default)
+    {
+        var deltas = await MintEnableDeltasAsync(lattice, keys, replicaId, cancellationToken).ConfigureAwait(false);
+        if (deltas.Count == 0)
+        {
+            return;
+        }
+
+        await lattice.ApplyCrdtDeltaManyAsync(deltas, LatticeMergeMode.OrFlag, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stages many OR-Flag enables for a cross-tree atomic write, minting every
+    /// delta from a single batched read rather than one read per key. Hand the
+    /// returned tokens to
+    /// <see cref="LatticeAtomicWriteBuilder.SetMany(IEnumerable{LatticeStagedCrdtWrite})"/>.
+    /// <para>
+    /// The staging cost is what made a wide atomic CRDT write expensive: each
+    /// accessor's <c>Stage*</c> reads its own key, so staging N keys was N reads
+    /// before the saga even began. This collapses that to one.
+    /// </para>
+    /// </summary>
+    /// <param name="lattice">The OR-Flag-mode tree holding the flags.</param>
+    /// <param name="keys">The keys to stage enables for.</param>
+    /// <param name="replicaId">The replica identity minting the enable dots.</param>
+    /// <param name="cancellationToken">Cancels the batched read.</param>
+    /// <returns>One staging token per key, in <paramref name="keys"/> order.</returns>
+    /// <exception cref="System.ArgumentNullException">
+    /// <paramref name="lattice"/>, <paramref name="keys"/>, or <paramref name="replicaId"/> is <see langword="null"/>.
+    /// </exception>
+    public static async Task<IReadOnlyList<LatticeStagedCrdtWrite>> StageEnableManyAsync(
+        this ILattice lattice,
+        IReadOnlyCollection<string> keys,
+        string replicaId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(replicaId);
+        if (keys.Count == 0)
+        {
+            return Array.Empty<LatticeStagedCrdtWrite>();
+        }
+
+        var current = await ReadFlagsAsync(lattice, keys, cancellationToken).ConfigureAwait(false);
+        var staged = new List<LatticeStagedCrdtWrite>(keys.Count);
+        foreach (var key in keys)
+        {
+            current.TryGetValue(key, out var raw);
+            var flag = OrFlagAccessor.DecodeFlag(raw);
+            var delta = OrFlagAccessor.EnableDeltaFor(flag, replicaId);
+
+            // Mint-once, exactly as the per-key Stage* does: fold the delta into
+            // the snapshot so the token carries both the merged state (for the
+            // saga's LWW-shaped commit) and the delta (so a remote cluster folds
+            // it and converges).
+            flag.MergeDelta(delta);
+            staged.Add(new LatticeStagedCrdtWrite(
+                key,
+                JsonLatticeSerializer<OrFlag>.Default.Serialize(flag),
+                JsonLatticeSerializer<OrFlagDelta>.Default.Serialize(delta)));
+        }
+
+        return staged;
+    }
+
+    private static async Task<List<KeyValuePair<string, byte[]>>> MintEnableDeltasAsync(
+        ILattice lattice,
+        IReadOnlyCollection<string> keys,
+        string replicaId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(lattice);
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(replicaId);
+        if (keys.Count == 0)
+        {
+            return new List<KeyValuePair<string, byte[]>>();
+        }
+
+        var current = await ReadFlagsAsync(lattice, keys, cancellationToken).ConfigureAwait(false);
+        var deltas = new List<KeyValuePair<string, byte[]>>(keys.Count);
+        foreach (var key in keys)
+        {
+            current.TryGetValue(key, out var raw);
+            var flag = OrFlagAccessor.DecodeFlag(raw);
+            var delta = OrFlagAccessor.EnableDeltaFor(flag, replicaId);
+            deltas.Add(new KeyValuePair<string, byte[]>(
+                key, JsonLatticeSerializer<OrFlagDelta>.Default.Serialize(delta)));
+        }
+
+        return deltas;
+    }
+
+    /// <summary>
+    /// Reads the current rows for <paramref name="keys"/> in one batched call.
+    /// Absent keys are simply missing from the result and decode as an empty flag.
+    /// </summary>
+    private static Task<Dictionary<string, byte[]>> ReadFlagsAsync(
+        ILattice lattice,
+        IReadOnlyCollection<string> keys,
+        CancellationToken cancellationToken)
+    {
+        var probe = new List<string>(keys.Count);
+        foreach (var key in keys)
+        {
+            ArgumentNullException.ThrowIfNull(key);
+            probe.Add(key);
+        }
+
+        return lattice.GetManyAsync(probe, cancellationToken);
+    }
+
+    /// <summary>
     /// Returns a typed accessor for an observed-remove (OR) set stored
     /// under <paramref name="key"/> in <paramref name="lattice"/>.
     /// </summary>

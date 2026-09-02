@@ -149,6 +149,32 @@ public sealed class LatticeAtomicWriteBuilder
     }
 
     /// <summary>
+    /// Couples a batch of typed CRDT mutations prepared by CRDT accessors'
+    /// <c>Stage*</c> methods into the atomic write on the current tree, in one
+    /// call. Equivalent to calling <see cref="Set(LatticeStagedCrdtWrite)"/> once
+    /// per token - the batch still commits as a single saga - but it keeps a
+    /// wide CRDT atomic write readable at the call site.
+    /// <para>
+    /// This adds no new transactional machinery: staging, the 2PC commit, and the
+    /// per-entry delta side-map are exactly those the single-token overload
+    /// already drives, so the all-or-nothing and cross-cluster guarantees are
+    /// unchanged.
+    /// </para>
+    /// </summary>
+    /// <param name="staged">The staging tokens returned by CRDT accessors' <c>Stage*</c> methods.</param>
+    /// <exception cref="System.ArgumentNullException"><paramref name="staged"/> is <see langword="null"/>.</exception>
+    public LatticeAtomicWriteBuilder SetMany(IEnumerable<LatticeStagedCrdtWrite> staged)
+    {
+        ArgumentNullException.ThrowIfNull(staged);
+        foreach (var token in staged)
+        {
+            Set(token);
+        }
+
+        return this;
+    }
+
+    /// <summary>
     /// Serializes <paramref name="value"/> with <paramref name="serializer"/>
     /// and stages it for <paramref name="key"/> on the current tree.
     /// </summary>

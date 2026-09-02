@@ -824,6 +824,161 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <summary>
+    /// Batched typed CRDT delta apply. The CRDT counterpart of
+    /// <see cref="SetManyAsync"/>, routed with the same bucket-by-leaf,
+    /// dispatch-in-parallel, promote-splits-sequentially shape.
+    /// <para>
+    /// Deliberately does <b>not</b> shadow-forward: the single-key CRDT path
+    /// (<c>TraverseForCrdtApplyAsync</c>) does not either, so the batch stays
+    /// per-key indistinguishable from N single-key applies rather than
+    /// inventing a forwarding contract the CRDT surface does not otherwise have.
+    /// </para>
+    /// </summary>
+    /// <param name="deltas">The key / typed-delta-bytes pairs to apply.</param>
+    /// <param name="mode">The CRDT merge mode for the whole batch.</param>
+    public async Task ApplyCrdtDeltaManyAsync(List<KeyValuePair<string, byte[]>> deltas, LatticeMergeMode mode)
+    {
+        EnsureInternalOrigin(LatticeOperation.CrdtApply);
+        ArgumentNullException.ThrowIfNull(deltas);
+        ThrowIfShuttingDown();
+        await PrepareForOperationAsync();
+        // Reject-check up-front so the batch fails fast rather than partially applying.
+        ThrowIfRejectedForAnyKey(deltas);
+        RecordWrite(deltas.Count);
+
+        if (deltas.Count == 0)
+        {
+            return;
+        }
+
+        // Flat tree: every key routes to the one root leaf, so the whole batch
+        // is a single leaf RPC and there is no parent path to walk.
+        if (RootIsLeafTyped)
+        {
+            var rootLeafId = state.State.RootNodeId!.Value;
+            var rootLeaf = ResolveLeafGrain(rootLeafId);
+            await RecordAffectedLeafIfPreparedAsync(rootLeafId);
+            var flatSplit = await DispatchLeafCrdtBatchAsync(rootLeaf, rootLeafId, deltas, mode);
+            while (flatSplit is not null)
+            {
+                flatSplit = await PromoteRootAsync(flatSplit);
+            }
+
+            return;
+        }
+
+        // Non-flat tree: group by routed leaf, capturing each leaf's
+        // root-to-immediate-parent path the first time it is seen so split
+        // promotion has the same shape as the single-key path's pop loop.
+        var buckets = new Dictionary<GrainId, LeafBucket>(capacity: 4);
+        foreach (var entry in deltas)
+        {
+            var leafId = await TraverseToLeafAsync(entry.Key);
+            if (!IsLeafGrainId(leafId))
+            {
+                leafId = await DescendToLeafForKeyAsync(leafId, entry.Key);
+            }
+
+            if (!buckets.TryGetValue(leafId, out var bucket))
+            {
+                var parents = await CaptureLeafParentPathAsync(entry.Key);
+                bucket = new LeafBucket(new List<KeyValuePair<string, byte[]>>(), parents);
+                buckets[leafId] = bucket;
+            }
+
+            bucket.Slice.Add(entry);
+        }
+
+        // Sequential resolve pass, for the same reason SetManyLocalOnlyAsync
+        // has one: the per-tx dedup gate inside RecordAffectedLeafIfPreparedAsync
+        // must be observed in deterministic order before any concurrent
+        // dispatch, and freezing the bucket order here keeps the dispatch index
+        // and the split-promotion index agreed on which parent path belongs to
+        // which leaf result.
+        var orderedBuckets = new List<(GrainId LeafId, LeafBucket Bucket)>(buckets.Count);
+        foreach (var (leafId, bucket) in buckets)
+        {
+            bucket.Leaf = ResolveLeafGrain(leafId);
+            await RecordAffectedLeafIfPreparedAsync(leafId);
+            orderedBuckets.Add((leafId, bucket));
+        }
+
+        var leafDispatchTasks = new Task<SplitResult?>[orderedBuckets.Count];
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var (leafId, bucket) = orderedBuckets[i];
+            leafDispatchTasks[i] = DispatchLeafCrdtBatchAsync(bucket.Leaf!, leafId, bucket.Slice, mode);
+        }
+
+        var splitResults = await Task.WhenAll(leafDispatchTasks);
+
+        // Split promotion is walked sequentially per leaf: AcceptSplitAsync
+        // mutates shared internal-node routing tables and PromoteRootAsync
+        // rewrites this shard's root, both of which must be serialised.
+        for (int i = 0; i < orderedBuckets.Count; i++)
+        {
+            var split = splitResults[i];
+            if (split is null)
+            {
+                continue;
+            }
+
+            var parents = orderedBuckets[i].Bucket.Parents;
+            var parentCursor = parents.Count;
+            while (split is not null && parentCursor > 0)
+            {
+                var parentId = parents[--parentCursor];
+                var parentGrain = ResolveInternalGrain(parentId);
+                split = await parentGrain.AcceptSplitAsync(split.PromotedKey, split.NewSiblingId);
+                InvalidateRoutingTable(parentId);
+            }
+
+            while (split is not null)
+            {
+                split = await PromoteRootAsync(split);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Dispatches one leaf's slice of a CRDT batch, re-binding the leaf and
+    /// retrying once if it turns out to be routable but unseeded - the batched
+    /// mirror of <c>ApplyCrdtDeltaRebindingUnboundLeafAsync</c>, so a node left
+    /// unbound by an interrupted purge or inherited from an unbound split donor
+    /// repairs itself here exactly as it does on the single-key path.
+    /// </summary>
+    private async Task<SplitResult?> DispatchLeafCrdtBatchAsync(
+        IBPlusLeafGrain leaf,
+        GrainId leafId,
+        List<KeyValuePair<string, byte[]>> slice,
+        LatticeMergeMode mode)
+    {
+        try
+        {
+            return await leaf.ApplyCrdtDeltaManyAsync(slice, mode);
+        }
+        catch (LatticeCrdtShapeNotRegisteredException ex) when (ex.TreeId.Length == 0)
+        {
+            logger.LogWarning(
+                ex,
+                "Leaf {LeafId} of shard {ShardIndex} of tree {TreeId} is routable but has no tree id bound, so the "
+                + "batched typed CRDT write of {Count} key(s) could not resolve a CrdtShape. Re-asserting the "
+                + "binding and retrying once.",
+                leafId,
+                MyShardIndex,
+                TreeId,
+                slice.Count);
+
+            await leaf.SetTreeIdAsync(TreeId);
+            await leaf.SetShardIndexAsync(MyShardIndex);
+
+            // Single-shot, matching the single-key path: a second failure is a
+            // genuine fault and must stay fail-closed.
+            return await leaf.ApplyCrdtDeltaManyAsync(slice, mode);
+        }
+    }
+
+    /// <summary>
     /// Per-key adaptive-split shadow forward applied to every entry after
     /// the batched local leaf apply succeeds. Each call is a cheap no-op
     /// when no adaptive split is in progress or when the key's virtual
