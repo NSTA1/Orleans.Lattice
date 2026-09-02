@@ -34,6 +34,7 @@ on:
       - 'test/lattice.explorer.uitests/**'
       - '!test/lattice.explorer.uitests/**/*.md'
       - '.github/workflows/ui-tests.yml'
+      - '.github/workflows/ui-test-shards.json'
 
 permissions:
   contents: read
@@ -46,7 +47,24 @@ env:
   UI_TEST_PROJECT: test/lattice.explorer.uitests/Orleans.Lattice.Explorer.UiTests.csproj
 
 jobs:
+  # The shard definitions live in ui-test-shards.json rather than inline, because
+  # the coverage lane has to split this suite exactly the same way and for exactly
+  # the same reason (see below). Two hand-maintained copies of these filters would
+  # drift, and a drifted complement filter fails silently by leaving cases unrun -
+  # the one outcome the complement spelling exists to prevent.
+  shards:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.load.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: load
+        run: |
+          set -euo pipefail
+          echo "matrix=$(jq -c . .github/workflows/ui-test-shards.json)" >> "$GITHUB_OUTPUT"
+
   browser-ui:
+    needs: shards
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -68,13 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - shard: structure
-            filter: 'TestCategory=UI&FullyQualifiedName!~Journeys'
-          - shard: journeys-a
-            filter: 'TestCategory=UI&FullyQualifiedName~Journeys&(FullyQualifiedName~AdaptiveTenant|FullyQualifiedName~AreaContinuity|FullyQualifiedName~DeepLink|FullyQualifiedName~FailClosedRestore|FullyQualifiedName~FirstRun)'
-          - shard: journeys-b
-            filter: 'TestCategory=UI&FullyQualifiedName~Journeys&FullyQualifiedName!~AdaptiveTenant&FullyQualifiedName!~AreaContinuity&FullyQualifiedName!~DeepLink&FullyQualifiedName!~FailClosedRestore&FullyQualifiedName!~FirstRun'
+        include: ${{ fromJSON(needs.shards.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v5
