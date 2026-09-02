@@ -257,6 +257,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var sources = new List<EmbeddingSource>();
 
         string? token = null;
+        var probeFailures = 0;
+        Exception? firstProbeFailure = null;
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -273,9 +275,33 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
             }
 
-            var embeddedMembers = await _writer
-                .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
-                .ConfigureAwait(false);
+            // The coverage probe reads the membership tree, which is the busiest
+            // tree in the plane during a reconcile - the gap sweep drives a point
+            // read per page across the whole symbol space - so this call is the one
+            // that times out under load. Losing it must cost one page, not the
+            // whole arm: without coverage for this page we cannot tell embedded
+            // from missing, so we skip the page rather than guess, and the next
+            // pass picks up whatever it was hiding.
+            IReadOnlySet<string> embeddedMembers;
+            try
+            {
+                embeddedMembers = await _writer
+                    .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                firstProbeFailure ??= ex;
+                probeFailures++;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: the embedding-coverage probe failed for a page of {Count} symbol(s); skipping "
+                    + "the page and continuing. Its symbols are re-checked on the next reconcile.",
+                    repoId,
+                    pageKeys.Count);
+                token = page.HasMore ? page.ContinuationToken : null;
+                continue;
+            }
 
             foreach (var record in page.Records)
             {
@@ -303,7 +329,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
-        return await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken).ConfigureAwait(false);
+        var symbolsEmbedded = await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Same rule as the batch boundary: a pass that achieved nothing at all
+        // still has to surface its fault, but one that made progress counts as
+        // progress even though part of the symbol space went unexamined.
+        if (symbolsEmbedded == 0 && firstProbeFailure is not null)
+        {
+            _logger.LogWarning(
+                "Repo {RepoId}: {Failed} coverage probe(s) failed and nothing was embedded; surfacing the first "
+                + "fault so the arm reports incomplete.",
+                repoId,
+                probeFailures);
+            throw firstProbeFailure;
+        }
+
+        return symbolsEmbedded;
     }
 
     /// <summary>
@@ -543,6 +585,21 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// stored source always carries its whole current passage set. Membership is
     /// recorded after each batch, so an interruption leaves at most one batch of
     /// vectors unrecorded while presence still implies a durable vector.
+    /// <para>
+    /// <b>Each batch carries its own failure boundary.</b> A store or membership
+    /// write can time out when the vector plane is under load, and unwinding the
+    /// whole call on the first such fault discarded every batch not yet reached -
+    /// so a pass banked almost nothing, the next pass rebuilt the same queue and
+    /// failed in the same place, and a large back-fill could never finish however
+    /// many passes it was given (issue #1933). A failing batch is therefore logged
+    /// and skipped: its sources stay unmarked and are retried on the next pass,
+    /// which is already the contract for an interrupted batch.
+    /// </para>
+    /// <para>
+    /// The fault is re-thrown only when <b>nothing</b> landed, so the caller can
+    /// still tell a wholly broken arm from a productive one. Surfacing it after a
+    /// partial pass would keep a run that genuinely advanced permanently red.
+    /// </para>
     /// </summary>
     private async Task<int> EmbedAndStoreAsync(
         string repoId,
@@ -577,6 +634,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         var embedded = 0;
+        var batchEmbedded = 0;
+        var failedBatches = 0;
+        Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
         {
@@ -609,24 +669,59 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
             }
 
-            foreach (var owner in completed)
+            // Store and record this batch under its own failure boundary. A store
+            // or membership write can time out when the vector plane is under
+            // load, and before this that exception unwound the whole arm - so a
+            // pass discarded every batch it had not reached yet, the next pass
+            // rebuilt the same queue and died at the same place, and a large
+            // back-fill could never finish however many passes it was given.
+            // Losing one batch costs one batch: its sources stay unmarked and are
+            // retried next pass, which is already the contract.
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                await _writer
-                    .StoreAsync(repoId, sources[owner].SourceKey, spaces[owner]!, slots[owner], cancellationToken)
-                    .ConfigureAwait(false);
-                pendingMembers.Add(sources[owner].SourceKey);
-                embedded++;
-            }
+                foreach (var owner in completed)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await _writer
+                        .StoreAsync(repoId, sources[owner].SourceKey, spaces[owner]!, slots[owner], cancellationToken)
+                        .ConfigureAwait(false);
+                    pendingMembers.Add(sources[owner].SourceKey);
+                    batchEmbedded++;
+                }
 
-            if (pendingMembers.Count > 0)
+                if (pendingMembers.Count > 0)
+                {
+                    // Record membership for the sources completed in this batch, after
+                    // their vectors have landed. The writer lands the whole batch in one
+                    // batched CRDT write (one read to mint the deltas, one apply), not
+                    // one round trip per source.
+                    await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
+                    pendingMembers.Clear();
+                }
+
+                embedded += batchEmbedded;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Record membership for the sources completed in this batch, after
-                // their vectors have landed. The writer lands the whole batch in one
-                // batched CRDT write (one read to mint the deltas, one apply), not
-                // one round trip per source.
-                await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
+                // A source whose vectors landed but whose membership write did not
+                // is simply unmarked, so the next pass re-embeds it idempotently.
+                // Nothing here is left half-recorded in a way a later pass cannot
+                // repair, which is what makes continuing safe rather than merely
+                // convenient.
+                firstBatchFailure ??= ex;
+                failedBatches++;
                 pendingMembers.Clear();
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: a batch of {Count} passage(s) could not be recorded; its sources stay unmarked "
+                    + "and are retried on the next reconcile. Continuing with the remaining batches.",
+                    repoId,
+                    count);
+                continue;
+            }
+            finally
+            {
+                batchEmbedded = 0;
             }
 
             // Surface incremental progress after each batch lands, so a long
@@ -635,6 +730,20 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             {
                 await onProgress(embedded, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        // Surfacing the fault only when nothing landed is what makes a partial pass
+        // count as forward progress: the caller logs the arm incomplete and fails
+        // the run, so reporting a fault after a productive pass would keep a run
+        // that genuinely advanced permanently red.
+        if (embedded == 0 && firstBatchFailure is not null)
+        {
+            _logger.LogWarning(
+                "Repo {RepoId}: every one of the {Failed} batch(es) that produced vectors failed to record them; "
+                + "surfacing the first fault so the arm reports incomplete.",
+                repoId,
+                failedBatches);
+            throw firstBatchFailure;
         }
 
         return embedded;
