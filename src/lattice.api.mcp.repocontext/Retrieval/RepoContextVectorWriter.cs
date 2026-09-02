@@ -124,7 +124,7 @@ internal sealed class RepoContextVectorWriter
     /// dispatches those buckets in parallel, which is what keeps a batch this
     /// wide inside the Orleans response deadline - when it awaited one leaf at a
     /// time the cost was the SUM of every bucket's round trip and a probe over a
-    /// large tree timed out (issue #1918). Treat this constant and that fan-out
+    /// large tree timed out. Treat this constant and that fan-out
     /// as a pair: raising it without the parallel dispatch reintroduces the
     /// timeout.
     /// </para>
