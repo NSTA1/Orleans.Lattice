@@ -151,6 +151,47 @@ public sealed class EmbeddingRepoContextVectorIngestorMemorySettlingTests
     }
 
     [Test]
+    public async Task An_unreadable_marker_set_degrades_instead_of_failing_the_arm()
+    {
+        // The marker load is itself a whole-set range scan over the membership
+        // tree, so it can time out under exactly the pressure it exists to
+        // tolerate. Losing it must fall back to the source-id flag alone, not kill
+        // the arm - the third instance of this seam in the same code path.
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            // The scan reaches the tree through its shard root, so the fault is
+            // aimed at the shard-level method the enumeration actually calls.
+            Method = "GetSortedEntriesBatchAsync",
+            FailFirst = int.MaxValue,
+        };
+
+        var options = new RepoContextMcpHarnessOptions
+        {
+            Posture = RepoContextMcpAuthPosture.Writer,
+            ConfigureSilo = silo =>
+            {
+                silo.Services.AddSingleton(injector);
+                silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeFaultInjectingFilter>();
+            },
+        };
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
+        var keys = await SeedMemoryAsync(harness, 2, Ct);
+
+        var embedded = await Ingestor(harness).IngestMemoryAsync(
+            RepoId, keys, Array.Empty<string>(), Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(injector.Failed, Is.GreaterThan(0), "The marker read was faulted.");
+            Assert.That(embedded, Is.EqualTo(2),
+                "The arm still embeds rather than failing; it just loses the extra skip evidence "
+                + "for this pass and may re-embed, which is the safe direction.");
+        });
+    }
+
+    [Test]
     public async Task A_source_whose_membership_write_failed_is_not_marked_as_embedded()
     {
         // The marker is the recorded half of the orphan set (recorded - live), so

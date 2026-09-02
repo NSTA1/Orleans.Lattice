@@ -16,8 +16,7 @@ internal sealed class LatticeTreeFaultInjectingFilter(LatticeTreeFaultInjector i
     public Task Invoke(IIncomingGrainCallContext context)
     {
         var method = context.InterfaceMethod;
-        if (method?.DeclaringType == typeof(ILattice)
-            && injector.ShouldFail(method.Name, context.TargetContext.GrainId.Key.ToString()))
+        if (method is not null && injector.ShouldFail(method.Name, context.TargetContext.GrainId.Key.ToString()))
         {
             throw new TimeoutException(
                 $"Injected fault: {method.Name} on '{context.TargetContext.GrainId.Key}' did not respond in time.");
