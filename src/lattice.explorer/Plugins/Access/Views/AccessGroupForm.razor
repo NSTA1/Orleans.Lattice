@@ -59,7 +59,7 @@
 
     @if (State.SelectedGroupId is not null)
     {
-        <h3 class="lxa-title" title="@State.SelectedGroupId">Direct members of '@State.SelectedGroupLabel'</h3>
+        <h3 class="lxa-title">Direct members of '@State.SelectedGroupLabel'<span class="lx-visually-hidden">, group id @State.SelectedGroupId</span></h3>
         @if (State.DirectMembers.Count == 0)
         {
             <p class="lxa-empty">No direct members.</p>
@@ -71,10 +71,10 @@
                 {
                     <li>
                         <button type="button" class="lx-btn lx-btn-icon lxa-danger"
-                                title="Remove member" aria-label="@($"Remove {member}")"
+                                aria-label="@($"Remove {member}")"
                                 disabled="@(State.Busy || !State.Allowed || !State.MembershipEditable)"
                                 @onclick="Remove(member)">x</button>
-                        <span class="lxa-principal" title="@member">@State.Labels.Label(member)</span>
+                        <span class="lxa-principal">@State.Labels.Label(member)<span class="lx-visually-hidden">, id @member</span></span>
                     </li>
                 }
             </ul>

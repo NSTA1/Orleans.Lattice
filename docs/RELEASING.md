@@ -20,6 +20,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Membership` | `src/lattice.membership/Orleans.Lattice.Membership.csproj` |
 | `Orleans.Lattice.Membership.Entra` | `src/lattice.membership.entra/Orleans.Lattice.Membership.Entra.csproj` |
 | `Orleans.Lattice.Membership.Entra.Graph` | `src/lattice.membership.entra.graph/Orleans.Lattice.Membership.Entra.Graph.csproj` |
+| `Orleans.Lattice.Membership.Oidc` | `src/lattice.membership.oidc/Orleans.Lattice.Membership.Oidc.csproj` |
 | `Orleans.Lattice.Auth` | `src/lattice.auth/Orleans.Lattice.Auth.csproj` |
 | `Orleans.Lattice.Api.Auth` | `src/lattice.api.auth/Orleans.Lattice.Api.Auth.csproj` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `src/lattice.api.auth.grpc/Orleans.Lattice.Api.Auth.Grpc.csproj` |
@@ -70,6 +71,7 @@ The package family ships from this repository:
 | `Orleans.Lattice.Caching.AzureBlob` | `src/lattice.caching.azureblob/Orleans.Lattice.Caching.AzureBlob.csproj` |
 | `Orleans.Lattice.Scaling` | `src/lattice.scaling/Orleans.Lattice.Scaling.csproj` |
 | `Orleans.Lattice.GrainIndex` | `src/lattice.grainindex/Orleans.Lattice.GrainIndex.csproj` |
+| `Orleans.Lattice.Vector` | `src/lattice.vector/Orleans.Lattice.Vector.csproj` |
 
 ## Tag shape
 
@@ -89,6 +91,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Membership` | `lattice.membership-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership.Entra` | `lattice.membership.entra-v<X.Y.Z>` |
 | `Orleans.Lattice.Membership.Entra.Graph` | `lattice.membership.entra.graph-v<X.Y.Z>` |
+| `Orleans.Lattice.Membership.Oidc` | `lattice.membership.oidc-v<X.Y.Z>` |
 | `Orleans.Lattice.Auth` | `lattice.auth-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth` | `lattice.api.auth-v<X.Y.Z>` |
 | `Orleans.Lattice.Api.Auth.Grpc` | `lattice.api.auth.grpc-v<X.Y.Z>` |
@@ -139,6 +142,7 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.Caching.AzureBlob` | `lattice.caching.azureblob-v<X.Y.Z>` |
 | `Orleans.Lattice.Scaling` | `lattice.scaling-v<X.Y.Z>` |
 | `Orleans.Lattice.GrainIndex` | `lattice.grainindex-v<X.Y.Z>` |
+| `Orleans.Lattice.Vector` | `lattice.vector-v<X.Y.Z>` |
 
 For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
 

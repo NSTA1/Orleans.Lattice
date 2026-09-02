@@ -117,4 +117,115 @@ public class CatalogReaderTenantScopingTests
 
         Assert.That(page.NextPageToken, Is.EqualTo("cursor"));
     }
+
+    [Test]
+    public async Task LoadAsync_Trees_activeViewThatFilteredNothing_reportsAZeroScopeCount()
+    {
+        // A tenant-scoped cluster that genuinely holds only this tenant's trees
+        // must not claim a filter removed something. The count is the fact that
+        // separates "your scope is hiding trees" from "there are none".
+        var client = ClientWithTrees("t/acme/orders", "t/acme/invoices");
+        var view = ActiveView(new ExplorerTenantId("acme"), ExplorerTenantVisibility.ActiveTenant, isOperator: false);
+        var reader = new CatalogReader(client, view);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.ScopeFilteredCount, Is.Zero);
+            Assert.That(page.ScopedToTenantId, Is.EqualTo("acme"));
+        });
+    }
+
+    [Test]
+    public async Task LoadAsync_Trees_activeViewThatFilteredEverything_reportsTheCountAndTheTenant()
+    {
+        var client = ClientWithTrees("t/globex/orders", "t/initech/orders");
+        var view = ActiveView(new ExplorerTenantId("acme"), ExplorerTenantVisibility.ActiveTenant, isOperator: false);
+        var reader = new CatalogReader(client, view);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Items, Is.Empty);
+            Assert.That(page.ScopeFilteredCount, Is.EqualTo(2));
+            Assert.That(page.ScopedToTenantId, Is.EqualTo("acme"));
+        });
+    }
+
+    [Test]
+    public async Task LoadAsync_Trees_activeViewThatFilteredSome_reportsOnlyWhatItRemoved()
+    {
+        var client = ClientWithTrees("t/acme/orders", "t/globex/orders", "legacy");
+        var view = ActiveView(new ExplorerTenantId("acme"), ExplorerTenantVisibility.ActiveTenant, isOperator: false);
+        var reader = new CatalogReader(client, view);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        Assert.That(page.ScopeFilteredCount, Is.EqualTo(2));
+    }
+
+    [Test]
+    public async Task LoadAsync_Trees_noTenantView_reportsNoScopeAtAll()
+    {
+        // The non-tenant path must stay byte-for-byte what it was, so an
+        // untenanted cluster can never be told a scope filtered its catalog.
+        var client = ClientWithTrees("t/acme/orders", "t/globex/orders");
+        var reader = new CatalogReader(client);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.ScopedToTenantId, Is.Null);
+            Assert.That(page.ScopeFilteredCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task LoadAsync_Trees_inactiveView_reportsNoScopeAtAll()
+    {
+        var client = ClientWithTrees("t/acme/orders", "t/globex/orders");
+        var reader = new CatalogReader(client, NullExplorerTenantView.Instance);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.ScopedToTenantId, Is.Null);
+            Assert.That(page.ScopeFilteredCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task LoadAsync_Trees_operatorViewingAllTenants_reportsNothingFiltered()
+    {
+        // The view is active, so the tenant is reported, but the all-tenant
+        // toggle removed nothing and must not be described as a filter.
+        var client = ClientWithTrees("t/acme/orders", "t/globex/orders", "legacy");
+        var view = ActiveView(new ExplorerTenantId("acme"), ExplorerTenantVisibility.AllTenants, isOperator: true);
+        var reader = new CatalogReader(client, view);
+
+        var page = await reader.LoadAsync(CatalogKind.Trees, pageToken: null, pageSize: 50);
+
+        Assert.That(page.ScopeFilteredCount, Is.Zero);
+    }
+
+    [TestCase(CatalogKind.Views)]
+    [TestCase(CatalogKind.TagIndexes)]
+    public async Task LoadAsync_kindsThatAreNotTenantScoped_reportNoScope(CatalogKind kind)
+    {
+        var client = ClientWithTrees("t/acme/orders");
+        var view = ActiveView(new ExplorerTenantId("acme"), ExplorerTenantVisibility.ActiveTenant, isOperator: false);
+        var reader = new CatalogReader(client, view);
+
+        var page = await reader.LoadAsync(kind, pageToken: null, pageSize: 50);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.ScopedToTenantId, Is.Null);
+            Assert.That(page.ScopeFilteredCount, Is.Zero);
+        });
+    }
 }

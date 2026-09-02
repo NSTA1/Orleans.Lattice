@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Plugins;
@@ -15,8 +17,14 @@ namespace Orleans.Lattice.Explorer.Tests.MyTenant;
 /// the surface unavailable and makes no call at all (epic decision D9); an
 /// authenticated caller who does not administer the active tenant is denied; and
 /// a not-found answer - which the cluster returns for a tenant the caller may
-/// not see - is a denial rather than an absence, so the gate cannot be used to
-/// probe for tenants.
+/// not see - withholds the grant rather than reporting an absence, so the gate
+/// cannot be used to probe for tenants.
+/// </para>
+/// <para>
+/// The gate reports facts and <see cref="ExplorerPluginAccessContract"/> picks
+/// the state, so these tests run signed in unless they say otherwise - an
+/// anonymous caller is invited to sign in rather than told they lack authority
+/// over a tenant they never had (issue #1854).
 /// </para>
 /// </summary>
 [TestFixture]
@@ -26,6 +34,13 @@ public sealed class MyTenantAccessGateTests
     {
         public ValueTask<bool> IsPlatformOperatorAsync(CancellationToken cancellationToken = default) =>
             new(true);
+    }
+
+    private static IExplorerAuthSession SignedIn(bool authenticated = true)
+    {
+        var session = Substitute.For<IExplorerAuthSession>();
+        session.IsAuthenticated.Returns(authenticated);
+        return session;
     }
 
     private static IExplorerPluginHostContext Context(bool tenancyActive = true, string? tenantId = null)
@@ -51,13 +66,14 @@ public sealed class MyTenantAccessGateTests
         ProbeAsync(
             Action<FakeTenancyDomain>? configure = null,
             bool tenancyActive = true,
-            IExplorerTenantOperatorGate? operatorGate = null)
+            IExplorerTenantOperatorGate? operatorGate = null,
+            bool authenticated = true)
     {
         var domain = new FakeTenancyDomain();
         configure?.Invoke(domain);
 
         var store = new ExplorerPluginAccessStore();
-        var gate = new MyTenantAccessGate(domain, store, operatorGate);
+        var gate = new MyTenantAccessGate(domain, store, operatorGate, SignedIn(authenticated));
         var access = await gate.ProbeAsync(Context(tenancyActive));
 
         return (access, domain, store);
@@ -81,10 +97,28 @@ public sealed class MyTenantAccessGateTests
     }
 
     [Test]
+    public async Task An_anonymous_caller_is_asked_to_sign_in_rather_than_told_they_lack_tenant_authority()
+    {
+        // Signed out there is no account to be refused for, so a withheld
+        // tenant-admin grant is a recoverable sign-in prompt rather than a
+        // statement about authority the visitor never claimed.
+        var (access, _, _) = await ProbeAsync(
+            d => d.Service.Admins =
+                TenantOperationResult<ExplorerTenantAdmins>.Failure(TenantOperationStatus.Denied, "no"),
+            authenticated: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.State, Is.EqualTo(ExplorerPluginAccessState.AuthenticationRequired));
+            Assert.That(access.IsVisible, Is.True);
+        });
+    }
+
+    [Test]
     public async Task A_host_reporting_an_inactive_tenant_scope_also_degrades_to_unavailable()
     {
         var domain = new FakeTenancyDomain();
-        var gate = new MyTenantAccessGate(domain, new ExplorerPluginAccessStore());
+        var gate = new MyTenantAccessGate(domain, new ExplorerPluginAccessStore(), session: SignedIn());
 
         var access = await gate.ProbeAsync(Context(tenancyActive: false));
 
@@ -191,7 +225,7 @@ public sealed class MyTenantAccessGateTests
     public async Task A_caller_with_no_active_tenant_is_denied_rather_than_probing_a_blank_tenant()
     {
         var domain = new FakeTenancyDomain { ActiveTenant = null };
-        var gate = new MyTenantAccessGate(domain, new ExplorerPluginAccessStore());
+        var gate = new MyTenantAccessGate(domain, new ExplorerPluginAccessStore(), session: SignedIn());
 
         var access = await gate.ProbeAsync(Context(tenancyActive: true, tenantId: string.Empty));
 
@@ -206,7 +240,7 @@ public sealed class MyTenantAccessGateTests
     public async Task The_hosts_tenant_scope_is_used_when_the_domain_has_not_established_one()
     {
         var domain = new FakeTenancyDomain { ActiveTenant = null };
-        var gate = new MyTenantAccessGate(domain, new ExplorerPluginAccessStore());
+        var gate = new MyTenantAccessGate(domain, new ExplorerPluginAccessStore(), session: SignedIn());
 
         var access = await gate.ProbeAsync(Context(tenancyActive: true, tenantId: MyTenantSample.TenantId));
 

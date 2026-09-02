@@ -5,6 +5,7 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
@@ -72,6 +73,13 @@ public abstract class LatticeComponentTestContext : BunitContext
 
         var catalog = new ExplorerPluginCatalog(plugins);
         var hostState = new ExplorerPluginHostState(selection, connection);
+
+        // The shell reads its active area from the router and its "hide what I
+        // cannot use" preference from the declared contract, so both are
+        // registered for real: the route model is a pure in-memory type and the
+        // preference backing store defaults to an in-memory one, so neither
+        // reaches a browser and neither introduces a wait.
+        Services.AddExplorerSession();
 
         Services.AddSingleton<IExplorerPluginCatalog>(catalog);
         Services.AddSingleton<IExplorerPluginAccessStore>(AccessStore);

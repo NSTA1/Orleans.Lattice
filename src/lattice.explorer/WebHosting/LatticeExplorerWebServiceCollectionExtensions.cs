@@ -20,6 +20,7 @@ using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
+using Orleans.Lattice.Explorer.UI.Appearance;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;
 
@@ -156,6 +157,13 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         // The adaptive shell's viewport seam: one breakpoint per circuit, driven
         // by LatticeAdaptiveRoot and read by every design-system primitive.
         services.AddLatticeExplorerDesignSystem();
+
+        // Theme, contrast and density, remembered per user through the preference
+        // contract registered just above. No IExplorerHostTheme is registered:
+        // the browser answers prefers-color-scheme in the document itself, so
+        // "follow the system" is resolved there by the first-paint bootstrap
+        // rather than guessed at on the server.
+        services.AddExplorerAppearance();
 
         // The web head persists UI preferences to the browser's localStorage (Data
         // Protection-encrypted), overriding the in-memory fallback backing store.

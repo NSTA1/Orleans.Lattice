@@ -15,6 +15,14 @@ public partial class HotShardMonitorGrainTests
 {
     private const string TreeId = "monitor-test-tree";
 
+    /// <summary>
+    /// Live-entry count handed to every shard substitute by default. Well above
+    /// <see cref="LatticeOptions.DefaultHotShardMinShardEntries"/> so the
+    /// occupancy floor never silently decides a test that is about something
+    /// else.
+    /// </summary>
+    private const int WellOccupiedShardEntryCount = 8192;
+
     private static (HotShardMonitorGrain grain,
                     IGrainFactory grainFactory,
                     ILattice lattice,
@@ -63,7 +71,10 @@ public partial class HotShardMonitorGrainTests
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
-        // One shard substitute per physical shard index. Defaults to cold.
+        // One shard substitute per physical shard index. Defaults to cold, and
+        // to an occupancy comfortably above LatticeOptions.HotShardMinShardEntries
+        // so the split-admission occupancy floor is not what a test is measuring
+        // unless it says so.
         var shardSubs = new Dictionary<int, IShardRootGrain>();
         IShardRootGrain Shard(int i)
         {
@@ -72,6 +83,7 @@ public partial class HotShardMonitorGrainTests
             sub.GetHotnessAsync().Returns(new ShardHotness { Reads = 0, Writes = 0, Window = TimeSpan.FromSeconds(30) });
             sub.HasPendingBulkOperationAsync().Returns(false);
             sub.IsSplittingAsync().Returns(false);
+            sub.CountAsync().Returns(WellOccupiedShardEntryCount);
             shardSubs[i] = sub;
             return sub;
         }

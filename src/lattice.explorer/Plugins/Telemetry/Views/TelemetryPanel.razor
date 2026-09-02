@@ -1,6 +1,9 @@
 @implements IDisposable
 @inject IExplorerPluginHostContextFactory HostContexts
 @inject IExplorerPluginAccessStore AccessStore
+@inject IExplorerShellPreferences Preferences
+@inject IExplorerPreferenceCatalog PreferenceCatalog
+@inject IExplorerShellRouter Router
 
 @*
     The Telemetry plugin's panel: the surface the shell renders through
@@ -64,11 +67,27 @@ else
         // change, and a fresh template on each would allocate on all of them.
         _panel = Panel;
 
+        // Declared before the first read, and idempotent by reference: the
+        // contract rejects an unregistered key, so this is what makes the
+        // remembered panel enumerable at /reset-view and cleared by it.
+        PreferenceCatalog.Register(TelemetryPluginKeys.SelectedQueryPreference);
+
         // The host context is bound to this plugin's id, so GetDomain can only
         // ever hand back this plugin's declared contract: there is no parameter
         // through which the panel could name another plugin's domain.
         _context = HostContexts.Create(TelemetryPluginKeys.PluginId);
-        _state = new TelemetryWorkspace(_context.GetDomain<ITelemetryDomain>(), AccessStore);
+
+        // The area mount owns the address and the remembered panel; the My
+        // Tenant section deliberately does not, so the two cannot overwrite one
+        // another's answer.
+        _state = new TelemetryWorkspace(
+            _context.GetDomain<ITelemetryDomain>(),
+            AccessStore,
+            clock: null,
+            pinnedToOwnTenant: false,
+            Preferences,
+            Router);
+
         _state.Changed += OnStateChanged;
         _context.Changed += OnHostChanged;
 

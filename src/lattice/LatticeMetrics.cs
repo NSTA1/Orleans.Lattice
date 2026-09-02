@@ -98,6 +98,16 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the decision a control loop reached on one observation
+    /// pass (e.g. <c>admitted</c>, <c>not_over_split</c>, <c>backpressure</c>
+    /// on <see cref="ShardHealingDecisions"/>). Distinct from
+    /// <see cref="TagReason"/>, which names only why something was refused:
+    /// a decision dimension carries the admitting value too, so the series is
+    /// a complete account of every pass rather than of the failures.
+    /// </summary>
+    public const string TagDecision = "decision";
+
+    /// <summary>
     /// Tag key for a configuration dimension name (e.g.
     /// <c>publish_events</c> on <see cref="ConfigChanged"/>).
     /// </summary>
@@ -349,6 +359,97 @@ public static class LatticeMetrics
     public static readonly Counter<long> ShardSplitsCommitted =
         Meter.CreateCounter<long>("orleans.lattice.shard.splits_committed", unit: "{split}",
             description: "Adaptive shard-split commits (ShardMap swap published).");
+
+    /// <summary>
+    /// Counter incremented once per online shard-consolidation commit, fired
+    /// from <c>TreeShardConsolidationGrain.FinaliseAsync</c> immediately after
+    /// the terminal state write succeeds, so an increment always corresponds to
+    /// a durably-committed fold.
+    /// <para>
+    /// The exact inverse of <see cref="ShardSplitsCommitted"/>, and the metric
+    /// that proves a tree an over-eager splitter shattered is actually being
+    /// healed: plotted together, a sustained gap between the two is a tree
+    /// whose physical shard count is still climbing. Tagged
+    /// <see cref="TagShard"/> with the <em>donor</em> shard index - the shard
+    /// being retired from the routing map.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardConsolidationsCommitted =
+        Meter.CreateCounter<long>("orleans.lattice.shard.consolidations_committed", unit: "{consolidation}",
+            description: "Online shard-consolidation commits (donor shard retired from the ShardMap).");
+
+    /// <summary>
+    /// Per-tree count of physical shards above the tree's configured base
+    /// shard count, sampled once every healing-orchestrator sweep. The healing
+    /// <em>work outstanding</em>: how many folds separate the tree from its
+    /// intended shape.
+    /// <para>
+    /// A tree is healed exactly when this reaches zero, so "trees healed" is
+    /// read off this instrument directly (<c>count</c> of series at zero) with
+    /// no second instrument to keep consistent. Plotted alongside
+    /// <see cref="ShardConsolidationsCommitted"/> - the reclaimed-shard rate -
+    /// it answers both halves of the question: how much damage is left, and is
+    /// it going down. Tagged <see cref="TagTree"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<int> ShardHealingBacklog =
+        Meter.CreateHistogram<int>("orleans.lattice.shard.healing.backlog", unit: "{shard}",
+            description: "Per-tree physical shards above the configured base count, sampled every healing sweep.");
+
+    /// <summary>
+    /// Counter incremented exactly once per healing-orchestrator sweep with
+    /// the decision that sweep reached, tagged <see cref="TagTree"/> and
+    /// <see cref="TagDecision"/>.
+    /// <para>
+    /// The series whose rate is currently non-zero for a tree <em>is</em> that
+    /// tree's current healing decision, so an operator can tell a tree that
+    /// needs no healing (<c>not_over_split</c>) from one that needs healing and
+    /// is being held back (<c>skewed_load</c>, <c>backpressure</c>,
+    /// <c>cooldown</c>, <c>split_in_flight</c>, <c>at_capacity</c>) from one
+    /// where the mechanism is off (<c>disabled</c>, <c>admission_closed</c>).
+    /// Without it, a tree that never heals is indistinguishable from a tree
+    /// that never needed to.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ShardHealingDecisions =
+        Meter.CreateCounter<long>("orleans.lattice.shard.healing.decisions", unit: "{decision}",
+            description: "Healing-orchestrator sweeps by decision (one increment per tree per sweep).");
+
+    /// <summary><see cref="TagDecision"/> = <c>admitted</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingAdmittedDecisionTag = new(TagDecision, "admitted");
+
+    /// <summary><see cref="TagDecision"/> = <c>disabled</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingDisabledDecisionTag = new(TagDecision, "disabled");
+
+    /// <summary><see cref="TagDecision"/> = <c>admission_closed</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingAdmissionClosedDecisionTag = new(TagDecision, "admission_closed");
+
+    /// <summary><see cref="TagDecision"/> = <c>not_over_split</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingNotOverSplitDecisionTag = new(TagDecision, "not_over_split");
+
+    /// <summary><see cref="TagDecision"/> = <c>skewed_load</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingSkewedLoadDecisionTag = new(TagDecision, "skewed_load");
+
+    /// <summary><see cref="TagDecision"/> = <c>split_in_flight</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingSplitInFlightDecisionTag = new(TagDecision, "split_in_flight");
+
+    /// <summary><see cref="TagDecision"/> = <c>tree_maintenance</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingTreeMaintenanceDecisionTag = new(TagDecision, "tree_maintenance");
+
+    /// <summary><see cref="TagDecision"/> = <c>cooldown</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingCooldownDecisionTag = new(TagDecision, "cooldown");
+
+    /// <summary><see cref="TagDecision"/> = <c>backpressure</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingBackpressureDecisionTag = new(TagDecision, "backpressure");
+
+    /// <summary><see cref="TagDecision"/> = <c>at_capacity</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingAtCapacityDecisionTag = new(TagDecision, "at_capacity");
+
+    /// <summary><see cref="TagDecision"/> = <c>no_foldable_pair</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingNoFoldablePairDecisionTag = new(TagDecision, "no_foldable_pair");
+
+    /// <summary><see cref="TagDecision"/> = <c>not_observed</c> on <see cref="ShardHealingDecisions"/>.</summary>
+    public static readonly KeyValuePair<string, object?> HealingNotObservedDecisionTag = new(TagDecision, "not_observed");
 
     // --- Leaf-level instruments (BPlusLeafGrain) ---------------------------------
 
@@ -864,6 +965,67 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalEntriesTrimmed =
         Meter.CreateCounter<long>("orleans.lattice.wal.entries_trimmed", unit: "{entry}",
             description: "WAL entries removed by the per-tree garbage collector, tagged by tree.");
+
+    /// <summary>
+    /// Counter of WAL garbage-collection passes the per-silo scheduler drove for a
+    /// tree, tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>
+    /// (<see cref="OutcomeReclaimed"/> when the pass trimmed at least one entry,
+    /// <see cref="OutcomeIdle"/> when it found nothing above the trim floor, and
+    /// <see cref="OutcomeFailed"/> when the pass threw). Pairing the reclaimed rate
+    /// against the total pass rate gives the per-tree reclaim rate, and the failed
+    /// rate isolates a wedged tree without needing to read the scheduler's logs.
+    /// </summary>
+    public static readonly Counter<long> WalGcPasses =
+        Meter.CreateCounter<long>("orleans.lattice.wal.gc.passes", unit: "{pass}",
+            description: "WAL garbage-collection passes driven by the per-silo scheduler, tagged by tree and outcome.");
+
+    /// <summary>
+    /// Histogram of the adaptive WAL garbage-collection cadence, in seconds: the
+    /// interval the scheduler selected for a tree after its most recent pass,
+    /// tagged with <see cref="TagTree"/>. The value moves inside the configured
+    /// band <c>[<see cref="LatticeOptions.WalGcMinInterval"/>,
+    /// <see cref="LatticeOptions.WalGcInterval"/>]</c>, so a sustained reading at
+    /// the floor is a tree whose log is growing faster than one pass reclaims and
+    /// a reading at the ceiling is a quiet tree. This is the instrument that shows
+    /// the cadence responding to backlog.
+    /// </summary>
+    public static readonly Histogram<double> WalGcInterval =
+        Meter.CreateHistogram<double>("orleans.lattice.wal.gc.interval", unit: "s",
+            description: "Adaptive WAL garbage-collection interval selected per tree, tagged by tree.");
+
+    /// <summary>
+    /// Histogram of retained WAL bytes remaining after a garbage-collection pass,
+    /// tagged with <see cref="TagTree"/>. Sampled from the pass's own
+    /// <see cref="LatticeWalGcReport.RetainedBytesAfter"/>, so it costs no extra
+    /// I/O. Read against <see cref="WalGcInterval"/> it answers the operational
+    /// question this instrument pair exists for: is the backlog falling, and is
+    /// the cadence tightening while it does.
+    /// <para>
+    /// <b>Byte accounting is a capability, and its absence is knowable rather
+    /// than silent.</b> The series exists for a tree only when the byte-pressure
+    /// policy is enabled (<see cref="LatticeOptions.WalMaxRetainedBytes"/> is
+    /// set) <i>and</i> the configured <see cref="IWalStorageProvider"/> reports a
+    /// retained byte size. <see cref="WalGcPasses"/> is emitted unconditionally
+    /// for every pass, so a tree that is reporting passes but no backlog bytes is
+    /// positively identifying a host without byte accounting - the two series are
+    /// read together, and no consumer has to distinguish "no backlog" from "not
+    /// measured". Reclaimed volume in that configuration is still observable in
+    /// records through <see cref="WalEntriesTrimmed"/> and
+    /// <see cref="OutcomeReclaimed"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<long> WalGcBacklogBytes =
+        Meter.CreateHistogram<long>("orleans.lattice.wal.gc.backlog_bytes", unit: "By",
+            description: "Retained WAL bytes remaining after a garbage-collection pass, tagged by tree.");
+
+    /// <summary><see cref="TagOutcome"/> = <c>reclaimed</c> (a WAL GC pass that trimmed at least one entry).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeReclaimed = new(TagOutcome, "reclaimed");
+
+    /// <summary><see cref="TagOutcome"/> = <c>idle</c> (a WAL GC pass that found nothing above the trim floor).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeIdle = new(TagOutcome, "idle");
+
+    /// <summary><see cref="TagOutcome"/> = <c>failed</c> (a WAL GC pass that threw).</summary>
+    public static readonly KeyValuePair<string, object?> OutcomeFailed = new(TagOutcome, "failed");
 
     // --- Leaf-materialiser durable pin instruments (issue #1030) ------------
 
@@ -2427,6 +2589,29 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagReason"/> = <c>cluster_cap</c> on <see cref="SplitAdmissionDeferred"/>.</summary>
     public static readonly KeyValuePair<string, object?> SplitDeferredClusterCapReasonTag = new(TagReason, "cluster_cap");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>uniform_load</c> on <see cref="SplitAdmissionDeferred"/>.
+    /// Emitted for a shard that is above the ops/sec threshold but whose tree is
+    /// uniformly loaded, so a split would relieve nothing. Sustained non-zero
+    /// values are the signature of a bulk ingest, not of a hot spot.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredUniformLoadReasonTag = new(TagReason, "uniform_load");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>low_occupancy</c> on <see cref="SplitAdmissionDeferred"/>.
+    /// Emitted for a hot, skewed shard that holds too few live entries for a
+    /// split to redistribute anything.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredLowOccupancyReasonTag = new(TagReason, "low_occupancy");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>shard_ceiling</c> on <see cref="SplitAdmissionDeferred"/>.
+    /// Emitted for a hot shard held back because the tree has reached its
+    /// per-tree physical shard ceiling. Sustained non-zero means the ceiling is
+    /// binding and should be reviewed alongside the tree's shard count.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SplitDeferredShardCeilingReasonTag = new(TagReason, "shard_ceiling");
 
     // --- Compaction policy instruments (TombstoneCompactionGrain) -----------
 

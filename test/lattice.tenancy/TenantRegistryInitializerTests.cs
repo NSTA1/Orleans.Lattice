@@ -79,4 +79,38 @@ public sealed class TenantRegistryInitializerTests
             () => new TenantRegistryInitializer(GrainFactory, Services, OptionsMonitor, Cluster, Serializer),
             Throws.Nothing);
     }
+
+    [Test]
+    public async Task EnsureInitializedAsync_skips_seeding_when_the_default_tenant_already_exists()
+    {
+        // Covers line 127: SeedDefaultTenantAsync returns early when the registry
+        // already contains the default tenant record instead of writing a new one.
+        var grainFactory = Substitute.For<IGrainFactory>();
+        var serializer = TestSerializers.TenantRecords;
+        var options = Substitute.For<IOptionsMonitor<LatticeTenancyOptions>>();
+        options.CurrentValue.Returns(new LatticeTenancyOptions { SeedDefaultTenant = true });
+
+        var lattice = Substitute.For<ILattice>();
+        grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(lattice);
+
+        // Return a serialized TenantRecord for the default-tenant key so the
+        // initializer finds an existing entry and returns at line 127.
+        var existing = TenantRecord.Create(
+            TenantId.Default,
+            TenantStatus.Active,
+            TenantQuotas.Unbounded,
+            TenantPlacement.Shared,
+            HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            "seed");
+        lattice.GetAsync(TenantId.Default.Value!, Arg.Any<CancellationToken>())
+            .Returns(serializer.Serialize(existing));
+
+        var initializer = new TenantRegistryInitializer(
+            grainFactory, Services, options, Cluster, serializer);
+
+        await initializer.EnsureInitializedAsync();
+
+        await lattice.DidNotReceive().SetAsync(
+            Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+    }
 }

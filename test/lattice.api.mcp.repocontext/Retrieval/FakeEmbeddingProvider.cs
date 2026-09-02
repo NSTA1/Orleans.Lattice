@@ -48,6 +48,14 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
     /// </summary>
     public bool RejectEmptyStrings { get; set; }
 
+    /// <summary>
+    /// Every passage this provider was asked to embed, in call order. Lets a test
+    /// assert what actually reached the embedder rather than only that a count
+    /// came back - which is how a test tells "the right text was embedded" from
+    /// "something was embedded".
+    /// </summary>
+    public List<string> CapturedTexts { get; } = new();
+
     /// <inheritdoc />
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(Available);
@@ -82,6 +90,7 @@ internal sealed class FakeEmbeddingProvider : IEmbeddingProvider
         var vectors = new List<ReadOnlyMemory<float>>(texts.Count);
         foreach (var text in texts)
         {
+            CapturedTexts.Add(text);
             vectors.Add(Embed(text));
         }
 

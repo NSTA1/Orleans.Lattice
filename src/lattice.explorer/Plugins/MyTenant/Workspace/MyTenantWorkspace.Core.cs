@@ -1,3 +1,6 @@
+using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Core.Session;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
 
@@ -34,6 +37,9 @@ public sealed partial class MyTenantWorkspace : IDisposable
 {
     private readonly IMyTenantDomain _domain;
     private readonly IExplorerPluginAccessStore _store;
+    private readonly IExplorerShellPreferences? _preferences;
+    private readonly IExplorerShellRouter? _router;
+    private readonly Action<ExplorerRoute>? _routeChanged;
 
     private bool _initialized;
 
@@ -45,17 +51,43 @@ public sealed partial class MyTenantWorkspace : IDisposable
     /// </summary>
     /// <param name="domain">The plugin's controlled domain contract. Must not be <see langword="null"/>.</param>
     /// <param name="store">The keyed plugin access store. Must not be <see langword="null"/>.</param>
-    /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
-    public MyTenantWorkspace(IMyTenantDomain domain, IExplorerPluginAccessStore store)
+    /// <param name="preferences">
+    /// The shell's preference contract, through which the open sub-surface is
+    /// remembered between sessions. Optional: a head composed without it keeps
+    /// the surface for the life of the circuit and no longer.
+    /// </param>
+    /// <param name="router">
+    /// The shell's router, through which the open sub-surface is addressable.
+    /// Optional: a head composed without it keeps the surface out of the URL.
+    /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="domain"/> or <paramref name="store"/> is
+    /// <see langword="null"/>.
+    /// </exception>
+    public MyTenantWorkspace(
+        IMyTenantDomain domain,
+        IExplorerPluginAccessStore store,
+        IExplorerShellPreferences? preferences = null,
+        IExplorerShellRouter? router = null)
     {
         ArgumentNullException.ThrowIfNull(domain);
         ArgumentNullException.ThrowIfNull(store);
 
         _domain = domain;
         _store = store;
+        _preferences = preferences;
+        _router = router;
 
         ReadAccess();
         _store.Changed += OnAccessChanged;
+
+        if (_router is not null)
+        {
+            // Bound once rather than per subscription, so unsubscribing in
+            // Dispose removes the same delegate instance that was added.
+            _routeChanged = OnRouteChanged;
+            _router.RouteChanged += _routeChanged;
+        }
     }
 
     /// <summary>Raised whenever the observable state changes, so the views re-render.</summary>
@@ -95,6 +127,31 @@ public sealed partial class MyTenantWorkspace : IDisposable
     public string? AccessReason { get; private set; }
 
     /// <summary>
+    /// What a refused caller is missing and who issues it, exactly as the gate
+    /// declared it. The panel renders a denial's remedy from this rather than
+    /// from the area's own label, so the reader is told which permission to ask
+    /// for and whom to ask.
+    /// </summary>
+    public ExplorerAccessRemedy AccessRemedy { get; private set; }
+
+    /// <summary>
+    /// The refusal to render, or <see langword="null"/> when the gate admits the
+    /// caller. Composed when the gate's answer changes rather than per render,
+    /// and never composed at all for an allowed caller.
+    /// </summary>
+    public ExplorerStateMessage? AccessMessage { get; private set; }
+
+    /// <summary>
+    /// What to do about a refusal, in one sentence: the gate's own remedy when it
+    /// declared one - which names the missing permission and who issues it - and
+    /// the copy layer's general remedy when it did not. Never
+    /// <see langword="null"/> while <see cref="AccessMessage"/> is non-null,
+    /// because a refusal with no remedy is the defect this path exists to
+    /// prevent.
+    /// </summary>
+    public string? AccessRemedyText { get; private set; }
+
+    /// <summary>
     /// The registration-order diagnostic the gate filed, or
     /// <see langword="null"/> when the head supplied a real platform-operator
     /// gate. Rendered on the Overview surface, because a head running on the
@@ -122,6 +179,10 @@ public sealed partial class MyTenantWorkspace : IDisposable
         }
 
         _initialized = true;
+
+        // The surface is restored first, so the load that follows is the load the
+        // restored surface needs rather than the default one's.
+        await RestoreSurfaceAsync().ConfigureAwait(false);
         await LoadIdentityAsync().ConfigureAwait(false);
         await LoadForSurfaceAsync(force: true).ConfigureAwait(false);
         RaiseChanged();
@@ -130,15 +191,30 @@ public sealed partial class MyTenantWorkspace : IDisposable
     /// <summary>
     /// Activates <paramref name="surfaceId"/>, clearing the previous surface's
     /// notice and loading the newly activated surface's data if it has not been
-    /// loaded yet.
+    /// loaded yet, then remembers it and puts it in the address.
     /// </summary>
     /// <param name="surfaceId">The sub-surface id to activate.</param>
     public async Task SelectSurfaceAsync(string surfaceId)
     {
+        if (!await ActivateSurfaceAsync(surfaceId).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await RememberSurfaceAsync(surfaceId, replaceHistoryEntry: false).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Activates <paramref name="surfaceId"/> without persisting or addressing
+    /// it, and reports whether it actually changed. The half a restore and a
+    /// browser Back share with an explicit tab click.
+    /// </summary>
+    private async Task<bool> ActivateSurfaceAsync(string surfaceId)
+    {
         if (!MyTenantSurfaces.IsKnown(surfaceId)
             || string.Equals(ActiveSurfaceId, surfaceId, StringComparison.Ordinal))
         {
-            return;
+            return false;
         }
 
         ActiveSurfaceId = surfaceId;
@@ -146,6 +222,7 @@ public sealed partial class MyTenantWorkspace : IDisposable
 
         await LoadForSurfaceAsync(force: false).ConfigureAwait(false);
         RaiseChanged();
+        return true;
     }
 
     /// <summary>
@@ -166,7 +243,15 @@ public sealed partial class MyTenantWorkspace : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => _store.Changed -= OnAccessChanged;
+    public void Dispose()
+    {
+        _store.Changed -= OnAccessChanged;
+
+        if (_router is not null && _routeChanged is not null)
+        {
+            _router.RouteChanged -= _routeChanged;
+        }
+    }
 
     /// <summary>
     /// Runs one mutation under the busy flag, recording its outcome as the
@@ -252,6 +337,23 @@ public sealed partial class MyTenantWorkspace : IDisposable
         AuthenticationRequired = access.State == ExplorerPluginAccessState.AuthenticationRequired;
         Unavailable = access.State == ExplorerPluginAccessState.Unavailable;
         AccessReason = access.Reason;
+        AccessRemedy = access.Remedy;
+
+        // Composed here, when the gate's answer changes, rather than on the
+        // render path: the panel re-renders on every load and every notice, and
+        // an allowed caller composes nothing at all.
+        AccessMessage = ExplorerAccessCopy.For(
+            ExplorerVocabulary.MyTenantArea,
+            access.IsAllowed,
+            requiresSignIn: AuthenticationRequired,
+            isUnavailable: Unavailable);
+
+        // The gate names the missing permission and its audience; the copy layer
+        // knows only the surface label. Prefer the gate, and fall back to the
+        // copy layer's general remedy rather than to nothing.
+        AccessRemedyText = AccessMessage is null
+            ? null
+            : access.Remedy.Describe() ?? AccessMessage.Remedy;
 
         var diagnostic = _store.Get(MyTenantPluginKeys.PluginId, MyTenantPluginKeys.OperatorGateScope);
         OperatorGateDiagnostic = diagnostic.IsAllowed ? null : diagnostic.Reason;

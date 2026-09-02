@@ -23,6 +23,9 @@ public sealed class LatticeViewport : ILatticeViewport
     public bool IsMeasured { get; private set; }
 
     /// <inheritdoc />
+    public int? MeasuredWidth { get; private set; }
+
+    /// <inheritdoc />
     public event Action<LatticeBreakpoint>? BreakpointChanged;
 
     /// <inheritdoc />
@@ -35,6 +38,12 @@ public sealed class LatticeViewport : ILatticeViewport
 
         IsMeasured = true;
 
+        // A head classifying its own band is not reporting a width, so any
+        // width left over from an earlier measurement is stale and would
+        // contradict the band just set. Dropping it is what makes
+        // MeasuredWidth mean "the width now", never "a width once".
+        MeasuredWidth = null;
+
         if (_breakpoint == breakpoint)
         {
             return false;
@@ -46,6 +55,13 @@ public sealed class LatticeViewport : ILatticeViewport
     }
 
     /// <inheritdoc />
-    public bool SetViewportWidth(int viewportWidth) =>
-        SetBreakpoint(LatticeBreakpoints.Resolve(viewportWidth));
+    public bool SetViewportWidth(int viewportWidth)
+    {
+        var changed = SetBreakpoint(LatticeBreakpoints.Resolve(viewportWidth));
+
+        // Set after the band, because SetBreakpoint clears it: this is the one
+        // caller that does know the width.
+        MeasuredWidth = viewportWidth < 0 ? 0 : viewportWidth;
+        return changed;
+    }
 }

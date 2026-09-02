@@ -36,7 +36,7 @@
                         {
                             <li @key="id">
                                 <button type="button" class="lx-btn lx-btn-icon lx-backups-remove"
-                                        title="Remove tree" aria-label="@($"Remove {id}")"
+                                        aria-label="@($"Remove {id}")"
                                         disabled="@Owner.Busy"
                                         @onclick="Remove(id)">x</button>
                                 <span class="lx-backups-selected-id">@id</span>
@@ -45,7 +45,12 @@
                     </ul>
                     @if (Owner.SelectedTrees.Count > 1)
                     {
-                        <p class="lx-backups-note">Multiple trees are captured as a cross-tree consistent backup set.</p>
+                        <p class="lx-backups-note">
+                        Multiple trees are captured as a cross-tree consistent backup set.
+                        <LatticeHelp Id="@BackupsVocabulary.BackupSetId"
+                                     Term="@BackupsVocabulary.BackupSet.Label"
+                                     Explanation="@BackupsVocabulary.BackupSet.Explanation" />
+                    </p>
                     }
                 }
             </div>
@@ -65,6 +70,12 @@
                                @onchange="@(() => Owner.SetKindAsync(BackupKind.Incremental))" />
                         Incremental
                     </label>
+                    <LatticeHelp Id="@BackupsVocabulary.FullBackupId"
+                                 Term="@BackupsVocabulary.FullBackup.Label"
+                                 Explanation="@BackupsVocabulary.FullBackup.Explanation" />
+                    <LatticeHelp Id="@BackupsVocabulary.IncrementalBackupId"
+                                 Term="@BackupsVocabulary.IncrementalBackup.Label"
+                                 Explanation="@BackupsVocabulary.IncrementalBackup.Explanation" />
                 </fieldset>
             </div>
         </div>
@@ -98,12 +109,16 @@
             <span class="lx-backups-field-label">Schedule</span>
             <div class="lx-backups-field-control">
                 <fieldset class="lx-backups-schedule" aria-label="Recurring schedule">
-                    <label title="Also register a recurring backup of the selected tree at the interval below.">
+                    <label>
                         <input type="checkbox" checked="@Owner.ScheduleEnabled"
+                               aria-describedby="@ScheduleExplanationId"
                                @onchange="e => Owner.SetScheduleEnabled((bool?)e.Value ?? false)"
                                disabled="@(!Owner.CanSchedule)" />
                         Schedule recurring
                     </label>
+                    <LatticeHelp Id="@BackupsVocabulary.ScheduleId"
+                                 Term="@BackupsVocabulary.Schedule.Label"
+                                 Explanation="@BackupsVocabulary.Schedule.Explanation" />
                     <label>
                         Every
                         <input type="number" min="0" max="168" value="@Owner.ScheduleHours"
@@ -146,6 +161,11 @@
 </div>
 
 @code {
+    // Hoisted to a static: the call concatenates, and this form re-renders on
+    // every tree selection and every keystroke in the name field.
+    private static readonly string ScheduleExplanationId =
+        LatticeHelp.ExplanationElementId(BackupsVocabulary.ScheduleId);
+
     private readonly Dictionary<string, EventCallback> _remove = new(StringComparer.Ordinal);
 
     /// <summary>The Backups panel this form reads and drives.</summary>

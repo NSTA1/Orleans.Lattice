@@ -1,16 +1,18 @@
 using Grpc.Core;
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Tenancy;
 using Orleans.Lattice.Explorer.Plugins;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 
 /// <summary>
-/// The default <see cref="ITenancyAvailability"/>, and a ready-made
-/// <see cref="IExplorerPluginAccessGate"/> a tenancy plugin composes with its
-/// own authorization check.
+/// The default <see cref="ITenancyAvailability"/>, and the shared
+/// <see cref="ExplorerPluginAccessGate"/> a tenancy plugin composes with its own
+/// authorization check.
 /// <para>
-/// It answers "does this cluster serve tenancy?" from two independent signals,
-/// in cost order:
+/// It answers "does this cluster serve tenancy, and can this caller reach it?"
+/// from two independent signals, in cost order:
 /// </para>
 /// <list type="number">
 ///   <item>
@@ -20,7 +22,7 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 ///     reports <see cref="IExplorerTenantSwitcher.IsActive"/>
 ///     <see langword="false"/>, tenant scoping is not enabled for this head at
 ///     all - the same posture <c>NullExplorerTenantView</c> takes - so the
-///     surface is unavailable and no call is made.
+///     capability is absent and no call is made.
 ///     </description>
 ///   </item>
 ///   <item>
@@ -35,11 +37,19 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 ///   </item>
 /// </list>
 /// <para>
-/// Every other fault fails closed to a denial rather than an error, so a probe
-/// never throws into the shell. The probe is not cached: it is a single light
-/// read, and the host re-probes only on mount, sign-in change, and reconnect -
-/// the same posture the Backups capability probe takes, and it keeps the answer
-/// from going stale across a reconnect.
+/// Every other fault folds into withheld facts rather than an error, so a probe
+/// never throws into the shell. It reports <em>facts</em> and leaves the state
+/// to <see cref="ExplorerPluginAccessContract"/>: a refusal it cannot classify
+/// is "the grant was not shown", which the contract renders as a sign-in prompt
+/// for an anonymous caller and as a denial for a signed-in one. Deciding that
+/// here is how this probe used to tell a signed-out visitor that tenancy was
+/// "not available for your account".
+/// </para>
+/// <para>
+/// The probe is not cached: it is a single light read, and the host re-probes
+/// only on mount, sign-in change, and reconnect - the same posture the Backups
+/// capability probe takes, and it keeps the answer from going stale across a
+/// reconnect.
 /// </para>
 /// </summary>
 /// <param name="client">The transport seam used for the light probe read.</param>
@@ -48,9 +58,16 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenancy;
 /// head never called <c>AddExplorerTenantView()</c>, which is itself the
 /// "no tenancy here" signal.
 /// </param>
+/// <param name="session">
+/// The Explorer's sign-in seam, read only to tell an anonymous refusal from an
+/// authenticated one. <see langword="null"/> on a head that registered no auth,
+/// which reads as anonymous - the recoverable answer.
+/// </param>
 public sealed class TenancyAvailability(
     ITenantAdminClient client,
-    IExplorerTenantSwitcher? switcher = null) : ITenancyAvailability, IExplorerPluginAccessGate
+    IExplorerTenantSwitcher? switcher = null,
+    IExplorerAuthSession? session = null)
+    : ExplorerPluginAccessGate, ITenancyAvailability
 {
     private const string InactiveReason =
         "This deployment does not have the tenancy add-on enabled.";
@@ -58,36 +75,80 @@ public sealed class TenancyAvailability(
     private const string DeniedReason =
         "The tenancy control surface could not be reached for this caller.";
 
+    /// <summary>
+    /// The grant a refused caller is missing. Cached, so attaching it to a
+    /// denial costs nothing per probe.
+    /// </summary>
+    private static readonly ExplorerAccessRemedy MissingGrant =
+        ExplorerAccessRemedy.Requiring("Tenant read", ExplorerVocabulary.GrantAudience);
+
     private readonly ITenantAdminClient _client = client ?? throw new ArgumentNullException(nameof(client));
 
     private readonly IExplorerTenantSwitcher? _switcher = switcher;
 
+    private readonly IExplorerAuthSession? _session = session;
+
     /// <inheritdoc />
-    public async ValueTask<ExplorerPluginAccess> ProbeAsync(CancellationToken cancellationToken = default)
+    public override ExplorerAccessRemedy Remedy => MissingGrant;
+
+    /// <inheritdoc />
+    protected override bool IsCallerAuthenticated => _session?.IsAuthenticated ?? false;
+
+    /// <inheritdoc />
+    public ValueTask<ExplorerPluginAccess> ProbeAsync(CancellationToken cancellationToken = default)
+    {
+        var pending = EvaluateAvailabilityAsync(cancellationToken);
+        return pending.IsCompletedSuccessfully
+            ? new ValueTask<ExplorerPluginAccess>(Resolve(pending.Result))
+            : ResolveAvailabilityAsync(pending);
+    }
+
+    /// <inheritdoc />
+    protected override ValueTask<ExplorerPluginAccessFacts> EvaluateAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken) =>
+        // The host's own tenant scope already says whether the deployment has the
+        // tenancy add-on. Trusting it here saves a call and keeps a plugin's gate
+        // consistent with the rest of the shell.
+        context.Tenant.IsActive
+            ? EvaluateAvailabilityAsync(cancellationToken)
+            : new ValueTask<ExplorerPluginAccessFacts>(
+                ExplorerPluginAccessFacts.CapabilityAbsent(InactiveReason));
+
+    private async ValueTask<ExplorerPluginAccessFacts> EvaluateAvailabilityAsync(CancellationToken cancellationToken)
     {
         if (_switcher is not { IsActive: true })
         {
             // Tenant scoping is not enabled for this head, so there is no tenancy
             // surface to render and nothing to ask the cluster about.
-            return ExplorerPluginAccess.ReportUnavailable(InactiveReason);
+            return ExplorerPluginAccessFacts.CapabilityAbsent(InactiveReason);
         }
 
         try
         {
             // The cheapest read on the surface, and the one every caller is
-            // entitled to: it requires no special authorization, so reaching it
-            // proves the surface exists rather than proving the caller is
-            // privileged. Per-operation authorization stays the server's job.
-            await _client.GetCurrentTenantAsync(cancellationToken).ConfigureAwait(false);
-            return ExplorerPluginAccess.Allowed;
+            // entitled to: reaching it shows the surface exists and that this
+            // caller can read it. Per-operation authorization stays the server's
+            // job, and the plugins composing this probe add their own check.
+            var current = await _client.GetCurrentTenantAsync(cancellationToken).ConfigureAwait(false);
+
+            // A seam that answered nothing proved nothing. Fail closed rather
+            // than read an absent response as an admission.
+            return current is null
+                ? ExplorerPluginAccessFacts.Withhold(DeniedReason)
+                : ExplorerPluginAccessFacts.Granted;
         }
         catch (TenancyUnavailableException ex)
         {
-            return ExplorerPluginAccess.ReportUnavailable(ex.Message);
+            return ExplorerPluginAccessFacts.CapabilityAbsent(ex.Message);
         }
         catch (LatticeAuthorizationDeniedException ex)
         {
-            return ExplorerPluginAccess.Deny(ex.Message);
+            // The server refuses an anonymous caller and an authenticated but
+            // unauthorized one with the same status, so this cannot be
+            // classified here. Report the withheld grant and let the contract
+            // pick the state from the caller's credential.
+            return ExplorerPluginAccessFacts.Withhold(ex.Message);
         }
         catch (RpcException ex)
         {
@@ -97,52 +158,37 @@ public sealed class TenancyAvailability(
         {
             // The Explorer holds no endpoint yet. Fail closed; a later
             // connection-status change re-probes.
-            return ExplorerPluginAccess.Deny(ex.Message);
+            return ExplorerPluginAccessFacts.Withhold(ex.Message);
         }
     }
 
-    /// <summary>
-    /// Probes on behalf of a plugin, short-circuiting to unavailable when the
-    /// host has already resolved the deployment as non-tenant.
-    /// </summary>
-    /// <param name="context">The probing plugin's own host context. Must not be <see langword="null"/>.</param>
-    /// <param name="cancellationToken">Cancels the probe.</param>
-    /// <returns>The resolved access decision.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
-    public ValueTask<ExplorerPluginAccess> ProbeAsync(
-        IExplorerPluginHostContext context,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
+    private async ValueTask<ExplorerPluginAccess> ResolveAvailabilityAsync(
+        ValueTask<ExplorerPluginAccessFacts> pending) =>
+        Resolve(await pending.ConfigureAwait(false));
 
-        // The host's own tenant scope already says whether the deployment has the
-        // tenancy add-on. Trusting it here saves a call and keeps a plugin's gate
-        // consistent with the rest of the shell.
-        return context.Tenant.IsActive
-            ? ProbeAsync(cancellationToken)
-            : new ValueTask<ExplorerPluginAccess>(ExplorerPluginAccess.ReportUnavailable(InactiveReason));
-    }
+    private ExplorerPluginAccess Resolve(in ExplorerPluginAccessFacts facts) =>
+        ExplorerPluginAccessContract.Resolve(facts, MissingGrant, IsCallerAuthenticated);
 
     /// <summary>
     /// Classifies a residual transport fault the client did not translate.
     /// </summary>
     /// <remarks>
-    /// <see cref="StatusCode.Unavailable"/> is deliberately a denial, not
-    /// <see cref="ExplorerPluginAccessState.Unavailable"/>: on the wire it means
-    /// the server could not be reached, which is transient, whereas the plugin
-    /// state means the capability does not exist and never will here. Hiding the
+    /// <see cref="StatusCode.Unavailable"/> is deliberately <em>not</em>
+    /// <see cref="ExplorerPluginCapabilityPresence.Absent"/>: on the wire it
+    /// means the server could not be reached, which is transient, whereas an
+    /// absent capability means it does not exist and never will here. Hiding the
     /// surface on a dropped connection would make a reconnect look like an
     /// uninstall.
     /// </remarks>
-    private static ExplorerPluginAccess Classify(RpcException exception) => exception.StatusCode switch
+    private static ExplorerPluginAccessFacts Classify(RpcException exception) => exception.StatusCode switch
     {
-        StatusCode.Unimplemented => ExplorerPluginAccess.ReportUnavailable(
+        StatusCode.Unimplemented => ExplorerPluginAccessFacts.CapabilityAbsent(
             string.IsNullOrWhiteSpace(exception.Status.Detail)
                 ? "This cluster does not serve tenant administration."
                 : exception.Status.Detail),
-        StatusCode.Unauthenticated => ExplorerPluginAccess.RequireAuthentication(
+        StatusCode.Unauthenticated => ExplorerPluginAccessFacts.CredentialMissing(
             string.IsNullOrWhiteSpace(exception.Status.Detail) ? null : exception.Status.Detail),
-        _ => ExplorerPluginAccess.Deny(
+        _ => ExplorerPluginAccessFacts.Withhold(
             string.IsNullOrWhiteSpace(exception.Status.Detail) ? DeniedReason : exception.Status.Detail),
     };
 }

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.Explorer.Core.Session;
 using NSubstitute;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
@@ -9,6 +10,8 @@ using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Plugins.Telemetry.Views;
 using Orleans.Lattice.Explorer.Tests.DesignSystem;
+
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Tests.Telemetry;
 
@@ -170,14 +173,32 @@ public sealed class TelemetryMountRenderTests
         // The section lives inside the My Tenant area but its availability is a
         // telemetry question; reading My Tenant's decision would report the
         // wrong surface's state.
-        var (panel, _) = await RenderAsync<TelemetryPanel>(access: ExplorerPluginAccess.Deny("telemetry denied"));
-        var (section, _) = await RenderAsync<TelemetryTenantSection>(
+        //
+        // Asserted through the refusal each mount renders rather than through
+        // the gate's raw reason string: the board words a refusal from the
+        // shared vocabulary now (issue #1857), so echoing a reason would prove
+        // nothing about which key was read.
+        var refusal = ExplorerStateCopy
+            .NotPermitted(ExplorerSubjects.TelemetrySignals, "Telemetry")
+            .Explanation;
+
+        var (deniedPanel, _) = await RenderAsync<TelemetryPanel>(
             access: ExplorerPluginAccess.Deny("telemetry denied"));
+        var (deniedSection, _) = await RenderAsync<TelemetryTenantSection>(
+            access: ExplorerPluginAccess.Deny("telemetry denied"));
+
+        // The converse is what makes the assertion about the KEY rather than
+        // about the copy: with the telemetry key allowed, neither mount refuses,
+        // however another plugin's decision reads.
+        var (allowedPanel, _) = await RenderAsync<TelemetryPanel>();
+        var (allowedSection, _) = await RenderAsync<TelemetryTenantSection>();
 
         Assert.Multiple(() =>
         {
-            Assert.That(panel, Does.Contain("telemetry denied"));
-            Assert.That(section, Does.Contain("telemetry denied"));
+            Assert.That(deniedPanel, Does.Contain(refusal));
+            Assert.That(deniedSection, Does.Contain(refusal));
+            Assert.That(allowedPanel, Does.Not.Contain(refusal));
+            Assert.That(allowedSection, Does.Not.Contain(refusal));
         });
     }
 
@@ -202,6 +223,12 @@ public sealed class TelemetryMountRenderTests
 
         var services = new ServiceCollection();
         services.AddLogging();
+        
+        // The shell-state contract the panel remembers and addresses its open
+        // surface on. Registered as the real thing: the route model is a pure
+        // in-memory type and the preference store falls back to an in-memory
+        // backing store, so nothing here reaches a browser.
+        services.AddExplorerSession();
         services.AddSingleton(factory);
         services.AddSingleton<IExplorerPluginAccessStore>(store);
 

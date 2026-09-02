@@ -206,6 +206,23 @@ public sealed class AccessCreateModel
     public string AllTreesGrantsLabel =>
         AllTreesGrantsEnabled ? "All-trees grants: on" : "All-trees grants: off";
 
+    /// <summary>
+    /// What the all-trees posture badge means, rendered as a help disclosure
+    /// beside it rather than as a title attribute a keyboard or touch caller can
+    /// never reach.
+    /// </summary>
+    public const string AllTreesGrantsExplanation =
+        "When off, an all-trees ('*') data grant is recorded but inert - the decision engine never consults "
+        + "it for an ordinary tree. Enable LatticeAuthOptions.AllTreesGrantsEnabled on the silo.";
+
+    /// <summary>
+    /// What the delegation posture badge means, rendered as a help disclosure
+    /// beside it rather than as a title attribute.
+    /// </summary>
+    public const string AccessAdministrationDelegationExplanation =
+        "When off, a whole-tree Admin delegation rule on the policy tree is unauthorable - the server "
+        + "rejects it. Enable LatticeAuthOptions.AccessAdministrationDelegationEnabled on the silo.";
+
     /// <summary>The posture badge label for the access-administration delegation tier.</summary>
     public string AccessAdministrationDelegationLabel =>
         AccessAdministrationDelegationEnabled

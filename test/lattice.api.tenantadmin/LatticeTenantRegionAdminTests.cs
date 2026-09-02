@@ -387,4 +387,41 @@ public sealed class LatticeTenantRegionAdminTests
             async () => await admin.GetTenantRegionStatusAsync("acme"),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
     }
+
+    [Test]
+    public async Task GetTenantRegionStatusAsync_maps_backfilling_and_offline_region_statuses()
+    {
+        // The remaining lifecycle arms: a region mid-backfill and a fully offline
+        // region map to their distinct lifecycle statuses, so the report never
+        // collapses a transitional or terminated region into the None default.
+        var registry = new FakeTenantRegistry();
+        registry.Seed(SeededRecord(
+            allowed: new[] { "region-a", "region-b" },
+            statuses: new[]
+            {
+                ("region-a", TenantRegionStatus.Backfilling),
+                ("region-b", TenantRegionStatus.Offline),
+            }));
+        var admin = Admin(registry);
+
+        var report = await admin.GetTenantRegionStatusAsync("acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Regions[0].Status, Is.EqualTo(TenantRegionLifecycleStatus.Backfilling));
+            Assert.That(report.Regions[1].Status, Is.EqualTo(TenantRegionLifecycleStatus.Offline));
+        });
+    }
+
+    [Test]
+    public void GetTenantRegionStatusAsync_an_invalid_tenant_id_throws()
+    {
+        // A syntactically invalid id is rejected before any authorization or read,
+        // so a malformed request never reaches the registry.
+        var admin = Admin(new FakeTenantRegistry());
+
+        Assert.That(
+            async () => await admin.GetTenantRegionStatusAsync("BAD_ID"),
+            Throws.ArgumentException);
+    }
 }

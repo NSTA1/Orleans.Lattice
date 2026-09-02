@@ -1,14 +1,10 @@
-using System.Globalization;
-using System.IO;
-using System.Text.RegularExpressions;
-using Orleans.Lattice.Testing.Hygiene;
-
 namespace Orleans.Lattice.Explorer.Tests;
 
 /// <summary>
-/// The design system's contrast gate (issue #1801): every text colour token
-/// clears the WCAG 2.1 AA minimum against every background colour token in its
-/// own palette, measured rather than asserted by eye.
+/// The design system's text contrast gate (issues #1801 and #1846): every
+/// foreground colour token clears the WCAG 2.1 AA minimum against every
+/// background colour token in its own palette, measured rather than asserted by
+/// eye, and no palette may quietly give back a ratio it once held.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -25,7 +21,7 @@ namespace Orleans.Lattice.Explorer.Tests;
 /// <item>The sweep only ever sees the default (dark) theme in whatever states it
 /// happens to visit. It could not have found the same defect in the light
 /// palette, whose dim token was a worse 2.91:1. Reading the tokens directly
-/// covers both palettes exhaustively instead of sampling one.</item>
+/// covers every palette exhaustively instead of sampling one.</item>
 /// </list>
 /// <para>
 /// The bar is the 4.5:1 for normal-size text rather than the relaxed 3:1 for
@@ -34,35 +30,30 @@ namespace Orleans.Lattice.Explorer.Tests;
 /// the relaxed allowance requires.
 /// </para>
 /// <para>
-/// Scope is deliberately the text-on-surface family. The status and accent
-/// tokens are a separate question: they are spent as fills as often as as text,
-/// and a fill carries no contrast requirement of its own, so folding them in
-/// here would assert a rule that does not apply to how they are used.
+/// Issue #1846 widened the scope in two directions. The accent and status tokens
+/// used to be excluded on the grounds that they are spent as fills as often as
+/// as text; they are now held to the text bar as well, because they are
+/// unambiguously spent as foregrounds - a link, a status label - and the retune
+/// moved them far enough to clear it. Their other role, as a fill with
+/// <c>--lx-color-accent-contrast</c> drawn on top, is measured by
+/// <see cref="NonTextContrastTokenHygieneTests"/>.
+/// </para>
+/// <para>
+/// The second direction is <see cref="No_palette_gives_back_a_recorded_canvas_ratio"/>.
+/// Contrast against a fixed canvas is zero-sum, so a later issue tasked with
+/// raising border contrast could meet its own bar by darkening the text that
+/// sits on the same surfaces. Pinning the ratios each palette held before #1846
+/// makes that trade fail loudly instead of passing silently.
 /// </para>
 /// </remarks>
 [TestFixture]
 public sealed class TextContrastTokenHygieneTests
 {
     /// <summary>
-    /// The one file that declares a palette. Every colour measured here is read
-    /// from it, so the gate cannot drift from what the Explorer actually ships.
-    /// </summary>
-    private const string TokenStylesheet =
-        "src/lattice.explorer/DesignSystem/wwwroot/lattice-tokens.css";
-
-    /// <summary>
-    /// WCAG 2.1 success criterion 1.4.3, normal-size text.
-    /// </summary>
-    private const double MinimumContrastRatio = 4.5;
-
-    private const string DarkPaletteSelector = ":root[data-theme=\"dark\"]";
-    private const string LightPaletteSelector = ":root[data-theme=\"light\"]";
-
-    /// <summary>
     /// The foreground tokens, ordered from most to least emphatic. The ladder
     /// test below depends on that order.
     /// </summary>
-    private static readonly string[] TextTokens =
+    private static readonly string[] EmphasisLadder =
     [
         "--lx-color-text",
         "--lx-color-text-muted",
@@ -70,81 +61,129 @@ public sealed class TextContrastTokenHygieneTests
     ];
 
     /// <summary>
-    /// Every token a surface can paint behind that text. A text token has to
-    /// clear the bar on all of them, not merely on the canvas, because a raised
-    /// or sunken surface is a different background with a different ratio.
+    /// Every token the Explorer draws as a foreground. All of them are held to
+    /// the same bar, on every background in the palette.
     /// </summary>
-    private static readonly string[] BackgroundTokens =
+    private static readonly string[] ForegroundTokens =
     [
-        "--lx-color-canvas",
-        "--lx-color-surface",
-        "--lx-color-surface-raised",
-        "--lx-color-surface-sunken",
+        "--lx-color-text",
+        "--lx-color-text-muted",
+        "--lx-color-text-dim",
+        "--lx-color-state-selected-fg",
+        "--lx-color-state-rest-fg",
+        "--lx-color-accent",
+        "--lx-color-accent-hover",
+        "--lx-color-success",
+        "--lx-color-warning",
+        "--lx-color-danger",
     ];
 
-    private static readonly Regex CssComment = new(
-        @"/\*.*?\*/", RegexOptions.Singleline | RegexOptions.Compiled);
-
-    private static readonly Regex CustomProperty = new(
-        @"(--[a-z0-9-]+)\s*:\s*([^;]+);", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex HexColour = new(
-        @"^#[0-9a-f]{6}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    /// <summary>
+    /// What each palette's canvas ratios measured before issue #1846 retuned
+    /// them. These are floors, not targets: a retune may improve them and may
+    /// never give one back.
+    /// </summary>
+    private static readonly (string Palette, string Token, double Recorded)[] RecordedCanvasRatios =
+    [
+        (DesignTokenPalettes.Dark, "--lx-color-text", 14.30),
+        (DesignTokenPalettes.Dark, "--lx-color-text-muted", 6.24),
+        (DesignTokenPalettes.Dark, "--lx-color-text-dim", 5.31),
+        (DesignTokenPalettes.Light, "--lx-color-text", 14.84),
+        (DesignTokenPalettes.Light, "--lx-color-text-muted", 5.63),
+        (DesignTokenPalettes.Light, "--lx-color-text-dim", 4.79),
+    ];
 
     [Test]
-    public void Every_dark_palette_text_token_clears_wcag_aa_on_every_surface()
+    [TestCase(DesignTokenPalettes.Dark)]
+    [TestCase(DesignTokenPalettes.Light)]
+    public void Every_foreground_token_clears_wcag_aa_on_every_surface(string paletteName)
     {
-        AssertPaletteClearsAa(DarkPaletteSelector);
+        AssertEveryForegroundClears(paletteName, DesignTokens.TextMinimum);
     }
 
     [Test]
-    public void Every_light_palette_text_token_clears_wcag_aa_on_every_surface()
+    [TestCase(DesignTokenPalettes.DarkHighContrast)]
+    [TestCase(DesignTokenPalettes.LightHighContrast)]
+    public void Every_high_contrast_foreground_token_clears_wcag_aaa_on_every_surface(string paletteName)
     {
-        AssertPaletteClearsAa(LightPaletteSelector);
+        // A reader who asks for more contrast gets a full step more, not the
+        // same palette under a different name.
+        AssertEveryForegroundClears(paletteName, DesignTokens.TextEnhancedMinimum);
     }
 
     [Test]
-    public void Every_palette_keeps_its_text_tokens_in_a_descending_emphasis_ladder()
+    [TestCase(DesignTokenPalettes.Dark)]
+    [TestCase(DesignTokenPalettes.Light)]
+    [TestCase(DesignTokenPalettes.DarkHighContrast)]
+    [TestCase(DesignTokenPalettes.LightHighContrast)]
+    public void Every_palette_keeps_its_text_tokens_in_a_descending_emphasis_ladder(string paletteName)
     {
         // Raising a failing token until the number passes is not on its own a
         // fix: setting dim equal to the primary text colour would clear the bar
         // above while destroying the only thing the token exists to express.
         // Measured against its own canvas, each token must be strictly less
         // emphatic than the one before it.
-        foreach (var selector in new[] { DarkPaletteSelector, LightPaletteSelector })
+        var palette = DesignTokenPalettes.Resolve(paletteName);
+        var canvas = DesignTokens.Colour(palette, paletteName, "--lx-color-canvas");
+
+        for (var i = 1; i < EmphasisLadder.Length; i++)
         {
-            var palette = ReadPalette(selector);
-            var canvas = Colour(palette, selector, "--lx-color-canvas");
+            var stronger = DesignTokens.ContrastRatio(
+                DesignTokens.Colour(palette, paletteName, EmphasisLadder[i - 1]), canvas);
+            var weaker = DesignTokens.ContrastRatio(
+                DesignTokens.Colour(palette, paletteName, EmphasisLadder[i]), canvas);
 
-            for (var i = 1; i < TextTokens.Length; i++)
-            {
-                var stronger = ContrastRatio(Colour(palette, selector, TextTokens[i - 1]), canvas);
-                var weaker = ContrastRatio(Colour(palette, selector, TextTokens[i]), canvas);
-
-                Assert.That(weaker, Is.LessThan(stronger),
-                    $"{selector}: {TextTokens[i]} ({Format(weaker)}) must read as less emphatic than "
-                    + $"{TextTokens[i - 1]} ({Format(stronger)}) on the canvas. A token that clears the "
-                    + "contrast bar by becoming indistinguishable from the one above it has not been fixed.");
-            }
+            Assert.That(weaker, Is.LessThan(stronger),
+                $"{paletteName}: {EmphasisLadder[i]} ({DesignTokens.Format(weaker)}) must read as less "
+                + $"emphatic than {EmphasisLadder[i - 1]} ({DesignTokens.Format(stronger)}) on the canvas. "
+                + "A token that clears the contrast bar by becoming indistinguishable from the one above "
+                + "it has not been fixed.");
         }
     }
 
     [Test]
-    public void Both_palettes_declare_the_same_measured_tokens()
+    public void No_palette_gives_back_a_recorded_canvas_ratio()
     {
-        // Without this, dropping a token from one palette would make that
-        // palette's gate quietly measure fewer pairs rather than fail.
-        var dark = ReadPalette(DarkPaletteSelector);
-        var light = ReadPalette(LightPaletteSelector);
+        // Contrast against a fixed canvas is zero-sum. Without this, an issue
+        // tasked with raising non-text contrast could meet its bar by spending
+        // text contrast, and every other gate here would still be green.
+        Assert.Multiple(() =>
+        {
+            foreach (var (paletteName, token, recorded) in RecordedCanvasRatios)
+            {
+                var palette = DesignTokenPalettes.Resolve(paletteName);
+                var measured = DesignTokens.ContrastRatio(
+                    DesignTokens.Colour(palette, paletteName, token),
+                    DesignTokens.Colour(palette, paletteName, "--lx-color-canvas"));
+
+                // Compared at the two decimal places the ratios were recorded
+                // to, so the floor is the published number rather than whatever
+                // binary floating point makes of it.
+                Assert.That(Math.Round(measured, 2), Is.GreaterThanOrEqualTo(recorded),
+                    $"{paletteName}: {token} now measures {DesignTokens.Format(measured)} on the canvas, "
+                    + $"below the {DesignTokens.Format(recorded)} it held before issue #1846. Text contrast "
+                    + "is not a budget to spend on borders.");
+            }
+        });
+    }
+
+    [Test]
+    [TestCase(DesignTokenPalettes.Dark)]
+    [TestCase(DesignTokenPalettes.Light)]
+    [TestCase(DesignTokenPalettes.DarkHighContrast)]
+    [TestCase(DesignTokenPalettes.LightHighContrast)]
+    public void Every_palette_resolves_every_measured_token(string paletteName)
+    {
+        // Without this, a token dropped or misspelled in one palette would make
+        // that palette's gate quietly measure fewer pairs rather than fail.
+        var palette = DesignTokenPalettes.Resolve(paletteName);
 
         Assert.Multiple(() =>
         {
-            foreach (var token in TextTokens.Concat(BackgroundTokens))
+            foreach (var token in ForegroundTokens.Concat(DesignTokens.BackgroundTokens))
             {
-                Assert.That(dark.ContainsKey(token), Is.True,
-                    $"{DarkPaletteSelector} must declare {token}");
-                Assert.That(light.ContainsKey(token), Is.True,
-                    $"{LightPaletteSelector} must declare {token}");
+                Assert.That(palette.ContainsKey(token), Is.True,
+                    $"{paletteName} must resolve {token}");
             }
         });
     }
@@ -157,20 +196,21 @@ public sealed class TextContrastTokenHygieneTests
         // never measured, so pin it to values published with the specification.
         Assert.Multiple(() =>
         {
-            Assert.That(ContrastRatio("#000000", "#ffffff"), Is.EqualTo(21.0).Within(0.0001),
+            Assert.That(DesignTokens.ContrastRatio("#000000", "#ffffff"), Is.EqualTo(21.0).Within(0.0001),
                 "black on white is the maximum ratio the formula can produce");
-            Assert.That(ContrastRatio("#ffffff", "#ffffff"), Is.EqualTo(1.0).Within(0.0001),
+            Assert.That(DesignTokens.ContrastRatio("#ffffff", "#ffffff"), Is.EqualTo(1.0).Within(0.0001),
                 "a colour against itself is the minimum ratio");
 
             // The canonical worked example: #777777 on white is the greyscale
             // value that sits just under the AA bar.
-            Assert.That(ContrastRatio("#777777", "#ffffff"), Is.EqualTo(4.478).Within(0.001));
-            Assert.That(ContrastRatio("#777777", "#ffffff"), Is.LessThan(MinimumContrastRatio));
+            Assert.That(DesignTokens.ContrastRatio("#777777", "#ffffff"), Is.EqualTo(4.478).Within(0.001));
+            Assert.That(DesignTokens.ContrastRatio("#777777", "#ffffff"),
+                Is.LessThan(DesignTokens.TextMinimum));
 
             // The ratio is symmetric: which colour is the foreground does not
             // change the measurement.
-            Assert.That(ContrastRatio("#0b0e14", "#7c8797"),
-                Is.EqualTo(ContrastRatio("#7c8797", "#0b0e14")).Within(0.0001));
+            Assert.That(DesignTokens.ContrastRatio("#0b0e14", "#7c8797"),
+                Is.EqualTo(DesignTokens.ContrastRatio("#7c8797", "#0b0e14")).Within(0.0001));
         });
     }
 
@@ -182,142 +222,55 @@ public sealed class TextContrastTokenHygieneTests
         // after the stylesheet stops declaring them.
         Assert.Multiple(() =>
         {
-            Assert.That(ContrastRatio("#5a6373", "#0b0e14"), Is.EqualTo(3.19).Within(0.01),
+            Assert.That(DesignTokens.ContrastRatio("#5a6373", "#0b0e14"), Is.EqualTo(3.19).Within(0.01),
                 "the dark palette's retired dim token, as measured on the issue");
-            Assert.That(ContrastRatio("#5a6373", "#0b0e14"), Is.LessThan(MinimumContrastRatio),
+            Assert.That(DesignTokens.ContrastRatio("#5a6373", "#0b0e14"),
+                Is.LessThan(DesignTokens.TextMinimum),
                 "and it must be judged a failure, or this fixture guards nothing");
 
-            Assert.That(ContrastRatio("#8a93a3", "#f6f8fb"), Is.EqualTo(2.91).Within(0.01),
+            Assert.That(DesignTokens.ContrastRatio("#8a93a3", "#f6f8fb"), Is.EqualTo(2.91).Within(0.01),
                 "the light palette's retired dim token, a worse instance of the same defect");
-            Assert.That(ContrastRatio("#8a93a3", "#f6f8fb"), Is.LessThan(MinimumContrastRatio));
+            Assert.That(DesignTokens.ContrastRatio("#8a93a3", "#f6f8fb"),
+                Is.LessThan(DesignTokens.TextMinimum));
         });
     }
 
-    private static void AssertPaletteClearsAa(string selector)
+    private static void AssertEveryForegroundClears(string paletteName, double minimum)
     {
-        var palette = ReadPalette(selector);
+        var palette = DesignTokenPalettes.Resolve(paletteName);
 
         var failures = new List<string>();
         var measured = 0;
 
-        foreach (var text in TextTokens)
+        foreach (var foreground in ForegroundTokens)
         {
-            var foreground = Colour(palette, selector, text);
+            var colour = DesignTokens.Colour(palette, paletteName, foreground);
 
-            foreach (var background in BackgroundTokens)
+            foreach (var background in DesignTokens.BackgroundTokens)
             {
-                var surface = Colour(palette, selector, background);
-                var ratio = ContrastRatio(foreground, surface);
+                var surface = DesignTokens.Colour(palette, paletteName, background);
+                var ratio = DesignTokens.ContrastRatio(colour, surface);
                 measured++;
 
-                if (ratio < MinimumContrastRatio)
+                if (ratio < minimum)
                 {
                     failures.Add(
-                        $"{text} ({foreground}) on {background} ({surface}) is {Format(ratio)}, "
-                        + $"below the {Format(MinimumContrastRatio)} WCAG 2.1 AA minimum for normal text");
+                        $"{foreground} ({colour}) on {background} ({surface}) is "
+                        + $"{DesignTokens.Format(ratio)}, below the {DesignTokens.Format(minimum)} minimum");
                 }
             }
         }
 
         // Without this the gate would pass vacuously if the palette parser ever
         // stopped finding declarations.
-        Assert.That(measured, Is.EqualTo(TextTokens.Length * BackgroundTokens.Length),
-            "every text/background pair in the palette must be measured");
+        Assert.That(measured, Is.EqualTo(ForegroundTokens.Length * DesignTokens.BackgroundTokens.Length),
+            "every foreground/background pair in the palette must be measured");
 
         Assert.That(failures, Is.Empty,
-            $"{selector} in {TokenStylesheet} fails WCAG 2.1 AA (1.4.3) for normal-size text. "
+            $"{paletteName} in {DesignTokens.Stylesheet} fails the WCAG 2.1 minimum for normal-size text. "
             + "On a dark palette the fix is to lighten the token, on a light palette to darken it, "
             + "and in both cases to keep it less emphatic than the token above it in the ladder."
             + Environment.NewLine
             + string.Join(Environment.NewLine, failures));
-    }
-
-    /// <summary>
-    /// Reads the custom properties declared in one palette block. Comments are
-    /// stripped first so a hex value quoted in prose - this stylesheet documents
-    /// the retired values in exactly that way - can never be mistaken for a
-    /// declaration.
-    /// </summary>
-    private static IReadOnlyDictionary<string, string> ReadPalette(string selector)
-    {
-        var css = CssComment.Replace(ReadTokenStylesheet(), string.Empty);
-
-        var selectorIndex = css.IndexOf(selector, StringComparison.Ordinal);
-        Assert.That(selectorIndex, Is.GreaterThanOrEqualTo(0),
-            $"{selector} must be declared in {TokenStylesheet}");
-
-        var open = css.IndexOf('{', selectorIndex);
-        Assert.That(open, Is.GreaterThanOrEqualTo(0), $"{selector} must open a declaration block");
-
-        var close = css.IndexOf('}', open);
-        Assert.That(close, Is.GreaterThan(open), $"{selector} must close its declaration block");
-
-        var block = css[(open + 1)..close];
-
-        var declarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match declaration in CustomProperty.Matches(block))
-        {
-            declarations[declaration.Groups[1].Value] = declaration.Groups[2].Value.Trim();
-        }
-
-        Assert.That(declarations, Is.Not.Empty, $"{selector} must declare custom properties");
-
-        return declarations;
-    }
-
-    /// <summary>
-    /// Resolves one token to the literal colour it declares, failing if it is
-    /// absent or is not a plain <c>#rrggbb</c> value. An indirection such as a
-    /// <c>var()</c> reference would otherwise slip past the measurement.
-    /// </summary>
-    private static string Colour(
-        IReadOnlyDictionary<string, string> palette,
-        string selector,
-        string token)
-    {
-        Assert.That(palette.ContainsKey(token), Is.True, $"{selector} must declare {token}");
-
-        var value = palette[token];
-        Assert.That(HexColour.IsMatch(value), Is.True,
-            $"{selector}: {token} must be a literal #rrggbb colour so its contrast can be measured, "
-            + $"but it is '{value}'");
-
-        return value;
-    }
-
-    /// <summary>
-    /// The WCAG 2.1 contrast ratio between two opaque sRGB colours, defined as
-    /// <c>(Lighter + 0.05) / (Darker + 0.05)</c> over their relative luminances.
-    /// </summary>
-    private static double ContrastRatio(string foreground, string background)
-    {
-        var a = RelativeLuminance(foreground) + 0.05;
-        var b = RelativeLuminance(background) + 0.05;
-
-        return a > b ? a / b : b / a;
-    }
-
-    private static double RelativeLuminance(string hex) =>
-        (0.2126 * Linearise(Channel(hex, 1)))
-        + (0.7152 * Linearise(Channel(hex, 3)))
-        + (0.0722 * Linearise(Channel(hex, 5)));
-
-    private static double Channel(string hex, int offset) =>
-        int.Parse(hex.Substring(offset, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture) / 255.0;
-
-    private static double Linearise(double channel) =>
-        channel <= 0.03928 ? channel / 12.92 : Math.Pow((channel + 0.055) / 1.055, 2.4);
-
-    private static string Format(double ratio) =>
-        ratio.ToString("0.00", CultureInfo.InvariantCulture) + ":1";
-
-    private static string ReadTokenStylesheet()
-    {
-        var repoRoot = HygieneRepository.FindRepoRoot();
-        var path = Path.Combine(repoRoot, TokenStylesheet.Replace('/', Path.DirectorySeparatorChar));
-
-        Assert.That(File.Exists(path), Is.True, TokenStylesheet + " must exist");
-
-        return File.ReadAllText(path);
     }
 }

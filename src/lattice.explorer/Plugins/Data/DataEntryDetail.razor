@@ -6,28 +6,13 @@
     The History button names a sibling surface by intent only; the parent turns
     that into a request by plugin id, so this package never references it.
 *@
-@if (SelectedKey is null)
+@if (State is not null)
 {
-    <div class="lx-selection-state">Select a key to inspect its value.</div>
-}
-else if (Loading)
-{
-    <div class="lx-selection-state">Loading value...</div>
-}
-else if (Error is not null)
-{
-    <div class="lx-selection-state lx-selection-state-error">
-        <span>@Error</span>
-        <button type="button" class="lx-btn-link" @onclick="OnRetry">Try again</button>
-    </div>
-}
-else if (Entry is null)
-{
-    <div class="lx-selection-state">Key not found (it may have changed since the scan).</div>
+    <SelectionStateView Message="State" OnAction="OnRetry" />
 }
 else
 {
-    var d = Entry;
+    var d = Entry!;
     <div class="lx-data-detail-head">
         <code class="lx-data-detail-key">@d.Key</code>
         @if (d.CrdtShape is null && Rendered is not null)
@@ -36,10 +21,11 @@ else
         }
         @if (ShowLiveIndicator)
         {
-            <span class="lx-data-live" title="This entry refreshes automatically as it is mutated. The live feed only carries changes emitted while this surface is open.">
+            <span class="lx-data-live">
                 <span class="lx-data-live-dot lx-data-live-dot-@DotClass"></span>
                 <span class="lx-data-live-label">@StateLabel</span>
             </span>
+            <LatticeHelp Term="Live updates" Explanation="@LiveExplanation" />
         }
         @if (CanShowHistory)
         {
@@ -116,6 +102,42 @@ else
 }
 
 @code {
+    /// <summary>
+    /// What the live indicator means, said once, through the help disclosure
+    /// rather than a tooltip.
+    /// </summary>
+    private const string LiveExplanation =
+        "This entry refreshes automatically as it is mutated. The live feed only carries changes "
+        + "emitted while this surface is open, so it shows what happens from now on rather than "
+        + "what happened before you opened it.";
+
+    /// <summary>
+    /// The prompt shown while no key is selected. Built once and shared: the
+    /// same sentence on every render of every instance.
+    /// </summary>
+    private static readonly ExplorerStateMessage NoKeySelected =
+        ExplorerStateCopy.Empty(ExplorerSubjects.Entries) with
+        {
+            Headline = "Nothing selected",
+            Explanation = "Choose a key from the list to see its value, its timestamp and whether "
+                + "it is a tombstone.",
+            Remedy = null,
+        };
+
+    /// <summary>
+    /// What the pane says when the selected key was not there when it was read.
+    /// A distinct situation from an empty list and from a refusal: the row was
+    /// listed, and the key has moved since.
+    /// </summary>
+    private static readonly ExplorerStateMessage KeyNotFound =
+        ExplorerStateCopy.Empty(ExplorerSubjects.Entries) with
+        {
+            Headline = "Key not found",
+            Explanation = "This key was on the page but is not in the table now. It may have been "
+                + "deleted, or expired, since the scan that listed it.",
+            Remedy = "Refresh the scan to see the table as it is now.",
+        };
+
     /// <summary>The key being inspected, or <see langword="null"/> when none is.</summary>
     [Parameter] public string? SelectedKey { get; set; }
 
@@ -163,6 +185,42 @@ else
     [Parameter] public EventCallback OnToggleHistory { get; set; }
 
     private bool CanShowHistory => HistoryViewType is not null;
+
+    /// <summary>
+    /// The state the pane is in, or <see langword="null"/> when it has an entry
+    /// to render. Four situations, each named: nothing chosen, a read in
+    /// flight, a read that failed, and a key that has gone since it was listed.
+    /// </summary>
+    /// <remarks>
+    /// Resolved when the parameters change rather than on the render path. The
+    /// three settled messages are pre-built statics; only the failure has to be
+    /// composed, because it quotes the cluster's own words, and this pane
+    /// re-renders on every live entry change.
+    /// </remarks>
+    private ExplorerStateMessage? State { get; set; }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet() => State = ResolveState();
+
+    private ExplorerStateMessage? ResolveState()
+    {
+        if (SelectedKey is null)
+        {
+            return NoKeySelected;
+        }
+
+        if (Error is not null)
+        {
+            return ExplorerStateCopy.Failed(ExplorerSubjects.Entries, Error);
+        }
+
+        if (Loading)
+        {
+            return ExplorerStateCopy.Loading(ExplorerSubjects.Entries);
+        }
+
+        return Entry is null ? KeyNotFound : null;
+    }
 
     private string DotClass => ConnectionState switch
     {

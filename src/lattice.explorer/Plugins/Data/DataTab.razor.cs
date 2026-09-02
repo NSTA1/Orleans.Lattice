@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Connection;
 using Orleans.Lattice.Explorer.Core.Data;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 
@@ -23,6 +24,7 @@ public partial class DataTab
     private int _pageSize = DataPaging.DefaultPageSize;
     private bool _loading;
     private string? _error;
+    private ExplorerStateMessage? _failure;
 
     private string _keyPrefix = string.Empty;
     private EntryScanMode _scanMode = EntryScanMode.Live;
@@ -60,6 +62,33 @@ public partial class DataTab
         (AdaptiveContext?.Breakpoint ?? LatticeBreakpoints.Default) == LatticeBreakpoint.Compact;
 
     private IReadOnlyList<DataEntry> CurrentEntries => _pager?.Current.Entries ?? NoEntries;
+
+    /// <summary>
+    /// The state the key list is in, or <see langword="null"/> when it has rows
+    /// to show. A failed scan is worded as a failure with the cluster's own
+    /// words and a retry, never as "no entries" - which would tell an operator
+    /// the table is empty when the read never landed.
+    /// </summary>
+    /// <remarks>
+    /// Read on the render path, and twice per pass, so it only ever selects an
+    /// already-built message. The failure copy quotes the cluster's own words
+    /// and therefore has to be composed; it is composed once, where the failure
+    /// is caught.
+    /// </remarks>
+    private ExplorerStateMessage? ListState
+    {
+        get
+        {
+            if (_failure is not null)
+            {
+                return _failure;
+            }
+
+            return _loading && CurrentEntries.Count == 0
+                ? ExplorerStateCopy.Loading(ExplorerSubjects.Entries)
+                : null;
+        }
+    }
 
     /// <inheritdoc />
     protected override async Task OnInitializedAsync()

@@ -6,10 +6,16 @@ namespace Orleans.Lattice.Scaling;
 /// split in flight suppresses scale-in, because relocating load off a silo while
 /// a shard is mid-split risks stranding the split's in-flight work.
 /// <para>
-/// The default implementation (<see cref="NoOpSplitActivityProbe"/>) reports no
-/// splits in flight; a host that wires a real split-activity source (for example
-/// one backed by the core cluster split-concurrency gate) can replace the
-/// registration to make the gate split-aware.
+/// The gate only affects scale-<em>in</em>; scale-out is never influenced by
+/// this probe.
+/// </para>
+/// <para>
+/// The default registration is <see cref="LatticeSplitActivityProbe"/>, which
+/// reads the cluster's split-activity snapshot from
+/// <see cref="Orleans.Lattice.ILatticeAdmin.GetSplitActivityAsync"/>. Setting
+/// <see cref="LatticeScalingSignalOptions.SplitAwareScaleIn"/> to
+/// <see langword="false"/> substitutes <see cref="NoOpSplitActivityProbe"/> to
+/// make the axis inert.
 /// </para>
 /// </summary>
 internal interface ISplitActivityProbe
@@ -17,8 +23,16 @@ internal interface ISplitActivityProbe
     /// <summary>
     /// Returns <see langword="true"/> when at least one adaptive shard split is
     /// currently in flight in the cluster; otherwise <see langword="false"/>.
-    /// Must be cheap and synchronous - it is read once per sample tick.
+    /// <para>
+    /// Read once per sample tick, off the scrape path, alongside the compute and
+    /// storage collectors - so an implementation may make a single cheap cluster
+    /// call, but must not fan out per tree or per shard. It must never throw: a
+    /// probe that cannot determine split activity reports <see langword="false"/>
+    /// rather than failing the sample, so a degraded split-activity source cannot
+    /// wedge scale-in permanently.
+    /// </para>
     /// </summary>
+    /// <param name="cancellationToken">Cancels the probe.</param>
     /// <returns>Whether any shard split is in flight cluster-wide.</returns>
-    bool AnySplitInFlight();
+    ValueTask<bool> AnySplitInFlightAsync(CancellationToken cancellationToken);
 }

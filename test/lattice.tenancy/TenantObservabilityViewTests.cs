@@ -228,6 +228,30 @@ public sealed class TenantObservabilityViewTests
     }
 
     [Test]
+    public async Task GetActiveTenantAsync_returns_null_when_the_caller_is_anonymous_despite_an_active_tenant_assertion()
+    {
+        // Covers line 110 in ResolveValidatedActiveTenantAsync: an active-tenant
+        // assertion is present but the resolved subject is anonymous, so the view
+        // must fail closed and return null (no tenant is admitted).
+        LatticeActiveTenantContext.Current = Acme;
+
+        var anonymousMembership = Substitute.For<ILatticeMembershipContext>();
+        anonymousMembership.TryResolveCurrent(out Arg.Any<LatticeSubject>())
+            .Returns(call =>
+            {
+                call[0] = LatticeSubject.Anonymous;
+                return true;
+            });
+
+        var view = Create(TwoTenants(), AllowingGate(), membership: anonymousMembership);
+
+        // Use the single-tenant scope so the view must resolve the active tenant.
+        var results = await ListAsync(view, TenantObservabilityScope.ActiveTenant);
+
+        Assert.That(results, Is.Empty, "an anonymous subject with an active-tenant assertion must fail closed to no tenant");
+    }
+
+    [Test]
     public async Task ListAsync_cluster_wide_surfaces_the_metered_overage_signal_per_tenant()
     {
         LatticeActiveTenantContext.Current = Acme;

@@ -79,8 +79,6 @@ public static class RepoContextHostBuilder
 
         PrepareDataPaths(config);
 
-        ConfigureContainerLogging(builder.Logging);
-
         // The container's single application listener: the MCP port, bound on all
         // interfaces so it is reachable on the container network.
         builder.WebHost.UseUrls($"http://0.0.0.0:{config.McpPort}");
@@ -133,6 +131,17 @@ public static class RepoContextHostBuilder
                 silo.AddLatticeScalingSignal();
             }
         });
+
+        // Configure our log filters AFTER UseOrleans, deliberately. Filter rules
+        // are evaluated by longest matching category prefix and, among equals, the
+        // LAST rule registered wins - so a rule Orleans registers for one of its
+        // own categories during UseOrleans silently overrides an identical rule we
+        // added earlier. That is not hypothetical: with this call sited before
+        // UseOrleans the Orleans.Runtime.CallbackData filter took effect while the
+        // Orleans.Messaging one did not, which is a confusing half-working state to
+        // debug. Registering last makes our intent win regardless of what the
+        // framework configures for itself.
+        ConfigureContainerLogging(builder.Logging);
 
         // The local-trusted credential bridge must be registered BEFORE AddLatticeMcp
         // so its TryAdd-registered HttpContext bridge is skipped and ours wins.
@@ -189,12 +198,25 @@ public static class RepoContextHostBuilder
         // Warmup + graceful-drain coordinator (flips readiness).
         builder.Services.AddHostedService<RepoContextStartupService>();
 
+        // Vector-plane warmup driver: issues the first semantic query itself so the
+        // retrieval readiness component reports demonstrated capability instead of
+        // waiting for traffic an orchestrator will not route to a not-ready box.
+        builder.Services.AddHostedService<RepoContextRetrievalWarmupService>();
+
         var healthChecks = builder.Services.AddHealthChecks();
         healthChecks.AddCheck<RepoContextLivenessHealthCheck>(
             RepoContextLivenessHealthCheck.Name,
             tags: new[] { LivenessTag });
         healthChecks.AddCheck<RepoContextReadinessHealthCheck>(
             RepoContextReadinessHealthCheck.Name,
+            tags: new[] { ReadinessTag });
+
+        // The vector-plane component of readiness. Tagged 'ready' so /health/ready is
+        // the conjunction of lifecycle phase and retrieval capability: a box that
+        // cannot serve a semantic query does not report ready. Liveness is untagged by
+        // it on purpose - a replaying box is alive and must not be restarted.
+        healthChecks.AddCheck<RepoContextRetrievalReadinessHealthCheck>(
+            RepoContextRetrievalReadinessHealthCheck.Name,
             tags: new[] { ReadinessTag });
         if (isAzure)
         {
@@ -270,6 +292,34 @@ public static class RepoContextHostBuilder
         // at the source (over and above the size cap). Keep warnings and above; a
         // failed embed still surfaces through our own provider category.
         logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+
+        // Orleans warns per dropped message and per late callback. During the
+        // cold-start replay window the vector trees are legitimately slower than
+        // the 30s response deadline, so every probe against them expires and each
+        // expiry logs twice - once as "Response did not arrive on time"
+        // (CallbackData) and once as "Dropping expired message" (Messaging). On a
+        // real volume that was 1,216 lines in fifteen minutes, 776 of them merely
+        // dropped STATUS RESPONSES (diagnostic probes about an already-late call,
+        // not lost work), which is enough to bury the handful of genuine faults
+        // mixed in among them.
+        //
+        // This is self-clearing back-pressure, not a fault: the replay converges
+        // and the callers retry. The condition stays observable through the
+        // over-budget replay counter, through our own RepoIndexRunner category,
+        // and through Error-level Orleans messaging problems, which these filters
+        // keep. Raise them back to Warning when diagnosing a hang that does NOT
+        // clear on its own.
+        logging.AddFilter("Orleans.Runtime.CallbackData", LogLevel.Error);
+        logging.AddFilter("Orleans.Messaging", LogLevel.Error);
+
+        // The runtime's companion to the above: while a request is outstanding past
+        // its deadline, Orleans polls the target activation and logs the reply at
+        // INFORMATION as "Received status update for pending request", one line per
+        // poll carrying a full activation and task-scheduler dump. It is a
+        // diagnostic about an already-reported slow call, so it adds no fact the
+        // callback and messaging lines did not, and it ran to 502 lines in ten
+        // minutes on a real cold start. Keep warnings and above.
+        logging.AddFilter("Orleans.Runtime.InsideRuntimeClient", LogLevel.Warning);
     }
 
     /// <summary>

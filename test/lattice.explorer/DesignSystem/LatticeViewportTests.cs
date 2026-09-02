@@ -172,4 +172,59 @@ public sealed class LatticeViewportTests
 
         Assert.That(viewport.Breakpoint, Is.EqualTo(LatticeBreakpoint.Compact));
     }
+
+    [Test]
+    public void MeasuredWidth_is_absent_until_a_width_is_supplied()
+    {
+        Assert.That(new LatticeViewport().MeasuredWidth, Is.Null);
+    }
+
+    [Test]
+    public void SetViewportWidth_records_the_width_as_well_as_the_band()
+    {
+        var viewport = new LatticeViewport();
+
+        viewport.SetViewportWidth(412);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(viewport.MeasuredWidth, Is.EqualTo(412));
+            Assert.That(viewport.Breakpoint, Is.EqualTo(LatticeBreakpoint.Compact));
+        });
+    }
+
+    [Test]
+    public void SetViewportWidth_records_a_resize_inside_a_band()
+    {
+        var viewport = new LatticeViewport();
+        viewport.SetViewportWidth(320);
+
+        viewport.SetViewportWidth(560);
+
+        Assert.That(viewport.MeasuredWidth, Is.EqualTo(560),
+            "a width is strictly more information than a band, so a resize inside a band "
+            + "still moves it");
+    }
+
+    [Test]
+    public void SetViewportWidth_clamps_a_negative_measurement_to_zero()
+    {
+        var viewport = new LatticeViewport();
+
+        viewport.SetViewportWidth(-40);
+
+        Assert.That(viewport.MeasuredWidth, Is.Zero);
+    }
+
+    [Test]
+    public void SetBreakpoint_drops_a_width_the_head_is_no_longer_reporting()
+    {
+        var viewport = new LatticeViewport();
+        viewport.SetViewportWidth(320);
+
+        viewport.SetBreakpoint(LatticeBreakpoint.Expanded);
+
+        Assert.That(viewport.MeasuredWidth, Is.Null,
+            "a stale width would contradict the band just set");
+    }
 }

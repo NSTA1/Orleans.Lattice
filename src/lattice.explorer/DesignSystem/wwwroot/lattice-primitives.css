@@ -85,7 +85,8 @@
 }
 
 .lx-nav-item:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: -2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
@@ -142,7 +143,8 @@
 }
 
 .lx-nav-drawer-toggle:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: 2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
@@ -197,7 +199,8 @@
 }
 
 .lx-nav-drawer-close:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: 2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
@@ -253,8 +256,9 @@
 }
 
 .lx-nav-bar-item:focus-visible {
-    outline: none;
-    box-shadow: inset 0 0 0 2px var(--lx-color-focus-ring);
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: -2px;
+    box-shadow: inset 0 0 0 4px var(--lx-color-focus-ring);
 }
 
 .lx-nav-bar-item:disabled {
@@ -271,14 +275,25 @@
     flex: 0 0 auto;
 }
 
+/*
+  The overflow menu is clamped to the bar's own box: inset from the trailing
+  edge by a gutter, and never wider than the bar minus a gutter on each side.
+  Its leading edge therefore lands at or after the leading gutter whatever the
+  viewport does, so the menu cannot reach a negative x - the fault measured on
+  the tab strip's menu, which this one shared by construction. `min-width`
+  takes the same clamp, because a min-width beats a max-width and would
+  otherwise reintroduce the overhang on a narrow bar.
+*/
 .lx-nav-overflow {
     position: absolute;
     right: var(--lx-space-2);
+    left: auto;
     bottom: 100%;
     z-index: var(--lx-layer-menu);
     display: flex;
     flex-direction: column;
-    min-width: 12rem;
+    min-width: min(12rem, calc(100% - (2 * var(--lx-space-2))));
+    max-width: calc(100% - (2 * var(--lx-space-2)));
     margin-bottom: var(--lx-space-2);
     padding: var(--lx-space-2);
     border: 1px solid var(--lx-color-border-strong);
@@ -311,7 +326,8 @@
 }
 
 .lx-nav-overflow-item:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: -2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
@@ -324,7 +340,18 @@
    Tab strip
    ========================================================================== */
 
+/*
+  The strip host is the overflow menu's positioning context, not the little
+  overflow-toggle box beside it. That is the whole fix for the clipping the
+  audit measured: anchored to a ~50px toggle sitting behind a single compact
+  tab, a 12rem menu aligned to that toggle's trailing edge started 25.2px
+  outside the viewport at every compact width, and `.lx-shell { overflow:
+  hidden }` clipped it dead with no scroll to recover it. Anchored here, and
+  clamped below to the host's own width, the menu is confined to a box that is
+  itself laid out inside the viewport, so it cannot overhang either edge.
+*/
 .lx-tabstrip-host {
+    position: relative;
     display: flex;
     align-items: stretch;
     gap: var(--lx-space-5);
@@ -371,7 +398,10 @@
 }
 
 .lx-tab:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    /* Inset, because the strip clips its overflow: an outset ring on the first
+       or last tab would be cut off by the very edge it needs to clear. */
+    outline-offset: -2px;
     color: var(--lx-color-accent);
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
@@ -386,6 +416,21 @@
     display: flex;
     align-items: stretch;
     flex-shrink: 0;
+}
+
+/*
+  Inside the primitive, deliberately NOT a positioning context: the overflow
+  menu anchors to the strip host, which spans the row, so the menu is clamped
+  against a box wide enough to hold it.
+
+  Scoped to a child of the strip host rather than declared on the class itself
+  because the shell still renders a hand-rolled copy of this markup inside its
+  own wrapper, which is not positioned. Unscoping this would send that copy's
+  menu to the viewport's containing block - a worse fault than the one being
+  fixed. The hand-rolled copy goes away when the shell adopts the primitive.
+*/
+.lx-tabstrip-host > .lx-tabstrip-overflow-host {
+    position: static;
 }
 
 .lx-tabstrip-overflow-toggle {
@@ -408,18 +453,29 @@
 }
 
 .lx-tabstrip-overflow-toggle:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: -2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
+/*
+  Clamped to the strip host's box: inset from the trailing edge by a gutter,
+  and never wider than the host minus a gutter on each side. The leading edge
+  therefore lands at or after the leading gutter at every viewport width, so
+  the menu is always fully within the viewport. `min-width` carries the same
+  clamp, because a min-width beats a max-width and an unclamped one would
+  reintroduce the overhang on a narrow strip.
+*/
 .lx-tabstrip-overflow {
     position: absolute;
     top: 100%;
-    right: 0;
+    right: var(--lx-space-4);
+    left: auto;
     z-index: var(--lx-layer-menu);
     display: flex;
     flex-direction: column;
-    min-width: 12rem;
+    min-width: min(12rem, calc(100% - (2 * var(--lx-space-4))));
+    max-width: calc(100% - (2 * var(--lx-space-4)));
     margin-top: var(--lx-space-2);
     padding: var(--lx-space-2);
     border: 1px solid var(--lx-color-border-strong);
@@ -453,7 +509,8 @@
 }
 
 .lx-tabstrip-overflow-item:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: -2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 
@@ -470,8 +527,288 @@
 }
 
 .lx-tabpanel:focus-visible {
-    outline: none;
-    box-shadow: inset 0 0 0 2px var(--lx-color-focus-ring);
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: -2px;
+    box-shadow: inset 0 0 0 4px var(--lx-color-focus-ring);
+}
+
+/* --------------------------------------------------------------------------
+   Tab strip - segmented and subordinate presentations
+
+   The same tablist, the same keyboard behaviour, a different shape. A
+   segmented control reads as a choice between peer options of one setting
+   rather than as a row of destinations, so its options share one bordered
+   track and the active one is filled instead of underlined. The subordinate
+   form is the same control rendered quieter and tighter, for a strip nested
+   inside a surface that has already been chosen - it must not compete with the
+   strip that chose it.
+   -------------------------------------------------------------------------- */
+
+.lx-tabstrip-segmented {
+    align-items: center;
+    gap: var(--lx-space-4);
+    border-bottom: none;
+    background: transparent;
+}
+
+.lx-tabstrip-segmented .lx-tabstrip {
+    flex: 1 1 auto;
+    gap: 0;
+    padding: var(--lx-space-1);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-sm);
+    background: var(--lx-color-surface-sunken);
+}
+
+.lx-tabstrip-segmented .lx-tab {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: var(--lx-space-2) var(--lx-space-4);
+    border-bottom: none;
+    border-radius: var(--lx-radius-sm);
+    font-size: var(--lx-text-caption);
+    font-weight: var(--lx-weight-semibold);
+    letter-spacing: var(--lx-tracking-wide);
+}
+
+.lx-tabstrip-segmented .lx-tab.is-active {
+    background: var(--lx-color-accent);
+    color: var(--lx-color-accent-contrast);
+}
+
+.lx-tabstrip-segmented .lx-tabstrip-overflow-toggle {
+    padding: var(--lx-space-2) var(--lx-space-4);
+    font-size: var(--lx-text-caption);
+}
+
+/* Quieter and tighter than the segmented control it derives from, so a
+   sub-surface strip sits visibly below the strip that selected the surface. */
+.lx-tabstrip-subordinate .lx-tabstrip {
+    border-color: var(--lx-color-border);
+    background: transparent;
+}
+
+.lx-tabstrip-subordinate .lx-tab {
+    padding: var(--lx-space-1) var(--lx-space-3);
+    font-size: var(--lx-text-micro);
+}
+
+.lx-tabstrip-subordinate .lx-tab.is-active {
+    background: var(--lx-color-surface-raised);
+    color: var(--lx-color-accent);
+}
+
+/* --------------------------------------------------------------------------
+   Tab strip - vertical
+
+   A rail beside its panel rather than a tier above it. Declared after the
+   segmented rules so it wins the flex axis for every variant, and it scrolls
+   rather than overflowing: the constraint on a column is height, and a column
+   that runs past its container is scrolled to, not hidden behind a "More".
+   -------------------------------------------------------------------------- */
+
+.lx-tabstrip-vertical {
+    flex-direction: column;
+    align-items: stretch;
+    border-bottom: none;
+}
+
+.lx-tabstrip-vertical .lx-tabstrip {
+    flex-direction: column;
+    align-items: stretch;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+/* The active marker moves to the leading edge, because a column has no
+   baseline to underline. */
+.lx-tabstrip-vertical .lx-tab {
+    justify-content: flex-start;
+    border-bottom: none;
+    border-inline-start: 2px solid transparent;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                border-inline-start-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-tabstrip-vertical .lx-tab.is-active {
+    border-bottom-color: transparent;
+    border-inline-start-color: var(--lx-color-accent);
+}
+
+.lx-tabstrip-vertical.lx-tabstrip-segmented .lx-tab.is-active {
+    border-inline-start-color: transparent;
+}
+
+/* ==========================================================================
+   Help
+
+   The one way the product explains a term or a refusal. It replaces the native
+   `title` attribute, which is invisible on touch, unreachable by keyboard, and
+   announced inconsistently.
+
+   The panel stays in the DOM while collapsed and is merely `hidden`, because a
+   target referenced by `aria-describedby` contributes its text to the
+   accessible description even when hidden - so a control can describe itself
+   with the explanation whether or not the caller has opened it.
+   ========================================================================== */
+
+.lx-help {
+    display: inline-flex;
+    align-items: center;
+    /* The panel wraps onto its own line beneath the trigger rather than
+       floating over the page. An overlay would need the same viewport clamping
+       the overflow menu just gained, and would need it per help affordance; an
+       in-flow disclosure cannot be clipped by any ancestor, which is the
+       stronger guarantee and the one the disclosure pattern expects. */
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+}
+
+.lx-help-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--lx-space-2);
+    /* Spends --lx-target-min, which the breakpoint layer raises to the 44px
+       recommended for finger input at compact, so the affordance is usable on
+       touch without a width media query here. */
+    min-height: var(--lx-target-min);
+    min-width: var(--lx-target-min);
+    padding: 0 var(--lx-space-2);
+    border: 1px solid transparent;
+    border-radius: var(--lx-radius-pill);
+    background: transparent;
+    color: var(--lx-color-text-muted);
+    font: inherit;
+    font-size: var(--lx-text-caption);
+    cursor: pointer;
+    transition: color var(--lx-motion-fast) var(--lx-motion-ease),
+                border-color var(--lx-motion-fast) var(--lx-motion-ease);
+}
+
+.lx-help-trigger:hover {
+    border-color: var(--lx-color-border-strong);
+    color: var(--lx-color-text);
+}
+
+.lx-help-trigger:focus-visible {
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
+}
+
+.lx-help-trigger[aria-expanded="true"] {
+    border-color: var(--lx-color-border-strong);
+    color: var(--lx-color-text);
+}
+
+.lx-help-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--lx-text-base);
+    font-weight: var(--lx-weight-semibold);
+    line-height: var(--lx-leading-tight);
+}
+
+.lx-help-trigger-text {
+    white-space: nowrap;
+}
+
+.lx-help-panel {
+    /* A full-basis flex item, so it takes its own line under the trigger and
+       is bounded by the container it sits in. It is in normal flow, so no
+       ancestor's overflow can clip it. */
+    flex: 1 0 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--lx-space-3);
+    max-width: 18rem;
+    padding: var(--lx-space-5);
+    border: 1px solid var(--lx-color-border-strong);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    box-shadow: var(--lx-elevation-1);
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-small);
+    line-height: var(--lx-leading-normal);
+    text-align: left;
+    white-space: normal;
+}
+
+/* The collapsed panel is `hidden`, which the browser honours; declared here so
+   the flex display above cannot override it. */
+.lx-help-panel[hidden] {
+    display: none;
+}
+
+.lx-help-explanation {
+    display: block;
+}
+
+.lx-help-remedy {
+    display: block;
+    color: var(--lx-color-text-muted);
+}
+
+.lx-help-remedy-label {
+    display: block;
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+}
+
+/* A refusal reads as a refusal: the trigger and the panel carry the danger
+   tone, so a caller does not mistake a denial for a footnote. */
+.lx-help.is-denial .lx-help-trigger {
+    border-color: var(--lx-color-danger-border);
+    color: var(--lx-color-danger);
+}
+
+.lx-help.is-denial .lx-help-panel {
+    border-color: var(--lx-color-danger-border);
+    background: var(--lx-color-danger-surface);
+}
+
+/* ==========================================================================
+   Forced colours
+
+   In a forced-colours mode the browser replaces every author colour, so a
+   focus ring painted in the accent disappears. Repainting it in the system
+   highlight keeps the indicator visible, which is the one thing a keyboard
+   caller cannot do without.
+   ========================================================================== */
+
+@media (forced-colors: active) {
+    .lx-nav-item:focus-visible,
+    .lx-nav-drawer-toggle:focus-visible,
+    .lx-nav-drawer-close:focus-visible,
+    .lx-nav-bar-item:focus-visible,
+    .lx-nav-overflow-item:focus-visible,
+    .lx-tab:focus-visible,
+    .lx-tabstrip-overflow-toggle:focus-visible,
+    .lx-tabstrip-overflow-item:focus-visible,
+    .lx-tabpanel:focus-visible,
+    .lx-help-trigger:focus-visible,
+    .lx-btn:focus-visible {
+        outline: 3px solid Highlight;
+        box-shadow: none;
+    }
+
+    /* A hue-only distinction does not survive forced colours, so the selected
+       item states itself structurally as well. */
+    .lx-tab.is-active,
+    .lx-tabstrip-overflow-item[aria-checked="true"],
+    .lx-nav-overflow-item[aria-checked="true"] {
+        forced-color-adjust: none;
+        border-bottom-color: Highlight;
+        color: Highlight;
+    }
+
+    .lx-tabstrip-vertical .lx-tab.is-active {
+        border-bottom-color: transparent;
+        border-inline-start-color: Highlight;
+    }
 }
 
 /* ==========================================================================
@@ -624,7 +961,8 @@
 }
 
 .lx-btn:focus-visible {
-    outline: none;
+    outline: 2px solid var(--lx-color-accent);
+    outline-offset: 2px;
     box-shadow: 0 0 0 2px var(--lx-color-focus-ring);
 }
 

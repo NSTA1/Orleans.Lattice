@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Explorer.Core.Catalog;
+using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.DesignSystem.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.Plugins;
@@ -73,9 +74,13 @@ internal sealed class DetailPanelHarness : IDisposable
         Selection = selection;
         Preferences = preferences;
         Views = views;
+        Router = provider.GetRequiredService<IExplorerShellRouter>();
     }
 
     public ComponentTestRenderer Renderer { get; }
+
+    /// <summary>The route model the panel publishes the open surface to and adopts it from.</summary>
+    public IExplorerShellRouter Router { get; }
 
     public ExplorerPluginAccessStore Store { get; }
 
@@ -144,6 +149,11 @@ internal sealed class DetailPanelHarness : IDisposable
         services.AddSingleton<IExplorerPluginAccessStore>(store);
         services.AddSingleton<IExplorerSelection>(selection);
         services.AddSingleton<Core.Session.IUiPreferenceStore>(preferenceStore);
+
+        // The panel publishes and adopts the open surface through the route, so
+        // the real in-memory router is registered: it touches no browser and
+        // introduces no wait, which keeps this a pure unit test.
+        services.AddExplorerNavigation();
         services.AddSingleton(views);
 
         var provider = services.BuildServiceProvider();
@@ -175,6 +185,13 @@ internal sealed class DetailPanelHarness : IDisposable
     public async Task FileAccessAsync(string pluginId, ExplorerPluginAccess access)
     {
         await Renderer.OnDispatcherAsync(() => Store.Set(pluginId, access));
+        ThrowIfFaulted();
+    }
+
+    /// <summary>Adopts <paramref name="address"/> on the renderer's dispatcher, as the head's binding does.</summary>
+    public async Task SetAddressAsync(string address)
+    {
+        await Renderer.OnDispatcherAsync(() => Router.SetAddress(address));
         ThrowIfFaulted();
     }
 

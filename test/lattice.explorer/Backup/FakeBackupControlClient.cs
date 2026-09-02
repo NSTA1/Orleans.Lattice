@@ -14,6 +14,15 @@ namespace Orleans.Lattice.Explorer.Tests.Backup;
 internal sealed class FakeBackupControlClient : IBackupControlClient
 {
     public BackupScopeCapabilities? CapabilitiesResult { get; set; }
+
+    /// <summary>
+    /// Per-tree capability answers, consulted before <see cref="CapabilitiesResult"/>.
+    /// Lets a test drive the coarse cluster-wide probe scope independently of a
+    /// per-tree scope, which is what the plugin-level gate and the scope probe
+    /// now ask about separately.
+    /// </summary>
+    public Dictionary<string, BackupScopeCapabilities> CapabilitiesByTree { get; } = new(StringComparer.Ordinal);
+
     public BackupCatalogPage? ListResult { get; set; }
     public Exception? ListThrows { get; set; }
     public Exception? CapabilitiesThrows { get; set; }
@@ -27,6 +36,10 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
     public string? SetCaptureId { get; set; } = "set-1";
 
     public int ListCallCount { get; private set; }
+
+    /// <summary>How many times the capability probe was called, in any scope.</summary>
+    public int CapabilityProbeCallCount { get; private set; }
+
     public BackupCatalogRequest? LastListRequest { get; private set; }
     public BackupScopeSelector? LastProbedScope { get; private set; }
     public LatticeBackupSetCaptureRequest? LastSetRequest { get; private set; }
@@ -34,10 +47,16 @@ internal sealed class FakeBackupControlClient : IBackupControlClient
 
     public Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
     {
+        CapabilityProbeCallCount++;
         LastProbedScope = scope;
         if (CapabilitiesThrows is not null)
         {
             throw CapabilitiesThrows;
+        }
+
+        if (CapabilitiesByTree.TryGetValue(scope.TreeId, out var scoped))
+        {
+            return Task.FromResult(scoped);
         }
 
         return Task.FromResult(CapabilitiesResult ?? new BackupScopeCapabilities { Scope = scope });

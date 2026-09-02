@@ -19,13 +19,21 @@ rather than a shell rewrite. Each registered area carries its display label and
 an advisory rule that decides whether the area is currently available to the
 connected user.
 
-## Area entry: grey-out not hide
+## Area entry: demote, do not hide
 
-An area the connected user cannot use is shown **disabled (greyed out)**, not
-hidden. The Backups area entry is enabled when the connected endpoint reports at
-least list / read backup access; otherwise it stays visible but greyed, so the
-user can see the capability exists without being able to enter it. This
-area-entry check is the one advisory capability gate on the backups path.
+An area the connected user cannot use is shown **visible but demoted**, not
+hidden: it is grouped below a divider at lower visual weight and states the
+permission it needs and who to ask. The Backups area entry is `Allowed` when the
+connected endpoint's capability probe reports list access; if the probe answers
+without it, or the endpoint faults, the grant is withheld and the area resolves
+`Denied` and is demoted, so the user can see the capability exists and ask for
+the grant. A caller who has not signed in gets `AuthenticationRequired` and an
+invitation to sign in, never a denial. The one case that hides the area instead
+is a cluster that does not serve backup control at all: that answers
+`Unimplemented`, resolves `Unavailable`, and renders no entry, with the absence
+named in the rail's capabilities affordance. This area-entry check is the one
+advisory capability gate on the backups path; see
+[Navigation visibility policy](navigation-visibility-policy.md).
 
 Inside the Backups area there is **no client-side permission pre-check**: the
 capture, schedule, restore, and delete controls enable or disable purely on local
@@ -38,7 +46,7 @@ capture, and a denial is folded into a clean "not permitted" status message.
 
 ## Advisory, not a security boundary
 
-The area-entry grey-out is a usability affordance only. The **server remains the
+The area-entry demotion is a usability affordance only. The **server remains the
 fail-closed enforcement point**: every real backup or restore action is
 authorized on the server when it runs, regardless of what the cached area-entry
 capability report said. If the report was over-optimistic - for example the grant

@@ -84,7 +84,7 @@ public sealed class LatticeScalingSignalSamplingLoopTests
 
     private sealed class FakeSplit : ISplitActivityProbe
     {
-        public bool AnySplitInFlight() => false;
+        public ValueTask<bool> AnySplitInFlightAsync(CancellationToken cancellationToken) => ValueTask.FromResult(false);
     }
 
     private static LatticeScalingSignal Build(

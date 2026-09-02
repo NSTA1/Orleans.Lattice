@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Configuration;
+using Orleans.Streams;
 
 namespace Orleans.Lattice.Tenancy.Tests;
 
@@ -29,6 +30,17 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
             writerId: "op");
         record.SetRegionStatus(regionId, status, TestClocks.Clock(2), "op");
         return record;
+    }
+
+    private static async IAsyncEnumerable<TenantRecord> ThrowAsync(
+        Exception ex,
+        [EnumeratorCancellation] CancellationToken _ = default)
+    {
+        await Task.CompletedTask;
+        throw ex;
+#pragma warning disable CS0162
+        yield break;
+#pragma warning restore CS0162
     }
 
     private static async IAsyncEnumerable<TenantRecord> Stream(
@@ -313,5 +325,97 @@ public sealed class TenantResidencyRegionSnapshotMaintainerTests
         await maintainer.RebuildNowAsync();
 
         Assert.That(maintainer.Current.TryGetStatus(acme, out _), Is.True);
+    }
+
+    [Test]
+    public async Task RebuildNowAsync_retries_on_a_transient_enumeration_abort()
+    {
+        // Covers lines 142-145: the registry scan is aborted (EnumerationAbortedException)
+        // on the first attempt; RebuildNowAsync must re-enumerate immediately.
+        var acme = TenantId.Parse("acme");
+        var calls = 0;
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            calls++;
+            return calls == 1
+                ? ThrowAsync(new EnumerationAbortedException())
+                : Stream(new[] { Configured(acme, "region-a", TenantRegionStatus.Online) });
+        });
+        var maintainer = Maintainer(registry);
+
+        await maintainer.RebuildNowAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(calls, Is.EqualTo(2), "the scan was retried after the transient abort");
+            Assert.That(maintainer.Current.TryGetStatus(acme, out _), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task RunRebuildLoopAsync_catches_a_rebuild_exception_and_keeps_the_previous_snapshot()
+    {
+        // Covers lines 195-198: the background loop's RebuildOnceAsync throws a
+        // non-transient exception; the loop catches it, logs a warning, and leaves
+        // the previous snapshot intact instead of crashing the background task.
+        var acme = TenantId.Parse("acme");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = Substitute.For<ITenantRegistry>();
+
+        // RebuildNowAsync (internal) uses a different lock path from the background
+        // loop. Seed one clean snapshot so there is a stable previous state to
+        // validate against after the loop catches the exception.
+        registry.ListAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Stream(new[] { Configured(acme, "region-a", TenantRegionStatus.Online) }));
+        var maintainer = Maintainer(registry);
+        await maintainer.RebuildNowAsync();
+
+        // Now reconfigure the registry to throw on the background rebuild so the
+        // catch block is exercised.
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            entered.TrySetResult();
+            return ThrowAsync(new InvalidOperationException("rebuild-failed"));
+        });
+
+        // Trigger a background rebuild.
+        await maintainer.OnMutationAsync(
+            new LatticeMutation { TreeId = TenantTreeNames.RegistryTree, Kind = MutationKind.Set, Key = "acme" },
+            CancellationToken.None);
+
+        // Wait for the background loop to have entered the scan (and thrown).
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // Small settle so the catch block has a chance to complete before we assert.
+        await Task.Delay(50);
+
+        // The previous snapshot must still be intact; the epoch must not have advanced.
+        Assert.That(maintainer.CurrentEpoch, Is.EqualTo(1), "the background exception must not advance the epoch");
+    }
+
+    [Test]
+    public async Task RebuildNowAsync_emits_a_drop_to_none_when_a_tenant_vanishes_from_the_registry_entirely()
+    {
+        // Covers line 281: a tenant was in _lastByTenant with a non-None status, but
+        // the new scan returns no record for it at all. The snapshot swapper must emit
+        // a status-change to None for the disappearing tenant.
+        var acme = TenantId.Parse("acme");
+        var registry = Substitute.For<ITenantRegistry>();
+        registry.ListAsync(Arg.Any<CancellationToken>()).Returns(
+            _ => Stream(new[] { Configured(acme, "region-a", TenantRegionStatus.Online) }),
+            _ => Stream(Array.Empty<TenantRecord>()));
+        var listener = new CapturingListener();
+        var maintainer = Maintainer(registry, "region-a", listener);
+
+        await maintainer.RebuildNowAsync();
+        listener.Changes.Clear();
+        await maintainer.RebuildNowAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(listener.Changes, Has.Count.EqualTo(1));
+            Assert.That(listener.Changes[0].PreviousStatus, Is.EqualTo(TenantRegionStatus.Online));
+            Assert.That(listener.Changes[0].CurrentStatus, Is.EqualTo(TenantRegionStatus.None));
+        });
     }
 }

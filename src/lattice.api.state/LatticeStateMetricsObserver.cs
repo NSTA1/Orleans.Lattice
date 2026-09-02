@@ -60,7 +60,10 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
             }
             else
             {
-                var changed = new List<TreeMetrics>();
+                // The changed set is bounded by the current sample's tree count;
+                // presizing to it removes the list's grow-from-empty regrowth on
+                // every delta tick.
+                var changed = new List<TreeMetrics>(current.Count);
                 foreach (var pair in current)
                 {
                     if (!previous.TryGetValue(pair.Key, out var prior) || !SameMetrics(prior, pair.Value))
@@ -69,14 +72,20 @@ internal sealed class LatticeStateMetricsObserver(SharedMetricsSampler sampler)
                     }
                 }
 
-                var removed = previous.Keys.Where(id => !current.ContainsKey(id)).ToList();
+                // OrderBy fully materialises and sorts its source, so the prior
+                // intermediate .ToList() only allocated a throwaway list; sort the
+                // filtered key sequence directly into the result array.
+                var removed = previous.Keys
+                    .Where(id => !current.ContainsKey(id))
+                    .OrderBy(static id => id, StringComparer.Ordinal)
+                    .ToArray();
 
                 yield return new TreeMetricsSnapshot
                 {
                     SampledAt = DateTimeOffset.UtcNow,
                     IsInitial = false,
                     Trees = Ordered(changed),
-                    RemovedTreeIds = removed.OrderBy(static id => id, StringComparer.Ordinal).ToArray(),
+                    RemovedTreeIds = removed,
                 };
             }
 

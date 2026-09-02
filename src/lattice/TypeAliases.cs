@@ -104,6 +104,7 @@ internal static class TypeAliases
     internal const string HotShardMonitorState = "ol.hms";
     internal const string ClusterSplitConcurrencyState = "ol.csc";
     internal const string TreeSplitFootprint = "ol.tsf";
+    internal const string SplitActivityReport = "ol.spa";
 
     // BPlusTree
     internal const string SplitResult = "ol.sr";
@@ -125,6 +126,17 @@ internal static class TypeAliases
     internal const string ShardSplitPhase = "ol.sph";
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
+
+    // Online shard consolidation (the inverse of an adaptive split).
+    internal const string TreeShardConsolidationState = "ol.cns";
+    internal const string ShardConsolidationPhase = "ol.cnp";
+    internal const string ShardConsolidationProgress = "ol.cnr";
+    internal const string ShardConsolidationPlan = "ol.cnl";
+
+    // Automatic over-split healing (the orchestrator that drives consolidation).
+    internal const string ShardHealingOrchestratorState = "ol.hls";
+    internal const string ShardHealingDecision = "ol.hld";
+    internal const string ShardHealingReport = "ol.hlr";
 
     // Leaf projection staleness surface. Thrown by BPlusLeafGrain during
     // activation (ReplayWalSinceCheckpointAsync) when the durable projection
@@ -403,6 +415,8 @@ internal static class TypeAliases
     internal const string ITreeMergeGrain = "ol.gtm";
     internal const string ITreeResizeGrain = "ol.gtr";
     internal const string ITreeShardSplitGrain = "ol.gss";
+    internal const string ITreeShardConsolidationGrain = "ol.gcn";
+    internal const string IShardHealingOrchestratorGrain = "ol.gho";
     internal const string ITreeSnapshotGrain = "ol.gsn";
     internal const string ITreeReshardGrain = "ol.gtx";
     internal const string ITagIndexReconcileGrain = "ol.gti";

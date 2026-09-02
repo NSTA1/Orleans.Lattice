@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -63,7 +64,21 @@ public sealed class ExplorerAppHost : IAsyncDisposable
     /// broken static-asset content root fails here with a clear message rather than as
     /// an opaque locator timeout deep inside a test.
     /// </summary>
-    public static async Task<ExplorerAppHost> StartAsync()
+    /// <param name="configureServices">
+    /// An optional hook run <b>before</b> <c>AddLatticeExplorerWeb</c>, so a
+    /// registration it makes wins the head's own <c>TryAdd</c> for the same contract.
+    /// This is the seam the end-to-end journey suite composes its world through -
+    /// a catalog reader, the tenancy seams, an extra area plugin - without a second
+    /// copy of the hosting code and without perturbing the default head every other
+    /// fixture measures. Omit it for the default disconnected, signed-out head.
+    /// </param>
+    /// <param name="configureApp">
+    /// An optional hook run after <c>MapLatticeExplorer</c>, for a test-only endpoint
+    /// the harness drives world state through.
+    /// </param>
+    public static async Task<ExplorerAppHost> StartAsync(
+        Action<IServiceCollection>? configureServices = null,
+        Action<WebApplication>? configureApp = null)
     {
         var publishRoot = await ExplorerPublishedAssets.EnsureAsync();
 
@@ -100,12 +115,60 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         // Bind port 0 and read back what the OS assigned.
         builder.WebHost.UseUrls("http://127.0.0.1:0");
 
+        // Before AddLatticeExplorerWeb, deliberately: every contract the head
+        // supplies is registered with TryAdd, so a journey's own catalog reader or
+        // tenancy seam only wins if it is already in the collection when the head
+        // registers its default.
+        configureServices?.Invoke(builder.Services);
+
         builder.Services.AddLatticeExplorerWeb();
+
+        // Retain a disconnected circuit briefly - but only briefly.
+        //
+        // This is the difference between a lane that runs in one process and one that
+        // dies part way through. Every UI test opens one to three fresh browser
+        // contexts, and closing a context only drops the SignalR connection: Blazor
+        // Server then keeps the whole circuit - every component instance, every
+        // captured render tree, the scoped services behind them - alive for
+        // DisconnectedCircuitRetentionPeriod (three minutes by default), up to
+        // DisconnectedCircuitMaxRetained (a hundred). A suite of forty browser tests
+        // therefore accumulates dozens of live circuits inside the in-process head at
+        // once, and the test host is killed for memory long before the suite ends -
+        // which reads as "Test host process crashed" with no test result to blame,
+        // and is why every fixture passes alone while the whole lane aborts.
+        //
+        // Nothing under test depends on reconnection, so retaining nothing is both
+        // safe and much closer to what these tests mean: each test gets a genuinely
+        // new circuit, and the previous one is collected as soon as its page closes.
+        //
+        // Tried at four retained for thirty seconds, on the theory that a socket
+        // blip mid-test would otherwise destroy a circuit the client could have
+        // recovered. That was reasoning rather than evidence, and the measured
+        // behaviour went the other way: the journey shards began failing with the
+        // shell never reporting itself measured - a circuit that never establishes
+        // at all, which is what memory pressure in this head looks like, and is the
+        // very failure retaining nothing exists to prevent. Reverted; do not raise
+        // it again without measuring the head's memory first.
+        builder.Services.Configure<CircuitOptions>(options =>
+        {
+            options.DisconnectedCircuitMaxRetained = 0;
+            options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromSeconds(1);
+
+            // Say what actually went wrong. A server-side exception on a Blazor circuit
+            // otherwise reaches the browser as "There was an unhandled exception on the
+            // current circuit, so this circuit will be terminated" and nothing else -
+            // and because the circuit is then dead, every later assertion in the test
+            // fails against a frozen page rather than against the fault. In a test host
+            // there is no reason to withhold the detail, and having it turns a whole
+            // afternoon of bisecting into reading one stack trace.
+            options.DetailedErrors = true;
+        });
 
         var app = builder.Build();
 
         app.UseAntiforgery();
         app.MapLatticeExplorer();
+        configureApp?.Invoke(app);
 
         await app.StartAsync();
 

@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 
 namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
@@ -81,5 +82,60 @@ public static class MyTenantSurfaces
     {
         Overview or Members or Quota or Regions or Sharing or Metrics => true,
         _ => false,
+    };
+
+    /// <summary>
+    /// The glossary term explaining <paramref name="surfaceId"/>, or
+    /// <see langword="null"/> when the id names no declared surface. Lets the
+    /// panel hang one help disclosure off the active sub-surface rather than
+    /// baking prose beside each tab.
+    /// </summary>
+    /// <remarks>
+    /// A frozen-dictionary probe per call and no allocation, so it is safe on the
+    /// render path.
+    /// </remarks>
+    /// <param name="surfaceId">The sub-surface id.</param>
+    /// <returns>The term, or <see langword="null"/>.</returns>
+    public static ExplorerTerm? TermFor(string? surfaceId) => surfaceId switch
+    {
+        Overview => ExplorerGlossary.Find(ExplorerTermIds.Tenant),
+        Members => ExplorerGlossary.Find(ExplorerTermIds.AdminSubject),
+        Quota => ExplorerGlossary.Find(ExplorerTermIds.Quota),
+        Regions => ExplorerGlossary.Find(ExplorerTermIds.Residency),
+        Sharing => ExplorerGlossary.Find(ExplorerTermIds.Grant),
+        Metrics => ExplorerGlossary.Find(ExplorerTermIds.Tenant),
+        _ => null,
+    };
+
+    /// <summary>
+    /// The element-id prefix the panel gives the active sub-surface's help
+    /// disclosure, so its trigger and its explanation get stable, unique ids.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not an <c>lx</c>-prefixed name: it is an element id, not a
+    /// class, and the repository's orphan-class gate reads every
+    /// <c>lx</c>-prefixed literal in a C# file as a class that must have a rule.
+    /// </remarks>
+    public const string HelpIdPrefix = "my-tenant-help-";
+
+    /// <summary>
+    /// The help disclosure's element id for <paramref name="surfaceId"/>, or
+    /// <see langword="null"/> when the id names no declared surface.
+    /// </summary>
+    /// <remarks>
+    /// Every arm is a compile-time constant, so the panel spends no allocation
+    /// composing one per render.
+    /// </remarks>
+    /// <param name="surfaceId">The sub-surface id.</param>
+    /// <returns>The element id, or <see langword="null"/>.</returns>
+    public static string? HelpIdFor(string? surfaceId) => surfaceId switch
+    {
+        Overview => HelpIdPrefix + Overview,
+        Members => HelpIdPrefix + Members,
+        Quota => HelpIdPrefix + Quota,
+        Regions => HelpIdPrefix + Regions,
+        Sharing => HelpIdPrefix + Sharing,
+        Metrics => HelpIdPrefix + Metrics,
+        _ => null,
     };
 }

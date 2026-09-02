@@ -318,6 +318,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                 {
                     IsTransient = IsTransient(ex),
                     RequiresAuthentication = IsAuthFailure(ex),
+                    IsPermissionDenied = ex.StatusCode == StatusCode.PermissionDenied,
                 };
             }
         }
@@ -371,6 +372,7 @@ public sealed class LatticeStateConnection : ILatticeStateConnection
                         {
                             IsTransient = false,
                             RequiresAuthentication = IsAuthFailure(ex),
+                            IsPermissionDenied = ex.StatusCode == StatusCode.PermissionDenied,
                         };
                     }
 

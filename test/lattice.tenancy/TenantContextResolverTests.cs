@@ -246,6 +246,20 @@ public sealed class TenantContextResolverTests
         Assert.That(await resolver.ResolveCurrentAsync(), Is.EqualTo(TenantId.Default));
     }
 
+    [Test]
+    public async Task ResolveCurrentAsync_validates_via_warm_membership_when_an_assertion_is_set()
+    {
+        // Covers the warm-membership fast path in ResolveCurrentAsync: membership
+        // TryResolveCurrent returns true and the result is validated synchronously,
+        // returning as a ValueTask without ever reaching the slow async path.
+        LatticeActiveTenantContext.Current = Acme;
+        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice", warm: true));
+
+        var tenant = await resolver.ResolveCurrentAsync();
+
+        Assert.That(tenant, Is.EqualTo(Acme));
+    }
+
     // ---- Construction ---------------------------------------------------
 
     [Test]

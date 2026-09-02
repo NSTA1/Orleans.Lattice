@@ -147,6 +147,19 @@ public partial class DataTab
         }
         finally
         {
+            // Release the field before disposing, and only when this loop is
+            // still the owner. Without this the field dangles at a disposed
+            // source once the stream ends BY ITSELF (a server-side close or an
+            // empty feed), and the next StopFollowing - which runs from the
+            // component's Dispose - calls Cancel on it. Cancel is the one member
+            // that is not safe after Dispose, so it throws out of the renderer's
+            // own disposal and faults the circuit rather than the component.
+            // The _refreshCts loop below already does this; this one did not.
+            if (ReferenceEquals(_liveCts, cts))
+            {
+                _liveCts = null;
+            }
+
             cts.Dispose();
         }
     }
@@ -210,10 +223,38 @@ public partial class DataTab
 
     private void StopFollowing()
     {
-        _liveCts?.Cancel();
+        // Take each reference and release the field BEFORE cancelling. The loops'
+        // finally blocks run off the renderer's synchronisation context (they
+        // follow an awaited ConfigureAwait(false)), so one can dispose its source
+        // while this method is between the read and the Cancel. Releasing first
+        // and tolerating the throw makes the interleaving harmless; the
+        // ReferenceEquals clear in each loop handles the commoner case, where the
+        // stream ended long before teardown.
+        var live = _liveCts;
         _liveCts = null;
-        _refreshCts?.Cancel();
+        var refresh = _refreshCts;
         _refreshCts = null;
+
+        Cancel(live);
+        Cancel(refresh);
+    }
+
+    private static void Cancel(CancellationTokenSource? cts)
+    {
+        if (cts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The loop that owned it finished and released it first, which is the
+            // outcome cancelling was asking for.
+        }
     }
 
     private void ClearSelection()

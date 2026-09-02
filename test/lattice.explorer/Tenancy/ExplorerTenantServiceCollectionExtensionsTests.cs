@@ -36,6 +36,80 @@ public class ExplorerTenantServiceCollectionExtensionsTests
     }
 
     [Test]
+    public async Task AddExplorerTenantView_registersAFailClosedAccessibleTenantSourceByDefault()
+    {
+        // Enumerating a cluster's tenants belongs to the administrative surface
+        // that already asks the cluster for them, so the core's own default
+        // reports only the scope already established - never a guess.
+        using var provider = BuildProvider(addTenantView: true);
+        using var scope = provider.CreateScope();
+
+        var source = scope.ServiceProvider.GetRequiredService<IExplorerAccessibleTenantSource>();
+
+        Assert.That(source, Is.InstanceOf<ActiveTenantOnlyAccessibleTenantSource>());
+        Assert.That(await source.GetAccessibleTenantsAsync(), Is.Empty);
+    }
+
+    [Test]
+    public void An_administrative_surface_registered_first_supplies_the_real_accessible_tenant_source()
+    {
+        // The one-source-of-truth seam: the tenant scope control and the tenant
+        // administration area must offer the same list.
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IExplorerAuthSession>());
+        services.AddScoped<IExplorerAccessibleTenantSource>(
+            _ => new FakeAccessibleTenantSource(SampleTenant.TenantId, SampleTenant.OtherTenantId));
+        services.AddExplorerTenantView();
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.That(
+            scope.ServiceProvider.GetRequiredService<IExplorerAccessibleTenantSource>(),
+            Is.InstanceOf<FakeAccessibleTenantSource>());
+    }
+
+    [Test]
+    public void AddExplorerTenantView_registersThePerCircuitNoticeSlot()
+    {
+        using var provider = BuildProvider(addTenantView: true);
+        using var scope = provider.CreateScope();
+
+        var notices = scope.ServiceProvider.GetRequiredService<IExplorerTenantScopeNotices>();
+
+        Assert.That(notices, Is.InstanceOf<ExplorerTenantScopeNotices>());
+        Assert.That(notices.Current, Is.Null);
+    }
+
+    [Test]
+    public void The_notice_slot_is_scoped_so_one_circuit_never_announces_anothers_outcome()
+    {
+        using var provider = BuildProvider(addTenantView: true);
+        using var first = provider.CreateScope();
+        using var second = provider.CreateScope();
+
+        first.ServiceProvider.GetRequiredService<IExplorerTenantScopeNotices>()
+            .Publish(ExplorerTenantScopeNotice.Refused());
+
+        Assert.That(
+            second.ServiceProvider.GetRequiredService<IExplorerTenantScopeNotices>().Current,
+            Is.Null);
+    }
+
+    [Test]
+    public void WithoutAddExplorerTenantView_theAccessibleSourceAndNoticeSlotAreNotRegistered()
+    {
+        using var provider = BuildProvider(addTenantView: false);
+        using var scope = provider.CreateScope();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scope.ServiceProvider.GetService<IExplorerAccessibleTenantSource>(), Is.Null);
+            Assert.That(scope.ServiceProvider.GetService<IExplorerTenantScopeNotices>(), Is.Null);
+        });
+    }
+
+    [Test]
     public async Task AddExplorerTenantView_registersContextAndAFailClosedGateByDefault()
     {
         using var provider = BuildProvider(addTenantView: true);

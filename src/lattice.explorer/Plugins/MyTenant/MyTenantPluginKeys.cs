@@ -1,3 +1,6 @@
+using Orleans.Lattice.Explorer.Core.Navigation;
+using Orleans.Lattice.Explorer.Core.Session;
+
 namespace Orleans.Lattice.Explorer.Plugins.MyTenant;
 
 /// <summary>
@@ -25,4 +28,37 @@ public static class MyTenantPluginKeys
     /// </para>
     /// </summary>
     public const string OperatorGateScope = "operator-gate";
+
+    /// <summary>
+    /// The query key carrying the open sub-surface in the address, so a link to
+    /// the sharing surface reopens on the sharing surface.
+    /// </summary>
+    /// <remarks>
+    /// Named for this area rather than a bare <c>surface</c>, so the two tenancy
+    /// areas - and any other area adding one - carry their own state
+    /// independently instead of overwriting each other's through the parameter
+    /// set a route keeps when the area changes. Canonical lower case, as every
+    /// route segment and query key in the shell is.
+    /// </remarks>
+    public const string SurfaceQueryKey = "my-tenant-surface";
+
+    /// <summary>
+    /// The area's canonical route slug, derived from <see cref="PluginId"/> the
+    /// same way the shell derives it, so the plugin and the shell always agree on
+    /// the address the area answers at.
+    /// </summary>
+    public static string AreaSlug { get; } = ExplorerRouteSlug.FromIdentifier(PluginId);
+
+    /// <summary>
+    /// The sub-surface the caller last had open here. Scoped per user and per
+    /// cluster, because it names a surface over a particular cluster's tenant.
+    /// </summary>
+    /// <remarks>
+    /// Registered by the panel when it mounts rather than by a head, so a
+    /// deployment gains it by rendering the area and the reset-view affordance
+    /// discloses and clears it with no further wiring.
+    /// </remarks>
+    public static ExplorerPreferenceKey SurfacePreference { get; } = new(
+        "mytenant.surface",
+        "the tenant surface you last had open");
 }

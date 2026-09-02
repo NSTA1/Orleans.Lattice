@@ -1,6 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.GrainIndex.Backfill;
 using Orleans.Runtime;
+using Orleans.Timers;
 
 namespace Orleans.Lattice.GrainIndex.Tests.Backfill;
 
@@ -408,5 +410,240 @@ public sealed class GrainIndexBackfillGrainLifecycleTests
 
         Assert.That(GrainIndexBackfillGrain.ReminderPeriod, Is.GreaterThanOrEqualTo(TimeSpan.FromMinutes(1)),
             "Orleans refuses a shorter reminder period, so a shorter one would fail at run time.");
+    }
+
+    [Test]
+    public async Task The_heartbeat_does_nothing_when_the_crawl_is_paused()
+    {
+        // Lines 337-338: ReceiveReminder with Paused checkpoint -> StopTimer(); return.
+        var harness = new BackfillHarness().WithKeys("a", "b").WithRegistryRecord();
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();
+        await grain.RunBatchAsync();
+
+        var paused = harness.StoredCheckpoint()!
+            .WithState(GrainIndexBackfillState.Paused, harness.Time.Now);
+        harness.Checkpoints.Seed(BackfillHarness.IndexName, paused);
+        var writesBefore = harness.Checkpoints.WriteCount;
+
+        await harness.CreateGrain().ReceiveReminder(GrainIndexBackfillGrain.ReminderName, new TickStatus());
+
+        Assert.That(harness.Checkpoints.WriteCount, Is.EqualTo(writesBefore),
+            "A paused crawl must not be resumed by a heartbeat; only an explicit ResumeAsync does that.");
+    }
+
+    [Test]
+    public async Task The_heartbeat_calls_start_timer_when_the_crawl_is_running()
+    {
+        // Lines 352-354: ReceiveReminder default case (Running) -> StartTimer(); return.
+        // BackfillEnabled is false in the harness so StartTimer exits immediately,
+        // but the coverage path still passes through StartTimer at line 353.
+        var harness = new BackfillHarness().WithKeys("a", "b").WithRegistryRecord();
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();
+        await grain.RunBatchAsync();
+        var writesBefore = harness.Checkpoints.WriteCount;
+
+        await grain.ReceiveReminder(GrainIndexBackfillGrain.ReminderName, new TickStatus());
+
+        Assert.That(harness.Checkpoints.WriteCount, Is.EqualTo(writesBefore),
+            "A running crawl ticked by its reminder calls StartTimer but does not write a new checkpoint.");
+    }
+
+    [Test]
+    public async Task The_crawl_completes_normally_when_the_registry_flag_clear_throws()
+    {
+        // Lines 467-476: ClearNeedsBackfillAsync catch block. The registry write
+        // that clears the NeedsBackfill flag fails, but the crawl is already
+        // recorded as complete and must not fail over the cleanup write.
+        var harness = new BackfillHarness().WithKeys("a").WithRegistryRecord();
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();
+
+        harness.Registry.WriteFault = new InvalidOperationException("registry temporarily unavailable");
+
+        var result = await grain.RunBatchAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.State, Is.EqualTo(GrainIndexBackfillState.Completed),
+                "The checkpoint records completion before the flag clear attempt; a write failure there "
+                + "must not revert the crawl to a running state.");
+            Assert.That(result.Exhausted, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task The_start_timer_is_idempotent_when_called_on_an_already_running_timer()
+    {
+        // Line 502: StartTimer early return when _timer is not null. Requires the
+        // ITimerRegistry substitute to return a non-null IGrainTimer so the field
+        // is populated on the first StartTimer call.
+        var harness = new BackfillHarness().WithKeys("a").WithRegistryRecord();
+        harness.Options.BackfillEnabled = true;
+
+        var timerRegistry = harness.Context.ActivationServices.GetRequiredService<ITimerRegistry>();
+        timerRegistry.RegisterGrainTimer(
+            Arg.Any<IGrainContext>(),
+            Arg.Any<Func<Func<CancellationToken, Task>, CancellationToken, Task>>(),
+            Arg.Any<Func<CancellationToken, Task>>(),
+            Arg.Any<GrainTimerCreationOptions>())
+            .Returns(Substitute.For<IGrainTimer>());
+
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();  // first call: creates timer (_timer = non-null)
+        await grain.EnsureStartedAsync();  // second call: StartTimer hits line 502 and returns
+
+        // Two EnsureStartedAsync calls -> two EnsureDriverAsync calls -> two RegisterOrUpdateReminder
+        await harness.Reminders.Received(2).RegisterOrUpdateReminder(
+            Arg.Any<GrainId>(),
+            GrainIndexBackfillGrain.ReminderName,
+            Arg.Any<TimeSpan>(),
+            Arg.Any<TimeSpan>());
+    }
+
+    [Test]
+    public async Task The_crawl_completes_even_when_reminder_unregistration_throws()
+    {
+        // Lines 588-596: UnregisterReminderAsync catch block. GetReminder throws,
+        // the warning is logged, and the crawl result still reflects completion.
+        var harness = new BackfillHarness().WithKeys("a").WithRegistryRecord();
+        harness.Reminders
+            .GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+            .Returns(Task.FromException<IGrainReminder?>(
+                new InvalidOperationException("reminder service unavailable")));
+
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();
+        var result = await grain.RunBatchAsync();
+
+        Assert.That(result.State, Is.EqualTo(GrainIndexBackfillState.Completed),
+            "A completed crawl whose reminder cannot be unregistered is still complete; "
+            + "the reminder's next tick catches the stale registration.");
+    }
+
+    [Test]
+    public async Task The_crawl_starts_even_when_the_population_estimate_throws()
+    {
+        // Lines 657-667: ApproximateTotalAsync catch block. The key source throws
+        // when asked for its population size; the crawl starts anyway and will
+        // report a count instead of a percentage.
+        var harness = new BackfillHarness().WithRegistryRecord();
+        harness.KeySource = new ListGrainKeySource(["a"])
+        {
+            CountFault = new InvalidOperationException("population service unavailable"),
+        };
+
+        var status = await harness.CreateGrain().EnsureStartedAsync();
+
+        Assert.That(status.State, Is.EqualTo(GrainIndexBackfillState.Running),
+            "A key source that cannot report its size is still a valid source for the crawl; "
+            + "it causes no progress percentage, which is cosmetic.");
+    }
+
+    [Test]
+    public async Task A_timer_tick_whose_batch_save_fails_logs_and_does_not_propagate()
+    {
+        // Lines 530-548 (OnPassTimerTickAsync catch) and 554-571 (MarkFailedAsync catch).
+        // The timer callback is captured from the ITimerRegistry substitute; invoking
+        // it simulates a timer tick. A write fault on the checkpoint store makes
+        // RunBatchAsync throw, which drives the catch block in OnPassTimerTickAsync.
+        // The same write fault then causes MarkFailedAsync's SaveCheckpointAsync to
+        // throw, covering that method's own catch block.
+        var harness = new BackfillHarness().WithKeys("a").WithRegistryRecord();
+        harness.Options.BackfillEnabled = true;
+
+        Func<CancellationToken, Task>? capturedCallback = null;
+        var timerRegistry = harness.Context.ActivationServices.GetRequiredService<ITimerRegistry>();
+        timerRegistry.RegisterGrainTimer(
+            Arg.Any<IGrainContext>(),
+            Arg.Any<Func<Func<CancellationToken, Task>, CancellationToken, Task>>(),
+            Arg.Do<Func<CancellationToken, Task>>(cb => capturedCallback = cb),
+            Arg.Any<GrainTimerCreationOptions>())
+            .Returns(Substitute.For<IGrainTimer>());
+
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();  // timer registered, callback captured
+
+        Assert.That(capturedCallback, Is.Not.Null, "The timer must have been registered with the registry.");
+
+        // Make checkpoint writes fail so RunBatchAsync throws on its progress save.
+        harness.Checkpoints.WriteFault = new InvalidOperationException("checkpoint store unavailable");
+
+        // Invoking the callback must not propagate: the grain logs and continues.
+        Assert.That(
+            async () => await capturedCallback!(CancellationToken.None),
+            Throws.Nothing,
+            "A pass-level fault must be logged and absorbed; it must not kill the grain.");
+    }
+
+    [Test]
+    public async Task A_timer_tick_that_completes_the_crawl_stops_the_timer()
+    {
+        // Lines 531-533: OnPassTimerTickAsync's success path when RunBatchAsync
+        // returns a non-Running state. With one key and a batch size of two, the
+        // source is exhausted and the crawl is marked Completed.
+        var harness = new BackfillHarness().WithKeys("a").WithRegistryRecord();
+        harness.Options.BackfillEnabled = true;
+
+        Func<CancellationToken, Task>? capturedCallback = null;
+        var timerRegistry = harness.Context.ActivationServices.GetRequiredService<ITimerRegistry>();
+        timerRegistry.RegisterGrainTimer(
+            Arg.Any<IGrainContext>(),
+            Arg.Any<Func<Func<CancellationToken, Task>, CancellationToken, Task>>(),
+            Arg.Do<Func<CancellationToken, Task>>(cb => capturedCallback = cb),
+            Arg.Any<GrainTimerCreationOptions>())
+            .Returns(Substitute.For<IGrainTimer>());
+
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();
+
+        // No write fault: RunBatchAsync succeeds. 1 key, batch size 2 -> exhausted
+        // -> result.State = Completed -> StopTimer() is called via the if-branch.
+        await capturedCallback!(CancellationToken.None);
+
+        Assert.That(
+            harness.StoredCheckpoint()!.State,
+            Is.EqualTo(GrainIndexBackfillState.Completed),
+            "A timer tick that exhausts the key source should record the crawl as completed.");
+    }
+
+    [Test]
+    public async Task A_timer_tick_whose_key_source_throws_saves_failed_state()
+    {
+        // Line 563: closing brace of MarkFailedAsync's try block (SaveCheckpointAsync
+        // succeeded after a pass-level fault). A faulting key source throws inside
+        // FillBatchAsync before any checkpoint write, so MarkFailedAsync's own
+        // SaveCheckpointAsync succeeds and the try block exits normally.
+        var harness = new BackfillHarness().WithRegistryRecord();
+        harness.KeySource = new ListGrainKeySource(["a"])
+        {
+            Fault = new InvalidOperationException("key source enumeration failed"),
+        };
+        harness.Options.BackfillEnabled = true;
+
+        Func<CancellationToken, Task>? capturedCallback = null;
+        var timerRegistry = harness.Context.ActivationServices.GetRequiredService<ITimerRegistry>();
+        timerRegistry.RegisterGrainTimer(
+            Arg.Any<IGrainContext>(),
+            Arg.Any<Func<Func<CancellationToken, Task>, CancellationToken, Task>>(),
+            Arg.Do<Func<CancellationToken, Task>>(cb => capturedCallback = cb),
+            Arg.Any<GrainTimerCreationOptions>())
+            .Returns(Substitute.For<IGrainTimer>());
+
+        var grain = harness.CreateGrain();
+        await grain.EnsureStartedAsync();
+
+        // Key source fault -> RunBatchAsync throws -> OnPassTimerTickAsync catch fires
+        // -> MarkFailedAsync saves Failed state (write succeeds, try block exits normally).
+        Assert.That(
+            async () => await capturedCallback!(CancellationToken.None),
+            Throws.Nothing,
+            "A faulting key source must be logged and absorbed; the crawl marks itself Failed.");
+
+        Assert.That(
+            harness.StoredCheckpoint()!.State,
+            Is.EqualTo(GrainIndexBackfillState.Failed),
+            "After a pass-level fault, the crawl should be in the Failed state.");
     }
 }

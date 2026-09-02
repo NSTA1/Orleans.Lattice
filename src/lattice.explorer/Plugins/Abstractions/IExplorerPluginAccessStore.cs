@@ -42,6 +42,32 @@ public interface IExplorerPluginAccessStore
     ExplorerPluginAccess Get(string pluginId);
 
     /// <summary>
+    /// Reports whether a plugin-level decision has actually been filed for
+    /// <paramref name="pluginId"/> yet.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>This is a presentation signal, never an authorization one.</strong>
+    /// It answers "is the answer known yet", not "is the caller allowed", and no
+    /// gate or enforcement path may branch on it. The fail-closed reads above are
+    /// unchanged: an unprobed key still reads
+    /// <see cref="ExplorerPluginAccess.Denied"/>, and that remains the only
+    /// answer any access decision is entitled to use.
+    /// </para>
+    /// <para>
+    /// It exists because a surface that renders a decision has to tell "refused"
+    /// apart from "not asked yet", and reading the fail-closed default cannot.
+    /// The rail did exactly that and so opened with every area demoted, each
+    /// carrying a remedy naming a permission nobody had established was missing -
+    /// a confident, wrong sentence that then vanished as the probes landed.
+    /// Fail-closed is right for the decision and wrong as a caption.
+    /// </para>
+    /// </remarks>
+    /// <param name="pluginId">The plugin id to test. Must not be <see langword="null"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="pluginId"/> is <see langword="null"/>.</exception>
+    bool HasReported(string pluginId);
+
+    /// <summary>
     /// Reads the scoped decision for <paramref name="pluginId"/> and
     /// <paramref name="scope"/>, or <see cref="ExplorerPluginAccess.Denied"/>
     /// when nothing is filed there. A scoped key does <em>not</em> inherit the

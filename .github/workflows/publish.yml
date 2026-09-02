@@ -17,6 +17,7 @@ on:
       #   lattice.membership-v7.8.0
       #   lattice.membership.entra-v7.8.0
       #   lattice.membership.entra.graph-v7.8.0
+      #   lattice.membership.oidc-v7.8.0
       #   lattice.auth-v7.8.0
       #   lattice.api.auth-v7.8.0
       #   lattice.api.auth.grpc-v7.8.0
@@ -43,6 +44,7 @@ on:
       #   lattice.api.telemetry.grpc-v9.4.0
       #   lattice.schema-v7.9.0
       #   lattice.scaling-v7.9.0
+      #   lattice.vector-v9.5.0
       #   lattice.tenancy-v8.0.0
       #   lattice.explorer.core-v7.9.1
       #   lattice.explorer.ui-v7.9.1
@@ -84,6 +86,7 @@ on:
       - 'lattice.membership-v*'
       - 'lattice.membership.entra-v*'
       - 'lattice.membership.entra.graph-v*'
+      - 'lattice.membership.oidc-v*'
       - 'lattice.auth-v*'
       - 'lattice.api.auth-v*'
       - 'lattice.api.auth.grpc-v*'
@@ -110,6 +113,7 @@ on:
       - 'lattice.api.telemetry.grpc-v*'
       - 'lattice.schema-v*'
       - 'lattice.scaling-v*'
+      - 'lattice.vector-v*'
       - 'lattice.tenancy-v*'
       - 'lattice.explorer.core-v*'
       - 'lattice.explorer.ui-v*'

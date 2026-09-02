@@ -238,6 +238,123 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
         Assert.That(service.Loop!.IsCompleted, Is.True, "the loop is not wedged on the stalled cycle");
     }
 
+    [Test]
+    public async Task RunCycleSafelyAsync_logs_and_continues_when_the_cycle_deadline_fires()
+    {
+        // Covers lines 189-195: RunCycleSafelyAsync catches the OperationCanceledException
+        // that comes from the per-cycle deadline (NOT the shutdown token). The loop
+        // must log the timeout warning and continue to the next tick.
+        // Uses TimeProvider.System so CancellationTokenSource(timeout, provider) fires
+        // after the real wall-clock deadline elapses.
+        var secondEntry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new CountingRateProvider(secondEntry);
+        var limiter = new SiloLocalTenantRateLimiter(TimeProvider.System);
+        var opts = Options(new LatticeTenantRateLimiterOptions
+        {
+            // Short lease interval so the second tick fires quickly after the timeout.
+            LeaseInterval = TimeSpan.FromMilliseconds(5),
+            // A tight per-cycle deadline: the stalling first cycle is cancelled here.
+            LeaseCycleTimeout = TimeSpan.FromMilliseconds(50),
+            MaxLeaseBackoff = TimeSpan.FromMilliseconds(200),
+        });
+        var coordinator = new TenantRateBudgetCoordinator(
+            provider,
+            new FakeSiloCountProvider(1),
+            new FakeDemandExchange(null),
+            limiter,
+            TimeProvider.System,
+            opts);
+        var service = new TenantRateBudgetCoordinatorHostedService(
+            coordinator, TimeProvider.System, opts, Substitute.For<ILogger<TenantRateBudgetCoordinatorHostedService>>());
+
+        await service.StartAsync(CancellationToken.None);
+        // Wait for the second GetConfiguredRatesAsync call (proves the loop survived
+        // the first-cycle timeout and entered the second-tick body, lines 100-105).
+        await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Test]
+    public async Task RunCycleSafelyAsync_logs_and_continues_on_a_general_exception()
+    {
+        // Covers lines 197-202: the cycle throws a non-OCE exception; RunCycleSafelyAsync
+        // catches it, logs a warning, and returns false so the loop can continue.
+        var secondEntry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var provider = new FaultyOnFirstCallProvider(secondEntry);
+        var limiter = new SiloLocalTenantRateLimiter(TimeProvider.System);
+        var opts = Options(new LatticeTenantRateLimiterOptions
+        {
+            LeaseInterval = TimeSpan.FromMilliseconds(5),
+            LeaseCycleTimeout = TimeSpan.FromSeconds(30),
+            MaxLeaseBackoff = TimeSpan.FromMilliseconds(200),
+        });
+        _ = calls;
+        var coordinator = new TenantRateBudgetCoordinator(
+            provider,
+            new FakeSiloCountProvider(1),
+            new FakeDemandExchange(null),
+            limiter,
+            TimeProvider.System,
+            opts);
+        var service = new TenantRateBudgetCoordinatorHostedService(
+            coordinator, TimeProvider.System, opts, Substitute.For<ILogger<TenantRateBudgetCoordinatorHostedService>>());
+
+        await service.StartAsync(CancellationToken.None);
+        await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// An <see cref="ITenantRateProvider"/> that stalls on the first call (to exercise
+    /// the cycle-deadline timeout path) and signals a <see cref="TaskCompletionSource"/>
+    /// on the second call (proving the loop recovered and reached the next tick).
+    /// </summary>
+    private sealed class CountingRateProvider(TaskCompletionSource secondEntry) : ITenantRateProvider
+    {
+        private int _calls;
+
+        public async IAsyncEnumerable<TenantRateSpec> GetConfiguredRatesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var n = Interlocked.Increment(ref _calls);
+            if (n == 1)
+            {
+                // Stall until the per-cycle deadline cancels this call.
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                secondEntry.TrySetResult();
+            }
+
+            yield break;
+        }
+    }
+
+    /// <summary>
+    /// An <see cref="ITenantRateProvider"/> that throws <see cref="InvalidOperationException"/>
+    /// on the first call and signals on the second, exercising the general-exception catch.
+    /// </summary>
+    private sealed class FaultyOnFirstCallProvider(TaskCompletionSource secondEntry) : ITenantRateProvider
+    {
+        private int _calls;
+
+        public async IAsyncEnumerable<TenantRateSpec> GetConfiguredRatesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var n = Interlocked.Increment(ref _calls);
+            await Task.CompletedTask;
+            if (n == 1)
+            {
+                throw new InvalidOperationException("rate-provider-fault");
+            }
+
+            secondEntry.TrySetResult();
+            yield break;
+        }
+    }
+
     /// <summary>
     /// An <see cref="ITenantRateProvider"/> that parks forever inside its scan,
     /// standing in for a registry read that never drains.

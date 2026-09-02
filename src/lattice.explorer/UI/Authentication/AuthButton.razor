@@ -14,7 +14,12 @@
             </svg>
             <span class="lx-shell-auth-name">@AuthSession.Username</span>
         </span>
-        <TenantControls />
+        @*
+            The tenant scope control used to render here. It decides what every
+            surface in the product is reading, so filing it under the caller's
+            identity buried a global control in a local one; the shell chrome now
+            places it in the banner's own scope region (see ClusterBadge).
+        *@
         @if (_signOut.UseServerFormPost)
         {
             <form method="post" action="@_signOut.FormAction" class="lx-shell-auth-form" data-enhance="false">

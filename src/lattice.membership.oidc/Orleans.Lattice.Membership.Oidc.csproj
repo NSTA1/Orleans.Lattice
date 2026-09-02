@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>Orleans.Lattice.Membership.Oidc</PackageId>
+    <Version>9.4.0</Version>
+    <Description>Generic OpenID Connect credential authenticator for Orleans.Lattice.Membership. Specializes the built-in JWT authenticator with discovery-document-driven JWKS rotation from any conformant OIDC provider (Okta, Auth0, Keycloak, Ping, Google), standard OIDC claim conventions (sub subject, configurable group / role claims), exact-issuer authenticator selection, and fail-closed signature-algorithm pinning taken from the discovery document when it is not configured explicitly. An additive sibling to the Entra authenticator; neither package depends on the other.</Description>
+    <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Orleans.Lattice.Membership.Oidc.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
+    <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.22.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.22.0" />
+  </ItemGroup>
+
+</Project>

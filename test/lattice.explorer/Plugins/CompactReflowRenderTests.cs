@@ -63,7 +63,7 @@ public sealed class CompactReflowRenderTests
 
             AdaptiveReflowAssert.CardShowsTitle(compact, "orders/1", DataSurface);
             AdaptiveReflowAssert.CardShowsField(compact, "Size", "2,048", DataSurface);
-            AdaptiveReflowAssert.CardShowsField(compact, "Flags", "tomb", DataSurface);
+            AdaptiveReflowAssert.CardShowsField(compact, "Flags", "tombstone", DataSurface);
         });
     }
 

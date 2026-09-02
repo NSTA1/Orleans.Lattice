@@ -14,7 +14,10 @@
                value="@_value" @oninput="OnInput" @onkeyup="OnKeyUp" @onblur="OnBlurAsync" />
         @if (!string.IsNullOrEmpty(_value))
         {
-            <button type="button" class="lx-data-search-clear" title="Clear search"
+            @* aria-label rather than title: the button's visible content is the
+               multiplication sign, which is not a name. The label is a constant,
+               so it costs nothing per render. *@
+            <button type="button" class="lx-data-search-clear" aria-label="Clear search"
                     disabled="@(Loading || Disabled)" @onclick="ClearAsync">&times;</button>
         }
     </div>

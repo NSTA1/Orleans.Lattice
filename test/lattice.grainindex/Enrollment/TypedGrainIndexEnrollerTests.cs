@@ -324,4 +324,13 @@ public sealed class TypedGrainIndexEnrollerTests
                 Throws.ArgumentNullException);
         });
     }
+
+    [Test]
+    public void The_maintainer_property_exposes_the_projector_maintainer()
+    {
+        // Line 64: Maintainer property getter.
+        var enroller = EnrollmentTestIndex.Enroller(new RecordingEnrollmentStore());
+
+        Assert.That(enroller.Maintainer, Is.Not.Null);
+    }
 }

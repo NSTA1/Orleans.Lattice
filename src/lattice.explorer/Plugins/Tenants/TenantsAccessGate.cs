@@ -1,25 +1,26 @@
+using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
-/// The Tenants plugin's own four-state access gate: the surface exists only on a
-/// cluster that serves tenancy, and only a validated platform operator may use
-/// it.
+/// The Tenants plugin's own access gate: the surface exists only on a cluster
+/// that serves tenancy, and only a validated platform operator may use it.
 /// <para>
-/// It resolves in two steps, in cost order, and each step maps onto exactly one
-/// of the shell's four states:
+/// It reports <em>facts</em> in two steps, in cost order, and
+/// <see cref="ExplorerPluginAccessContract"/> maps them onto the shell's four
+/// states:
 /// </para>
 /// <list type="number">
 ///   <item>
 ///     <description>
 ///     <b>Does the cluster serve tenancy at all?</b> The tenancy seam's
-///     availability probe answers
-///     <see cref="ExplorerPluginAccessState.Unavailable"/> for a deployment
-///     without the tenancy add-on - either because this head never enabled
-///     tenant scoping, or because the cluster answered the light probe read with
-///     an <c>Unimplemented</c> status. The shell then renders no Tenants entry at
+///     availability probe reports an absent capability for a deployment without
+///     the tenancy add-on - either because this head never enabled tenant
+///     scoping, or because the cluster answered the light probe read with an
+///     <c>Unimplemented</c> status. The shell then renders no Tenants entry at
 ///     all, rather than an entry no operator could ever be granted (epic
 ///     decision D9).
 ///     </description>
@@ -36,8 +37,15 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 /// </list>
 /// <para>
 /// The order matters: probing the operator first would let a non-tenant cluster
-/// render a greyed-out Tenants entry to a non-operator, which is the one thing
-/// the unavailable state exists to prevent.
+/// render a demoted Tenants entry to a non-operator, which is the one thing the
+/// unavailable state exists to prevent.
+/// </para>
+/// <para>
+/// It deliberately does <em>not</em> decide that a non-operator is
+/// <see cref="ExplorerPluginAccessState.Denied"/>. Deciding that here is how
+/// this gate came to tell an anonymous visitor that tenant administration was
+/// not available for their account, when the honest answer was "sign in": only
+/// the contract knows whether a credential was presented.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -51,7 +59,12 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 /// The controlled tenancy domain model - the whole of what this plugin reaches
 /// (epic decision D3).
 /// </param>
-public sealed class TenantsAccessGate(ITenancyDomain domain) : IExplorerPluginAccessGate
+/// <param name="session">
+/// The Explorer's sign-in seam, read only to tell an anonymous refusal from an
+/// authenticated one.
+/// </param>
+public sealed class TenantsAccessGate(ITenancyDomain domain, IExplorerAuthSession? session = null)
+    : ExplorerPluginAccessGate
 {
     /// <summary>
     /// The reason a non-operator is refused. Phrased as a statement about the
@@ -62,27 +75,43 @@ public sealed class TenantsAccessGate(ITenancyDomain domain) : IExplorerPluginAc
         "Tenant administration is reserved for platform operators. Your account is not "
         + "authorized as an administrator on this cluster.";
 
+    /// <summary>
+    /// The grant a refused caller is missing, and who issues it. Cached, so
+    /// attaching it to a denial costs nothing per probe.
+    /// </summary>
+    private static readonly ExplorerAccessRemedy MissingGrant =
+        ExplorerAccessRemedy.Requiring("Admin", ExplorerVocabulary.GrantAudience);
+
     private readonly ITenancyDomain _domain = domain ?? throw new ArgumentNullException(nameof(domain));
 
-    /// <inheritdoc />
-    public async ValueTask<ExplorerPluginAccess> ProbeAsync(
-        IExplorerPluginHostContext context,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(context);
+    private readonly IExplorerAuthSession? _session = session;
 
+    /// <inheritdoc />
+    public override ExplorerAccessRemedy Remedy => MissingGrant;
+
+    /// <inheritdoc />
+    protected override bool IsCallerAuthenticated => _session?.IsAuthenticated ?? false;
+
+    /// <inheritdoc />
+    protected override async ValueTask<ExplorerPluginAccessFacts> EvaluateAsync(
+        IExplorerPluginHostContext context,
+        CancellationToken cancellationToken)
+    {
         // Never throws: the seam folds an unreachable endpoint, a refusal, and an
         // absent add-on into a decision, so a probe cannot break the shell.
         var availability = await _domain.ProbeAvailabilityAsync(cancellationToken).ConfigureAwait(false);
-        if (!availability.IsAllowed)
+        if (availability.State != ExplorerPluginAccessState.Allowed)
         {
-            // Unavailable, denied, and authentication-required all pass through
-            // unchanged, so the shell can tell "no such capability here" from
-            // "not yours" from "sign in first".
-            return availability;
+            // An absent capability, an unauthenticated connection, and a refusal
+            // all pass through unchanged, so this gate can only narrow the shared
+            // probe's answer and never widen it.
+            return ExplorerPluginAccessFacts.From(availability);
         }
 
         var isOperator = await _domain.IsPlatformOperatorAsync(cancellationToken).ConfigureAwait(false);
-        return isOperator ? ExplorerPluginAccess.Allowed : ExplorerPluginAccess.Deny(NotOperatorReason);
+        return isOperator
+            ? ExplorerPluginAccessFacts.Granted
+            : ExplorerPluginAccessFacts.Withhold(NotOperatorReason);
     }
 }
+

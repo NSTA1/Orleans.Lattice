@@ -987,7 +987,7 @@ internal sealed partial class ShardRootGrain
             // (where the splitting root produced a same-level bubble
             // and the live root is, correctly, internal), so this
             // predicate is deliberately one-sided.
-            if (splitResult.ChildIsLeaf && !state.State.RootIsLeaf && state.State.PendingPromotion is null)
+            if (splitResult.ChildIsLeaf && !RootIsLeafTyped && state.State.PendingPromotion is null)
             {
                 var currentRootId = state.State.RootNodeId!.Value;
                 var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
@@ -1082,7 +1082,7 @@ internal sealed partial class ShardRootGrain
         // `ChildrenAreLeaves == ChildIsLeaf` check would false-
         // positive every legitimate depth->=1 root split whose
         // persisted intent legitimately needs to wrap.
-        if (pending.ChildIsLeaf && !state.State.RootIsLeaf)
+        if (pending.ChildIsLeaf && !RootIsLeafTyped)
         {
             var rootSnapshot = await GetRoutingTableSnapshotAsync(currentRootId);
             if (rootSnapshot.ChildrenAreLeaves)
@@ -1132,6 +1132,41 @@ internal sealed partial class ShardRootGrain
         var childrenAreLeaves = pending.ChildIsLeaf
             ? true
             : state.State.PendingPromotionRootWasLeaf;
+
+        // Final clamp, decided by node TYPE rather than by either flag above
+        // (issue 899 / issue 1883). Both `ChildIsLeaf` and the legacy
+        // `PendingPromotionRootWasLeaf` scalar describe the LEVEL the new
+        // root's children sit at, and both are ultimately sampled from the
+        // persisted `RootIsLeaf` bit - which a census of a pristine
+        // production volume found lying (true over an internal root) on 96 of
+        // 841 shard roots. The surviving root child's actual grain type cannot
+        // lie, so it has the last word here. Without this clamp a lying flag
+        // wraps a new root over an internal child while claiming
+        // `childrenAreLeaves = true`, and the two failures compound: the
+        // immediate one is BPlusInternalGrain.SeedChildParentAsync resolving
+        // that internal child through IBPlusLeafGrain and throwing
+        // InvalidCastException, and the durable one is that the new root is
+        // PERSISTED with a ChildrenAreLeaves bit that lies about its own
+        // children - minting exactly the inconsistent state that makes the
+        // next promotion on this shard skip the guard above. That
+        // self-perpetuating step is how the condition accumulated in
+        // production. When the grain factory cannot resolve the leaf grain
+        // type (a non-runtime test factory) IsLeafGrainId is always true and
+        // this clamp is a no-op, exactly like every other issue-899 guard.
+        if (childrenAreLeaves && !IsLeafGrainId(currentRootId))
+        {
+            logger.LogWarning(
+                "ShardRootGrain {ShardId} CompletePromotionAsync computed childrenAreLeaves=true for a new root over "
+                + "node {CurrentRootId}, which is not a leaf grain (pending.ChildIsLeaf={ChildIsLeaf}, "
+                + "PendingPromotionRootWasLeaf={RootWasLeaf}, RootIsLeaf={RootIsLeaf}); clamping to false so the new "
+                + "root describes its children truthfully.",
+                context.GrainId,
+                currentRootId,
+                pending.ChildIsLeaf,
+                state.State.PendingPromotionRootWasLeaf,
+                state.State.RootIsLeaf);
+            childrenAreLeaves = false;
+        }
 
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(

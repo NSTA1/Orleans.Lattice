@@ -19,7 +19,7 @@ public sealed class DataSelectionPlugin : IExplorerPlugin<IDataSurface>
         PluginId = SelectionPluginKeys.Data,
         Label = "Data",
         Surface = ExplorerPluginSurface.Selection,
-        Order = 300,
+        Order = 100,
         SelectionKinds = ExplorerPluginSelectionKinds.Tree | ExplorerPluginSelectionKinds.View,
     };
 

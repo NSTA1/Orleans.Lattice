@@ -3,16 +3,20 @@
 @using Orleans.Lattice.Explorer.Core.DeadLetter
 @using Orleans.Lattice.Explorer.Core.Navigation
 @using Orleans.Lattice.Explorer.Core.Session
+@using Orleans.Lattice.Explorer.Core.Tenancy
+@using Orleans.Lattice.Explorer.Core.Vocabulary
 @implements IDisposable
 @inject ICatalogReader CatalogReader
 @inject IDeadLetterReader DeadLetterReader
 @inject IExplorerSelection Selection
 @inject IExplorerSession Session
 @inject IServiceProvider Services
-@inject IUiPreferenceStore Preferences
+@inject IExplorerShellRouter Router
+@inject IExplorerShellPreferences Preferences
 
 <nav class="lx-shell-nav" aria-label="Tree and view catalog">
     <header class="lx-shell-nav-header">
+        <h2 class="lx-shell-nav-title">@CatalogHeading</h2>
         <div class="lx-shell-nav-actions">
             @if (_navOptions.AllowEndpointConfiguration)
             {
@@ -32,108 +36,110 @@
             </button>
         </div>
 
-        <div class="lx-shell-nav-toggle" role="tablist" aria-label="Catalog kind">
-            <button type="button"
-                    role="tab"
-                    class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.Trees ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Trees ? "true" : "false")"
-                    @onclick="@(() => SwitchKindAsync(CatalogKind.Trees))">
-                Trees
-            </button>
-            <button type="button"
-                    role="tab"
-                    class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.Views ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.Views ? "true" : "false")"
-                    @onclick="@(() => SwitchKindAsync(CatalogKind.Views))">
-                Views
-            </button>
-            <button type="button"
-                    role="tab"
-                    class="lx-shell-toggle-option @(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "is-active" : null)"
-                    aria-selected="@(_preferencesApplied && _kind == CatalogKind.TagIndexes ? "true" : "false")"
-                    @onclick="@(() => SwitchKindAsync(CatalogKind.TagIndexes))">
-                Tag indexes
-            </button>
-        </div>
+        @*
+            Tier two: the catalog kind, as the segmented variant of the one tab
+            primitive. It used to be a hand-rolled role=tablist whose tabs
+            carried no tabindex and answered no arrow key, so a keyboard caller
+            tabbed through all three to pass it and a screen-reader caller was
+            promised the tabs pattern without being given it. The segmented
+            variant also reproduces the sunken-track look, so the strip reads as
+            a toggle between peers rather than as a second copy of the rail.
+        *@
+        <LatticeAdaptiveTabs Tabs="KindTabs"
+                             ActiveId="@(_restored ? _kindId : null)"
+                             OnSelect="_switchKind"
+                             Label="Catalog kind"
+                             Variant="LatticeTabsVariant.Segmented"
+                             Id="@ExplorerShellRegions.CatalogKindStrip"
+                             PanelId="@ExplorerShellRegions.CatalogList"
+                             Class="lx-shell-nav-toggle" />
     </header>
 
-    <div class="lx-shell-nav-body">
-        @if (_loading && _items.Count == 0)
+    @*
+        The catalog is swapped wholesale by a control the caller used, but the
+        swap itself completes asynchronously and off-screen: the list below
+        empties, reloads, and re-renders with entirely different content. Without
+        an announcement a screen-reader caller is told nothing at all, so the
+        region is rendered from the first pass - empty - and its text is set when
+        a load settles. A live region created at the same moment as its message
+        is silent (WCAG SC 4.1.3 Status Messages).
+    *@
+    <div class="lx-visually-hidden" role="status" aria-live="polite">@_announcement</div>
+
+    <div class="lx-shell-nav-body"
+         id="@ExplorerShellRegions.CatalogList"
+         role="tabpanel"
+         tabindex="0"
+         aria-labelledby="@_kindTabElementId">
+        @*
+            One renderer for ExplorerStateMessage, shared with every plugin
+            selection surface.
+
+            The panel used to hand-roll this block, which is how the message type
+            came to carry a field - ActionLabel - that reached one surface and
+            silently not the other: the catalog told a reader what would fix the
+            state and then gave them nothing to click. Two renderers for one type
+            is the drift, so there is now one.
+
+            What is offered is still decided by the state, not by the renderer.
+            _stateAction carries a delegate only for a state THIS panel can
+            actually resolve, and SelectionStateView renders no button without
+            one - so a refusal is still not offered the "Try again" that would
+            have the reader hammer a door that will not open, and the scope
+            remedy appears only for a caller permitted to widen the scope.
+        *@
+        @if (_items.Count == 0 || _error is not null)
         {
-            <div class="lx-shell-nav-state">Loading catalog...</div>
-        }
-        else if (_error is not null)
-        {
-            <div class="lx-shell-nav-state lx-shell-nav-error">
-                <span>@_error</span>
-                <button type="button" class="lx-btn-link" @onclick="RefreshAsync">Try again</button>
-            </div>
-        }
-        else if (_items.Count == 0)
-        {
-            <div class="lx-shell-nav-state">
-                @EmptyMessage
-            </div>
+            <SelectionStateView Message="_state"
+                                Class="lx-shell-nav-state"
+                                OnAction="_stateAction" />
         }
         else
         {
             <ul class="lx-shell-nav-list" role="listbox" aria-label="@KindLabel">
-                @foreach (var item in _items)
+                @for (var row = 0; row < _items.Count; row++)
                 {
+                    var item = _items[row];
                     var isSelected = string.Equals(Selection.Selected?.Id, item.Id, StringComparison.Ordinal)
                         && Selection.Selected?.Kind == item.Kind;
+                    var badgeStart = row * ExplorerBadges.MaxCatalogBadges;
+                    @*
+                        Floored rather than indexed blind. The buffers are rebuilt
+                        in the same synchronous step that appends the rows, so this
+                        should never bite - but when it did, an unhandled
+                        IndexOutOfRangeException out of BuildRenderTree took the
+                        whole circuit down and the shell froze on "Loading
+                        catalog...". A row with no badge is a far better failure
+                        than a shell with no rows, and the bounds check is one
+                        comparison the array access performs anyway.
+                    *@
+                    var badgeCount = row < _rowBadgeCounts.Length ? _rowBadgeCounts[row] : 0;
                     <li role="option" aria-selected="@(isSelected ? "true" : "false")">
                         <button type="button"
                                 class="lx-shell-nav-item @(isSelected ? "is-selected" : null)"
-                                @onclick="@(() => SelectAsync(item))">
+                                @onclick="@(() => Select(item))">
                             <span class="lx-shell-nav-item-id">@(item.Kind == CatalogKind.TagIndexes ? item.IndexName ?? item.Id : item.Label)</span>
+                            @*
+                                Badges come from the shared vocabulary, which
+                                spells them out: "64 shards" rather than "64 sh",
+                                "Aggregation" rather than "agg". The expansion is
+                                the visible text, so it is not hidden behind a
+                                title attribute - which is invisible on touch and
+                                unreachable by keyboard, and was the defect here.
+
+                                Deliberately no per-badge help disclosure: a
+                                focusable trigger on every badge of every row
+                                would put hundreds of stops in the tab order
+                                between the catalog and the surface below it. The
+                                readable text is what a caller needs at this
+                                density; the glossary explains the terms where
+                                they head a surface.
+                            *@
                             <span class="lx-shell-nav-item-meta">
-                                @if (item.Kind == CatalogKind.Trees)
+                                @for (var i = 0; i < badgeCount; i++)
                                 {
-                                    @if (item.Lifecycle is not null)
-                                    {
-                                        <span class="lx-badge">@item.Lifecycle</span>
-                                    }
-                                    @if (item.ShardCount is int shards)
-                                    {
-                                        <span class="lx-badge" title="Shard count">@shards sh</span>
-                                    }
-                                    @if (_deadLetterCounts.TryGetValue(item.Id, out var dlq) && dlq > 0)
-                                    {
-                                        <span class="lx-badge"
-                                              title="Dead-lettered items (strict-mode schema rejects)">@dlq DLQ</span>
-                                    }
-                                }
-                                else if (item.Kind == CatalogKind.TagIndexes)
-                                {
-                                    <span class="lx-badge" title="Tag index">tag</span>
-                                    @if (item.ShardCount is int tagShards)
-                                    {
-                                        <span class="lx-badge" title="Shard count">@tagShards sh</span>
-                                    }
-                                }
-                                else
-                                {
-                                    @if (item.IsAggregation)
-                                    {
-                                        <span class="lx-badge" title="Aggregation view">agg</span>
-                                    }
-                                    @if (item.IsHistory)
-                                    {
-                                        <span class="lx-badge" title="Change-history view">history</span>
-                                    }
-                                    @if (item.SourceTreeId is not null)
-                                    {
-                                        <span class="lx-badge lx-badge-muted" title="Source tree">@item.SourceTreeId</span>
-                                    }
-                                    @if (item.ProjectionProviderKey is not null)
-                                    {
-                                        <span class="lx-badge lx-badge-muted" title="Runtime projection provider">@item.ProjectionProviderKey</span>
-                                    }
-                                    @if (item.ProjectionVersion is not null)
-                                    {
-                                        <span class="lx-badge lx-badge-muted" title="Projection version">@item.ProjectionVersion</span>
-                                    }
+                                    var badge = _rowBadges[badgeStart + i];
+                                    <span class="@(badge.IsMuted ? MutedBadgeClass : BadgeClass)">@badge.Text</span>
                                 }
                             </span>
                         </button>
@@ -167,6 +173,30 @@
 @code {
     private const int PageSize = 100;
 
+    /// <summary>The catalog pane's heading, the level below the surface title.</summary>
+    private const string CatalogHeading = "Catalog";
+
+    // The catalog-kind strip's three options, composed once as a static: the
+    // panel re-renders on every selection notification and every load, and
+    // rebuilding the tab items per render would allocate on all of them. The
+    // identities are the route kind slugs, so the strip, the address bar and the
+    // preference contract all spell a kind the same way.
+    private static readonly LatticeTabItem[] KindTabs =
+    [
+        new LatticeTabItem(ExplorerRouteSegments.Trees, "Trees")
+        {
+            Description = "Every tree on the cluster.",
+        },
+        new LatticeTabItem(ExplorerRouteSegments.Views, "Views")
+        {
+            Description = "Projections and change-history views over the trees.",
+        },
+        new LatticeTabItem(ExplorerRouteSegments.TagIndexes, "Tag indexes")
+        {
+            Description = "Tag indexes and the trees they cover.",
+        },
+    ];
+
     private ExplorerNavigationOptions _navOptions = new();
 
     private readonly List<CatalogItem> _items = new();
@@ -176,6 +206,24 @@
     // shows no badge. Empty for the Views / Tag-index kinds, which have no DLQ.
     private readonly Dictionary<string, int> _deadLetterCounts = new(StringComparer.Ordinal);
     private CatalogKind _kind = CatalogKind.Trees;
+    private readonly EventCallback<string> _switchKind;
+
+    /// <summary>The active kind's tab identity, which is its route slug.</summary>
+    private string _kindId = ExplorerRouteSegments.Trees;
+
+    /// <summary>The active kind's tab element id, so the catalog list names the tab that chose it.</summary>
+    private string _kindTabElementId =
+        ExplorerShellRegions.TabElementId(
+            ExplorerShellRegions.CatalogKindStrip,
+            ExplorerRouteSegments.Trees);
+
+    /// <summary>
+    /// The polite announcement for the last asynchronous catalog change. Empty
+    /// until one happens, so the region is in the accessibility tree before it
+    /// has anything to say.
+    /// </summary>
+    private string _announcement = string.Empty;
+
     private string KindLabel => _kind switch
     {
         CatalogKind.Trees => "Trees",
@@ -183,25 +231,223 @@
         CatalogKind.TagIndexes => "Tag indexes",
         _ => "Catalog",
     };
-    private string EmptyMessage => _kind switch
-    {
-        CatalogKind.Trees => "No trees found.",
-        CatalogKind.Views => "No views found.",
-        CatalogKind.TagIndexes => "No tag indexes found.",
-        _ => "No items found.",
-    };
+    private string EmptyMessage => _state.Explanation;
+
+    /// <summary>
+    /// The state the catalog is in, as the shared vocabulary words it. Never
+    /// defaulted to "empty": a list that is empty because the read failed says
+    /// so, and says what to try.
+    /// </summary>
+    private ExplorerStateMessage _state = ExplorerStateCopy.Loading(ExplorerSubjects.Trees);
+
+    // The rows' badges, composed on the LOAD path and indexed on the render
+    // path. A row's badges depend only on its catalog item and its dead-letter
+    // count, and neither changes between loads - so building them here means a
+    // re-render caused by a selection notification reads a struct out of an
+    // array instead of re-deriving every row. Flat, one row's slots at
+    // row * MaxCatalogBadges, so there is one array rather than one per row.
+    private ExplorerBadge[] _rowBadges = [];
+    private int[] _rowBadgeCounts = [];
+
+    private const string BadgeClass = "lx-badge";
+    private const string MutedBadgeClass = "lx-badge lx-badge-muted";
+
     private string? _nextToken;
     private bool _hasMore;
+
+    // Carried from the catalog page so an empty list can say WHY it is empty.
+    // Accumulated across pages and cleared only on a reload, because a stale
+    // count would assert a filter that this read did not perform.
+    private string? _scopedToTenantId;
+    private int _scopeFilteredCount;
+
+    // Set when the server REFUSED the read rather than failing it, so the panel
+    // can offer the remedy that fits: signing in cannot supply a grant, and
+    // holding a grant is no use to a caller who never signed in.
+    private ExplorerStateKind? _refusal;
     private bool _loading = true;
     private string? _error;
     private bool _showConfig;
-    private bool _preferencesApplied;
+    private bool _restored;
+    private bool _disposed;
 
-    // Durable-preference keys for the navigation panel's global UI state: the
-    // catalog-kind toggle and the active catalog selection (the whole item, so
-    // it can be restored without re-discovering it from the catalog).
-    private const string KindStateKey = "nav-kind";
-    private const string SelectionStateKey = "nav-selected";
+    // Identifies the current listing, so a badge fan-out that outlives the load
+    // it belongs to cannot apply counts over a newer one.
+    private int _loadGeneration;
+
+    // The plugin host's projected tenant scope, resolved optionally: the catalog
+    // is scoped by tenant, so a switch has to re-read it in place rather than
+    // waiting for a reload. A head with no plugin host simply never re-scopes.
+    private ExplorerPluginHostState? _hostState;
+
+    private readonly Func<Task> _adoptRoute;
+    private readonly Func<Task> _reload;
+
+    /// <summary>
+    /// The tenant-scope seam, resolved optionally: it is registered only when
+    /// tenant scoping is enabled, and a head without it simply never offers the
+    /// scope remedy.
+    /// </summary>
+    private IExplorerTenantSwitcher? _tenantSwitcher;
+
+    /// <summary>
+    /// Whether this caller may actually widen the tenant scope, re-read whenever
+    /// the scope is what emptied the catalog.
+    /// </summary>
+    /// <remarks>
+    /// Gating the remedy on the seam's own answer rather than offering it to
+    /// everyone: <see cref="IExplorerTenantSwitcher.SetVisibilityAsync"/> is
+    /// fail-closed and honours only an operator, so rendering the button for
+    /// anyone else would promise a way out that silently refuses - the same
+    /// defect, in the opposite direction, as describing the remedy in prose and
+    /// never offering it.
+    /// </remarks>
+    private bool _canClearTenantScope;
+
+    /// <summary>
+    /// The action offered alongside the current state, or the default (no
+    /// delegate) when this panel cannot resolve it. Composed on the load path,
+    /// so the render path binds a field rather than deciding per pass.
+    /// </summary>
+    private EventCallback _stateAction;
+
+    private readonly EventCallback _resolveState;
+
+    /// <summary>Creates the panel, caching the delegates it binds and marshals.</summary>
+    public NavigationPanel()
+    {
+        // Bound once rather than per render or per notification: the strip
+        // re-renders on every selection notification and every load, and the
+        // route and tenant subscriptions fire for the panel's whole lifetime, so
+        // a lambda at either site would allocate a delegate on all of them.
+        _switchKind = EventCallback.Factory.Create<string>(this, SwitchKindAsync);
+        _resolveState = EventCallback.Factory.Create(this, ResolveStateAsync);
+        _adoptRoute = AdoptRouteAsync;
+        _reload = ReloadAsync;
+    }
+
+    /// <summary>
+    /// Performs whatever the current state's action is. One handler rather than
+    /// one per state, because <see cref="SelectionStateView"/> offers a single
+    /// action and the state already names which one it is.
+    /// </summary>
+    private Task ResolveStateAsync() => _state.Kind switch
+    {
+        ExplorerStateKind.ScopedOut => ClearTenantScopeAsync(),
+        ExplorerStateKind.Failed => RefreshAsync(),
+        _ => Task.CompletedTask,
+    };
+
+    /// <summary>
+    /// Widens the scope to every tenant the caller can reach and reloads, which
+    /// is the remedy a scoped-out catalog names.
+    /// </summary>
+    /// <remarks>
+    /// The seam states its own outcome and is the enforcement point; this reloads
+    /// regardless, so a refusal re-renders the state that still applies rather
+    /// than leaving the catalog looking as though the button did nothing.
+    /// </remarks>
+    private async Task ClearTenantScopeAsync()
+    {
+        if (_tenantSwitcher is not null)
+        {
+            await _tenantSwitcher.SetVisibilityAsync(ExplorerTenantVisibility.AllTenants);
+        }
+
+        await ReloadAsync();
+    }
+
+    /// <summary>
+    /// Re-reads whether the scope remedy can be offered, once a load has settled
+    /// on a state that would offer it.
+    /// </summary>
+    /// <remarks>
+    /// Asked only when the scope is what emptied the catalog, so the ordinary
+    /// path - a catalog with rows, or empty for any other reason - never pays for
+    /// the probe.
+    /// </remarks>
+    private async Task RefreshScopeRemedyAsync()
+    {
+        if (_state.Kind != ExplorerStateKind.ScopedOut || _tenantSwitcher is not { IsActive: true })
+        {
+            return;
+        }
+
+        bool permitted;
+        try
+        {
+            permitted = await _tenantSwitcher.IsOperatorAsync();
+        }
+        catch
+        {
+            // Presentation only: a seam that cannot answer withholds the remedy
+            // rather than disrupting a catalog that has already rendered.
+            permitted = false;
+        }
+
+        if (permitted == _canClearTenantScope || _disposed)
+        {
+            return;
+        }
+
+        _canClearTenantScope = permitted;
+        Announce();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>The route kind slug naming <paramref name="kind"/>.</summary>
+    private static string SlugFor(CatalogKind kind) => kind switch
+    {
+        CatalogKind.Views => ExplorerRouteSegments.Views,
+        CatalogKind.TagIndexes => ExplorerRouteSegments.TagIndexes,
+        _ => ExplorerRouteSegments.Trees,
+    };
+
+    /// <summary>The catalog kind <paramref name="slug"/> names.</summary>
+    private static CatalogKind KindFor(string? slug) => slug switch
+    {
+        ExplorerRouteSegments.Views => CatalogKind.Views,
+        ExplorerRouteSegments.TagIndexes => CatalogKind.TagIndexes,
+        _ => CatalogKind.Trees,
+    };
+
+    // Kept in step with _kind, so the strip's active id and the panel's
+    // aria-labelledby are field reads rather than per-render switches.
+    private void SyncKindIdentity()
+    {
+        _kindId = SlugFor(_kind);
+        _kindTabElementId =
+            ExplorerShellRegions.TabElementId(ExplorerShellRegions.CatalogKindStrip, _kindId);
+    }
+
+    /// <summary>
+    /// Composes every loaded row's badges into the flat buffer, growing it only
+    /// when the catalog has become longer than it has ever been.
+    /// </summary>
+    private void RebuildBadges()
+    {
+        var rows = _items.Count;
+        if (_rowBadgeCounts.Length < rows)
+        {
+            _rowBadgeCounts = new int[rows];
+            _rowBadges = new ExplorerBadge[rows * ExplorerBadges.MaxCatalogBadges];
+        }
+
+        for (var row = 0; row < rows; row++)
+        {
+            var item = _items[row];
+            var deadLetters = item.Kind == CatalogKind.Trees
+                && _deadLetterCounts.TryGetValue(item.Id, out var count)
+                    ? count
+                    : 0;
+
+            var slots = _rowBadges.AsSpan(
+                row * ExplorerBadges.MaxCatalogBadges,
+                ExplorerBadges.MaxCatalogBadges);
+
+            _rowBadgeCounts[row] = ExplorerBadges.ForCatalogItem(item, deadLetters, slots);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -209,15 +455,30 @@
             ?? new ExplorerNavigationOptions();
         Selection.SelectionChanged += OnSelectionChanged;
         Session.ConfigurationChanged += OnConfigurationChanged;
+        Router.RouteChanged += OnRouteChanged;
 
-        // Restore the prior kind toggle and active selection before the first
-        // catalog load so the panel opens on the retained kind (and never shows
-        // the default kind selected first). When browser storage is not yet
-        // reachable (server prerender), defer the first load to the first
-        // interactive render so the wrong kind is never shown.
+        // The catalog is read under the caller's tenant scope, so a switch is a
+        // reload occasion. The host state is the seam that publishes it, and it
+        // is optional so a head without the plugin host still renders.
+        _hostState = Services.GetService(typeof(ExplorerPluginHostState)) as ExplorerPluginHostState;
+
+        // The seam that can widen the scope, so a scoped-out catalog can offer
+        // the way out it already describes. Optional: registered only when tenant
+        // scoping is enabled, and a head without it simply never offers it.
+        _tenantSwitcher = Services.GetService(typeof(IExplorerTenantSwitcher)) as IExplorerTenantSwitcher;
+
+        if (_hostState is not null)
+        {
+            _hostState.Changed += OnHostChanged;
+        }
+
+        // Adopt the route before the first catalog load so the panel opens on the
+        // addressed kind (and never shows the default kind selected first). When
+        // the route names no kind the remembered one is used, which needs the
+        // durable mirror - unreachable during a server prerender, so the first
+        // load is deferred to the first interactive render.
         await Preferences.EnsureLoadedAsync();
-        ApplyPreferences();
-        if (_preferencesApplied)
+        if (TryRestore())
         {
             await ReloadAsync();
         }
@@ -229,49 +490,76 @@
     // ends up with a selected kind and a loaded list rather than a blank toggle.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _preferencesApplied)
+        if (!firstRender || _restored)
         {
             return;
         }
 
         await Preferences.EnsureLoadedAsync();
-        ApplyPreferences();
-        _preferencesApplied = true;
+        if (!TryRestore())
+        {
+            // Storage is still unreachable. Open on the addressed (or default)
+            // kind anyway rather than holding the toggle blank forever.
+            _restored = true;
+        }
+
         await ReloadAsync();
         StateHasChanged();
     }
 
-    // Applies the retained kind and selection from durable preferences (once,
-    // and only after the mirror has hydrated).
-    private void ApplyPreferences()
+    /// <summary>
+    /// Takes the panel's opening kind and selection from the route, falling back
+    /// to the remembered catalog kind when the address names none.
+    /// </summary>
+    /// <remarks>
+    /// The route is the authority, not a second one: a bare <c>/</c> has already
+    /// been turned into the remembered route by
+    /// <see cref="ExplorerShellEntryPolicy"/> before this runs. The fallback
+    /// covers only the segment a route cannot carry across sessions - a kind
+    /// browsed with nothing selected is remembered as a preference, and
+    /// <see cref="IExplorerShellPreferences.GetRememberedRoute"/> restores a kind
+    /// only alongside a selection.
+    /// </remarks>
+    private bool TryRestore()
     {
-        if (_preferencesApplied || !Preferences.IsLoaded)
+        if (_restored)
         {
-            return;
+            return false;
         }
 
-        _preferencesApplied = true;
-        _kind = Preferences.GetOrDefault(KindStateKey, CatalogKind.Trees);
+        var route = Router.Current;
+        var kindSlug = route.Kind;
 
-        var saved = Preferences.GetOrDefault<CatalogItem?>(SelectionStateKey, null);
-        if (saved is not null)
+        if (kindSlug.Length == 0)
         {
-            Selection.Select(saved);
+            if (!Preferences.IsLoaded)
+            {
+                return false;
+            }
+
+            kindSlug = Preferences.GetOrDefault(ExplorerPreferenceKeys.CatalogKind, string.Empty);
         }
+
+        _restored = true;
+        _kind = KindFor(kindSlug);
+        SyncKindIdentity();
+        return true;
     }
 
-    private async Task SwitchKindAsync(CatalogKind kind)
+    private Task SwitchKindAsync(string kindId)
     {
+        var kind = KindFor(kindId);
         if (_kind == kind)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        _kind = kind;
-
-        // Retain the toggle as a durable preference.
-        await Preferences.SetAsync(KindStateKey, kind);
-        await ReloadAsync();
+        // Published rather than applied: the address is where the shell's
+        // navigation state lives, so the toggle asks for a route and adopts the
+        // one that comes back. That is also what makes the change survive a
+        // reload, a bookmark and Back.
+        Publish(Router.Current.WithKind(SlugFor(kind)));
+        return Task.CompletedTask;
     }
 
     private Task RefreshAsync() => ReloadAsync();
@@ -282,6 +570,8 @@
         _deadLetterCounts.Clear();
         _nextToken = null;
         _hasMore = false;
+        _scopedToTenantId = null;
+        _scopeFilteredCount = 0;
         await LoadPageAsync(reset: true);
     }
 
@@ -289,9 +579,27 @@
 
     private async Task LoadPageAsync(bool reset)
     {
+        // Stamps this load so a badge fan-out that outlives it cannot apply its
+        // counts over a newer listing.
+        var generation = ++_loadGeneration;
+
         _loading = true;
         _error = null;
+        _refusal = null;
+
+        if (reset)
+        {
+            // The state block now renders the shared message rather than a fixed
+            // "Loading catalog..." string, so a reload has to say it is loading
+            // THIS kind. Leaving the previous kind's settled state in place would
+            // show the outgoing catalog's answer over the incoming one's wait.
+            _state = ExplorerStateCopy.Loading(ExplorerSubjects.ForCatalogKind(_kind));
+            _stateAction = default;
+        }
+
         StateHasChanged();
+
+        List<CatalogItem>? trees = null;
 
         try
         {
@@ -304,14 +612,37 @@
             _nextToken = page.NextPageToken;
             _hasMore = page.HasMore;
 
-            // Populate the DLQ badge counts for the freshly loaded trees. Zero /
-            // absent counts (including a cluster with no schema enforcement, where
-            // the reader returns 0) simply render no badge. Views and tag indexes
-            // have no dead-letter queue, so this is skipped for those kinds.
-            if (_kind == CatalogKind.Trees)
+            // Carried so Announce can tell a list that was FILTERED from one that
+            // was empty already. Accumulated across pages, because a first page
+            // that filtered nothing does not mean the scope filtered nothing.
+            _scopedToTenantId = page.ScopedToTenantId;
+            _scopeFilteredCount += page.ScopeFilteredCount;
+
+            // Rebuilt here, in the same synchronous step that appended the rows,
+            // because the render path indexes these buffers BY ROW. Leaving them
+            // to the finally opened a window - across an await - in which _items
+            // was longer than the badge buffers, and any render landing in it
+            // threw IndexOutOfRangeException out of BuildRenderTree. That is not
+            // a hypothetical: the window only exists when the catalog actually
+            // returns rows, which is why an empty-catalog head never saw it.
+            RebuildBadges();
+
+            if (_kind == CatalogKind.Trees && page.Items.Count > 0)
             {
-                await LoadDeadLetterCountsAsync(page.Items);
+                trees = new List<CatalogItem>(page.Items);
             }
+        }
+        catch (LatticeStateApiException ex) when (ex.RequiresAuthentication)
+        {
+            // A refusal is not an error. The server answered, and its answer has a
+            // remedy - so it must not land in the error branch, whose affordance is
+            // a "Try again" button. Retrying an unauthorized read changes nothing;
+            // offering it invites the reader to hammer a door that will not open.
+            // Leaving _error null routes this to the state block, which renders the
+            // explanation and the remedy that actually applies.
+            _refusal = ex.IsPermissionDenied
+                ? ExplorerStateKind.NotPermitted
+                : ExplorerStateKind.SignInRequired;
         }
         catch (Exception ex)
         {
@@ -320,9 +651,200 @@
         finally
         {
             _loading = false;
+            RebuildBadges();
+            ApplyRouteSelection();
+            Announce();
             StateHasChanged();
         }
+
+        // After the state has settled, because the probe is only worth making for
+        // the one state that offers the remedy it gates.
+        await RefreshScopeRemedyAsync();
+
+        if (trees is not null)
+        {
+            // Deliberately NOT awaited. A dead-letter count is decoration on a row
+            // that has already loaded, and there is one call per tree: awaiting the
+            // fan-out here made the whole catalog - and, because this runs from
+            // OnInitializedAsync, the panel's first real render - wait on the
+            // slowest of them, and wait forever on one that never answers. The
+            // rows now appear immediately and the badges fill in behind them.
+            _ = ApplyDeadLetterCountsAsync(trees, generation);
+        }
     }
+
+    /// <summary>
+    /// Fetches the dead-letter counts for <paramref name="trees"/> and folds them
+    /// into the badges, off the load path.
+    /// </summary>
+    /// <remarks>
+    /// Fault-isolated and generation-checked: a failure leaves the rows without
+    /// badges rather than without rows, and counts from a superseded load are
+    /// discarded instead of being painted over a newer listing.
+    /// </remarks>
+    private async Task ApplyDeadLetterCountsAsync(List<CatalogItem> trees, int generation)
+    {
+        try
+        {
+            await LoadDeadLetterCountsAsync(trees);
+
+            if (_disposed || generation != _loadGeneration)
+            {
+                return;
+            }
+
+            await InvokeAsync(() =>
+            {
+                if (_disposed || generation != _loadGeneration)
+                {
+                    return;
+                }
+
+                RebuildBadges();
+                StateHasChanged();
+            });
+        }
+        catch (Exception)
+        {
+            // Decoration only. A badge that cannot be fetched is not a reason to
+            // disturb a catalog the caller can already use.
+        }
+    }
+
+    /// <summary>
+    /// Reconciles what is selected against what the <em>address</em> asks for,
+    /// using the rows currently loaded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The id is read from the route on every call rather than held as a one-shot
+    /// token, and that is the whole point. A token was consumed by the first load
+    /// that did not contain the row - and on a fresh deep link the first load
+    /// routinely does not: the catalog is read under the caller's tenant scope,
+    /// which is established <em>after</em> mount, so the first read can answer
+    /// under the fail-closed scope and see nothing. The rows then arrived on the
+    /// reload that followed the scope refresh, by which time the link's intent had
+    /// been thrown away - the shell sat on the right URL with nothing selected and
+    /// no detail surface. The same happens whenever the row is simply not on the
+    /// first page.
+    /// </para>
+    /// <para>
+    /// Reading the route instead makes this idempotent: every load reconciles
+    /// again, so the selection lands the moment the row appears, and an address
+    /// that stops naming the id stops asking for it. A row that never appears (a
+    /// deleted tree) still degrades to "nothing selected" rather than pointing a
+    /// surface at something that is not there - the address is a request, not a
+    /// promise - but the request is no longer silently forgotten.
+    /// </para>
+    /// <para>
+    /// Being idempotent is also why no "a read is in flight" guard is needed: a
+    /// reload clears the rows first, so a call landing mid-load matches nothing
+    /// and changes nothing, and the load's own completion reconciles again.
+    /// </para>
+    /// </remarks>
+    private void ApplyRouteSelection()
+    {
+        if (!_restored)
+        {
+            // The panel has not taken its opening state yet; the mount path reads
+            // the route when it does.
+            return;
+        }
+
+        var id = Router.Current.Id;
+
+        if (id.Length == 0)
+        {
+            if (Selection.Selected is not null)
+            {
+                Selection.Select(null);
+            }
+
+            return;
+        }
+
+        for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            if (!string.Equals(item.Id, id, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.Equals(Selection.Selected?.Id, id, StringComparison.Ordinal)
+                || Selection.Selected?.Kind != item.Kind)
+            {
+                Selection.Select(item);
+            }
+
+            return;
+        }
+    }
+
+    // Says what the catalog now holds, once a load has settled. Composed on the
+    // load path rather than on the render path: this runs once per catalog
+    // change, where a render runs on every selection notification.
+    private void Announce()
+    {
+        // Pick the kind rather than defaulting to Empty: a list that is empty
+        // because the read failed is a different thing from one that is empty
+        // because there is nothing there, and only one of them has a remedy.
+        //
+        // Precedence is refusal, then scope, then absence, because each earlier
+        // answer explains away the later one: a refused read never reached the
+        // scope, and a scope that hid everything is not an empty cluster.
+        //
+        // ScopedOut is judged on the scope having actually removed something, not
+        // on a scope merely being active: a tenant-scoped cluster that genuinely
+        // holds nothing must still say it is empty. Claiming a filter that removed
+        // nothing would be the same class of untruth as hiding one that did.
+        var subject = ExplorerSubjects.ForCatalogKind(_kind);
+        _state = _refusal switch
+        {
+            ExplorerStateKind.NotPermitted => ExplorerStateCopy.NotPermitted(subject),
+            ExplorerStateKind.SignInRequired => ExplorerStateCopy.SignInRequired(subject),
+            _ => _error is not null
+                ? ExplorerStateCopy.Failed(subject, _error)
+                : _scopeFilteredCount > 0
+                    ? ExplorerStateCopy.ScopedOut(subject, _scopedToTenantId)
+                    : ExplorerStateCopy.Empty(subject),
+        };
+
+        if (_error is not null || _refusal is not null)
+        {
+            _announcement = _state.Headline + " " + _state.Explanation;
+            ComposeStateAction();
+            return;
+        }
+
+        _announcement = _items.Count == 0
+            ? KindLabel + ": " + _state.Headline
+            : _items.Count == 1
+                ? KindLabel + ": 1 " + subject.Singular + "."
+                : KindLabel + ": " + _items.Count.ToString(System.Globalization.CultureInfo.CurrentCulture)
+                    + " " + subject.Plural + ".";
+
+        ComposeStateAction();
+    }
+
+    /// <summary>
+    /// Resolves the action offered with the current state to the one this panel
+    /// can actually perform, or to no action at all.
+    /// </summary>
+    /// <remarks>
+    /// The two states with a way out are the two this panel owns: a failed read
+    /// it can re-issue, and a scope it can widen for a caller permitted to. Every
+    /// other state - absent, refused, sign-in-required - is resolved somewhere
+    /// other than here, so the panel offers no control for it and the copy's
+    /// remedy prose stands alone.
+    /// </remarks>
+    private void ComposeStateAction() =>
+        _stateAction = _state.Kind switch
+        {
+            ExplorerStateKind.Failed => _resolveState,
+            ExplorerStateKind.ScopedOut when _canClearTenantScope => _resolveState,
+            _ => default,
+        };
 
     // Fetches the dead-letter count for each of the given trees and records the
     // non-zero counts for the badge. Counts are fetched concurrently (no delays /
@@ -357,13 +879,10 @@
         }
     }
 
-    // Selects an item and retains it as a durable preference so the selection
-    // is restored when the panel reopens.
-    private async Task SelectAsync(CatalogItem item)
-    {
-        await Preferences.SetAsync(SelectionStateKey, item);
-        Selection.Select(item);
-    }
+    // Selects an item. The route is published from the selection notification
+    // below rather than here, so a selection driven from another surface reaches
+    // the address bar exactly as a click on this list does.
+    private void Select(CatalogItem item) => Selection.Select(item);
 
     private void OpenConfig()
     {
@@ -390,16 +909,19 @@
     // A selection can be driven from outside the navigation list - for example the
     // Data tab's "Go to source table" action on a history view selects the source
     // tree while the Views toggle is active. When the selected item's kind differs
-    // from the kind currently listed, switch the toggle (persisting it like a manual
-    // switch) and reload so the item appears in the list and is highlighted;
-    // otherwise just re-render in place.
+    // from the kind currently listed, switch the toggle and reload so the item
+    // appears in the list and is highlighted; otherwise just re-render in place.
+    // Either way the selection is published to the route, which is what makes it
+    // addressable, bookmarkable and reachable by Back.
     private async Task SyncSelectionKindAsync()
     {
         var selected = Selection.Selected;
-        if (_preferencesApplied && selected is not null && selected.Kind != _kind)
+        PublishSelection(selected);
+
+        if (_restored && selected is not null && selected.Kind != _kind)
         {
             _kind = selected.Kind;
-            await Preferences.SetAsync(KindStateKey, _kind);
+            SyncKindIdentity();
             await ReloadAsync();
             return;
         }
@@ -407,18 +929,145 @@
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Puts <paramref name="selected"/> in the address bar.
+    /// </summary>
+    private void PublishSelection(CatalogItem? selected)
+    {
+        if (!_restored)
+        {
+            // Before the panel has taken its opening state from the route, a
+            // notification is the restore itself; publishing here would overwrite
+            // the very address being adopted.
+            return;
+        }
+
+        var current = Router.Current;
+        if (selected is null)
+        {
+            if (_loading)
+            {
+                // The catalog is mid-reload, so "nothing is selected" is a statement
+                // about a list that has been emptied and not yet refilled - not about
+                // the selection. Publishing a clearing route here destroys the very
+                // selection that caused the reload: choosing an item publishes it into
+                // the address, the address reloads the list, and the empty list then
+                // reports no selection. The user is left on "Nothing selected"
+                // immediately after choosing something.
+                return;
+            }
+
+            // Clearing is a correction the user did not ask for (a new cluster
+            // invalidated what was selected), so it replaces rather than pushes.
+            Publish(current.WithKind(SlugFor(_kind)), replace: true);
+            return;
+        }
+
+        Publish(current.WithSelection(SlugFor(selected.Kind), selected.Id));
+    }
+
+    /// <summary>
+    /// Asks the router for <paramref name="route"/>, unless it is the route
+    /// already showing.
+    /// </summary>
+    /// <remarks>
+    /// The guard is load-bearing and belongs here rather than at the router. The
+    /// router suppresses the <em>announcement</em> for an unchanged route but
+    /// still raises the address request (deliberately - that is the remedy for a
+    /// non-canonical spelling of the right route), so a caller that publishes
+    /// unconditionally asks the head to navigate to the address it is already on.
+    /// <para>
+    /// That is not harmless at first render. The head buffers a request raised
+    /// before its circuit is live and keeps only the latest, so an unnecessary
+    /// publication <em>overwrites</em> the entry policy's buffered restore - and
+    /// the restore's history <em>replace</em> becomes this publication's
+    /// <em>push</em>. The result is a real navigation, and a spurious history
+    /// entry, at the exact moment the shell is still mounting. It only happens
+    /// when the catalog actually returns the remembered row, which is why an
+    /// empty-catalog test head never sees it.
+    /// </para>
+    /// </remarks>
+    private void Publish(ExplorerRoute route, bool replace = false)
+    {
+        if (route.Equals(Router.Current))
+        {
+            return;
+        }
+
+        Router.NavigateTo(route, replace);
+    }
+
+    private void OnRouteChanged(ExplorerRoute route) => InvokeAsync(_adoptRoute);
+
+    /// <summary>
+    /// Follows the address when it changes underneath the panel - a deep link,
+    /// Back, Forward, or a restore - so the list and the URL never disagree.
+    /// </summary>
+    private async Task AdoptRouteAsync()
+    {
+        if (!_restored)
+        {
+            // The mount path has not taken its opening state yet, and will read
+            // the current route when it does.
+            return;
+        }
+
+        var route = Router.Current;
+        if (route.Area.Length != 0
+            && !string.Equals(route.Area, ExplorerRouteSegments.Explore, StringComparison.Ordinal))
+        {
+            // Another area owns the working surface; the catalog is not the thing
+            // the address is describing.
+            return;
+        }
+
+        var kind = KindFor(route.Kind);
+        if (route.Kind.Length != 0 && kind != _kind)
+        {
+            _kind = kind;
+            SyncKindIdentity();
+            await ReloadAsync();
+            return;
+        }
+
+        ApplyRouteSelection();
+        StateHasChanged();
+    }
+
+    // A tenant switch re-scopes what the catalog is allowed to see, so the list
+    // has to be re-read rather than left describing the tenant the caller just
+    // left. This is the same refresh occasion the shell already re-probes its
+    // gates on; nothing else the host publishes changes the catalog.
+    private void OnHostChanged(ExplorerPluginHostChange change)
+    {
+        if (change != ExplorerPluginHostChange.Tenant)
+        {
+            return;
+        }
+
+        InvokeAsync(_reload);
+    }
+
     private void OnConfigurationChanged() => InvokeAsync(async () =>
     {
-        // A new endpoint invalidates the retained selection (it belongs to the
-        // previous cluster); clear it so it is not restored against the new one.
+        // A new endpoint invalidates the selection (it belongs to the previous
+        // cluster); clear it so it is not restored against the new one. Clearing
+        // the selection publishes the cleared route, so the address bar does not
+        // keep advertising a tree this cluster may not have.
         Selection.Select(null);
-        await Preferences.RemoveAsync(SelectionStateKey);
         await ReloadAsync();
     });
 
     public void Dispose()
     {
+        _disposed = true;
         Selection.SelectionChanged -= OnSelectionChanged;
         Session.ConfigurationChanged -= OnConfigurationChanged;
+        Router.RouteChanged -= OnRouteChanged;
+
+        if (_hostState is not null)
+        {
+            _hostState.Changed -= OnHostChanged;
+        }
     }
 }

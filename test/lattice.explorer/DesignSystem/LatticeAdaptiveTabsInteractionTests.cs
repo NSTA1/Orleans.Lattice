@@ -284,15 +284,24 @@ public sealed class LatticeAdaptiveTabsInteractionTests
     }
 
     [Test]
-    public async Task KeyDown_withNothingActive_arrowRightActivatesTheFirstTab()
+    public async Task KeyDown_withNothingActive_arrowRightMovesOffTheFirstTab()
     {
+        // With nothing selected the roving tabindex puts keyboard focus on the first
+        // enabled tab, so ArrowRight has to move to the SECOND one. This used to expect
+        // the first tab, which reads as reasonable until you notice focus is already
+        // there: the key then appeared to do nothing.
+        //
+        // That is not hypothetical. It is why the area rail - which is ordinarily in
+        // exactly this state, because a signed-out shell has no active area - failed
+        // its keyboard-operability check while the horizontal strips passed: an arrow
+        // resolved to the tab focus was already on, so focus never moved.
         var selected = new List<string>();
         await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(
             Parameters(LatticeBreakpoint.Expanded, null, selected));
 
         await harness.KeyDownAsync(Tablist, "ArrowRight");
 
-        Assert.That(selected, Is.EqualTo(new[] { "metrics" }));
+        Assert.That(selected, Is.EqualTo(new[] { "topology" }));
     }
 
     [Test]
@@ -315,6 +324,93 @@ public sealed class LatticeAdaptiveTabsInteractionTests
         var selected = new List<string>();
         await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(
             Parameters(LatticeBreakpoint.Compact, "metrics", selected));
+
+        await harness.KeyDownAsync(Tablist, "ArrowRight");
+
+        Assert.That(selected, Is.EqualTo(new[] { "topology" }));
+    }
+
+    // -------------------------------------------------- manual activation
+
+    [Test]
+    public async Task ManualActivation_arrowMovesFocusWithoutSelecting()
+    {
+        // The distinction the area rail depends on. Under automatic activation an
+        // arrow key is a selection attempt, so a tab whose selection is refused
+        // cannot be reached by keyboard at all - the strip restores focus to
+        // whatever stayed active and the key appears dead.
+        var selected = new List<string>();
+        var parameters = Parameters(LatticeBreakpoint.Expanded, "metrics", selected);
+        parameters["Activation"] = LatticeTabsActivation.Manual;
+
+        await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(parameters);
+
+        await harness.KeyDownAsync(Tablist, "ArrowRight");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(selected, Is.Empty, "an arrow key must not select under manual activation");
+            Assert.That(
+                harness.Elements().Any(e =>
+                    e.Attribute("role") == "tab"
+                    && e.Text == "Topology"
+                    && e.Attribute("tabindex") == "0"),
+                Is.True,
+                "the roving tabindex must follow the arrow so focus lands on the next tab");
+            Assert.That(
+                harness.Elements().Any(e =>
+                    e.Attribute("role") == "tab"
+                    && e.Text == "Metrics"
+                    && e.Attribute("aria-selected") == "true"),
+                Is.True,
+                "selection must stay where it was");
+        });
+    }
+
+    [Test]
+    public async Task ManualActivation_enterSelectsTheFocusedTab()
+    {
+        var selected = new List<string>();
+        var parameters = Parameters(LatticeBreakpoint.Expanded, "metrics", selected);
+        parameters["Activation"] = LatticeTabsActivation.Manual;
+
+        await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(parameters);
+
+        await harness.KeyDownAsync(Tablist, "ArrowRight");
+        await harness.KeyDownAsync(Tablist, "Enter");
+
+        Assert.That(selected, Is.EqualTo(new[] { "topology" }));
+    }
+
+    [Test]
+    public async Task ManualActivation_arrowSkipsADisabledTab()
+    {
+        var selected = new List<string>();
+        var parameters = Parameters(LatticeBreakpoint.Expanded, "topology", selected);
+        parameters["Activation"] = LatticeTabsActivation.Manual;
+
+        await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(parameters);
+
+        // Topology is index 1 and Data (index 2) is disabled, so the next stop is History.
+        await harness.KeyDownAsync(Tablist, "ArrowRight");
+
+        Assert.That(
+            harness.Elements().Any(e =>
+                e.Attribute("role") == "tab"
+                && e.Text == "History"
+                && e.Attribute("tabindex") == "0"),
+            Is.True);
+    }
+
+    [Test]
+    public async Task AutomaticActivation_remainsTheDefault()
+    {
+        // The default must not change: for a cheap, always-permitted switch one
+        // keypress that both moves and selects is the better behaviour, and every
+        // horizontal strip in the shell relies on it.
+        var selected = new List<string>();
+        await using var harness = await DesignSystemInteractiveHarness.RenderAsync<LatticeAdaptiveTabs>(
+            Parameters(LatticeBreakpoint.Expanded, "metrics", selected));
 
         await harness.KeyDownAsync(Tablist, "ArrowRight");
 

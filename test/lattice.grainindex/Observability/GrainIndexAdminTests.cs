@@ -402,6 +402,41 @@ public sealed class GrainIndexAdminTests
     private static IOptions<GrainIndexDeclarationOptions> Declarations() =>
         Options.Create(new GrainIndexDeclarationOptions());
 
+    [Test]
+    public async Task Get_status_with_an_empty_tree_name_reports_zero_entries_without_calling_the_tree()
+    {
+        // Line 220 of GrainIndexAdmin: EntryCountAsync returns 0 immediately
+        // when the configured TreeName is empty or null, without resolving the
+        // ILattice grain from the factory.
+        var declarations = new GrainIndexDeclarationOptions();
+        declarations.Definitions.Add(new GrainIndexDefinition<ITestStringKeyedGrain, TestGrainState>(
+            Index,
+            StringGrainKeyCodec<ITestStringKeyedGrain>.Instance,
+            [new TypedGrainIndexProperty<TestGrainState, int>("Age", static s => s.Age)]));
+
+        var options = Substitute.For<IOptionsMonitor<GrainIndexOptions>>();
+        options.Get(Arg.Any<string>()).Returns(new GrainIndexOptions { TreeName = string.Empty });
+
+        var backfill = Substitute.For<IGrainIndexBackfillGrain>();
+        backfill.GetStatusAsync().Returns(_ => Task.FromResult(GrainIndexBackfillStatus.NotStarted(Index)));
+
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IGrainIndexBackfillGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(backfill);
+
+        var admin = new GrainIndexAdmin(
+            Options.Create(declarations),
+            options,
+            new FakeGrainIndexRegistryStore(),
+            Substitute.For<IGrainKeySourceResolver>(),
+            factory);
+
+        var status = await admin.GetStatusAsync(Index);
+
+        Assert.That(status.EntryCount, Is.Zero,
+            "An empty TreeName means the tree is not yet configured; the count is 0 and the grain factory is not called.");
+        factory.DidNotReceive().GetGrain<ILattice>(Arg.Any<string>(), Arg.Any<string?>());
+    }
+
     /// <summary>An <see cref="IGrainKeySource"/> that reports a fixed bound.</summary>
     private sealed class BoundedKeySource(long? count) : IGrainKeySource
     {

@@ -27,6 +27,81 @@
     color: var(--lx-color-danger);
 }
 
+/*
+  The shared empty / error / loading block (SelectionStateView). It is a column
+  rather than the single flexed line above it, because it carries a headline, an
+  explanation, a remedy and an action instead of one sentence.
+
+  Tone is carried by a left indicator plus a border, never by hue alone: a
+  denial and a failure must still read as such in greyscale, under forced
+  colours, and to a reader who cannot separate red from grey.
+*/
+.lx-selection-message {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--lx-space-3);
+    padding: var(--lx-space-6);
+    max-width: 48rem;
+    border: var(--lx-focus-outline-width) solid var(--lx-color-border);
+    border-left-width: var(--lx-state-indicator-thickness);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-sunken);
+    color: var(--lx-color-text-dim);
+    font-size: var(--lx-text-small);
+}
+
+.lx-selection-message.is-denial {
+    border-color: var(--lx-color-danger-border);
+    background: var(--lx-color-danger-surface);
+}
+
+.lx-selection-message.is-failed {
+    border-color: var(--lx-color-danger-border);
+}
+
+.lx-selection-message.is-busy {
+    border-color: var(--lx-color-border-strong);
+}
+
+.lx-selection-message-headline {
+    margin: 0;
+    color: var(--lx-color-text);
+    font-size: var(--lx-text-body);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-selection-message-explanation {
+    margin: 0;
+    line-height: var(--lx-leading-normal);
+}
+
+.lx-selection-message-remedy {
+    margin: 0;
+    line-height: var(--lx-leading-normal);
+    color: var(--lx-color-text-muted);
+}
+
+.lx-selection-message-remedy-label {
+    margin-right: var(--lx-space-2);
+    color: var(--lx-color-text);
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lx-selection-message-action {
+    margin-top: var(--lx-space-2);
+}
+
+/* The shared badge run (SelectionBadgeList). Layout only: the badge chrome
+   itself is the design system's, so a plugin badge and a catalog badge cannot
+   drift apart. */
+.lx-selection-badges {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--lx-space-2);
+}
+
 .lx-selection-guidance {
     display: flex;
     flex-direction: column;

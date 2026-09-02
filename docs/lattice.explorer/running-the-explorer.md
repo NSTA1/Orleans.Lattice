@@ -80,11 +80,24 @@ shared explorer libraries it builds on restore transitively:
 
 ### Mounting under a subpath
 
-When you set `BasePath` to a subpath, the Blazor Server circuit and the static
-assets are served under that prefix. A reverse proxy or host that strips the
-prefix before the request reaches the app must re-establish it with
-`UsePathBase` so the circuit and the sign-in endpoints resolve; hosting the app
-directly at the subpath needs no extra step.
+Setting `BasePath` is the whole of it. The head applies the prefix itself, as a
+`PathBase` at the front of its pipeline, and maps its components, static assets
+and sign-in endpoints at the root behind it - so the pages, the Blazor Server
+circuit and the assets all resolve under the mount, and the host document is
+emitted with a matching `<base href>`.
+
+Under a subpath the console is mapped inside an isolated branch pipeline rooted
+at the prefix. The branch strips the prefix before its own routing runs, so every
+component keeps its declared root-relative `@page` template, and it keeps the
+console's endpoints out of the host application's endpoint table so they cannot
+collide with the host's own routes. Grouping the endpoints under the prefix
+instead leaves every declared template unresolvable and serves no page at all
+([dotnet/aspnetcore#64965](https://github.com/dotnet/aspnetcore/issues/64965)).
+
+The app has to see the prefix for `BasePath` to apply to it. A front end that
+strips the prefix before forwarding leaves the head serving at the root: either
+have it preserve the prefix, or leave `BasePath` at `/` and let the front end
+own the public path entirely.
 
 ## Deployment: prefer an isolated head
 
@@ -128,7 +141,7 @@ steps**. Blazor-host detection and the web-asset contribution are resolved durin
 **restore**, so a Dockerfile that restores from the `.csproj` alone and then runs
 `dotnet publish --no-restore` can silently drop `blazor.web.js`. The console then
 renders server-side but its interactive circuit never starts: **Sign in does
-nothing, tabs stay greyed, and the console reports "Access to the state API was
+nothing, area entries stay inert, and the console reports "Access to the state API was
 denied"** even though the endpoint is reachable.
 
 To keep the asset in a containerized isolated host:

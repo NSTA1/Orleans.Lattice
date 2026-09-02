@@ -21,17 +21,28 @@ internal sealed class RecordingEnrollmentStore : IGrainIndexEnrollmentStore
     /// <summary>An exception every read throws, or <c>null</c>.</summary>
     public Exception? ReadFault { get; set; }
 
+    /// <summary>An exception every <see cref="ScanPendingAsync"/> throws before yielding, or <c>null</c>.</summary>
+    public Exception? ScanFault { get; set; }
+
     /// <summary>An exception every outbox write throws, or <c>null</c>.</summary>
     public Exception? WritePendingFault { get; set; }
 
     /// <summary>An exception every completion throws, or <c>null</c>.</summary>
     public Exception? CompleteFault { get; set; }
 
+    private int _scanCount;
+
     /// <summary>
     /// Completes the first time the outbox is scanned, so a test can wait for a
     /// background pass to happen instead of guessing how long it takes.
     /// </summary>
     public TaskCompletionSource ScanObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes the second time the outbox is scanned, guaranteeing that the
+    /// periodic timer has fired at least once between the first and second pass.
+    /// </summary>
+    public TaskCompletionSource SecondScanObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <inheritdoc />
     public Task<GrainIndexEnrollmentRecord?> ReadEnrollmentAsync(
@@ -133,6 +144,13 @@ internal sealed class RecordingEnrollmentStore : IGrainIndexEnrollmentStore
     {
         Log.Add("scan");
         ScanObserved.TrySetResult();
+        _scanCount++;
+        if (_scanCount >= 2)
+            SecondScanObserved.TrySetResult();
+
+        if (ScanFault is { } fault)
+            throw fault;
+
         foreach (var pending in Pending.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Value).ToList())
         {
             cancellationToken.ThrowIfCancellationRequested();

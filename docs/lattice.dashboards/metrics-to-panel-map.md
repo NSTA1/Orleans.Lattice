@@ -34,6 +34,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.shard.writes` | counter (`{op}`, **per-operation**) | `tree`, `shard` | Overview | Cluster throughput (ops/s), Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.records_written` | counter (`{record}`, **per-record**) | `tree`, `shard` | Overview | Per-tree write throughput (operations/s and records/s) |
 | `orleans.lattice.shard.splits_committed` | counter | `tree`, `shard` | Overview | Splits committed |
+| `orleans.lattice.shard.consolidations_committed` | counter | `tree`, `shard` | Overview | Consolidations committed |
+| `orleans.lattice.shard.healing.backlog` | histogram (`{shard}`) | `tree` | Overview | Healing backlog (shards above base) |
+| `orleans.lattice.shard.healing.decisions` | counter | `tree`, `decision` | Overview | Healing decisions by outcome |
 | `orleans.lattice.leaf.write.duration` | histogram (ms) | `tree` | Overview, CommitPath | Leaf write duration percentiles |
 | `orleans.lattice.leaf.scan.duration` | histogram (ms) | `tree`, `operation` | Overview | Leaf scan duration p95 by operation |
 | `orleans.lattice.leaf.compaction.duration` | histogram (ms) | `tree` | Overview, CommitPath | Compaction duration p95 |
@@ -65,6 +68,9 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.policy.over_threshold` | observable gauge (0/1) | `tree` | Overview | Trees over advisory threshold |
 | `orleans.lattice.storage.policy.trim_triggered` | counter | `tree`, `reason` | Overview | Byte-pressure trim activity |
 | `orleans.lattice.storage.policy.bytes_reclaimed` | counter (`By`) | `tree` | Overview | Byte-pressure trim activity |
+| `orleans.lattice.wal.gc.passes` | counter (`{pass}`) | `tree`, `outcome` | Replication | WAL GC pass rate by outcome |
+| `orleans.lattice.wal.gc.interval` | histogram (`s`) | `tree` | Replication | WAL GC adaptive interval |
+| `orleans.lattice.wal.gc.backlog_bytes` | histogram (`By`) | `tree` | Replication | WAL GC retained backlog after pass |
 | `orleans.lattice.admission.live_keys` | observable gauge (`{key}`) | `tree` | Overview | Admission - live keys by tree |
 | `orleans.lattice.admission.estimated_bytes` | observable gauge (`By`) | `tree` | Overview | Admission - estimated bytes by tree |
 | `orleans.lattice.admission.over_advisory` | observable gauge (0/1) | `tree` | Overview | Admission - trees over advisory ceiling |

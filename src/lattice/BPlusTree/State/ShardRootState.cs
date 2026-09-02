@@ -14,8 +14,19 @@ internal sealed class ShardRootState
     /// <summary>The grain identity of the current root node (leaf or internal).</summary>
     [Id(0)] public GrainId? RootNodeId { get; set; }
 
-    /// <summary>Whether the current root is a leaf (<c>true</c>) or internal node (<c>false</c>).</summary>
-    [Id(1)] public bool RootIsLeaf { get; set; } = true;
+    /// <summary>
+    /// Whether the current root is a leaf (<c>true</c>) or internal node (<c>false</c>).
+    /// <para>
+    /// Deliberately has NO property initializer. The grain-storage serializer omits
+    /// members equal to the type default, so a non-default initializer here would
+    /// resurrect an omitted <c>false</c> as <c>true</c> on load - silently turning an
+    /// internal root into a claimed leaf root (issue 899 / issue 1883). Every write
+    /// path assigns this explicitly, so the default is only ever observed for a shard
+    /// with no root yet, where <see cref="RootNodeId"/> is <see langword="null"/> and
+    /// the flag is not consulted.
+    /// </para>
+    /// </summary>
+    [Id(1)] public bool RootIsLeaf { get; set; }
 
     /// <summary>
     /// If a root promotion is in progress, the split result that triggered it.

@@ -26,6 +26,12 @@ public interface ITestCompoundKeyedGrain : IGrainWithGuidCompoundKey;
 public interface ITestAmbiguouslyKeyedGrain : IGrainWithStringKey, IGrainWithGuidKey;
 
 /// <summary>
+/// A grain declaring integer and guid key interfaces at once, used to exercise
+/// the ambiguous key-shape failure for integer-keyed grains specifically.
+/// </summary>
+public interface ITestIntegerAmbiguouslyKeyedGrain : IGrainWithIntegerKey, IGrainWithGuidKey;
+
+/// <summary>
 /// The grain state the declaration tests project from. Deliberately mixes a
 /// value type, a reference type, and a nullable so the projected-property
 /// descriptor is exercised across all three.

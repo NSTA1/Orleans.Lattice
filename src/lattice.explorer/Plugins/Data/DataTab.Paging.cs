@@ -1,5 +1,6 @@
 using Orleans.Lattice.Api.State;
 using Orleans.Lattice.Explorer.Core.Data;
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 
 namespace Orleans.Lattice.Explorer.Plugins.Data;
 
@@ -109,6 +110,7 @@ public partial class DataTab
     {
         _loading = true;
         _error = null;
+        _failure = null;
         StateHasChanged();
 
         try
@@ -122,6 +124,12 @@ public partial class DataTab
         catch (Exception ex)
         {
             _error = ex.Message;
+
+            // Composed here, not in the ListState property: the failure copy
+            // quotes the cluster's words and so has to be built, and ListState
+            // is read on every render pass - of which this surface has many,
+            // because a live entry change triggers one.
+            _failure = ExplorerStateCopy.Failed(ExplorerSubjects.Entries, _error);
         }
         finally
         {

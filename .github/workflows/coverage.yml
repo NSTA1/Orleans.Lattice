@@ -11,6 +11,11 @@ name: Coverage
 on:
   push:
     branches: [main]
+  # Manual trigger. Coverage is a post-merge lane, so without this there is no way
+  # to re-run it after a transient failure, or to validate a change to the lane
+  # itself on a branch before merging it - the change would have to land on main
+  # unverified.
+  workflow_dispatch:
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
 permissions:
@@ -95,7 +100,7 @@ jobs:
         env:
           LATTICE_DIGEST_SETTLE_TIMEOUT_MS: '60000'
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # Exclude the benchmark/throughput test projects: microbench runs
           # BenchmarkDotNet harnesses (not library coverage) and
           # azure-throughput-silo is not part of Orleans.Lattice.slnx, so it is
@@ -111,9 +116,31 @@ jobs:
           mapfile -t testProjs < <(find test -type f -name '*Tests.csproj' \
             -not -path '*/microbench/*' \
             -not -path '*/azure-throughput-silo/*' | sort)
+          # Run every project even when one fails, then fail the step at the end.
+          #
+          # This loop used to run under `set -e`, so the first failing project
+          # aborted the whole step: every later project went unmeasured and the
+          # Codecov upload was skipped entirely, leaving the badge frozen on the
+          # last good commit. One flaky suite therefore discarded the coverage of
+          # all forty-odd others, which is the opposite of what this lane is for.
+          # Collecting failures and reporting them together keeps a green project's
+          # coverage even when a sibling is broken, and still fails the run.
+          failed=()
+
+          runSuite() {
+            local proj="$1" name="$2" label="$3" filter="$4"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "$filter" \
+              --collect:"XPlat Code Coverage" \
+              --results-directory "coverage/${name}" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}-${label}.trx"
+          }
+
           for proj in "${testProjs[@]}"; do
             name=$(basename "$proj" .csproj)
             echo "::group::Coverage: $name"
+            ok=true
             # Chaos tests are CI-only fault-injection and excluded here to keep
             # the coverage run deterministic; AzureStorageEmulator tests run
             # against the Azurite service above. Coyote systematic-concurrency
@@ -121,16 +148,51 @@ jobs:
             # cores the deterministic unit tests already exercise, so they are
             # excluded here too. The UI category is deliberately NOT excluded -
             # browsers are installed above precisely so those paths are counted.
-            dotnet test "$proj" --no-build --configuration Release \
-              --filter "TestCategory!=Chaos&TestCategory!=Coyote" \
-              --collect:"XPlat Code Coverage" \
-              --results-directory "coverage/${name}" \
-              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-              --logger "trx;LogFileName=${name}.trx"
+            if [ "$name" = "Orleans.Lattice.Explorer.UiTests" ]; then
+              # Shard the browser suite exactly as ui-tests.yml does, reading the
+              # same ui-test-shards.json so the two lanes cannot drift.
+              #
+              # Sharding is not about speed here - the shards run sequentially - it
+              # is about how many cases one in-process Explorer web head serves.
+              # ui-tests.yml gives each shard its own runner, and therefore its own
+              # head, because a single head serving the whole journey suite starts
+              # failing cases with the shell never reporting itself measured: the
+              # interactive circuit stops establishing under the accumulated load.
+              # Running the whole suite in one `dotnet test` process here put every
+              # case back on one head and reproduced exactly that, two cases timing
+              # out after thirty seconds waiting for .lx-root[data-lx-measured].
+              # A separate process per shard restores one head per shard.
+              #
+              # The three shards cover the whole project, so nothing is skipped by
+              # not running it unfiltered as well: every filter selects
+              # TestCategory=UI, and UiCategoryHygieneTests fails the build if any
+              # [TestFixture] in this assembly lacks [Category("UI")] (with a
+              # vacuity guard, so it cannot pass by scanning nothing). Within that,
+              # structure takes the non-Journeys fixtures and journeys-a/journeys-b
+              # partition the Journeys ones by complement.
+              while IFS=$'\t' read -r shard filter; do
+                runSuite "$proj" "$name" "$shard" "$filter" || ok=false
+              done < <(jq -r '.[] | [.shard, .filter] | @tsv' .github/workflows/ui-test-shards.json)
+            else
+              runSuite "$proj" "$name" "all" \
+                "TestCategory!=Chaos&TestCategory!=Coyote" || ok=false
+            fi
+            if [ "$ok" != true ]; then
+              failed+=("$name")
+              echo "::error::Coverage run failed for ${name}."
+            fi
             echo "::endgroup::"
           done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::Coverage failed for ${#failed[@]} project(s): ${failed[*]}"
+            exit 1
+          fi
 
       - name: Upload coverage to Codecov
+        # Upload whatever was measured even when a project failed above. The
+        # point of this lane is to keep main's coverage current; discarding a
+        # complete report because one suite broke is how the badge went stale.
+        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v7
         with:
           # Add a CODECOV_TOKEN repository secret (from the Codecov project

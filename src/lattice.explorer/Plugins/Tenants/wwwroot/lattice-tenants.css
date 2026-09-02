@@ -63,6 +63,14 @@
     margin-inline-start: auto;
 }
 
+/* The sub-surface strip is tier four and the quietest control in the shell, so
+   it is given room below the banners above it and nothing else: the subordinate
+   variant of the shared tab primitive carries the whole of its presentation.
+   Styling it further here would be this package re-deciding a house rule. */
+.lxt-surfaces {
+    margin-block-start: var(--lx-space-4);
+}
+
 /* ---- Status banners --------------------------------------------------- */
 
 .lxt-status {
@@ -97,6 +105,20 @@
     color: var(--lx-color-text-muted);
 }
 
+/* A refusal states its headline, its explanation and its remedy as three
+   paragraphs inside one banner, so the three are read as one message rather
+   than as three unrelated status lines. The remedy is the part the reader acts
+   on, so it keeps the banner's own colour where the explanation is muted. */
+.lxt-status-headline {
+    margin: 0;
+    font-weight: var(--lx-weight-semibold);
+}
+
+.lxt-status-remedy {
+    margin: var(--lx-space-2) 0 0;
+    line-height: var(--lx-leading-normal);
+}
+
 .lxt-status-detail {
     display: block;
     margin-block-start: var(--lx-space-2);
@@ -127,6 +149,18 @@
     padding: var(--lx-space-6);
     color: var(--lx-color-text-muted);
     text-align: center;
+}
+
+/* An empty list says WHICH kind of empty it is, so it is a small block rather
+   than one muted line: a headline naming the situation, an explanation, and the
+   remedy that resolves it. */
+.lxt-empty-state {
+    margin: 0;
+    padding: var(--lx-space-6);
+    border: 1px solid var(--lx-color-border);
+    border-radius: var(--lx-radius-md);
+    background: var(--lx-color-surface-raised);
+    line-height: var(--lx-leading-normal);
 }
 
 /* ---- Shared surface furniture ----------------------------------------- */
@@ -205,6 +239,16 @@
 .lxt-badge.is-online {
     border-color: var(--lx-color-success);
     color: var(--lx-color-success);
+}
+
+/* The tenant the whole Explorer is reading as. It is a scope statement rather
+   than a lifecycle state, so it borrows the accent rather than the success
+   colour - and it carries the words "Active tenant", so the distinction never
+   rests on the hue. */
+.lxt-badge.is-active-scope {
+    border-color: var(--lx-color-accent);
+    color: var(--lx-color-accent);
+    font-weight: var(--lx-weight-semibold);
 }
 
 .lxt-badge.is-suspended,

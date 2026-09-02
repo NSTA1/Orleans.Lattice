@@ -144,6 +144,50 @@ public class LatticeReplicationGrpcServiceCollectionExtensionsTests
     }
 
     [Test]
+    public void AddLatticeReplicationGrpc_projects_unified_options_to_saga_control_options()
+    {
+        var services = BaseServices();
+        services.AddLatticeReplicationGrpc(opts =>
+        {
+            opts.Peers["site-c"] = new Uri("https://localhost:5003/");
+            opts.AllowPlaintextEndpoints = true;
+            opts.LocalClusterId = "site-a";
+        });
+
+        using var sp = services.BuildServiceProvider();
+        var sagaOptions = sp.GetRequiredService<IOptionsMonitor<GrpcSagaControlChannelOptions>>().CurrentValue;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sagaOptions.PeerEndpoints["site-c"], Is.EqualTo(new Uri("https://localhost:5003/")));
+            Assert.That(sagaOptions.AllowPlaintextEndpoints, Is.True);
+            Assert.That(sagaOptions.LocalClusterId, Is.EqualTo("site-a"));
+        });
+    }
+
+    [Test]
+    public void AddLatticeReplicationGrpc_projects_the_configure_channel_hook_onto_every_transport()
+    {
+        var services = BaseServices();
+        Action<string, global::Grpc.Net.Client.GrpcChannelOptions> hook = (_, _) => { };
+
+        services.AddLatticeReplicationGrpc(opts =>
+        {
+            opts.Peers["site-d"] = new Uri("https://localhost:5004/");
+            opts.ConfigureChannel = hook;
+        });
+
+        using var sp = services.BuildServiceProvider();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sp.GetRequiredService<IOptionsMonitor<GrpcPushTransportOptions>>().CurrentValue.ConfigureChannel, Is.SameAs(hook));
+            Assert.That(sp.GetRequiredService<IOptionsMonitor<GrpcRemoteSnapshotTransportOptions>>().CurrentValue.ConfigureChannel, Is.SameAs(hook));
+            Assert.That(sp.GetRequiredService<IOptionsMonitor<GrpcSagaControlChannelOptions>>().CurrentValue.ConfigureChannel, Is.SameAs(hook));
+        });
+    }
+
+    [Test]
     public void AddLatticeReplicationGrpc_registers_push_method_singleton()
     {
         var services = BaseServices();

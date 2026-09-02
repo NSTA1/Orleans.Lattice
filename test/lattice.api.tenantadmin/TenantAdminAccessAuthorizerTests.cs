@@ -221,4 +221,41 @@ public sealed class TenantAdminAccessAuthorizerTests
 
         Assert.That(await authorizer.IsTenantAdminAuthorizedAsync(), Is.False);
     }
+
+    [Test]
+    public void AuthorizeTenantAdminAsync_refuses_a_reasonless_partial_allow_fail_closed()
+    {
+        // A whole-scope administrative operation can never be narrowed to a key
+        // subset, so a key-filtered allow is refused fail-closed even when the gate
+        // supplies no reason - the authorizer falls back to its own denial message
+        // rather than admit the caller.
+        var authorizer = new TenantAdminAccessAuthorizer(new FilteredNoReasonGate());
+
+        Assert.That(
+            async () => await authorizer.AuthorizeTenantAdminAsync(),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+    }
+
+    [Test]
+    public async Task AuthorizeTenantAdminAsync_resolves_an_uncached_subject_under_system_origin()
+    {
+        // Cache miss: the warm synchronous resolve fails, so the caller is resolved
+        // through the membership directory's own gated trees, which must run under a
+        // system-origin scope to bypass the gate rather than re-enter it. The
+        // resolved subject is then handed to the gate for the real decision.
+        var gate = new AdminSubjectGate(AdminSubjectId);
+        var membership = new CacheMissMembershipContext(new LatticeSubject(AdminSubjectId));
+        var authorizer = new TenantAdminAccessAuthorizer(gate, membership);
+
+        await authorizer.AuthorizeTenantAdminAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.LastSubjectId, Is.EqualTo(AdminSubjectId),
+                "the uncached-resolved subject is handed to the gate for the decision.");
+            Assert.That(membership.ResolveCurrentCalled, Is.True);
+            Assert.That(membership.ResolvedUnderSystemOrigin, Is.True,
+                "cache-miss resolution reads the gated membership trees under a system-origin scope.");
+        });
+    }
 }

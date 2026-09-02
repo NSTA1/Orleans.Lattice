@@ -4,6 +4,8 @@ using Orleans.Lattice.Explorer.Backup.Components;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Tests.Plugins;
 
+using Orleans.Lattice.Explorer.Core.Vocabulary;
+
 namespace Orleans.Lattice.Explorer.Tests.Backup;
 
 /// <summary>
@@ -28,8 +30,8 @@ public sealed class BackupsPanelRenderTests
             Assert.That(html, Does.Contain("class=\"lx-backups\""));
             Assert.That(html, Does.Contain("aria-label=\"Backups\""));
             Assert.That(html, Does.Contain("role=\"tablist\""));
-            Assert.That(html, Does.Contain("New Backup"));
-            Assert.That(html, Does.Contain("Existing Backups"));
+            Assert.That(html, Does.Contain("New backup"));
+            Assert.That(html, Does.Contain("Existing backups"));
         });
     }
 
@@ -57,11 +59,20 @@ public sealed class BackupsPanelRenderTests
     }
 
     [Test]
-    public async Task Before_the_sub_tab_is_restored_both_tabs_state_that_they_are_unselected()
+    public async Task Before_the_surface_is_restored_the_body_says_so_and_the_strip_stays_navigable()
     {
-        // The strip renders neither tab as active until the stored preference
-        // has been read. That must render "false" on both rather than saying
-        // nothing at all - the state is "no tab selected yet", not "unknown".
+        // The retained surface has not resolved - browser storage is
+        // unreachable, as during a prerender or with script disabled - so
+        // neither body is the right one to render. Two things must hold.
+        //
+        // The panel says what is happening instead of rendering an empty block:
+        // a caller who never gets past this is looking at a real state.
+        //
+        // And the strip still reports exactly one selected tab. A tab strip
+        // whose every tab reads unselected has no tab to put in the tab
+        // sequence, so it cannot be reached by keyboard at all - which is why
+        // the shared primitive always keeps one, and why the "nothing selected
+        // yet" state belongs in the panel rather than in the strip.
         var html = await BackupsRenderHarness.RenderPanelAsync(
             StubBackupsDomain.Create(),
             preferencesLoaded: false);
@@ -70,8 +81,13 @@ public sealed class BackupsPanelRenderTests
         Assert.Multiple(() =>
         {
             Assert.That(aria.Invalid, Is.Zero);
-            Assert.That(aria.True, Is.Zero, "no sub-tab is selected before the restore completes");
-            Assert.That(aria.False, Is.EqualTo(2));
+            Assert.That(aria.True, Is.EqualTo(1), "the strip keeps a tab in the tab sequence");
+            Assert.That(aria.False, Is.EqualTo(1));
+            Assert.That(html, Does.Contain("aria-busy=\"true\""));
+            Assert.That(
+                html,
+                Does.Contain(ExplorerStateCopy.Loading(ExplorerSubjects.Backups).Headline),
+                "an unresolved surface is a state with words, not an empty panel");
         });
     }
 
@@ -239,7 +255,14 @@ public sealed class BackupsPanelRenderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("You are not permitted to list backups here."));
+            Assert.That(
+                html,
+                Does.Contain(ExplorerStateCopy.NotPermitted(ExplorerSubjects.Backups, "Backup").Explanation),
+                "the refusal comes from the shared vocabulary, not a second wording");
+            Assert.That(
+                html,
+                Does.Contain("Backup"),
+                "a denial names the missing permission, not the label the caller can already see");
             Assert.That(html, Does.Not.Contain("lx-backups-pager"));
         });
     }

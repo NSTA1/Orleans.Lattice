@@ -15,7 +15,7 @@ option flag, no enum to extend, and no `switch` in the shell to edit.
 
 | Surface | Where it renders | Applicability |
 |---|---|---|
-| `ExplorerPluginSurface.Area` | The top-level area strip (Backups, Access, Schema, Tenants, My Tenant, Telemetry) | Always applicable; ordered by `Order` |
+| `ExplorerPluginSurface.Area` | The rail of top-level areas (Backups, Access, Schema, Tenant administration, My tenant, Telemetry) | Always applicable; ordered by `Order` |
 | `ExplorerPluginSurface.Selection` | The detail panel for the selected tree, view, or tag index | Filtered by `SelectionKinds` |
 
 A selection plugin declares which selection kinds it applies to, so a tag-index
@@ -96,9 +96,9 @@ The break appears only in a consumer's restore, after publish.
 ### A distinct `Order`
 
 Two area plugins sharing an `Order` compiles and renders, and hands the relative
-position of two tabs to the catalogue's tie-break (ordinal `Label`, then ordinal
+position of two entries to the catalogue's tie-break (ordinal `Label`, then ordinal
 `PluginId`) rather than to intent. Current area values are 100 (Backups), 200
-(Access), 300 (Schema), 400 (Tenants), 500 (My Tenant) and 600 (Telemetry), so
+(Access), 300 (Schema), 400 (Tenant administration), 500 (My tenant) and 600 (Telemetry), so
 the next one is 700. Pick an unused one: `Assembled_area_plugins_all_declare_a_distinct_order`
 composes every area a head can register at once and fails on a collision.
 
@@ -114,19 +114,99 @@ choice for a surface that exposes no capability of its own to probe, but it is a
 decision to state rather than a default to inherit - say why in the member's
 remarks, as the Metrics plugin does.
 
-The four gate states render differently, so pick the one that matches what you
-mean:
+Resolve the state through the shared contract in
+`Orleans.Lattice.Explorer.Plugins.Abstractions` rather than mapping a probe onto
+the enum by hand. Before that contract existed each gate did its own mapping and
+they disagreed with each other: two told an anonymous visitor a surface was "not
+available for your account" where the honest answer was "sign in", and one
+reported `Allowed` to a caller holding no grant at all, inviting them into a
+surface the server would refuse. A shared conformance test now enumerates every
+registered gate by reflection and asserts all four states across an identity
+matrix, so a new plugin is covered without editing the guard.
+
+The contract is evaluated in precedence order, and each rule applies only when
+the ones above it did not:
+
+| Order | Condition | State |
+|---|---|---|
+| 1 | The cluster does not serve the capability | `Unavailable` |
+| 2 | The caller demonstrably holds the grant | `Allowed` |
+| 3 | The caller presented no accepted credential | `AuthenticationRequired` |
+| 4 | Otherwise (signed in, no grant) | `Denied` |
+
+The grant is checked **before** the credential, not after it, so a caller who
+provably holds it is admitted whatever the shell believes about their sign-in
+state. The converse of rule 2 is the load-bearing half: a probe that cannot
+positively demonstrate the grant never reaches it and falls through to rules 3
+and 4, so "the call did not fail" is not by itself an admission.
+
+The four states render differently, so pick the one that matches what you mean:
 
 | State | The shell renders |
 |---|---|
-| `Allowed` | The tab is active and the view is mounted. |
-| `Denied` | The tab is **visible but disabled** - greyed out, with a tooltip - and the view is never mounted. |
-| `AuthenticationRequired` | The tab stays clickable and opens the sign-in dialog rather than the view. |
-| `Unavailable` | No entry at all. This is the state that hides a surface, not `Denied`. |
+| `Allowed` | The entry is active and the view is mounted. |
+| `Denied` | The entry is **visible but demoted** - grouped below a divider at lower visual weight, stating the permission it needs and who to ask - and the view is never mounted. |
+| `AuthenticationRequired` | The entry stays prominent and clickable, and opens the sign-in dialog rather than the view. |
+| `Unavailable` | No entry at all, with the absence explained in the rail's capabilities affordance. This is the state that hides a surface, not `Denied`. |
+
+**A denial must supply a remedy.** Declare the missing permission and the
+audience to ask as structured data on the gate result; the shell renders them as
+"Requires the Backup permission - ask a platform administrator". Do not compose
+that sentence yourself, and do not derive it from your own area label - naming
+the area tells the user something they can already see. A gate that declares no
+remedy falls back to a general one, which is weaker than the one you could have
+given.
 
 Gating is advisory and is for presentation only: a denied plugin's view is never
 mounted, but the server remains the sole enforcement point for every call the
-plugin then issues.
+plugin then issues. Because hiding buys no security, a denied entry is shown
+rather than hidden - see
+[Navigation visibility policy](navigation-visibility-policy.md).
+
+### Sub-surfaces render as a subordinate control
+
+A plugin with several sections declares them as sub-surfaces. They render as a
+visibly **subordinate segmented control**, not as a third tab strip, so the
+navigation tiers stay distinguishable. Use the shared tab primitive with its
+subordinate variant rather than hand-rolling a strip; a hand-rolled
+`role="tablist"` will not carry the roving tabindex, the arrow-key handling or
+the `aria-controls` binding the shell guarantees everywhere else.
+
+Do not give a sub-surface the same label as its own area. The shell relabels a
+colliding first sub-surface to `Overview` as a backstop, but a plugin should
+name its surfaces so that never fires.
+
+### Vocabulary, explanations and empty states
+
+Take wording from the shared vocabulary module in
+`Orleans.Lattice.Explorer.Core.Vocabulary` rather than writing your own. It
+carries the glossary, the badge expansions, the refusal copy, and the
+empty/error/loading messages, so one concept reads the same everywhere. If a
+term your plugin needs is missing, add it there rather than locally.
+
+Explanations go through the shared help primitive, which is keyboard-focusable,
+usable on touch and associated with its target for assistive technology. **A
+bare `title` attribute is not an acceptable explanation mechanism** - it is
+invisible on touch and unreachable by keyboard.
+
+Empty and error states must distinguish "there is genuinely nothing here" from
+"the tenant scope is filtering it" from "you do not have the grant", and say
+what to do next. Pick the state kind deliberately rather than defaulting
+everything to empty; under deny-by-default this is the single most common source
+of confusion.
+
+### Remembered state
+
+Anything your plugin remembers between visits goes through the shell's
+preference contract: declare a key, register it on the catalog, and read and
+write through the contract. Do not call the underlying store directly and do not
+invent a second persistence mechanism. Keys are scoped per user, and per cluster
+where the value names something cluster-specific. See
+[What the Explorer remembers](what-the-explorer-remembers.md).
+
+If your surface is addressable, its path must be lower case, and its route must
+begin with a literal segment - both are enforced by hygiene tests. See
+[The Explorer navigation model](navigation-model.md#addressing-a-view-by-url).
 
 ### Release plumbing
 

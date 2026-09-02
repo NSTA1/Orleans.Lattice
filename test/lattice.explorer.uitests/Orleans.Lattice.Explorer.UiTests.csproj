@@ -47,6 +47,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      The published accessibility conformance standard for epic #1845. Copied beside
+      the test assembly so ConformanceChecklistTests can read it back and fail if a
+      criterion is dropped or a cited guard is renamed away.
+    -->
+    <None Update="ConformanceChecklist.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.explorer\WebHosting\Orleans.Lattice.Explorer.Web.csproj" />
     <ProjectReference Include="..\shared\Orleans.Lattice.Testing\Orleans.Lattice.Testing.csproj" />
   </ItemGroup>

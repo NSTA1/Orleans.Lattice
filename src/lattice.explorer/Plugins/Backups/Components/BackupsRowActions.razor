@@ -18,8 +18,12 @@
             <div class="lx-backups-field-control">
                 <input type="text" class="lx-backups-text" value="@Owner.RestoreTargetFor(manifest)"
                        aria-labelledby="lx-backups-target-label"
+                       aria-describedby="@RestoreExplanationId"
                        @oninput="e => Owner.SetRestoreTarget(manifest.Id, e.Value?.ToString())"
                        placeholder="target tree" />
+                <LatticeHelp Id="@BackupsVocabulary.RestoreId"
+                             Term="@BackupsVocabulary.Restore.Label"
+                             Explanation="@BackupsVocabulary.Restore.Explanation" />
             </div>
         </div>
     }
@@ -31,12 +35,16 @@
             <div class="lx-backups-field-control">
                 <select class="lx-backups-select" value="@Owner.SelectedRestorePoint(Row)"
                         aria-labelledby="lx-backups-point-label"
-                        @onchange="OnRestorePointChanged" title="Restore point (point in time)">
+                        aria-describedby="@IncrementalExplanationId"
+                        @onchange="OnRestorePointChanged">
                     @foreach (var member in Owner.ChainMembersNewestFirst(Row))
                     {
                         <option value="@member.Id" @key="member.Id">@BackupsPanel.FormatCreated(member.CreatedAtUtc)</option>
                     }
                 </select>
+                <LatticeHelp Id="@BackupsVocabulary.IncrementalBackupId"
+                             Term="@BackupsVocabulary.IncrementalBackup.Label"
+                             Explanation="@BackupsVocabulary.IncrementalBackup.Explanation" />
             </div>
         </div>
     }
@@ -46,10 +54,14 @@
         <div class="lx-backups-field-control">
             <select class="lx-backups-select" value="@Owner.RestoreMode"
                     aria-labelledby="lx-backups-mode-label"
-                    @onchange="OnRestoreModeChanged" title="Restore mode">
+                    aria-describedby="@RevertExplanationId"
+                    @onchange="OnRestoreModeChanged">
                 <option value="@LatticeRestoreMode.InPlace">Repair missing items (non-destructive)</option>
                 <option value="@LatticeRestoreMode.ShadowCutover">Point-in-time replace (destructive)</option>
             </select>
+            <LatticeHelp Id="@BackupsVocabulary.RevertId"
+                         Term="@BackupsVocabulary.Revert.Label"
+                         Explanation="@BackupsVocabulary.Revert.Explanation" />
         </div>
     </div>
 
@@ -66,14 +78,31 @@
             {
                 <button type="button" class="lx-btn"
                         disabled="@Owner.Busy"
-                        @onclick="OpenScheduleAsync"
-                        title="Edit or remove this scope's recurring backup schedule">Schedule</button>
+                        aria-describedby="@ScheduleExplanationId"
+                        @onclick="OpenScheduleAsync">Schedule</button>
+                <LatticeHelp Id="@BackupsVocabulary.ScheduleId"
+                             Term="@BackupsVocabulary.Schedule.Label"
+                             Explanation="@BackupsVocabulary.Schedule.Explanation" />
             }
         </div>
     </div>
 </div>
 
 @code {
+    // Hoisted to statics: each call concatenates, and this panel re-renders on
+    // every selection change and every operation.
+    private static readonly string RestoreExplanationId =
+        LatticeHelp.ExplanationElementId(BackupsVocabulary.RestoreId);
+
+    private static readonly string RevertExplanationId =
+        LatticeHelp.ExplanationElementId(BackupsVocabulary.RevertId);
+
+    private static readonly string IncrementalExplanationId =
+        LatticeHelp.ExplanationElementId(BackupsVocabulary.IncrementalBackupId);
+
+    private static readonly string ScheduleExplanationId =
+        LatticeHelp.ExplanationElementId(BackupsVocabulary.ScheduleId);
+
     /// <summary>The Backups panel this action panel reads and drives.</summary>
     [Parameter, EditorRequired] public BackupsPanel Owner { get; set; } = default!;
 

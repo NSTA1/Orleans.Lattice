@@ -22,6 +22,15 @@ public readonly record struct TenantRow
     /// <summary>The label for a tenant whose usage reading could not be read at all.</summary>
     public const string UsageUnavailableText = "Not read";
 
+    /// <summary>What an active tenant's lifecycle state means for its data plane.</summary>
+    public const string ActiveExplanation =
+        "the tenant is registered and its data plane admits operations.";
+
+    /// <summary>What a suspended tenant's lifecycle state means for its data plane.</summary>
+    public const string SuspendedExplanation =
+        "its trees remain intact, but its data-plane operations are refused until an operator "
+        + "resumes it.";
+
     /// <summary>The tenant id.</summary>
     public required string TenantId { get; init; }
 
@@ -55,6 +64,22 @@ public readonly record struct TenantRow
 
     /// <summary>The tenant's lifecycle state as a display label.</summary>
     public string StatusLabel => IsSuspended ? "Suspended" : "Active";
+
+    /// <summary>
+    /// What the lifecycle state means for the tenant's data plane, as a phrase
+    /// that reads on from <see cref="StatusLabel"/>. Rendered as the badge's
+    /// visually-hidden expansion, so the meaning travels with the accessible name
+    /// instead of living in a title attribute a keyboard or touch caller cannot
+    /// reach.
+    /// </summary>
+    /// <remarks>
+    /// Two compile-time constants, so a page of tenants pays no allocation for
+    /// them. The two states have no glossary term of their own - the shared
+    /// glossary's lifecycle terms name a <em>tree</em>'s lifecycle, not a
+    /// tenant's - so the wording is stated once here rather than in each view
+    /// that shows a status badge.
+    /// </remarks>
+    public string StatusExplanation => IsSuspended ? SuspendedExplanation : ActiveExplanation;
 
     /// <summary>
     /// The reserved-default marker, or an empty string for an ordinary tenant.

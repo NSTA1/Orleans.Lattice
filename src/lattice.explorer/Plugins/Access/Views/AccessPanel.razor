@@ -1,6 +1,9 @@
 @implements IDisposable
 @inject IExplorerPluginHostContextFactory HostContexts
 @inject IExplorerPluginAccessStore AccessStore
+@inject IExplorerShellPreferences Preferences
+@inject IExplorerPreferenceCatalog PreferenceCatalog
+@inject IExplorerShellRouter Router
 
 @*
     The Access (membership & access-control) plugin's panel: the surface the
@@ -63,10 +66,48 @@ else
     private const string OnBadgeClass = "lxa-badge is-on";
     private const string OffBadgeClass = "lxa-badge is-off";
 
+    /// <summary>
+    /// The grant a refused caller is missing, named as the cluster names it, so
+    /// the refusal points at the permission rather than at the area label the
+    /// caller can already see.
+    /// </summary>
+    private const string MissingAdminGrant = "Admin";
+
+    private const string AllTreesHelpId = "lxa-all-trees-grants";
+    private const string DelegationHelpId = "lxa-admin-delegation";
+
+    // Hoisted to statics: each call concatenates, and the posture line
+    // re-renders on every access change.
+    private static readonly string AllTreesExplanationId =
+        LatticeHelp.ExplanationElementId(AllTreesHelpId);
+
+    private static readonly string DelegationExplanationId =
+        LatticeHelp.ExplanationElementId(DelegationHelpId);
+
+    // Frozen singletons from the shared copy, so a panel that renders one of
+    // these on every gate change composes nothing.
+    private static readonly ExplorerStateMessage SignInRequired =
+        ExplorerStateCopy.SignInRequired(ExplorerSubjects.Grants);
+
+    private static readonly ExplorerStateMessage NotPermitted =
+        ExplorerStateCopy.NotPermitted(ExplorerSubjects.Grants, MissingAdminGrant);
+
     private readonly Action _render;
 
     private AccessWorkspace _state = null!;
     private RenderFragment? _panel;
+    private EventCallback<string> _selectSurface;
+
+    /// <summary>
+    /// The strip's selection callback, bound once at mount rather than written
+    /// as a method group at the call site: the panel re-renders on every load,
+    /// every gate change and every breakpoint change, and a callback composed on
+    /// the render path would be rebuilt on each of them.
+    /// </summary>
+    private EventCallback<string> SelectSurface => _selectSurface;
+
+    private ExplorerStateMessage RefusedMessage =>
+        _state.AuthenticationRequired ? SignInRequired : NotPermitted;
 
     /// <summary>Creates the panel, caching the delegate its state subscription marshals.</summary>
     public AccessPanel() =>
@@ -91,13 +132,90 @@ else
         // change, and a fresh template on each would allocate on all of them.
         _panel = Panel;
 
+        // Declared before the first read, and idempotent by reference: the
+        // contract rejects an unregistered key, so this is what makes the
+        // area's retained surface enumerable at /reset-view and cleared by it.
+        PreferenceCatalog.Register(AccessPluginKeys.SurfacePreference);
+
+        // Bound once here rather than per render, for the reason given on
+        // SelectSurface.
+        _selectSurface = EventCallback.Factory.Create<string>(this, SelectSurfaceAsync);
+
         // The host context is bound to this plugin's id, so GetDomain can only
         // ever hand back this plugin's declared contract: there is no parameter
         // through which the panel could name another plugin's domain.
         var context = HostContexts.Create(AccessPluginKeys.PluginId);
         _state = new AccessWorkspace(context.GetDomain<IAccessDomain>(), AccessStore);
         _state.Changed += OnStateChanged;
+
+        // The address is an explicit intent and resolves synchronously, so a
+        // deep link opens its surface on the first pass rather than flashing the
+        // remembered one first. Only then does the remembered choice apply.
+        var opening = AddressedSurface(Router.Current) ?? await RestoreSurfaceAsync();
+
+        _state.OpenSurface(opening);
+
         await _state.InitializeAsync();
+    }
+
+    /// <summary>
+    /// The surface the address names, or <see langword="null"/> when it names
+    /// none this area offers.
+    /// </summary>
+    /// <remarks>
+    /// Read from the path segment when the address carries a selection and from
+    /// this area's parameter otherwise, because the grammar's surface segment
+    /// qualifies a selection and is ignored without one - which is the ordinary
+    /// case here, since Access scopes to a tree it picks itself.
+    /// </remarks>
+    private static string? AddressedSurface(ExplorerRoute route)
+    {
+        if (AccessSurfaces.IsKnown(route.Surface))
+        {
+            return route.Surface;
+        }
+
+        var parameter = route.Parameters.GetValueOrEmpty(AccessPluginKeys.SurfaceParameter);
+        return AccessSurfaces.IsKnown(parameter) ? parameter : null;
+    }
+
+    /// <summary>
+    /// Opens <paramref name="surfaceId"/>, remembering it and putting it in the
+    /// address. The workspace ignores an id it does not offer, so a value edited
+    /// into the address cannot open something that is not there.
+    /// </summary>
+    private async Task SelectSurfaceAsync(string surfaceId)
+    {
+        await _state.SelectSurfaceAsync(surfaceId);
+
+        var opened = _state.ActiveSurfaceId;
+
+        // Replaced rather than pushed, so the browser's Back button leaves the
+        // area rather than walking back through every surface the caller opened.
+        var route = Router.Current.HasSelection
+            ? Router.Current.WithSurface(opened)
+            : Router.Current.WithParameter(AccessPluginKeys.SurfaceParameter, opened);
+
+        if (!ReferenceEquals(route, Router.Current))
+        {
+            Router.NavigateTo(route, replace: true);
+        }
+
+        await Preferences.SetAsync(AccessPluginKeys.SurfacePreference, opened);
+    }
+
+    // Validated against the surfaces this area actually offers, and a remembered
+    // slug that resolves to none of them is forgotten rather than rejected again
+    // on every later visit.
+    private async Task<string> RestoreSurfaceAsync()
+    {
+        var restored = await Preferences.RestoreAsync(
+            AccessPluginKeys.SurfacePreference,
+            AccessSurfaces.Groups,
+            state: 0,
+            static (remembered, _) => AccessSurfaces.IsKnown(remembered));
+
+        return AccessSurfaces.IsKnown(restored.Value) ? restored.Value : AccessSurfaces.Groups;
     }
 
     private void OnStateChanged() => InvokeAsync(_render);
@@ -117,25 +235,16 @@ else
     private RenderFragment Panel => @<section class="lxa-panel" aria-label="Access">
         @if (!_state.Allowed)
         {
-            @if (_state.AuthenticationRequired)
-            {
-                @*
-                    Recoverable, so say so and leave the shell's sign-in prompt
-                    standing rather than collapsing it into an inert grey-out:
-                    the connection carries no accepted credential.
-                *@
-                <p class="lxa-status is-denied" role="alert">
-                    You are not signed in to the cluster, so access administration is unavailable.
-                    The connection is unauthenticated - sign in to administer access.
-                </p>
-            }
-            else
-            {
-                <p class="lxa-status is-denied" role="status">
-                    Access administration is not permitted for your account, or the cluster has no
-                    auth-admin endpoint configured.
-                </p>
-            }
+            @*
+                A refusal, and the kind is picked rather than defaulted: an
+                unauthenticated connection is recoverable by signing in and is
+                announced assertively because it is actionable now, where a
+                refusal of a signed-in caller is a polite status naming the
+                grant they lack.
+            *@
+            <div role="@(_state.AuthenticationRequired ? "alert" : "status")">
+                <AccessStateBlock Message="RefusedMessage" Class="lxa-status is-denied" />
+            </div>
         }
 
         @if (_state.LastResult is { } result)
@@ -150,15 +259,27 @@ else
             </p>
             @if (_state.AccessModel.ShowPosture)
             {
+                @*
+                    Each posture badge used to explain itself in a title
+                    attribute, which neither a keyboard nor a touch caller can
+                    reach. The explanation is now a real disclosure, associated
+                    with the badge it explains.
+                *@
                 <p class="lxa-posture" role="status">
                     <span class="@(_state.AccessModel.AllTreesGrantsEnabled ? OnBadgeClass : OffBadgeClass)"
-                          title="When off, an all-trees ('*') data grant is recorded but inert - the decision engine never consults it for an ordinary tree. Enable LatticeAuthOptions.AllTreesGrantsEnabled on the silo.">
+                          aria-describedby="@AllTreesExplanationId">
                         @_state.AccessModel.AllTreesGrantsLabel
                     </span>
+                    <LatticeHelp Id="@AllTreesHelpId"
+                                 Term="@_state.AccessModel.AllTreesGrantsLabel"
+                                 Explanation="@AccessCreateModel.AllTreesGrantsExplanation" />
                     <span class="@(_state.AccessModel.AccessAdministrationDelegationEnabled ? OnBadgeClass : OffBadgeClass)"
-                          title="When off, a whole-tree Admin delegation rule on the policy tree is unauthorable - the server rejects it. Enable LatticeAuthOptions.AccessAdministrationDelegationEnabled on the silo.">
+                          aria-describedby="@DelegationExplanationId">
                         @_state.AccessModel.AccessAdministrationDelegationLabel
                     </span>
+                    <LatticeHelp Id="@DelegationHelpId"
+                                 Term="@_state.AccessModel.AccessAdministrationDelegationLabel"
+                                 Explanation="@AccessCreateModel.AccessAdministrationDelegationExplanation" />
                 </p>
             }
             @if (_state.AccessModel.ShowEnforcementNotice)
@@ -173,8 +294,10 @@ else
 
         <LatticeAdaptiveTabs Tabs="AccessSurfaces.Tabs"
                              ActiveId="@_state.ActiveSurfaceId"
-                             OnSelect="_state.SelectSurfaceAsync"
-                             Label="Access sub-surfaces"
+                             OnSelect="SelectSurface"
+                             Label="@AccessSurfaces.StripLabel"
+                             Variant="LatticeTabsVariant.Subordinate"
+                             Id="@AccessSurfaces.StripElementId"
                              Class="lxa-tabs">
             <TrailingContent>
                 <button type="button" class="lx-btn lxa-refresh-action"

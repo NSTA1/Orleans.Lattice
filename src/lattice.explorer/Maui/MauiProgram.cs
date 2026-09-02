@@ -16,6 +16,7 @@ using Orleans.Lattice.Explorer.Plugins.MyTenant;
 using Orleans.Lattice.Explorer.Plugins.Telemetry;
 using Orleans.Lattice.Explorer.Schema;
 using Orleans.Lattice.Explorer.Plugins.Tenants;
+using Orleans.Lattice.Explorer.UI.Appearance;
 using Orleans.Lattice.Explorer.UI.Authentication;
 using Orleans.Lattice.Explorer.UI.Plugins;
 
@@ -72,6 +73,14 @@ public static class MauiProgram
         // driven by LatticeAdaptiveRoot and read by every design-system
         // primitive.
         builder.Services.AddLatticeExplorerDesignSystem();
+
+        // Theme, contrast and density, remembered per user through the preference
+        // contract. Unlike the web head this one registers a host theme: a MAUI
+        // application carries its own requested theme, which does not necessarily
+        // match what the embedded web view reports, so "follow the system" tracks
+        // the application (and follows a theme switch made while it is running).
+        builder.Services.AddScoped<IExplorerHostTheme, MauiHostTheme>();
+        builder.Services.AddExplorerAppearance();
 
         // The desktop head persists UI preferences to the platform preference
         // store, overriding the in-memory fallback backing store.

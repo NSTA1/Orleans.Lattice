@@ -48,12 +48,100 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "(0 persists the leaf-access model only on clean deactivation; a positive value is the coalescing "
                 + "window in milliseconds for the shard-root flush timer).");
         }
+        if (options.LeafHydrationResidentBytes < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafHydrationResidentBytes)} must be greater than or equal to 0 "
+                + "(0 leaves a partially hydrated leaf's resident snapshot footprint unbounded so nothing is ever "
+                + "evicted; a positive value caps it and evicts the least recently used clean hydrated ranges).");
+        }
         if (options.MaxClusterConcurrentAutoSplits is { } maxClusterConcurrentAutoSplits && maxClusterConcurrentAutoSplits < 1)
         {
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.MaxClusterConcurrentAutoSplits)} must be greater than or equal to 1 when set "
                 + "(null disables the cluster-wide split gate so each tree enforces only its own MaxConcurrentAutoSplits; "
                 + "a positive value caps the aggregate number of concurrently in-flight autonomic splits across all trees).");
+        }
+        if (double.IsNaN(options.HotShardMinSkewRatio) || options.HotShardMinSkewRatio < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardMinSkewRatio)} must be a non-negative number "
+                + "(it is the ratio of the hottest shard's rate to the tree's median shard rate at which an "
+                + "autonomic split is admitted; a value at or below 1.0 disables the skew gate).");
+        }
+        if (double.IsNaN(options.HotShardConsolidationSkewRatio) || options.HotShardConsolidationSkewRatio < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardConsolidationSkewRatio)} must be a non-negative number "
+                + "(it is the load-skew ratio at or below which a tree counts as uniformly loaded and therefore "
+                + "eligible for shard consolidation).");
+        }
+        if (options.HotShardMinSkewRatio > 1d
+            && options.HotShardConsolidationSkewRatio >= options.HotShardMinSkewRatio)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardConsolidationSkewRatio)} must be strictly less than "
+                + $"{nameof(LatticeOptions.HotShardMinSkewRatio)} "
+                + "(the interval between them is the hysteresis dead band separating the split trigger from the "
+                + "consolidation trigger; overlapping trigger regions let the two control loops oscillate, "
+                + "splitting a tree and immediately consolidating it again).");
+        }
+        if (options.HotShardMinShardEntries < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.HotShardMinShardEntries)} must be greater than or equal to 0 "
+                + "(0 disables the occupancy floor and its per-candidate probe; a positive value is the minimum "
+                + "number of live entries a shard must hold before an autonomic split can relieve anything).");
+        }
+        if (options.ConsolidationDrainBatchSize < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ConsolidationDrainBatchSize)} must be greater than or equal to 1 "
+                + "(it is the number of donor entries the online shard-consolidation coordinator accumulates per "
+                + "MergeManyAsync flush to the survivor; there is no meaningful 'disabled' value, because a fold that "
+                + "flushes no entries could never drain the donor).");
+        }
+        if (options.ConsolidationDrainLeavesPerPass < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ConsolidationDrainLeavesPerPass)} must be greater than or equal to 1 "
+                + "(it is the number of donor leaves the online shard-consolidation coordinator visits per background "
+                + "pass; 0 would visit no leaf per pass, so a fold would never make progress and would sit in its "
+                + "drain phase indefinitely rather than being disabled).");
+        }
+        if (options.MaxConcurrentShardConsolidations < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxConcurrentShardConsolidations)} must be greater than or equal to 0 "
+                + "(0 admits no online shard consolidation at all, which is the supported way to switch automated "
+                + "shard healing off; a positive value caps how many folds a driver may run concurrently against "
+                + "one tree).");
+        }
+        if (options.ShardHealingInterval <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ShardHealingInterval)} must be greater than zero "
+                + "(it is the cadence at which the healing orchestrator observes a tree's shape and admits at most "
+                + "one consolidation; a non-positive interval could never schedule an observation, so it is rejected "
+                + $"rather than treated as disabled - set {nameof(LatticeOptions.ShardHealingEnabled)} to false to "
+                + "switch automatic over-split healing off).");
+        }
+        if (options.ShardHealingCooldown < TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ShardHealingCooldown)} must be greater than or equal to zero "
+                + "(zero disables the post-split stand-off window, leaving only the skew dead band between the split "
+                + "and consolidation triggers; a positive value is how long healing waits after observing a split "
+                + "before consolidating the same tree).");
+        }
+        if (double.IsNaN(options.ShardHealingBackpressureOpsPerSecond)
+            || options.ShardHealingBackpressureOpsPerSecond < 0)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.ShardHealingBackpressureOpsPerSecond)} must be a non-negative number "
+                + "(0 disables backpressure so healing proceeds regardless of load; a positive value is the tree's "
+                + "median shard rate in operations per second at or above which healing yields to foreground "
+                + "traffic).");
         }
         if (options.MaxLiveKeys is { } maxLiveKeys && maxLiveKeys < 1)
         {

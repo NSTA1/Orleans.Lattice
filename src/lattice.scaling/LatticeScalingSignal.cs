@@ -161,7 +161,7 @@ internal sealed class LatticeScalingSignal : ILatticeScalingSignal, IHostedServi
             var compute = await _computeCollector.CollectAsync(cancellationToken).ConfigureAwait(false);
             var storage = await _storageCollector.CollectAsync(cancellationToken).ConfigureAwait(false);
             var replicas = await _replicaCountProvider.GetActiveReplicaCountAsync(cancellationToken).ConfigureAwait(false);
-            var splitInFlight = _splitProbe.AnySplitInFlight();
+            var splitInFlight = await _splitProbe.AnySplitInFlightAsync(cancellationToken).ConfigureAwait(false);
             var now = _timeProvider.GetUtcNow();
 
             var signal = _computer.Compute(compute, storage, replicas, splitInFlight, now);

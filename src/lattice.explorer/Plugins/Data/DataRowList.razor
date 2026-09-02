@@ -53,12 +53,14 @@
                         string.Equals(entry.Key, SelectedKey, StringComparison.Ordinal)
                             ? "lx-data-key is-selected"
                             : "lx-data-key");
-                    builder.AddAttribute(3, "title", entry.Key);
+                    // No title attribute: the key is the button's own text, and
+                    // the detail pane shows it in full once a row is chosen, so
+                    // the tooltip only duplicated the accessible name.
                     builder.AddAttribute(
-                        4,
+                        3,
                         "onclick",
                         EventCallback.Factory.Create(this, () => OnSelect.InvokeAsync(entry.Key)));
-                    builder.AddContent(5, entry.Key);
+                    builder.AddContent(4, entry.Key);
                     builder.CloseElement();
                 },
             },
@@ -75,9 +77,12 @@
                 {
                     if (entry.IsTombstone)
                     {
+                        // The whole word, not "tomb": an abbreviation with its
+                        // meaning nowhere on the page is the defect this epic
+                        // removes, and the column has room for it.
                         builder.OpenElement(0, "span");
                         builder.AddAttribute(1, "class", "lx-data-flag lx-data-flag-tomb");
-                        builder.AddContent(2, "tomb");
+                        builder.AddContent(2, "tombstone");
                         builder.CloseElement();
                     }
 

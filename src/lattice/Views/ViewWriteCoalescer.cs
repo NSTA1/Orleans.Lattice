@@ -23,8 +23,16 @@ public static class ViewWriteCoalescer
     {
         ArgumentNullException.ThrowIfNull(writes);
 
-        var index = new Dictionary<string, int>(StringComparer.Ordinal);
-        var survivors = new List<ViewWrite>();
+        // Presize both buffers to the batch size when it is cheaply known (the
+        // maintainer always passes a materialised List), so the survivor list and
+        // the key index do not regrow their backing arrays as the batch is folded.
+        // The capacity is bounded by the actual input count - at most one survivor
+        // and one index entry per input write - so a small batch presizes small;
+        // this is not the fixed-batchSize presize that over-allocates on sparse
+        // drains.
+        var capacity = writes.TryGetNonEnumeratedCount(out var count) ? count : 0;
+        var index = new Dictionary<string, int>(capacity, StringComparer.Ordinal);
+        var survivors = new List<ViewWrite>(capacity);
 
         foreach (var write in writes)
         {

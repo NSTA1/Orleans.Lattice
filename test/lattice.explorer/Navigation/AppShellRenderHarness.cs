@@ -6,6 +6,7 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Connection;
+using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.DesignSystem.Layout;
 using Orleans.Lattice.Explorer.DesignSystem.Tokens;
 using Orleans.Lattice.Explorer.Plugins;
@@ -56,13 +57,11 @@ internal static class AppShellRenderHarness
     /// </summary>
     /// <param name="breakpoint">The breakpoint to cascade.</param>
     /// <param name="isCatalogOpen">Whether the compact catalog drawer starts open.</param>
-    /// <param name="isOverflowOpen">Whether the area strip's overflow menu starts open.</param>
     /// <param name="plugins">The area plugins the container yields.</param>
     /// <returns>The rendered markup.</returns>
     public static async Task<string> RenderAsync(
         LatticeBreakpoint breakpoint = LatticeBreakpoint.Expanded,
         bool isCatalogOpen = false,
-        bool isOverflowOpen = false,
         params IExplorerPlugin[] plugins)
     {
         await using var provider = BuildServices(plugins);
@@ -83,7 +82,6 @@ internal static class AppShellRenderHarness
                     builder.AddComponentParameter(1, nameof(AppShell.Catalog), CatalogFragment());
                     builder.AddComponentParameter(2, nameof(AppShell.ChildContent), DetailFragment());
                     builder.AddComponentParameter(3, nameof(AppShell.IsCatalogOpen), isCatalogOpen);
-                    builder.AddComponentParameter(4, nameof(AppShell.IsOverflowOpen), isOverflowOpen);
                     builder.CloseComponent();
                 }),
             });
@@ -167,6 +165,14 @@ internal static class AppShellRenderHarness
 
         var services = new ServiceCollection();
         services.AddLogging();
+
+        // The shell reads its active area from the router and its "hide what I
+        // cannot use" preference from the declared contract, so the harness
+        // registers the real session stack rather than substituting either: the
+        // route model is a pure in-memory type and the preference backing store
+        // defaults to an in-memory one, so nothing here reaches a browser.
+        services.AddExplorerSession();
+
         services.AddSingleton<IExplorerPluginCatalog>(catalog);
         services.AddSingleton<IExplorerPluginAccessStore>(store);
         services.AddSingleton(hostState);

@@ -1,0 +1,58 @@
+@page "/reset-view"
+@using Microsoft.AspNetCore.Components.Web
+
+@*
+    The reset-view escape: the addressable, always-reachable way to forget
+    everything the Explorer remembers about how you like the shell and where you
+    were.
+
+    It lives at its own lower-case route rather than as a control buried in the
+    chrome for a reason. A user who needs it most is usually a user whose
+    remembered state is the problem - a view pinned to a tenant they can no
+    longer see, or a surface that no longer resolves - so the escape must not
+    depend on that chrome rendering correctly. A typed or bookmarked address
+    always works.
+
+    Resetting is deliberately an explicit action rather than something that
+    happens on arrival, so following a link cannot silently discard somebody's
+    preferences. It clears only this identity's own UI preferences: no cluster
+    data, no sign-in, and no other user's or cluster's remembered view, because
+    the contract scopes every key.
+*@
+
+<PageTitle>Reset view</PageTitle>
+
+<h1>Reset view</h1>
+
+@if (_reset)
+{
+    <p role="status">
+        The Explorer has forgotten your remembered view. It will start from its
+        default the next time you open it.
+    </p>
+    <p>
+        <a href="/">Back to the Explorer</a>
+    </p>
+}
+else
+{
+    <p>
+        The Explorer remembers a few things about how you like it and where you
+        were last time. Resetting forgets all of them for the account and cluster
+        you are connected to now, and affects nothing else - no cluster data, and
+        no sign-in.
+    </p>
+
+    <p>What is remembered:</p>
+    <ul>
+        @foreach (var key in Preferences.Keys)
+        {
+            <li>@key.Description</li>
+        }
+    </ul>
+
+    <p>
+        <button type="button" disabled="@_busy" @onclick="_resetClicked">Reset view</button>
+        <a href="/">Cancel</a>
+    </p>
+}

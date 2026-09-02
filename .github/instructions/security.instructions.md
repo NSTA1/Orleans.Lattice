@@ -1,5 +1,5 @@
 ---
-applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.telemetry/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**"
+applyTo: "src/lattice.api.mcp/**,src/lattice.api.mcp.telemetry/**,src/lattice.explorer/**,src/lattice.explorer.entra/**,src/lattice.replication/**,src/lattice.replication.grpc/**,src/lattice.membership/**,src/lattice.membership.entra/**,src/lattice.membership.entra.graph/**,src/lattice.membership.oidc/**,src/lattice.api.auth/**,src/lattice.api.auth.grpc/**"
 ---
 
 # Security Boundaries and Invariants

@@ -107,6 +107,14 @@
     gap: var(--lx-space-4);
 }
 
+/* The one-line instruction above a list of activatable rows. It replaces a
+   per-row title attribute, which no keyboard or touch caller could reach. */
+.lx-tagindex-hint {
+    color: var(--lx-color-text-muted);
+    font-size: var(--lx-text-caption);
+    margin: 0 0 var(--lx-space-2);
+}
+
 .lx-tagindex-treelist,
 .lx-tagindex-taglist {
     list-style: none;

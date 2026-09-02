@@ -47,6 +47,7 @@ siloBuilder.AddLatticeScalingSignal(options =>
 | `ResourceScaleInThreshold` | `double` | `0.25` | Resource-pressure level (0..1) at or above which the resource dimension is too hot to permit scale-in. |
 | `WalDispatchScaleInThreshold` | `double` | `0.25` | WAL-dispatch-pressure level (0..1) at or above which the WAL-dispatch dimension is too hot to permit scale-in. |
 | `ActivationWorkingSetTarget` | `int` | `100000` | Per-silo grain-activation count treated as full activation saturation. Activation pressure is `activationCount / target`, clamped to 0..1. Size it to the activation count at which a silo's memory or scheduler starts to strain. |
+| `SplitAwareScaleIn` | `bool` | `true` | Whether the scale-in gate is suppressed while any adaptive shard split is in flight cluster-wide. Reads `ILatticeAdmin.GetSplitActivityAsync` once per `SampleInterval` - a single call to the split-admission singleton, never a fan-out. Set to `false` to make the axis inert (a deployment with autonomic splitting disabled, where the query is pure overhead). Scale-**out** is never influenced either way. See [split-aware scale-in](architecture.md#split-aware-scale-in). |
 
 ### Storage axis
 

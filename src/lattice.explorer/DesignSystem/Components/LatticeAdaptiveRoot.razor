@@ -70,15 +70,17 @@
     {
         var breakpoint = _viewport?.Breakpoint ?? LatticeBreakpoints.Default;
         var isMeasured = _viewport?.IsMeasured ?? false;
+        var width = _viewport?.MeasuredWidth;
 
         if (_context.Breakpoint == breakpoint
             && _context.Density == Density
-            && _context.IsMeasured == isMeasured)
+            && _context.IsMeasured == isMeasured
+            && _context.ViewportWidth == width)
         {
             return;
         }
 
-        _context = new LatticeAdaptiveContext(breakpoint, Density, isMeasured);
+        _context = new LatticeAdaptiveContext(breakpoint, Density, isMeasured, width);
     }
 
     /// <inheritdoc />

@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.Core.Vocabulary;
 using Orleans.Lattice.Explorer.Plugins;
 using Orleans.Lattice.Explorer.Plugins.Tenancy;
 using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
@@ -5,7 +6,7 @@ using Orleans.Lattice.Explorer.Plugins.Tenants.Views;
 namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 
 /// <summary>
-/// The Tenants (platform-operator tenant management) area as a plugin: its
+/// The tenant administration (platform-operator) area as a plugin: its
 /// descriptor, the panel the shell renders for it, its own access gate, and the
 /// single domain contract its views operate against.
 /// <para>
@@ -18,21 +19,30 @@ namespace Orleans.Lattice.Explorer.Plugins.Tenants;
 /// </para>
 /// </summary>
 /// <remarks>
+/// <para>
 /// Declaring <see cref="IExplorerPlugin{TDomain}"/> states the plugin's reach in
 /// the type system: the host resolves <see cref="ITenancyDomain"/> for it and
-/// nothing else, so what the Tenants surface can touch is a compile-time fact
-/// (epic decision D3). It reuses the shared tenancy seam's domain model rather
-/// than declaring one of its own, because that contract is precisely "the whole
-/// of what a tenancy plugin may reach" and a second copy would be a second place
-/// to widen it.
+/// nothing else, so what this surface can touch is a compile-time fact (epic
+/// decision D3). It reuses the shared tenancy seam's domain model rather than
+/// declaring one of its own, because that contract is precisely "the whole of
+/// what a tenancy plugin may reach" and a second copy would be a second place to
+/// widen it.
+/// </para>
+/// <para>
+/// The area is labelled <see cref="ExplorerVocabulary.TenantAdministrationArea"/>
+/// and never the bare word "Tenants". Beside
+/// <see cref="ExplorerVocabulary.MyTenantArea"/> that word said nothing about
+/// which of the two areas administered whose tenants, and the shell rendered
+/// both in the same strip.
+/// </para>
 /// </remarks>
-/// <param name="gate">The Tenants plugin's own four-state access gate.</param>
+/// <param name="gate">The plugin's own four-state access gate.</param>
 public sealed class TenantsAreaPlugin(TenantsAccessGate gate) : IExplorerPlugin<ITenancyDomain>
 {
     private static readonly ExplorerPluginDescriptor Registration = new()
     {
         PluginId = TenantsPluginKeys.PluginId,
-        Label = "Tenants",
+        Label = ExplorerVocabulary.TenantAdministrationArea,
         Surface = ExplorerPluginSurface.Area,
         // Last of the area tier: after Backups (100), Access (200), and Schema
         // (300). An operator reaches tenant administration less often than any

@@ -91,6 +91,91 @@ public sealed class LatticeBackupServiceCollectionExtensionsTests
         });
     }
 
+    [Test]
+    public void ConfigureLatticeBackupSchedule_with_scopeKey_and_null_builder_throws()
+    {
+        // Line 244: null-builder guard on the overload that takes a scopeKey.
+        Assert.That(
+            () => ((ISiloBuilder)null!).ConfigureLatticeBackupSchedule("my-scope", _ => { }),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ConfigureLatticeBackupSchedule_with_null_or_empty_scopeKey_throws()
+    {
+        // Line 245: null/empty scopeKey guard.
+        var builder = new FakeSiloBuilder();
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => builder.ConfigureLatticeBackupSchedule(null!, _ => { }),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(
+                () => builder.ConfigureLatticeBackupSchedule("", _ => { }),
+                Throws.InstanceOf<ArgumentException>());
+        });
+    }
+
+    [Test]
+    public void ConfigureLatticeBackupSchedule_with_scopeKey_and_null_configure_throws()
+    {
+        // Line 246: null-configure guard on the scoped overload.
+        var builder = new FakeSiloBuilder();
+        Assert.That(
+            () => builder.ConfigureLatticeBackupSchedule("my-scope", null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ConfigureLatticeBackupSchedule_with_scopeKey_layers_options_under_that_name()
+    {
+        // Line 247: the Configure call with a named options section.
+        var builder = new FakeSiloBuilder();
+
+        builder.ConfigureLatticeBackupSchedule("my-scope", o => o.RetentionEnabled = true);
+
+        var opts = builder.Services
+            .BuildServiceProvider()
+            .GetRequiredService<IOptionsMonitor<LatticeBackupScheduleOptions>>()
+            .Get("my-scope");
+
+        Assert.That(opts.RetentionEnabled, Is.True);
+    }
+
+    [Test]
+    public void ConfigureLatticeBackupHealth_with_null_builder_throws()
+    {
+        // Line 267: null-builder guard on ConfigureLatticeBackupHealth.
+        Assert.That(
+            () => ((ISiloBuilder)null!).ConfigureLatticeBackupHealth(_ => { }),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ConfigureLatticeBackupHealth_with_null_configure_throws()
+    {
+        // Line 268: null-configure guard.
+        var builder = new FakeSiloBuilder();
+        Assert.That(
+            () => builder.ConfigureLatticeBackupHealth(null!),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void ConfigureLatticeBackupHealth_layers_the_options_delegate()
+    {
+        // Lines 269-270: the successful path - options delegate is applied.
+        var builder = new FakeSiloBuilder();
+        builder.ConfigureLatticeBackupHealth(o => o.Enabled = false);
+
+        var opts = builder.Services
+            .BuildServiceProvider()
+            .GetRequiredService<IOptions<LatticeBackupHealthOptions>>()
+            .Value;
+
+        Assert.That(opts.Enabled, Is.False);
+    }
+
     private sealed class PassthroughLatticeOptionsValidator : IValidateOptions<LatticeOptions>
     {
         public ValidateOptionsResult Validate(string? name, LatticeOptions options) =>

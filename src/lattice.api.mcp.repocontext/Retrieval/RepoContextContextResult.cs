@@ -38,6 +38,19 @@ public sealed record RepoContextContextResult
     public required string Mode { get; init; }
 
     /// <summary>
+    /// The precise retrieval path the underlying search took, from the closed
+    /// <see cref="RepoContextRetrievalPath"/> vocabulary. It rides <b>alongside</b>
+    /// <see cref="Mode"/> without changing it, and disambiguates what <see cref="Mode"/>
+    /// cannot: whether a semantic answer had complete or bounded recall, and - when the
+    /// answer was a keyword scan - whether that is an intended keyword-only deployment
+    /// (<see cref="RepoContextRetrievalPath.KeywordNoEmbedder"/>) or a real capability
+    /// loss (<see cref="RepoContextRetrievalPath.KeywordVectorPlaneUnavailable"/> or
+    /// <see cref="RepoContextRetrievalPath.KeywordIndexDegraded"/>). Always server-derived
+    /// and never <see langword="null"/>.
+    /// </summary>
+    public required string RetrievalPath { get; init; }
+
+    /// <summary>
     /// The concrete detail level the bundle was packed at - <c>"paths"</c>,
     /// <c>"outline"</c>, or <c>"slices"</c> - after resolving an
     /// <see cref="RepoContextContextDetail.Auto"/> request. Never <c>"auto"</c>.

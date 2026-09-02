@@ -75,4 +75,15 @@ public sealed class GrainKeyCodecTests
 
         Assert.That(codec, Is.SameAs(GrainKeyCodec.CreateDefault<ITestGuidKeyedGrain>()));
     }
+
+    [Test]
+    public void Create_default_throws_a_typed_failure_for_an_integer_ambiguously_keyed_grain()
+    {
+        // Line 128: the integer key interface is detected, and together with the
+        // Guid key interface the grain has two key shapes -> ambiguity error.
+        Assert.That(
+            GrainKeyCodec.CreateDefault<ITestIntegerAmbiguouslyKeyedGrain>,
+            Throws.TypeOf<GrainIndexKeyEncodingException>()
+                .With.Message.Contains("more than one"));
+    }
 }

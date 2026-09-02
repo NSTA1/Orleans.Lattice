@@ -1,4 +1,43 @@
 @page "/"
+@page "/explore"
+@page "/explore/{kind}"
+@page "/explore/{kind}/{id}"
+@page "/explore/{kind}/{id}/{surface}"
+@page "/area"
+@page "/area/{area}"
+@page "/area/{area}/{kind}"
+@page "/area/{area}/{kind}/{id}"
+@page "/area/{area}/{kind}/{id}/{surface}"
+
+@*
+    The Explorer's routable shell surface, and the one place the shell's route
+    model is bound to the browser.
+
+    Every template but the bare "/" begins with a LITERAL segment, and that is
+    load-bearing rather than stylistic. The Explorer is an embeddable library
+    mounted under a caller-chosen prefix, sharing that mount with framework and
+    static assets (_framework/**, _content/**, published files). A template whose
+    first segment is a parameter - and a root catch-all most of all - matches
+    those too, so an asset request renders the whole admin console at an asset URL
+    and comes back carrying two Content-Security-Policy headers, which browsers
+    resolve as the intersection of both policies. Literal-first makes that
+    impossible by construction instead of relying on route precedence, and it
+    survives being rebased under a base path, which a root catch-all does not.
+
+    The home area owns the literal 'explore'. A contributed area's slug is only
+    known at run time, so it cannot own a literal and is namespaced under '/area/'
+    instead - one extra segment, in exchange for no contributed slug ever being
+    able to collide with an asset path.
+
+    The route parameters are declared because the templates name them, but they
+    are not read. The address is parsed from NavigationManager.Uri by
+    ExplorerRoutePath, because a selection id is cluster-owned and may contain a
+    slash (a tenant-owned tree is t/acme/orders); escaping it and parsing it here
+    is what keeps such an id addressable at all.
+
+    The markup is unchanged: the chrome around it belongs to the layout and the
+    app shell, and this page contributes only the detail surface it always did.
+*@
 
 <PageTitle>@ExplorerInfo.DisplayName</PageTitle>
 

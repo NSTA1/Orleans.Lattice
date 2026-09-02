@@ -29,8 +29,9 @@
                     var actions = Actions(group);
                     <li class="@(id == State.SelectedGroupId ? SelectedRowClass : RowClass)"
                         @onclick="actions.Select">
-                        <span class="lxa-itemlabel" title="@id">
+                        <span class="lxa-itemlabel">
                             <span class="lxa-itemid">@(string.IsNullOrWhiteSpace(group.DisplayName) ? id : group.DisplayName)</span>
+                            <span class="lx-visually-hidden">, group id @id</span>
                         </span>
                         <button type="button" class="lx-btn lxa-edit"
                                 disabled="@(State.Busy || !State.Allowed)"

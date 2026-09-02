@@ -33,6 +33,10 @@
     {
         @if (Members.Count > 0)
         {
+            @* Said once rather than as a per-row title attribute: a tooltip on
+               every key was unreachable by keyboard and invisible on touch, and
+               this costs nothing per row. *@
+            <p class="lx-tagindex-hint">Choose a key to open it in its tree.</p>
             <div class="lx-tagindex-pager">
                 <button type="button" class="lx-btn"
                         disabled="@(Loading || !CanGoPrevious)"
@@ -115,12 +119,11 @@
                     builder.OpenElement(0, "button");
                     builder.AddAttribute(1, "type", "button");
                     builder.AddAttribute(2, "class", "lx-tagindex-memberlink");
-                    builder.AddAttribute(3, "title", "Open this key in its tree");
                     builder.AddAttribute(
-                        4,
+                        3,
                         "onclick",
                         EventCallback.Factory.Create(this, () => OnOpenMember.InvokeAsync(member)));
-                    builder.AddContent(5, member.Key);
+                    builder.AddContent(4, member.Key);
                     builder.CloseElement();
                 },
             },

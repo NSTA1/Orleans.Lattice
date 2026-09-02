@@ -95,4 +95,87 @@ public partial class LatticeStateConnectionTests
             Assert.That(connection.Status.State, Is.EqualTo(LatticeConnectionState.Faulted));
         });
     }
+
+    [Test]
+    public async Task PermissionDenied_isDistinguishedFromAnUnauthenticatedRefusal()
+    {
+        // Both are auth failures, so RequiresAuthentication cannot tell them
+        // apart - and a surface that only reads that flag offers "sign in" to a
+        // caller who is already signed in and merely lacks the grant.
+        var client = new FakeStateClient();
+        var (connection, _) = NewConnection(_ => client);
+        await connection.ConfigureAsync(Settings());
+        client.ListTreesHandler = _ => throw Denied();
+
+        LatticeStateApiException? captured = null;
+        try
+        {
+            await connection.ListTreesAsync(new CatalogRequest());
+        }
+        catch (LatticeStateApiException ex)
+        {
+            captured = ex;
+        }
+
+        Assert.That(captured, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured!.RequiresAuthentication, Is.True);
+            Assert.That(captured.IsPermissionDenied, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task AnUnauthenticatedRefusal_isNotReportedAsAMissingGrant()
+    {
+        var client = new FakeStateClient();
+        var (connection, _) = NewConnection(_ => client);
+        await connection.ConfigureAsync(Settings());
+        client.ListTreesHandler = _ => throw Permanent();
+
+        LatticeStateApiException? captured = null;
+        try
+        {
+            await connection.ListTreesAsync(new CatalogRequest());
+        }
+        catch (LatticeStateApiException ex)
+        {
+            captured = ex;
+        }
+
+        Assert.That(captured, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured!.RequiresAuthentication, Is.True);
+            Assert.That(captured.IsPermissionDenied, Is.False, "signing in is the remedy here, not a grant");
+        });
+    }
+
+    [Test]
+    public async Task ATransientFault_isNeverReportedAsARefusal()
+    {
+        // The opposite error: classifying an unreachable cluster as a permission
+        // problem sends the reader to an administrator who cannot help them.
+        var client = new FakeStateClient();
+        var (connection, _) = NewConnection(_ => client);
+        await connection.ConfigureAsync(Settings() with { MaxTransientRetries = 0 });
+        client.ListTreesHandler = _ => throw Transient();
+
+        LatticeStateApiException? captured = null;
+        try
+        {
+            await connection.ListTreesAsync(new CatalogRequest());
+        }
+        catch (LatticeStateApiException ex)
+        {
+            captured = ex;
+        }
+
+        Assert.That(captured, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured!.RequiresAuthentication, Is.False);
+            Assert.That(captured.IsPermissionDenied, Is.False);
+        });
+    }
 }

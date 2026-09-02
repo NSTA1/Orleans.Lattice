@@ -71,6 +71,24 @@ public static class LatticeBreakpoints
     /// </summary>
     public const int ExpandedTabInlineCapacity = 8;
 
+    /// <summary>
+    /// The width, in CSS pixels, a <see cref="LatticeBreakpoint.Compact"/>
+    /// layout is sized against when no real viewport measurement is available.
+    /// </summary>
+    public const int CompactNominalWidth = 360;
+
+    /// <summary>
+    /// The width, in CSS pixels, a <see cref="LatticeBreakpoint.Medium"/>
+    /// layout is sized against when no real viewport measurement is available.
+    /// </summary>
+    public const int MediumNominalWidth = 768;
+
+    /// <summary>
+    /// The width, in CSS pixels, an <see cref="LatticeBreakpoint.Expanded"/>
+    /// layout is sized against when no real viewport measurement is available.
+    /// </summary>
+    public const int ExpandedNominalWidth = 1280;
+
     /// <summary>The stable name of <see cref="LatticeBreakpoint.Compact"/>.</summary>
     public const string CompactName = "compact";
 
@@ -143,6 +161,32 @@ public static class LatticeBreakpoints
     };
 
     /// <summary>
+    /// A representative viewport width, in CSS pixels, for
+    /// <paramref name="breakpoint"/>: what a layout is sized against when it
+    /// must measure but no real measurement has arrived.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MinimumWidth"/> answers "where does this band begin", which
+    /// is zero for compact and therefore useless as a width to size against.
+    /// This answers "how wide is a viewport in this band, typically", which is
+    /// what a measured layout needs. It is a fallback: a head that pushes a
+    /// real width through <see cref="Layout.ILatticeViewport.SetViewportWidth"/>
+    /// is measured against that instead.
+    /// </remarks>
+    /// <param name="breakpoint">The breakpoint to size for.</param>
+    /// <returns>The breakpoint's nominal width.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="breakpoint"/> is not a declared breakpoint.
+    /// </exception>
+    public static int NominalWidth(LatticeBreakpoint breakpoint) => breakpoint switch
+    {
+        LatticeBreakpoint.Compact => CompactNominalWidth,
+        LatticeBreakpoint.Medium => MediumNominalWidth,
+        LatticeBreakpoint.Expanded => ExpandedNominalWidth,
+        _ => throw new ArgumentOutOfRangeException(nameof(breakpoint), breakpoint, "Unknown breakpoint."),
+    };
+
+    /// <summary>
     /// The stable lowercase name of <paramref name="breakpoint"/>, as used by
     /// the <c>data-lx-breakpoint</c> attribute and the stylesheet selectors.
     /// Returns an interned literal, so this allocates nothing.
@@ -203,10 +247,17 @@ public static class LatticeBreakpoints
         breakpoint >= minimum;
 
     /// <summary>
-    /// The maximum number of tabs an adaptive tab strip renders inline at
+    /// The maximum number of tabs rendered inline in a tab strip at
     /// <paramref name="breakpoint"/> before it collapses the remainder into an
     /// overflow menu.
     /// </summary>
+    /// <remarks>
+    /// A fixed count per band cannot adapt to label length, so
+    /// <see cref="Components.LatticeAdaptiveTabs"/> now measures its own
+    /// capacity with <see cref="Layout.LatticeTabCapacity"/> instead. This
+    /// remains for a caller that has not migrated to the primitive and for a
+    /// surface that deliberately wants a fixed count.
+    /// </remarks>
     /// <param name="breakpoint">The breakpoint to size for.</param>
     /// <returns>The inline tab capacity, always at least one.</returns>
     /// <exception cref="ArgumentOutOfRangeException">

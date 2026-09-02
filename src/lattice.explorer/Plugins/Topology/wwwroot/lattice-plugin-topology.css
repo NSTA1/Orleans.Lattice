@@ -60,6 +60,13 @@
     color: var(--lx-color-warning);
 }
 
+/* The disclosure explaining the truncation marker sits beside it rather than
+   inside it, so the marker stays a plain word and the explanation is a real
+   focusable control instead of a tooltip. */
+.lx-topology-trunc-help {
+    margin-left: var(--lx-space-1);
+}
+
 .lx-topology-legend {
     display: inline-flex;
     align-items: center;
@@ -76,8 +83,8 @@
 }
 
 .lx-topo-swatch {
-    width: 14px;
-    height: 14px;
+    width: var(--lx-space-5);
+    height: var(--lx-space-5);
     border-radius: var(--lx-radius-sm);
     display: inline-block;
 }
@@ -146,6 +153,21 @@
     stroke: var(--lx-color-accent);
 }
 
+/*
+  An expandable node is a keyboard-reachable control, so it owes a visible focus
+  indicator. The ring is drawn as an outline rather than a box-shadow, because
+  forced-colors mode drops box-shadow outright and a focus ring that disappears
+  in high contrast is the case that needs it most.
+*/
+.lx-topo-node.is-expandable:focus-visible {
+    outline: var(--lx-focus-outline-width) solid var(--lx-color-focus-ring);
+    outline-offset: var(--lx-focus-outline-offset);
+}
+
+.lx-topo-node.is-expandable:focus-visible .lx-topo-dot {
+    stroke: var(--lx-color-focus-ring);
+}
+
 .lx-topo-badge {
     fill: var(--lx-color-accent-contrast);
     font-family: var(--lx-font-mono);
@@ -161,16 +183,33 @@
     pointer-events: none;
 }
 
-.lx-topology-state {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--lx-space-5);
-    padding: var(--lx-space-8);
-    color: var(--lx-color-text-muted);
-    font-size: var(--lx-text-body);
-}
+/*
+  The `.lx-topology-state` and `.lx-topology-error` rules that used to sit here
+  are gone with the inline state lines they styled. Loading, failed and empty
+  now come from the shared SelectionStateView, which carries tone as a class
+  rather than as a colour this stylesheet picked.
 
-.lx-topology-error {
-    color: var(--lx-color-danger);
+  Forced colours. The load ramp is the one place this package names a colour
+  value, and under a forced palette those five hues are replaced by the
+  platform's, so the ramp stops separating one bucket from the next. Give every
+  swatch and dot a system-coloured outline so they remain visible as shapes; the
+  load a node carries is also in its accessible name, so no information is lost
+  with the hue.
+*/
+@media (forced-colors: active) {
+    .lx-topo-swatch,
+    .lx-topo-dot {
+        forced-color-adjust: none;
+        background: Canvas;
+        fill: Canvas;
+        stroke: CanvasText;
+    }
+
+    .lx-topo-edge {
+        stroke: CanvasText;
+    }
+
+    .lx-topo-node.is-expandable:focus-visible {
+        outline-color: Highlight;
+    }
 }

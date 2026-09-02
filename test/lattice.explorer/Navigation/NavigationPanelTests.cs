@@ -6,6 +6,7 @@ using NSubstitute;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.DeadLetter;
+using Orleans.Lattice.Explorer.Core.Navigation;
 using Orleans.Lattice.Explorer.Core.Session;
 using Orleans.Lattice.Explorer.UI.Navigation;
 
@@ -43,19 +44,19 @@ public sealed class NavigationPanelTests
                     },
                 ],
             });
-        var preferences = Substitute.For<IUiPreferenceStore>();
-        preferences.IsLoaded.Returns(true);
-        preferences.GetOrDefault("nav-kind", CatalogKind.Trees).Returns(CatalogKind.Views);
-        preferences.GetOrDefault<CatalogItem?>("nav-selected", null).Returns((CatalogItem?)null);
-
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(catalog);
         services.AddSingleton(Substitute.For<IDeadLetterReader>());
         services.AddSingleton(Substitute.For<IExplorerSelection>());
         services.AddSingleton(Substitute.For<IExplorerSession>());
-        services.AddSingleton(preferences);
+        services.AddExplorerSession();
         await using var provider = services.BuildServiceProvider();
+
+        // The panel opens on the kind the address names, so the Views listing is
+        // reached by addressing it rather than by seeding a preference.
+        provider.GetRequiredService<IExplorerShellRouter>().SetAddress("/explore/views");
+
         var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
         await using var renderer = new HtmlRenderer(provider, loggerFactory);
 
@@ -67,8 +68,16 @@ public sealed class NavigationPanelTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(html, Does.Contain("title=\"Runtime projection provider\">app.region.v1</span>"));
-            Assert.That(html, Does.Contain("title=\"Projection version\">v3</span>"));
+            // The badges now spell themselves out instead of hiding the
+            // expansion in a title attribute, which is invisible on touch and
+            // unreachable by keyboard.
+            Assert.That(html, Does.Contain("app.region.v1"));
+            Assert.That(html, Does.Contain("v3"));
+            Assert.That(
+                html,
+                Does.Not.Contain("title=\"Runtime projection provider\""),
+                "the expansion is the visible text, not a tooltip");
+            Assert.That(html, Does.Not.Contain("title=\"Projection version\""));
         });
     }
 }

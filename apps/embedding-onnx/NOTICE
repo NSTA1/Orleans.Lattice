@@ -1,0 +1,37 @@
+Orleans.Lattice repository-context embedding companion (ONNX Runtime edition).
+
+This image bundles third-party components with the following notices.
+
+---------------------------------------------------------------------------
+Model weights: nomic-ai/nomic-embed-text-v1
+---------------------------------------------------------------------------
+
+The ONNX weights baked into this image are downloaded at build time from the
+HuggingFace repository `nomic-ai/nomic-embed-text-v1`, pinned to revision
+3ac47f125a41961d13b397d0332866be2f9152e1 and verified by SHA-256.
+
+The model is published by Nomic AI under the Apache License 2.0. No
+modification is made to the weights; they are copied into the image verbatim.
+
+  https://huggingface.co/nomic-ai/nomic-embed-text-v1
+
+---------------------------------------------------------------------------
+FastBertTokenizer
+---------------------------------------------------------------------------
+
+WordPiece tokenization is performed by the FastBertTokenizer package, which is
+licensed under the MIT License.
+
+  https://github.com/georg-jung/FastBertTokenizer
+
+The WordPiece vocabulary committed at assets/vocab.txt is the vocabulary file
+from the pinned model revision above, and carries that model's licence.
+
+---------------------------------------------------------------------------
+ONNX Runtime
+---------------------------------------------------------------------------
+
+Inference is performed by Microsoft.ML.OnnxRuntime, licensed under the MIT
+License.
+
+  https://github.com/microsoft/onnxruntime

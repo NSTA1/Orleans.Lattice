@@ -45,6 +45,14 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// This index is a brute-force scan of every stored vector in the query's embedding
+    /// space, so its recall is complete: it declares
+    /// <see cref="RepoContextRetrievalPath.SemanticExact"/>.
+    /// </remarks>
+    public string RetrievalPath => RepoContextRetrievalPath.SemanticExact;
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<RepoContextVectorMatch>> SearchAsync(
         string repoId,
         ReadOnlyMemory<float> query,
@@ -163,22 +171,8 @@ internal sealed class ExactKnnSemanticIndex : IRepoContextSemanticIndex
     }
 
     private float[]? DecodePayload(byte[] payloadBytes)
-    {
-        var payload = _serializer.Deserialize<VectorPayloadRecord>(payloadBytes);
-        var encoded = FirstElement(payload.Payload);
-        return encoded is null ? null : VectorCodec.Decode(encoded);
-    }
+        => RepoContextVectorPayloads.Decode(_serializer, payloadBytes);
 
     private readonly record struct PendingVector(
         string VectorId, string SourceKey, string PayloadKey, EmbeddingSpaceTag Space);
-
-    private static byte[]? FirstElement(GSet payload)
-    {
-        foreach (var element in payload.Elements)
-        {
-            return Convert.FromBase64String(element);
-        }
-
-        return null;
-    }
 }

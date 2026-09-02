@@ -3,13 +3,56 @@
 @using Orleans.Lattice.Explorer.DesignSystem.Components
 @implements IDisposable
 
+@*
+    The shell's outermost frame.
+
+    THE SKIP LINK IS THE FIRST TAB STOP, deliberately and structurally. The shell
+    puts a banner, a scope control, an identity control and a whole area rail
+    between the top of the document and the working surface, and a keyboard
+    caller met all of it again on every surface change. A same-page link to the
+    main landmark is the level-A remedy (WCAG SC 2.4.1 Bypass Blocks); it is
+    visually hidden until it takes focus, at which point it paints, because a
+    bypass a sighted keyboard caller cannot see is a bypass they cannot trust.
+
+    It is the first child of the shell body rather than of the document so that
+    it renders exactly when the surface it bypasses to does: pointing a skip link
+    at a main landmark that the configuration gate is currently withholding would
+    send a caller nowhere.
+*@
+
+@*
+    The router-to-browser binding is the FIRST thing the layout renders, and it
+    is deliberately outside the configuration gate and the adaptive root. It
+    renders nothing; what it does is keep the address bar and the route model in
+    step, and it must outlive every surface swap beneath it - the app shell stops
+    rendering its child content when a contributed area takes the working
+    surface, which disposes the routable page. When the binding lived on that
+    page, entering an area silently unbound the shell from the browser: the rail
+    could not get back to Explore and Back out of an area went unnoticed.
+*@
+<ShellRouteBinding />
+
 <CascadingValue Value="_login" IsFixed="true">
     <LatticeAdaptiveRoot>
         <div class="lx-shell">
             <ConfigurationGate>
                 <div class="lx-shell-body">
+                    @*
+                        The href is load-bearing and stays: it makes this a real
+                        link, gives it the right role and name for free, and is
+                        what works when script has not started. The click handler
+                        beside it is what actually performs the bypass - the
+                        framework intercepts a same-document anchor and updates
+                        the address itself instead of letting the browser perform
+                        a fragment navigation, and only a real fragment
+                        navigation moves the sequential focus navigation starting
+                        point. Without the handler the link announces a bypass
+                        and does not perform one, which is a documented way of
+                        failing SC 2.4.1 while appearing to satisfy it.
+                    *@
+                    <a class="lx-shell-skip" href="@_skipTarget" @onclick="_focusMain">Skip to main content</a>
                     <ClusterBadge />
-                    <AppShell>
+                    <AppShell @ref="_shell">
                         <Catalog>
                             <NavigationPanel />
                         </Catalog>
@@ -33,7 +76,30 @@
 </CascadingValue>
 
 @code {
+    // Composed once as a constant rather than interpolated per render: the
+    // layout re-renders on every sign-in dialog transition.
+    private const string _skipTarget = "#" + ExplorerShellRegions.Main;
+
     private readonly LoginDialogState _login = new();
+
+    private AppShell? _shell;
+
+    // Bound once rather than per render: the layout re-renders on every sign-in
+    // dialog transition, and a method group in the markup would allocate a
+    // delegate on each of them.
+    private readonly EventCallback<MouseEventArgs> _focusMain;
+
+    /// <summary>Creates the layout, caching the delegate the skip link binds.</summary>
+    public MainLayout() =>
+        _focusMain = EventCallback.Factory.Create<MouseEventArgs>(this, FocusMainAsync);
+
+    /// <summary>
+    /// Performs the bypass the skip link advertises. Tolerant of a shell that is
+    /// not mounted (the configuration gate can withhold it), in which case the
+    /// anchor's own fragment behaviour is all there is - and there is no main
+    /// landmark to land in either.
+    /// </summary>
+    private Task FocusMainAsync() => _shell?.FocusMainAsync().AsTask() ?? Task.CompletedTask;
 
     protected override void OnInitialized() => _login.Changed += OnLoginChanged;
 

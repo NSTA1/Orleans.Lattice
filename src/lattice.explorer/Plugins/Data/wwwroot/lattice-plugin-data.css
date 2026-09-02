@@ -86,29 +86,14 @@
     cursor: pointer;
 }
 
-.lx-data-infoicon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 15px;
-    height: 15px;
-    border-radius: var(--lx-radius-pill);
-    border: 1px solid var(--lx-color-border);
-    color: var(--lx-color-text-muted);
-    font-size: var(--lx-text-micro);
-    font-style: italic;
-    font-weight: var(--lx-weight-semibold);
-    line-height: 1;
-    cursor: help;
-    user-select: none;
-}
-
-.lx-data-infoicon:hover,
-.lx-data-infoicon:focus {
-    color: var(--lx-color-text);
-    border-color: var(--lx-color-text-muted);
-    outline: none;
-}
+/*
+  The `.lx-data-infoicon` rules that used to sit here are gone with the element
+  they styled. It was a tabindex="0" span carrying its whole explanation in a
+  title attribute - a control that took focus and then had nothing to give a
+  screen reader or a touch caller, with `cursor: help` and an `outline: none` on
+  focus that also removed the only sign it was focused. The explanation is now a
+  LatticeHelp disclosure, which the design system styles.
+*/
 
 .lx-data-pagenum {
     font-size: var(--lx-text-caption);

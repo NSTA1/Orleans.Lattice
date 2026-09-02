@@ -114,6 +114,26 @@ public sealed partial class AccessWorkspace : IDisposable
     }
 
     /// <summary>
+    /// Opens <paramref name="surfaceId"/> before the first load, without the
+    /// side effects <see cref="SelectSurfaceAsync"/> carries.
+    /// </summary>
+    /// <remarks>
+    /// Restoring an address or a remembered choice at mount is not the same act
+    /// as a caller switching surface: there is no form to close, no banner to
+    /// clear, and no data to reload, because the initial load has not run yet.
+    /// An id this area does not offer is ignored, so a value edited into the
+    /// address cannot open something that is not there.
+    /// </remarks>
+    /// <param name="surfaceId">The sub-surface id to open. May be <see langword="null"/>.</param>
+    public void OpenSurface(string? surfaceId)
+    {
+        if (AccessSurfaces.IsKnown(surfaceId))
+        {
+            ActiveSurfaceId = surfaceId!;
+        }
+    }
+
+    /// <summary>
     /// Activates <paramref name="surfaceId"/>, closing any open create / edit
     /// form so the caller always returns to the list-first view, and loading the
     /// newly activated surface's data if it has not been loaded yet.
@@ -121,7 +141,8 @@ public sealed partial class AccessWorkspace : IDisposable
     /// <param name="surfaceId">The sub-surface id to activate.</param>
     public async Task SelectSurfaceAsync(string surfaceId)
     {
-        if (string.Equals(ActiveSurfaceId, surfaceId, StringComparison.Ordinal))
+        if (!AccessSurfaces.IsKnown(surfaceId)
+            || string.Equals(ActiveSurfaceId, surfaceId, StringComparison.Ordinal))
         {
             return;
         }

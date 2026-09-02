@@ -1,22 +1,48 @@
-using Deque.AxeCore.Commons;
+using System.Text;
 using Deque.AxeCore.Playwright;
 using Microsoft.Playwright;
+using Orleans.Lattice.Explorer.DesignSystem.Tokens;
+using Orleans.Lattice.Explorer.UI.Appearance;
 
 namespace Orleans.Lattice.Explorer.UiTests;
 
 /// <summary>
-/// Automated accessibility baseline for the Explorer home surface. Runs the axe-core
-/// engine over the rendered shell and asserts zero critical/serious violations of the
-/// WCAG 2.0 A and AA rule sets, and additionally asserts every <c>role="tab"</c> reports
-/// a valid enumerated <c>aria-selected</c> value.
+/// The Explorer's automated accessibility gate: an axe-core sweep of the rendered
+/// shell against the WCAG 2.0, 2.1 and 2.2 A and AA rule sets, across both themes,
+/// all three breakpoint bands, both identities, and every area the shell offers.
 /// <para>
-/// The enumerated-attribute assertion is the capability that catches #1793 (an
-/// <c>aria-selected</c> bound to a bare <c>bool</c>, which Blazor renders as a valueless
-/// HTML boolean attribute rather than the enumerated <c>"true"</c>/<c>"false"</c> the
-/// ARIA spec requires). Note the axe sweep alone does <b>not</b> catch that exact
-/// regression - axe's <c>aria-required-attr</c> is satisfied by mere presence of the
-/// attribute and tolerates a valueless <c>aria-selected</c>. See <c>AxeMutationProof.md</c>
-/// in this directory for the recorded mutation-test result documenting this honestly.
+/// <b>Why the matrix.</b> Until issue #1849 this swept one cell - the signed-out home
+/// surface, at 1400x900, in the default dark theme, against <c>wcag2a</c> /
+/// <c>wcag2aa</c> alone. Each of those four narrowings hid a class of defect by
+/// construction rather than by accident: the 2.0-only tag set put SC 1.4.11 Non-text
+/// Contrast out of scope, which is exactly why borders measuring 1.21:1 passed; the
+/// single viewport never rendered the compact band, where the overflow menu is clipped
+/// at every width; the single theme never rendered the light palette, whose own dim
+/// text token was below AA and had to be found by hand; and the signed-out-only run
+/// never reached the areas the gates admit only once a credential is applied.
+/// </para>
+/// <para>
+/// <b>Why it cannot pass vacuously.</b> axe reports zero violations on a blank
+/// document, so a broken app sweeps cleanest. Every case therefore proves its own
+/// premises before asserting cleanliness: the shell rendered interactive content, the
+/// requested theme genuinely changed what the browser resolved, the design system
+/// genuinely classified the viewport into the requested band, the requested identity
+/// is genuinely the one rendered, and - the trap specific to widening the tag set -
+/// every requested WCAG tag genuinely resolved to rules axe evaluated. See
+/// <see cref="AccessibilityConformance"/>, which owns the last of those.
+/// </para>
+/// <para>
+/// <b>There is no allow-list and no mechanism to add one</b> - see
+/// <see cref="AccessibilityConformance"/> for that history. A finding is fixed or
+/// tracked as its own issue.
+/// </para>
+/// <para>
+/// axe is a net for the defects nobody anticipated, not a substitute for asserting a
+/// specific contract: it did not flag the valueless <c>aria-selected</c> of #1793, and
+/// it cannot see tab/panel binding, heading structure, a skip link, or keyboard
+/// operability at all. Those are asserted explicitly in
+/// <see cref="AccessibilityStructureTests"/>, and the standard both fixtures enforce
+/// is published in <c>ConformanceChecklist.md</c> beside them.
 /// </para>
 /// <para>
 /// Carries <c>[Category("Integration")]</c> in addition to <c>[Category("UI")]</c>
@@ -29,102 +55,246 @@ namespace Orleans.Lattice.Explorer.UiTests;
 [Category("Integration")]
 public sealed class AccessibilitySweepTests : UiTestBase
 {
-    private const int Width = 1400;
-    private const int Height = 900;
+    /// <summary>Every theme x breakpoint x identity cell the home surface is swept in.</summary>
+    public static IEnumerable<AccessibilityScenario> Scenarios() => AccessibilityScenario.All();
 
-    // The rule impacts that fail the build. axe classifies each violation as minor,
-    // moderate, serious, or critical; we gate on the two most severe.
-    private static readonly HashSet<string> BlockingImpacts =
-        new(StringComparer.OrdinalIgnoreCase) { "critical", "serious" };
+    /// <summary>Every breakpoint band, narrowest first.</summary>
+    public static IEnumerable<LatticeBreakpoint> Breakpoints() => LatticeBreakpoints.All;
 
-    // The WCAG 2.0 A and AA rule tags. Scoping the run to these keeps the baseline
-    // focused on established conformance criteria rather than best-practice advisories.
-    private static readonly List<string> WcagTags = ["wcag2a", "wcag2aa"];
+    /// <summary>
+    /// How many times the area walk re-reads the strip looking for an area whose gate
+    /// had not yet reported. Bounded so a strip that somehow never settles fails in
+    /// bounded time rather than looping; two passes suffice in practice.
+    /// </summary>
+    private const int MaxAreaSettlePasses = 4;
 
-    // There is deliberately no allow-list here. This sweep once carried one, holding
-    // a single entry: `color-contrast`, because the dark theme's --lx-color-text-dim
-    // (#5a6373 on the #0b0e14 canvas) measured 3.19:1 against the 4.5:1 WCAG AA
-    // minimum for normal text. That was a real defect in the design tokens rather
-    // than a shell-structure regression, so it was recorded and tracked as #1801
-    // instead of being suppressed silently.
-    //
-    // #1801 raised both palettes' dim token and removed the entry, which emptied the
-    // set. An empty allow-list plus the filter that consumed it is an invitation to
-    // refill it, so the mechanism went with it: every critical or serious violation
-    // of the scoped rule set now fails this test, with no exception to argue about.
-    // The tokens themselves are re-measured on every build by
-    // Orleans.Lattice.Explorer.Tests.TextContrastTokenHygieneTests, which does not
-    // need a browser and therefore runs in the required build-and-test check rather
-    // than in this advisory browser lane.
-
-    [Test]
-    public async Task Home_surface_has_no_critical_or_serious_wcag_violations()
+    [TestCaseSource(nameof(Scenarios))]
+    public async Task Home_surface_has_no_critical_or_serious_wcag_violations(AccessibilityScenario scenario)
     {
-        var page = await OpenHomeAsync(Width, Height);
-
-        // Guard against a false pass: axe finds zero violations on a blank document, so
-        // a home surface that never rendered would sweep clean and pass hardest exactly
-        // when the app is most broken. Assert the shell actually rendered interactive
-        // content first, so this test fails loudly rather than silently on an empty page.
-        await Assertions.Expect(page.Locator("[role=tab]").First).ToBeAttachedAsync();
-
-        var results = await page.RunAxe(new AxeRunOptions
-        {
-            RunOnly = new RunOnlyOptions { Type = "tag", Values = WcagTags },
-        });
-
-        var blocking = results.Violations
-            .Where(v => v.Impact is not null && BlockingImpacts.Contains(v.Impact))
-            .ToList();
-
-        Assert.That(blocking, Is.Empty, () => DescribeViolations(blocking));
+        var page = await OpenScenarioAsync(scenario);
+        await AssertSweepIsCleanAsync(page, $"the home surface ({scenario})");
     }
 
-    [Test]
-    public async Task Every_tab_reports_a_valid_enumerated_aria_selected_value()
+    /// <summary>
+    /// Sweeps every area the shell offers, not just the default home surface.
+    /// <para>
+    /// The areas are enumerated from the live strip rather than hard-coded, so an area
+    /// added to the catalogue, or newly admitted by a gate, is swept without editing
+    /// this file - and one silently withheld cannot be quietly dropped from the gate.
+    /// The run is at the expanded band in the dark theme because theme and breakpoint
+    /// are already crossed exhaustively on the home surface above; what this case adds
+    /// is the surface dimension, held against both identities because which areas are
+    /// reachable is exactly what a credential changes.
+    /// </para>
+    /// <para>
+    /// The strip is re-read until the set of offered areas stops growing, rather than
+    /// snapshotted once. Every gate reports asynchronously and every plugin's access
+    /// defaults to denied until it does, so a single read catches a strip mid-settle:
+    /// it can list an area that is about to be withdrawn, and - the reason this matters
+    /// for a gate rather than only for flakiness - it can miss one that has not yet been
+    /// admitted, silently narrowing "every area" to "every area that had reported by the
+    /// time we looked". Walking to a fixed point converges in two passes in practice,
+    /// because the first pass spends seconds running axe.
+    /// </para>
+    /// <para>
+    /// Failures are collected across every area rather than thrown at the first, so one
+    /// run reports the whole gate's state - which is what the issues downstream of this
+    /// one are measured against.
+    /// </para>
+    /// </summary>
+    /// <param name="signedIn">Whether to apply a credential before enumerating areas.</param>
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Every_offered_area_has_no_critical_or_serious_wcag_violations(bool signedIn)
     {
-        // Directly guards #1793. The ARIA spec defines aria-selected as an enumerated
-        // attribute whose only valid tokens are "true" and "false"; an "undefined"
-        // (absent) value is also permitted. A bare boolean-attribute form (rendered by
-        // Blazor when the value is a C# bool) produces aria-selected with no value, which
-        // no tab may report. axe does not flag this, so we assert it explicitly.
-        var page = await OpenHomeAsync(Width, Height);
+        var scenario = new AccessibilityScenario(ExplorerTheme.Dark, LatticeBreakpoint.Expanded, signedIn);
+        var page = await OpenScenarioAsync(scenario);
+        var identity = signedIn ? "signed in" : "signed out";
 
-        // Wait for the area tab strip to be attached before snapshotting the tab set.
-        // CountAsync is a point-in-time query with no auto-wait, so anchor on a
-        // web-first assertion first to avoid racing the circuit's initial render.
-        var tabs = page.Locator("[role=tab]");
-        await Assertions.Expect(tabs.First).ToBeAttachedAsync();
+        var failures = new StringBuilder();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var swept = new List<string>();
+        var unreachable = new List<string>();
 
-        var count = await tabs.CountAsync();
-        Assert.That(count, Is.GreaterThan(0), "Expected at least one role=tab element on the home surface.");
-
-        for (var i = 0; i < count; i++)
+        for (var pass = 0; pass < MaxAreaSettlePasses; pass++)
         {
-            var tab = tabs.Nth(i);
-            var hasAttribute = await tab.EvaluateAsync<bool>("el => el.hasAttribute('aria-selected')");
-            Assert.That(hasAttribute, Is.True, $"role=tab element at index {i} is missing aria-selected.");
+            var discovered = false;
 
-            var value = await tab.GetAttributeAsync("aria-selected");
-            Assert.That(
-                value,
-                Is.EqualTo("true").Or.EqualTo("false"),
-                $"role=tab element at index {i} has aria-selected=\"{value ?? "<null>"}\", "
-                + "which is not a valid enumerated value. A valueless (boolean-attribute) "
-                + "aria-selected renders as null here and is the exact #1793 regression.");
+            foreach (var label in await ExplorerShell.OfferedAreaLabelsAsync(page))
+            {
+                if (!seen.Add(label))
+                {
+                    continue;
+                }
+
+                discovered = true;
+
+                if (!await ExplorerShell.TryActivateAreaAsync(page, label))
+                {
+                    unreachable.Add(label);
+                    continue;
+                }
+
+                // Re-prove the premises after each activation: switching area re-renders
+                // the whole working surface, and an area that rendered nothing at all
+                // would otherwise sweep clean and be counted as covered.
+                await ExplorerShell.AssertShellRenderedAsync(page);
+                await ExplorerShell.AssertBreakpointAsync(page, scenario.Breakpoint);
+                swept.Add(label);
+
+                var surface = $"the '{label}' area ({identity})";
+
+                // Landmarks are checked here rather than only on the home surface,
+                // because the shell wraps its own home surface in a main element and
+                // renders an active area plugin directly. axe cannot see that: its
+                // landmark rules are best-practice tags outside the WCAG rule set this
+                // sweep scopes to.
+                await AccessibilityProbe.AssertLandmarksAsync(page, surface);
+
+                var results = await page.RunAxe(AccessibilityConformance.RunOptions);
+                AccessibilityConformance.AssertRuleSetIsNotVacuous(results, surface);
+
+                var blocking = AccessibilityConformance.BlockingViolations(results);
+                if (blocking.Count > 0)
+                {
+                    failures.AppendLine(AccessibilityConformance.Describe(blocking, surface));
+                }
+            }
+
+            if (!discovered)
+            {
+                break;
+            }
         }
+
+        var coverage = $"{identity}: swept [{string.Join(", ", swept)}]"
+            + (unreachable.Count == 0
+                ? string.Empty
+                : $"; unreachable [{string.Join(", ", unreachable)}]");
+
+        // Recorded on every run, pass or fail: which areas the gate actually covered is
+        // the evidence the epic's later issues are measured against, and a shrinking
+        // reachable set is itself a regression worth seeing in the log.
+        TestContext.Out.WriteLine(coverage);
+
+        Assert.That(swept, Is.Not.Empty, () =>
+            $"No area was reachable {identity}, so this case swept nothing and its result is "
+            + $"meaningless. Every area the strip offered was withheld, disabled, or required a "
+            + $"sign-in. {coverage}");
+
+        Assert.That(failures.Length, Is.Zero, () => coverage + Environment.NewLine + failures);
     }
 
-    private static string DescribeViolations(IReadOnlyList<AxeResultItem> violations)
+    /// <summary>
+    /// Directly guards #1793: the ARIA spec defines <c>aria-selected</c> as an
+    /// enumerated attribute whose only valid tokens are <c>"true"</c> and
+    /// <c>"false"</c>. A bare boolean-attribute form - which Blazor renders when the
+    /// value is a C# <c>bool</c> - produces <c>aria-selected</c> with no value, which no
+    /// tab may report. axe does not flag this: <c>aria-required-attr</c> is satisfied by
+    /// the attribute's mere presence. See <c>AxeMutationProof.md</c> in this directory
+    /// for the recorded mutation-test result documenting that honestly.
+    /// <para>
+    /// Run once per breakpoint band, because the band decides how many tabs render
+    /// inline and how many collapse into the overflow menu, so each band presents a
+    /// different set of elements to check.
+    /// </para>
+    /// <para>
+    /// Every tab is read from a single DOM snapshot rather than by indexing a live
+    /// locator: the strip re-renders as each access gate reports, so an index resolved
+    /// against the pre-settle strip can address a tab that has since been withdrawn, and
+    /// the test then times out on a missing element instead of reporting on the tabs
+    /// that are there. Reading the attribute in the page is still reading the parsed
+    /// DOM - <c>getAttribute</c> returns the empty string for a valueless attribute,
+    /// which is exactly the #1793 signal.
+    /// </para>
+    /// </summary>
+    /// <param name="breakpoint">The breakpoint band to render in.</param>
+    [TestCaseSource(nameof(Breakpoints))]
+    public async Task Every_tab_reports_a_valid_enumerated_aria_selected_value(LatticeBreakpoint breakpoint)
     {
-        var lines = violations.Select(v =>
-        {
-            var targets = string.Join("; ", v.Nodes.Select(n => n.Target?.ToString()));
-            return $"[{v.Impact}] {v.Id}: {v.Help} ({v.HelpUrl}){Environment.NewLine}    at: {targets}";
-        });
+        var page = await OpenHomeAsync(breakpoint);
+        await ExplorerShell.AssertShellRenderedAsync(page);
 
-        return "axe-core reported critical/serious WCAG 2 A/AA violations on the home surface:"
-            + Environment.NewLine
-            + string.Join(Environment.NewLine, lines);
+        var report = await AccessibilityProbe.RunAsync(page, EnumeratedAriaSelectedProbe);
+
+        Assert.That(report.Examined, Is.GreaterThan(0),
+            $"Expected at least one role=tab element at the {LatticeBreakpoints.Name(breakpoint)} "
+            + "band; with none, a clean result would say nothing.");
+
+        Assert.That(report.Problems, Is.Empty, () =>
+            $"{report.Problems.Count} of {report.Examined} tabs at the "
+            + $"{LatticeBreakpoints.Name(breakpoint)} band report an invalid aria-selected value. A "
+            + "valueless (boolean-attribute) aria-selected reads as an empty string here and is the "
+            + "exact #1793 regression."
+            + Environment.NewLine + report);
     }
+
+    /// <summary>
+    /// Opens the home surface in <paramref name="scenario"/>'s state and proves every
+    /// dimension of that state is genuinely in effect before any assertion is made
+    /// about the surface.
+    /// </summary>
+    private async Task<IPage> OpenScenarioAsync(AccessibilityScenario scenario)
+    {
+        var page = await OpenHomeAsync(scenario.Breakpoint);
+
+        if (scenario.SignedIn)
+        {
+            // Sign in before theming: the sign-in POST redirects home, so a second
+            // document loads and any attribute written on the first one is gone.
+            await ExplorerShell.SignInAsync(page);
+            await ExplorerShell.AssertBreakpointAsync(page, scenario.Breakpoint);
+        }
+        else
+        {
+            await ExplorerShell.AssertSignedOutAsync(page);
+        }
+
+        // Asserted after the identity is settled, not before: a sign-in lands a second
+        // document, so a strip proved to have rendered on the first one proves nothing
+        // about the one that is about to be swept.
+        await ExplorerShell.AssertShellRenderedAsync(page);
+        await ExplorerShell.ApplyThemeAsync(page, scenario.Theme);
+
+        // After the theme, because the overlay is selected by data-contrast
+        // ALONGSIDE data-theme: proving it took effect means resolving it against
+        // the palette this cell actually sweeps, not against whichever one the
+        // theme probe happened to leave behind.
+        await ExplorerShell.ApplyContrastAsync(page, scenario.Contrast);
+        return page;
+    }
+
+    private static async Task AssertSweepIsCleanAsync(IPage page, string surface)
+    {
+        var results = await page.RunAxe(AccessibilityConformance.RunOptions);
+        AccessibilityConformance.AssertRuleSetIsNotVacuous(results, surface);
+
+        var blocking = AccessibilityConformance.BlockingViolations(results);
+        Assert.That(blocking, Is.Empty, () => AccessibilityConformance.Describe(blocking, surface));
+    }
+
+    private const string EnumeratedAriaSelectedProbe =
+        """
+        () => {
+            const tabs = Array.from(document.querySelectorAll('[role=tab]'));
+            const problems = [];
+
+            for (const tab of tabs) {
+                const name = ((tab.textContent || '').trim() || tab.getAttribute('aria-label') || '<unlabelled>').slice(0, 40);
+
+                if (!tab.hasAttribute('aria-selected')) {
+                    problems.push('role=tab "' + name + '" is missing aria-selected entirely');
+                    continue;
+                }
+
+                const value = tab.getAttribute('aria-selected');
+                if (value !== 'true' && value !== 'false') {
+                    problems.push('role=tab "' + name + '" has aria-selected="' + value
+                        + '", which is not one of the enumerated values "true" or "false"');
+                }
+            }
+
+            return { examined: tabs.length, problems };
+        }
+        """;
 }

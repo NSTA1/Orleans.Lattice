@@ -38,6 +38,20 @@ public sealed class BackupConstantsTests
     }
 
     [Test]
+    public void AllTrees_contains_the_three_reserved_tree_names()
+    {
+        // Line 83: the AllTrees property getter.
+        Assert.That(
+            BackupConstants.AllTrees,
+            Is.EquivalentTo(new[]
+            {
+                BackupConstants.StoreTree,
+                BackupConstants.CatalogTree,
+                BackupConstants.HealthTree,
+            }));
+    }
+
+    [Test]
     public void PrefixUpperBound_never_sorts_at_or_below_the_prefix()
     {
         // The range-validity invariant that the bug violated: whenever a finite

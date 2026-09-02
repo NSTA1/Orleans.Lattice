@@ -36,6 +36,21 @@ public interface ILatticeViewport
     bool IsMeasured { get; }
 
     /// <summary>
+    /// The last viewport width supplied to <see cref="SetViewportWidth"/>, in
+    /// CSS pixels, or <see langword="null"/> when the head classifies its own
+    /// band through <see cref="SetBreakpoint"/> and never reports a width.
+    /// </summary>
+    /// <remarks>
+    /// A width is strictly more information than a band, and the primitives
+    /// that measure their own layout use it when it is there. It is optional
+    /// precisely because the browser observer classifies with
+    /// <c>matchMedia</c>, which reports a band crossing rather than a width, so
+    /// a shell in the default head reports no width and its primitives size
+    /// against <see cref="LatticeBreakpoints.NominalWidth"/> instead.
+    /// </remarks>
+    int? MeasuredWidth { get; }
+
+    /// <summary>
     /// Raised after <see cref="Breakpoint"/> changes to a different value.
     /// A measurement that resolves to the breakpoint already in effect does not
     /// raise it, so a resize within a breakpoint costs no re-render.

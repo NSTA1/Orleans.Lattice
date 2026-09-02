@@ -21,10 +21,15 @@
         <input type="checkbox" disabled="@Loading"
                checked="@(ScanMode == EntryScanMode.Snapshot)" @onchange="OnScanModeToggled" />
         Consistent snapshot
-        <span class="lx-data-infoicon" tabindex="0" role="img"
-              aria-label="Consistent snapshot scan mode explanation"
-              title="Off (default): a live scan reads current data cheaply, so entries written after you start paging can appear on later pages. On: a consistent snapshot freezes the table at the moment you open the scan, so every page reflects one instant - at the cost of a heavier per-shard capture that can be shed while the table is very busy.">i</span>
     </label>
+    @*
+        The explanation sits beside the control rather than inside its label, so
+        the disclosure's own button is not swallowed by the label's click target.
+        It replaces a title attribute on a tabindex="0" span - a control that
+        took focus and then had nothing to give a screen reader or a touch
+        caller.
+    *@
+    <LatticeHelp Term="Consistent snapshot" Explanation="@ScanModeExplanation" />
 
     <div class="lx-data-pager">
         <button type="button" class="lx-btn" disabled="@(Loading || !CanGoPrevious)" @onclick="OnPrevious">Prev</button>
@@ -34,6 +39,16 @@
 </div>
 
 @code {
+    /// <summary>
+    /// What the two cursor isolations actually do, said once, through the help
+    /// disclosure rather than a tooltip no keyboard or touch caller could reach.
+    /// </summary>
+    private const string ScanModeExplanation =
+        "Off (default): a live scan reads current data cheaply, so entries written after you "
+        + "start paging can appear on later pages. On: a consistent snapshot freezes the table at "
+        + "the moment you open the scan, so every page reflects one instant - at the cost of a "
+        + "heavier per-shard capture that can be shed while the table is very busy.";
+
     /// <summary>Whether a scan is in flight; disables every control.</summary>
     [Parameter] public bool Loading { get; set; }
 

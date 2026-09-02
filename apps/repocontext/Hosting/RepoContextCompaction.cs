@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// constants (which are not part of the public surface, so they cannot be
 /// referenced here): <c>repo-context-structural</c>, <c>repo-context-symbol</c>,
 /// <c>repo-context-memory</c>, <c>repo-context-vector-membership</c>,
-/// <c>repo-context-vector-metadata</c>, <c>repo-context-vector-payload</c>, and
-/// <c>repo-context-content</c>.
+/// <c>repo-context-vector-metadata</c>, <c>repo-context-vector-payload</c>,
+/// <c>repo-context-content</c>, and <c>repo-context-vector-index</c>.
 /// If a package accessor is ever exposed, prefer it over these literals.
 /// </summary>
 public static class RepoContextHostTrees
@@ -57,14 +57,31 @@ public static class RepoContextHostTrees
     public const string Session = "repo-context-session";
 
     /// <summary>
+    /// The persisted approximate nearest-neighbour index the semantic retrieval
+    /// path queries instead of re-scanning the whole vector-metadata prefix.
+    /// <para>
+    /// It is a wholly derived, local accelerator, so it is deliberately excluded
+    /// from the package's own replication enrolment list - but it still needs a
+    /// local-agent grant here, because the box runs a default-deny access gate and
+    /// an ungranted tree would fail closed on every read and write the index makes.
+    /// That failure would be invisible in the worst way: the plane would keep
+    /// declining, retrieval would keep serving correctly through the exact scan,
+    /// and the index would simply never finish building.
+    /// </para>
+    /// </summary>
+    public const string VectorIndex = "repo-context-vector-index";
+
+    /// <summary>
     /// The churn trees whose re-embed / prune / forget cycles create tombstones
     /// that must be reaped: memory, the two vector projections, structural (which
     /// the bootstrap prunes), the symbol tree (which the bootstrap re-writes
     /// and prunes on every re-index of a changed file), the content projection
     /// (which the bootstrap re-writes on a changed file and deletes on a removed
     /// file), the reverse cross-reference projection (which the symbol reconciler
-    /// re-writes and deletes as references change), and the per-session reuse
-    /// bookkeeping (whose entries expire and are pruned as sessions lapse). The
+    /// re-writes and deletes as references change), the per-session reuse
+    /// bookkeeping (whose entries expire and are pruned as sessions lapse), and the
+    /// approximate index (which rewrites a cell's chunks on every flush and range-
+    /// deletes a whole superseded generation on every retrain or rebuild). The
     /// content-addressed vector-payload tree is write-once with no in-place deletes,
     /// so it is excluded - it needs no aggressive compaction.
     /// </summary>
@@ -78,6 +95,7 @@ public static class RepoContextHostTrees
         Content,
         CrossReference,
         Session,
+        VectorIndex,
     };
 
     /// <summary>Every repository-context tree the box grants the local agent access to.</summary>
@@ -92,6 +110,7 @@ public static class RepoContextHostTrees
         Content,
         CrossReference,
         Session,
+        VectorIndex,
     };
 }
 

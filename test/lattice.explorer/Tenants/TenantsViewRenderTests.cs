@@ -382,7 +382,7 @@ public sealed class TenantsViewRenderTests
     [Test]
     public async Task The_delete_confirmation_renders_the_cascade_size()
     {
-        using var workspace = await OnSurfaceAsync(TenantsSurfaces.Tenants);
+        using var workspace = await OnSurfaceAsync(TenantsSurfaces.Overview);
         await workspace.RequestDeleteAsync(SampleTenants.Acme);
 
         var html = await RenderAsync<TenantConfirmDialog>(workspace);
@@ -399,7 +399,7 @@ public sealed class TenantsViewRenderTests
     [Test]
     public async Task Nothing_renders_when_no_confirmation_is_pending()
     {
-        using var workspace = await OnSurfaceAsync(TenantsSurfaces.Tenants);
+        using var workspace = await OnSurfaceAsync(TenantsSurfaces.Overview);
 
         var html = await RenderAsync<TenantConfirmDialog>(workspace);
 
