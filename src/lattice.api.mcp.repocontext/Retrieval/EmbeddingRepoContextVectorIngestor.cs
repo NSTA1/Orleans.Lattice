@@ -52,6 +52,14 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </summary>
     internal const int EmbedBatchSize = 32;
 
+    /// <summary>
+    /// The recorded-marker set used when the real one could not be read, so a
+    /// failed read degrades to "no marker evidence this pass" rather than failing
+    /// the arm. Shared and immutable because it is only ever read.
+    /// </summary>
+    private static readonly IReadOnlySet<string> EmptyMemoryKeys =
+        new HashSet<string>(StringComparer.Ordinal);
+
     private readonly RepoContextVectorWriter _writer;
     private readonly IGrainFactory _grainFactory;
     private readonly Serializer _serializer;
@@ -440,9 +448,30 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // does not contend with the sweep, so it survives exactly the pressure that
         // loses the flag. Either being present is sufficient evidence, and each is
         // only ever written after the corresponding vectors landed.
-        var recordedMemoryKeys = await _writer
-            .LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken)
-            .ConfigureAwait(false);
+        //
+        // The load is itself a whole-set range scan over the membership tree, so it
+        // is one more thing that can time out under the very pressure it exists to
+        // tolerate. Losing it degrades to the previous behaviour - the source-id
+        // flag alone - rather than failing the arm, and an empty recorded set also
+        // makes the orphan sweep a no-op, which is the safe direction: it declines
+        // to retire anything rather than mistaking an unreadable set for an empty
+        // one and sweeping live embeddings away.
+        IReadOnlySet<string> recordedMemoryKeys;
+        try
+        {
+            recordedMemoryKeys = await _writer
+                .LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            recordedMemoryKeys = EmptyMemoryKeys;
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: could not read the embedded-memory-key markers; falling back to the source-id "
+                + "flag alone for this pass and skipping the orphan sweep.",
+                repoId);
+        }
 
         // Every memory key that is live right now. Collected during the same walk
         // that selects what to embed, so the orphan sweep below costs one extra

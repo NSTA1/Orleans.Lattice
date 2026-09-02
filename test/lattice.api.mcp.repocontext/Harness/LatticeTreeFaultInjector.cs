@@ -48,7 +48,12 @@ public sealed class LatticeTreeFaultInjector
             return false;
         }
 
-        if (TreeId is not null && !string.Equals(treeId, TreeId, StringComparison.Ordinal))
+        // A tree's work is split across a facade grain keyed by the tree id and
+        // shard/leaf grains keyed by "{treeId}/{index}", so a fault aimed at a tree
+        // has to match both shapes to reach a call that only ever lands on a shard.
+        if (TreeId is not null
+            && !string.Equals(treeId, TreeId, StringComparison.Ordinal)
+            && !(treeId is not null && treeId.StartsWith(TreeId + "/", StringComparison.Ordinal)))
         {
             return false;
         }
