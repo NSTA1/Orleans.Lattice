@@ -75,6 +75,37 @@ participant whose build exhausts its bounded retry budget votes to abort and
 garbage collects its partial shadow, leaving no orphaned shadow state; the whole
 saga then rolls back all-or-nothing.
 
+## The sink must be shared, and that is checked at capture time
+
+Every cluster in the saga resolves the backup's manifest chain from **its own**
+configured `ILatticeBackupSink`. A coordinated restore therefore only works if
+every cluster's sink is the *same* storage. Point each region at an isolated
+sink and the misconfiguration is invisible: each capture succeeds locally, each
+local health check passes, and the fault only surfaces as an all-or-nothing saga
+abort at restore time - after the operator has spent weeks relying on backups
+that were never restorable.
+
+That check now runs at **capture/startup** time instead. The replication package
+registers a real cross-cluster sink-sharing probe over the backup package's
+no-op default (the same layering trick the saga dispatcher itself uses - see
+[Enlisting your own resource in the saga](#enlisting-your-own-resource-in-the-saga)),
+so the backup package never takes a dependency on replication. When a tree is
+replicated and the deployment has peers, each cluster writes a tiny self-naming
+marker into its own sink and reads every peer's marker back out of that same
+sink. A marker that is missing while its peer answers the saga control channel
+proves the sinks are separate; a marker missing from an unreachable peer is
+merely undecided and is re-probed on the next backup-health sweep.
+
+The verdict is logged at start, annotated onto every affected backup's health
+report (so it shows as a `Warning` in the Explorer Backups tab), and can be made
+to block silo start outright. Nothing is probed at all - no sink write and no
+network call - when no tree is replicated or the deployment has no peers.
+
+See [backup configuration](../lattice.backup/configuration.md#cross-cluster-sink-sharing)
+for the enforcement modes and their defaults, and
+[disaster recovery](../lattice.backup/disaster-recovery.md#un-restorable-backups-a-sink-that-is-not-shared)
+for how the verdict reaches the health surface.
+
 ## Triggering a restore
 
 Use the ordinary backup restore surface. Restoring into a replicated target

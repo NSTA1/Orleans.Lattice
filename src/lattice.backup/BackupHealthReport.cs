@@ -39,6 +39,17 @@ public sealed record BackupHealthReport
     /// A precise, human-readable description of the outcome, naming the specific
     /// missing or mismatched artifacts. Must not be <c>null</c>.
     /// </param>
+    /// <param name="peerVisibility">
+    /// Whether the sink holding this backup is demonstrably shared with every peer
+    /// cluster, for a backup of a replicated tree. Defaults to
+    /// <see cref="BackupSinkSharingStatus.NotApplicable"/>, which is correct for a
+    /// non-replicated tree, a single-cluster deployment, and every report captured
+    /// before the cross-cluster sharing probe existed.
+    /// </param>
+    /// <param name="peerUnconfirmedClusterIds">
+    /// The peer clusters that could not read this cluster's backup sink. <c>null</c>
+    /// is normalised to an empty list.
+    /// </param>
     /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="ArgumentNullException">A required reference argument is <c>null</c>.</exception>
     public BackupHealthReport(
@@ -48,7 +59,9 @@ public sealed record BackupHealthReport
         IReadOnlyList<string> missingArtifactIds,
         IReadOnlyList<string> hashMismatchArtifactIds,
         DateTimeOffset checkedAtUtc,
-        string explanation)
+        string explanation,
+        BackupSinkSharingStatus peerVisibility = BackupSinkSharingStatus.NotApplicable,
+        IReadOnlyList<string>? peerUnconfirmedClusterIds = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
         ArgumentNullException.ThrowIfNull(missingArtifactIds);
@@ -61,6 +74,8 @@ public sealed record BackupHealthReport
         HashMismatchArtifactIds = hashMismatchArtifactIds;
         CheckedAtUtc = checkedAtUtc;
         Explanation = explanation;
+        PeerVisibility = peerVisibility;
+        PeerUnconfirmedClusterIds = peerUnconfirmedClusterIds ?? [];
     }
 
     /// <summary>The verified backup id.</summary>
@@ -102,6 +117,27 @@ public sealed record BackupHealthReport
     /// </summary>
     [Id(6)]
     public string Explanation { get; init; }
+
+    /// <summary>
+    /// Whether the sink holding this backup is demonstrably shared with every peer
+    /// cluster. Only meaningful for a backup of a replicated tree: a coordinated
+    /// restore resolves the same manifest chain from every cluster's own sink, so a
+    /// backup that is locally intact but invisible to a peer is not a usable restore
+    /// point for the replication set. <see cref="BackupSinkSharingStatus.NotApplicable"/>
+    /// for a non-replicated tree, a single-cluster deployment, or a report captured
+    /// before the cross-cluster sharing probe existed.
+    /// </summary>
+    [Id(7)]
+    public BackupSinkSharingStatus PeerVisibility { get; init; }
+
+    /// <summary>
+    /// The peer clusters that could not be confirmed to read this cluster's backup
+    /// sink. Empty unless <see cref="PeerVisibility"/> is
+    /// <see cref="BackupSinkSharingStatus.NotShared"/> or
+    /// <see cref="BackupSinkSharingStatus.Unverified"/>.
+    /// </summary>
+    [Id(8)]
+    public IReadOnlyList<string> PeerUnconfirmedClusterIds { get; init; }
 
     /// <summary><see langword="true"/> when <see cref="Status"/> is <see cref="BackupHealthStatus.Healthy"/>.</summary>
     public bool IsHealthy => Status == BackupHealthStatus.Healthy;

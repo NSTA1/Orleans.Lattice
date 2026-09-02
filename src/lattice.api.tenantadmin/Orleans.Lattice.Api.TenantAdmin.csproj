@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TenantAdmin</PackageId>
-    <Version>9.4.1</Version>
+    <Version>9.5.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice multi-tenant clusters. Presents one discoverable, fail-closed control surface for the tenant lifecycle - create, suspend, resume, and delete (delete cascading the tenant's trees) - over the tenancy add-on's tenant registry. Every operation authorizes the caller through the Lattice access gate before acting, so an unauthenticated or unauthorized caller is refused. Registered separately; adds no transport behaviour of its own (the gRPC and MCP bindings adapt over it).</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

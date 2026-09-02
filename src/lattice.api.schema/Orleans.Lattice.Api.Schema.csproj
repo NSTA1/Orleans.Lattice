@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Schema</PackageId>
-    <Version>9.4.0</Version>
+    <Version>9.5.0</Version>
     <Description>Optional transport-agnostic control facade add-on for Orleans.Lattice schema management. Wraps the in-process schema admin surface (policy, versioning, remediation, and a read-only per-tree compliance audit) behind a single fail-closed control interface every transport binding (for example the gRPC surface) adapts over. Registered separately; adds no transport behaviour of its own.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

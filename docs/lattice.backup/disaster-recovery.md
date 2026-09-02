@@ -153,14 +153,49 @@ Key properties:
   custom interval per backup with `ConfigureBackupHealthAsync`, trigger an on-demand
   check with `CheckBackupHealthAsync`, and read the last stored report with
   `GetBackupHealthAsync`.
+- **Peer visibility for replicated trees.** For a backup of a replicated tree, each
+  sweep also refreshes the cross-cluster sink-sharing verdict, and the report carries
+  it as `PeerVisibility` plus the `PeerUnconfirmedClusterIds` that could not see the
+  sink. A backup that is locally intact but whose sink is **provably not readable
+  from a peer cluster** is reported `Warning`, not `Healthy`, with an explanation
+  naming the peers - because a coordinated restore would abort on it. See
+  [Un-restorable backups: a sink that is not shared](#un-restorable-backups-a-sink-that-is-not-shared).
+
+### Un-restorable backups: a sink that is not shared
+
+A coordinated restore of a replicated tree is all-or-nothing across every cluster,
+and each cluster resolves the manifest chain from **its own** configured sink. Point
+each region at an isolated sink and every capture succeeds, every local health check
+passes, and the restore aborts - at the worst possible moment.
+
+That failure mode is now caught at capture time instead. When at least one tree is
+replicated and the deployment has at least one peer, each cluster writes a tiny
+self-naming marker into its own sink at start and reads every peer's marker back out
+of that same sink. A marker that is missing while its peer is reachable proves the
+sinks are separate. The verdict is logged loudly at start, annotated onto every
+affected backup's health report, and - if `SinkSharingEnforcement` is set to
+`FailFast` - blocks the silo from starting at all. A missing marker from a peer that
+is itself unreachable is reported `Unverified` and never fails anything; it is
+re-probed on the next sweep.
+
+A replicated tree backed by the default **in-cluster** sink is rejected outright at
+start regardless of that setting, since a per-cluster reserved tree is provably
+invisible to a peer.
+
+Nothing runs, and nothing changes, for a non-replicated tree, a single-cluster
+deployment, or a host that does not wire the replication package. See
+[Configuration](configuration.md#cross-cluster-sink-sharing) for the enforcement
+modes and the probe timeout.
 
 ### Health in the Explorer
 
 The [`Orleans.Lattice.Explorer`](../lattice.explorer/managing-backups.md) **Existing Backups**
 tab renders a per-row health indicator (an OK marker when healthy, a warning marker
-when a backup is unresolvable, has a missing blob, or has a hash mismatch). Clicking
-the warning opens a diagnostics dialog that names exactly which artifact is missing
-or which hash mismatched, and when the backup was last checked. The New Backup form
+when a backup is unresolvable, has a missing blob, has a hash mismatch, or - for a
+replicated tree - sits in a sink a peer cluster cannot read). Clicking
+the warning opens a diagnostics dialog that names exactly which artifact is missing,
+which hash mismatched, or which peer cluster could not see the sink, and when the
+backup was last checked. The New Backup form
 and the schedule dialog expose the per-backup health schedule. When no durable sink
 is configured the health column and its controls are hidden.
 

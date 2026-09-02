@@ -114,6 +114,171 @@ public sealed class LatticeBackupHealthServiceTests
         });
     }
 
+    [Test]
+    public async Task VerifyAsync_replicated_tree_on_a_non_shared_sink_reports_warning_and_names_the_peer()
+    {
+        // The backup is locally perfect; only the cross-cluster verdict makes it
+        // unusable, and that must surface in the health column with a reason.
+        var bytes = Encoding.UTF8.GetBytes("payload-bytes");
+        var sink = new FakeSink()
+            .WithManifest(ManifestWithArtifact("ok", "artifact-1", BackupContentHash.Compute(bytes)))
+            .WithArtifact("artifact-1", bytes);
+        var service = new LatticeBackupHealthService(
+            sink,
+            new FakeSharingProbe(Sharing(BackupSinkSharingStatus.NotShared, "region-b")),
+            new FakeReplicatedTreeMembership("orders"));
+
+        var report = await service.VerifyAsync("ok");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Warning));
+            Assert.That(report.PeerVisibility, Is.EqualTo(BackupSinkSharingStatus.NotShared));
+            Assert.That(report.PeerUnconfirmedClusterIds, Is.EqualTo(new[] { "region-b" }));
+            Assert.That(report.Explanation, Does.Contain("region-b"));
+            Assert.That(report.Explanation, Does.Contain("NOT shared"));
+            Assert.That(report.IsHealthy, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task VerifyAsync_non_replicated_tree_ignores_a_non_shared_sink_verdict()
+    {
+        // A tree nobody replicates is restorable from this cluster alone, so a
+        // cross-cluster verdict must not degrade it.
+        var bytes = Encoding.UTF8.GetBytes("payload-bytes");
+        var sink = new FakeSink()
+            .WithManifest(ManifestWithArtifact("ok", "artifact-1", BackupContentHash.Compute(bytes)))
+            .WithArtifact("artifact-1", bytes);
+        var service = new LatticeBackupHealthService(
+            sink,
+            new FakeSharingProbe(Sharing(BackupSinkSharingStatus.NotShared, "region-b")),
+            new NoReplicatedTreeMembership());
+
+        var report = await service.VerifyAsync("ok");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Healthy));
+            Assert.That(report.PeerVisibility, Is.EqualTo(BackupSinkSharingStatus.NotApplicable));
+            Assert.That(report.PeerUnconfirmedClusterIds, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task VerifyAsync_shared_sink_stays_healthy_and_records_the_verdict()
+    {
+        var bytes = Encoding.UTF8.GetBytes("payload-bytes");
+        var sink = new FakeSink()
+            .WithManifest(ManifestWithArtifact("ok", "artifact-1", BackupContentHash.Compute(bytes)))
+            .WithArtifact("artifact-1", bytes);
+        var service = new LatticeBackupHealthService(
+            sink,
+            new FakeSharingProbe(Sharing(BackupSinkSharingStatus.Shared)),
+            new FakeReplicatedTreeMembership("orders"));
+
+        var report = await service.VerifyAsync("ok");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Healthy));
+            Assert.That(report.PeerVisibility, Is.EqualTo(BackupSinkSharingStatus.Shared));
+            Assert.That(report.Explanation, Does.Not.Contain("NOT shared"));
+        });
+    }
+
+    [Test]
+    public async Task VerifyAsync_unverified_sink_stays_healthy_but_explains_why_it_is_unconfirmed()
+    {
+        // An offline peer is not a fault: the backup stays Healthy, and the reason
+        // records that sharing is merely unconfirmed.
+        var bytes = Encoding.UTF8.GetBytes("payload-bytes");
+        var sink = new FakeSink()
+            .WithManifest(ManifestWithArtifact("ok", "artifact-1", BackupContentHash.Compute(bytes)))
+            .WithArtifact("artifact-1", bytes);
+        var service = new LatticeBackupHealthService(
+            sink,
+            new FakeSharingProbe(Sharing(BackupSinkSharingStatus.Unverified, "region-b")),
+            new FakeReplicatedTreeMembership("orders"));
+
+        var report = await service.VerifyAsync("ok");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Healthy));
+            Assert.That(report.PeerVisibility, Is.EqualTo(BackupSinkSharingStatus.Unverified));
+            Assert.That(report.Explanation, Does.Contain("unconfirmed"));
+        });
+    }
+
+    [Test]
+    public async Task VerifyAsync_locally_faulted_backup_on_a_non_shared_sink_reports_both_faults()
+    {
+        var sink = new FakeSink()
+            .WithManifest(ManifestWithArtifact("torn", "artifact-1", "unused"))
+            .WithMissingArtifacts("torn", "artifact-1");
+        var service = new LatticeBackupHealthService(
+            sink,
+            new FakeSharingProbe(Sharing(BackupSinkSharingStatus.NotShared, "region-b")),
+            new FakeReplicatedTreeMembership("orders"));
+
+        var report = await service.VerifyAsync("torn");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Warning));
+            Assert.That(report.Explanation, Does.Contain("artifact-1"));
+            Assert.That(report.Explanation, Does.Contain("region-b"));
+        });
+    }
+
+    [Test]
+    public async Task VerifyAsync_probe_that_never_ran_leaves_peer_visibility_not_applicable()
+    {
+        var bytes = Encoding.UTF8.GetBytes("payload-bytes");
+        var sink = new FakeSink()
+            .WithManifest(ManifestWithArtifact("ok", "artifact-1", BackupContentHash.Compute(bytes)))
+            .WithArtifact("artifact-1", bytes);
+        var service = new LatticeBackupHealthService(
+            sink,
+            new NoBackupSinkSharingProbe(),
+            new FakeReplicatedTreeMembership("orders"));
+
+        var report = await service.VerifyAsync("ok");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Healthy));
+            Assert.That(report.PeerVisibility, Is.EqualTo(BackupSinkSharingStatus.NotApplicable));
+        });
+    }
+
+    private static BackupSinkSharingReport Sharing(BackupSinkSharingStatus status, params string[] unconfirmed) =>
+        new(status, "region-a", unconfirmed.Length, unconfirmed, DateTimeOffset.UnixEpoch, $"probe says {status}.");
+
+    /// <summary>A probe that reports a canned verdict as its last result.</summary>
+    private sealed class FakeSharingProbe(BackupSinkSharingReport report) : IBackupSinkSharingProbe
+    {
+        public BackupSinkSharingReport? LastReport => report;
+
+        public Task<BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(report);
+    }
+
+    /// <summary>A membership seam that reports a fixed set of trees as replicated.</summary>
+    private sealed class FakeReplicatedTreeMembership(params string[] trees) : IReplicatedTreeMembership
+    {
+        private readonly HashSet<string> _trees = new(trees, StringComparer.Ordinal);
+
+        public IReadOnlyCollection<string> ReplicatedTrees => _trees;
+
+        public bool IsReplicated(string treeId)
+        {
+            ArgumentNullException.ThrowIfNull(treeId);
+            return _trees.Contains(treeId);
+        }
+    }
+
     /// <summary>An in-memory sink whose probe verdict, manifest, and artifact bytes are scripted.</summary>
     private sealed class FakeSink : ILatticeBackupSink
     {

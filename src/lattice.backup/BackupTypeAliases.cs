@@ -87,4 +87,7 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupHealthMonitorState"/>.</summary>
     internal const string BackupHealthMonitorState = "olb.hy";
+
+    /// <summary>Alias for <see cref="BackupSinkSharingReport"/>.</summary>
+    internal const string BackupSinkSharingReport = "olb.sh";
 }

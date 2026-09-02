@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Backup.Grpc</PackageId>
-    <Version>9.4.0</Version>
+    <Version>9.5.0</Version>
     <Description>gRPC transport binding for Orleans.Lattice.Api.Backup. Scaffolding release: reserves the package and its serialization-alias prefix so the code-first gRPC binding and client for the backup control facade can be layered by later releases. No runtime behaviour yet.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

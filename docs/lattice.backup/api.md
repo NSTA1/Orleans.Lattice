@@ -125,9 +125,9 @@ Persists per-backup health state - the latest `BackupHealthReport` and the per-b
 
 The periodic monitor itself is an internal reminder-driven grain (mirroring the backup scheduler): once per sweep it enumerates the catalog and re-verifies each enrolled backup whose configured interval has elapsed, writing the result through `ILatticeBackupHealthStore`. It is inert unless the registered sink reports `IsDurable`.
 
-## Extension seams (coordinated restore)
+## Extension seams (replication-aware backup)
 
-These backup-package-local seams let the replication package layer an atomic multi-tree, multi-cluster restore on top of the backup engine without the backup package taking a dependency on replication. Each has a default no-op registration installed by `AddLatticeBackup`, so a single-cluster host always takes the plain local restore path; the replication package (or the host) supplies the real implementation.
+These backup-package-local seams let the replication package layer replication awareness on top of the backup engine - an atomic multi-tree, multi-cluster restore, and a capture-side check that the sink is actually shared - without the backup package taking a dependency on replication. Each has a default no-op registration installed by `AddLatticeBackup`, so a single-cluster host always takes the plain local restore path and never runs a cross-cluster probe; the replication package (or the host) supplies the real implementation.
 
 ### `IRestoreSagaDispatcher`
 
@@ -138,10 +138,38 @@ The seam the restore path consults so a restore into a replicated tree can be pr
 
 ### `IReplicatedTreeMembership`
 
-The seam the fail-fast sink guard consults to learn whether a tree participates in the cross-cluster replication set (a replicated tree must be backed by a shared external sink, not the default in-cluster sink). The default registration reports nothing replicated.
+The seam the startup sink guard consults to learn whether a tree participates in the cross-cluster replication set (a replicated tree must be backed by a shared external sink, not the default in-cluster sink). The default registration reports nothing replicated.
 
 - `bool IsReplicated(string treeId)` - reports whether the tree participates in the replication set. Throws `ArgumentNullException` when `treeId` is null.
 - `IReadOnlyCollection<string> ReplicatedTrees { get; }` - the ids of every replicated tree.
+
+### `IBackupSinkSharingProbe`
+
+The capture-side analogue of `IRestoreSagaDispatcher`: the seam the startup sink guard and the periodic health monitor consult to learn whether the sink this cluster captures into is demonstrably the **same** store every peer cluster reads from. That is a deployment fact rather than a locally provable configuration property - two regions can hold identical-looking connection strings that resolve to different accounts - so the real (replication-supplied) implementation writes a tiny marker naming this cluster into its own sink and reads every peer's marker back out of that same sink. The default registration never probes and always reports `NotApplicable`.
+
+- `BackupSinkSharingReport? LastReport { get; }` - the most recent verdict, or `null` when the probe has never run. Read by the per-backup health path so annotating a report costs no I/O.
+- `Task<BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default)` - runs the probe now and publishes the fresh verdict to `LastReport`. Inert (no sink or network I/O, verdict `NotApplicable`) when no tree is replicated or the deployment has no peers.
+
+### `BackupSinkSharingReport`
+
+The outcome of one cross-cluster sharing probe. Serialized (alias `olb.sh`), immutable.
+
+- `BackupSinkSharingStatus Status` - the verdict.
+- `string ClusterId` - the local cluster's id, as attested by the marker it wrote.
+- `int PeerCount` - the number of peer clusters considered.
+- `IReadOnlyList<string> UnconfirmedPeerClusterIds` - the peers whose marker could not be read back from this cluster's sink.
+- `DateTimeOffset ProbedAtUtc` - when the probe ran.
+- `string Explanation` - an operator-facing sentence naming the unconfirmed peers and the remediation.
+- `bool IsRefuted` - `true` only when `Status` is `NotShared`.
+
+### `BackupSinkSharingStatus`
+
+| Value | Meaning |
+|-------|---------|
+| `NotApplicable` | Nothing was measured: no replicated tree, no peers, no replication package, or the probe is disabled. The value a single-cluster deployment always reports. |
+| `Shared` | Every peer's marker was read back from this cluster's sink, so a coordinated restore can resolve the same backup fleet-wide. |
+| `Unverified` | At least one peer left no marker and was not reachable, so it may simply not be running yet. Undecided, not a fault. |
+| `NotShared` | At least one peer is reachable yet its marker is absent, so the sink is **not** shared and backups of a replicated tree are not restorable fleet-wide. |
 
 ### `ILatticeCoordinatedRestoreEngine`
 
@@ -345,10 +373,12 @@ The read-only outcome of `ILatticeBackupSink.ProbeAsync`: whether a backup is re
 
 ### `BackupHealthReport`
 
-The result of verifying one backup's durable sink payload - presence plus content-hash consistency - precise enough to drive a diagnostics dialog. Persisted per backup by `ILatticeBackupHealthStore`.
+The result of verifying one backup's durable sink payload - presence plus content-hash consistency, and for a replicated tree whether every peer cluster can read the sink holding it - precise enough to drive a diagnostics dialog. Persisted per backup by `ILatticeBackupHealthStore`.
 
-- Constructor: `BackupHealthReport(string backupId, BackupHealthStatus status, bool manifestPresent, IReadOnlyList<string> missingArtifactIds, IReadOnlyList<string> hashMismatchArtifactIds, DateTimeOffset checkedAtUtc, string explanation)`. Throws `ArgumentException` (`backupId` null/empty) and `ArgumentNullException` (`missingArtifactIds`, `hashMismatchArtifactIds`, or `explanation` null).
-- Properties: `string BackupId`, `BackupHealthStatus Status`, `bool ManifestPresent`, `IReadOnlyList<string> MissingArtifactIds` (referenced artifacts absent or uncommitted), `IReadOnlyList<string> HashMismatchArtifactIds` (present artifacts whose content no longer matches the manifest's recorded hash), `DateTimeOffset CheckedAtUtc`, `string Explanation` (a precise human-readable summary naming the missing / mismatched artifacts), and the computed `bool IsHealthy` (`true` only when `Status` is `Healthy`).
+- Constructor: `BackupHealthReport(string backupId, BackupHealthStatus status, bool manifestPresent, IReadOnlyList<string> missingArtifactIds, IReadOnlyList<string> hashMismatchArtifactIds, DateTimeOffset checkedAtUtc, string explanation, BackupSinkSharingStatus peerVisibility = BackupSinkSharingStatus.NotApplicable, IReadOnlyList<string>? peerUnconfirmedClusterIds = null)`. The two sharing parameters are trailing and defaulted, so every pre-existing call site and every report persisted before the probe existed still means "no cross-cluster claim made". Throws `ArgumentException` (`backupId` null/empty) and `ArgumentNullException` (`missingArtifactIds`, `hashMismatchArtifactIds`, or `explanation` null).
+- Properties: `string BackupId`, `BackupHealthStatus Status`, `bool ManifestPresent`, `IReadOnlyList<string> MissingArtifactIds` (referenced artifacts absent or uncommitted), `IReadOnlyList<string> HashMismatchArtifactIds` (present artifacts whose content no longer matches the manifest's recorded hash), `DateTimeOffset CheckedAtUtc`, `string Explanation` (a precise human-readable summary naming the missing / mismatched artifacts and any peer that cannot see the sink), `BackupSinkSharingStatus PeerVisibility`, `IReadOnlyList<string> PeerUnconfirmedClusterIds`, and the computed `bool IsHealthy` (`true` only when `Status` is `Healthy`).
+
+A backup of a **replicated** tree whose sink is positively refuted (`PeerVisibility` is `NotShared`) is reported as `Warning` even when it is locally intact, because a coordinated restore resolves the same manifest chain from every cluster's own sink and would abort. A non-replicated tree's report is unaffected.
 
 ### `BackupHealthConfig`
 
@@ -381,7 +411,11 @@ The per-backup health-monitoring override: whether the periodic monitor verifies
 
 ### `BackupHealthStatus`
 
-`Unknown = 0` (never verified), `Healthy = 1` (manifest and every artifact present, committed, and hash-matched), `Warning = 2` (manifest present but at least one artifact missing, uncommitted, or hash-mismatched), `Missing = 3` (manifest itself absent - the catalog row is an orphan).
+`Unknown = 0` (never verified), `Healthy = 1` (manifest and every artifact present, committed, and hash-matched), `Warning = 2` (manifest present but at least one artifact missing, uncommitted, or hash-mismatched - or, for a replicated tree, the sink is not readable from a peer cluster), `Missing = 3` (manifest itself absent - the catalog row is an orphan).
+
+### `BackupSinkSharingEnforcement`
+
+`Disabled = 0` (never probe), `Warn = 1` (the default - probe, log loudly, annotate health, but start), `FailFast = 2` (a positively refuted sink blocks silo start). See [Configuration](configuration.md).
 
 ## Options
 

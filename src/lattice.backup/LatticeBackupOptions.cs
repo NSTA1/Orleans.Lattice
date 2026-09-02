@@ -61,4 +61,29 @@ public sealed class LatticeBackupOptions
     /// the set during the capture window. Must be at least 1. Defaults to 5.
     /// </summary>
     public int MaxCrossTreeFenceAttempts { get; set; } = 5;
+
+    /// <summary>
+    /// How a positively refuted cross-cluster backup sink is enforced at silo
+    /// start. A coordinated restore of a replicated tree requires every cluster
+    /// to read the <b>same</b> backup store, and that is a deployment fact no
+    /// local configuration check can prove, so the sink guard writes a tiny
+    /// per-cluster marker into the configured sink and reads every peer's marker
+    /// back out of it. Defaults to <see cref="BackupSinkSharingEnforcement.Warn"/>:
+    /// a refuted sink logs a loud warning and annotates the backup health
+    /// surface, but does not block startup, so a transient peer outage can never
+    /// brick a deployment that is actually configured correctly. Set to
+    /// <see cref="BackupSinkSharingEnforcement.FailFast"/> to refuse to start
+    /// instead, or <see cref="BackupSinkSharingEnforcement.Disabled"/> to skip
+    /// the probe entirely. Single-cluster deployments and deployments with no
+    /// replicated tree never probe regardless of this value.
+    /// </summary>
+    public BackupSinkSharingEnforcement SinkSharingEnforcement { get; set; } = BackupSinkSharingEnforcement.Warn;
+
+    /// <summary>
+    /// The maximum total wall-clock time the cross-cluster backup sink sharing
+    /// probe may spend before it gives up and reports
+    /// <see cref="BackupSinkSharingStatus.Unverified"/>. Bounds silo start, which
+    /// blocks on the probe. Must be strictly positive. Defaults to 15 seconds.
+    /// </summary>
+    public TimeSpan SinkSharingProbeTimeout { get; set; } = TimeSpan.FromSeconds(15);
 }
