@@ -503,7 +503,7 @@ internal sealed class SnapshotLeafGrain(
         EnsureOpened();
         if (limit <= 0)
             return Task.FromResult(new List<string>());
-        var result = new List<string>();
+        var result = new List<string>(Math.Min(limit, _folder!.Entries.Count));
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         foreach (var (key, value) in _folder!.Entries)
         {
@@ -553,7 +553,7 @@ internal sealed class SnapshotLeafGrain(
         EnsureOpened();
         if (limit <= 0)
             return Task.FromResult(new List<KeyValuePair<string, byte[]>>());
-        var result = new List<KeyValuePair<string, byte[]>>();
+        var result = new List<KeyValuePair<string, byte[]>>(Math.Min(limit, _folder!.Entries.Count));
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         foreach (var (key, value) in _folder!.Entries)
         {
@@ -598,7 +598,7 @@ internal sealed class SnapshotLeafGrain(
         EnsureOpened();
         if (limit <= 0)
             return Task.FromResult(new List<LwwEntry>());
-        var result = new List<LwwEntry>();
+        var result = new List<LwwEntry>(Math.Min(limit, _folder!.Entries.Count));
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         foreach (var (key, value) in _folder!.Entries)
         {

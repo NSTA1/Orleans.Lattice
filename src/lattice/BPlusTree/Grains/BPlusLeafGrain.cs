@@ -2761,7 +2761,10 @@ internal sealed partial class BPlusLeafGrain(
     {
         var nowTicks = DateTimeOffset.UtcNow.Ticks;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
-        var result = new Dictionary<string, byte[]>();
+        // Presize to the cached row count (the first loop's upper bound), mirroring
+        // the sibling GetLiveRawEntriesAsync; the prior grow-from-empty map rehashed
+        // its bucket and entry arrays repeatedly on a full-leaf read.
+        var result = new Dictionary<string, byte[]>(Cache.Count);
         foreach (var (key, lww) in Cache.EnumerateRows())
         {
             if (pendingKeys.TryGetValue(key, out var pending))
