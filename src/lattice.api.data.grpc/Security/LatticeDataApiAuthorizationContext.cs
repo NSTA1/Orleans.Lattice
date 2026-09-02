@@ -37,6 +37,20 @@ public enum LatticeDataApiOperation
     /// than have it silently masquerade as a benign operation.
     /// </summary>
     Unknown,
+
+    // The members below are appended after Unknown deliberately: this enum has
+    // implicit ordinals, and inserting them in declaration order would renumber
+    // Unknown and every member after it, silently changing the meaning of a
+    // persisted or logged numeric value.
+
+    /// <summary>The <c>SetMany</c> non-atomic bulk-write RPC.</summary>
+    SetMany,
+
+    /// <summary>The <c>CrdtWrite</c> CRDT mutation RPC.</summary>
+    CrdtWrite,
+
+    /// <summary>The <c>CrdtRead</c> CRDT read RPC.</summary>
+    CrdtRead,
 }
 
 /// <summary>

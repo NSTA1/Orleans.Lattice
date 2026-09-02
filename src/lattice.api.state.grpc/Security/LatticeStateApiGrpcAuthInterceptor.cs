@@ -156,6 +156,8 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             LatticeStateGrpcMethods.ObserveMetricsMethodName => LatticeStateApiOperation.ObserveMetrics,
             LatticeStateGrpcMethods.GetMetricsSnapshotMethodName => LatticeStateApiOperation.GetMetricsSnapshot,
             LatticeStateGrpcMethods.GetClusterInfoMethodName => LatticeStateApiOperation.GetClusterInfo,
+            LatticeStateGrpcMethods.GetDeadLetterCountMethodName => LatticeStateApiOperation.GetDeadLetterCount,
+            LatticeStateGrpcMethods.ListDeadLettersMethodName => LatticeStateApiOperation.ListDeadLetters,
             _ => LatticeStateApiOperation.Unknown,
         };
 
@@ -167,6 +169,8 @@ internal sealed class LatticeStateApiGrpcAuthInterceptor : Interceptor
             EntryHistoryRequest h => h.TreeId,
             EntryScanCancelRequest c => c.TreeId,
             StateObserveRequest o => o.TreeId,
+            DeadLetterCountRequest dc => dc.TreeId,
+            DeadLetterQueueRequest dq => dq.TreeId,
             // The tag-catalog RPCs scope to a subject tree via SourceTreeId; the
             // cluster-wide ListTrees / ListViews leave it null.
             CatalogRequest cat => cat.SourceTreeId,
