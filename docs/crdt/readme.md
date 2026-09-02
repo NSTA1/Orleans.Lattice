@@ -90,49 +90,13 @@ should mean.
 > value bytes. It is safe only when a single cluster owns each key at a time; use
 > a typed CRDT above whenever concurrent writers can target the same key.
 
-## State size of the observed-remove primitives
-
-`OrFlag`, `OrSet`, `RwFlag`, and `RwSet` tag every assertion with a causal
-**dot** - a `(replicaId, counter)` pair - and that dot context is what makes
-concurrent add/remove converge. A fair question is therefore what stops the dot
-history growing forever on a key you keep re-asserting.
-
-**It is bounded by replica count, not by assertion count.** Re-asserting a slot
-(enabling an already-enabled flag, re-adding an element already present) mints a
-fresh dot, because that fresh dot is exactly what beats a concurrent retraction
-that never observed it. But a replica's own earlier dots for the same slot carry
-no information its newest one does not, so they are collapsed away: each slot
-keeps **at most one dot per replica per side**. Enabling one flag a million times
-from one cluster leaves one dot, not a million.
-
-This holds without weakening convergence. Compaction never merges dots across
-replicas, so a concurrent assertion elsewhere keeps its own distinct dot and
-still wins or loses its primitive's tie-break unchanged. It is sound because a
-replica mints its own dots in counter order, so a cancellation is evaluated by
-**coverage** - a retraction at counter `t` cancels that replica's dots at
-`<= t` - rather than by exact dot equality. That is what lets a superseded dot be
-dropped locally while a peer that still holds it is cancelled correctly on the
-next merge.
-
-Compaction runs on every mutation and every merge, including the delta fold used
-by replication and by write-ahead-log replay. So a store written by an older
-build that predates this repairs itself the first time each key is merged or
-written, with no migration step or operator action.
-
-Two things it deliberately does **not** do. It does not drop a cancelled dot,
-because the durable per-key history view decodes a slot's dots into its add and
-remove events and dropping the cancelled one would erase the "added" half of the
-pair. And it does not touch tombstones left by genuine retractions, which are
-reclaimed by [tombstone compaction](../lattice/tombstone-compaction.md) at the
-tree level instead - a separate mechanism that reclaims whole dead rows and
-cannot shrink a live row's own value.
-
-> **`OrMap` is excluded.** Its per-key entries carry a **value**, not just a dot,
-> so two entries from one replica are two real value contributions that
-> `LiveValue` folds together - not a redundant re-assertion. Collapsing them
-> would lose data, and pre-merging them would change what a concurrent remove
-> removes, because a tombstone cancels a specific entry. `OrMap` therefore keeps
-> one entry per `Set`. See issue #1937.
+> [!NOTE]
+> **Does a CRDT grow forever?** A reasonable worry: if a set remembers every add
+> so a concurrent remove cannot silently win, does re-adding the same thing over
+> and over bloat it? No. Repeating an operation you have already performed - such
+> as re-enabling a flag that is already on - does not make the stored value
+> bigger. See [Monotonic State Primitives](../lattice/state-primitives.md) for
+> how that is done.
 
 ## How you use them here
 

@@ -14,10 +14,9 @@ dots it has **observed**. The flag is on whenever at least one enable dot
 survives, so a `Disable` concurrent with an `Enable` it never saw leaves the flag
 **enabled**.
 
-Re-enabling an already-enabled flag still mints a fresh dot (that is what beats a
-concurrent disable), but the flag keeps at most **one dot per replica** - see
-[state size](readme.md#state-size-of-the-observed-remove-primitives). Enabling
-the same flag a million times costs one dot, not a million.
+Enabling a flag that is already on is safe to repeat: it does not make the
+stored value grow. Turning the same flag on a million times costs no more space
+than turning it on once.
 
 Use it for: membership rows in a secondary index (a tag/key pair is present or
 not), feature toggles, presence bits - where a concurrent enable should beat a
