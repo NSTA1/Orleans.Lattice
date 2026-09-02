@@ -102,4 +102,63 @@ public sealed class LatticePredicateTranslatorBranchTests
         Assert.That(node.Children![1].Constant.Kind, Is.EqualTo(LatticeConstantKind.Int64));
         Assert.That(node.Children![1].Constant.Int64Value, Is.EqualTo((long)DayOfWeek.Wednesday));
     }
+
+    // ===== StringComparison / culture overloads are rejected, not silently
+    // pushed down as ordinal. The evaluator compares strings ordinally, so
+    // accepting an overload that carries a StringComparison / CultureInfo would
+    // silently evaluate a semantically different match than the compiled
+    // lambda. Rejecting at translation time upholds the documented contract
+    // that an unsupported construct throws rather than misleads. =====
+
+    [Test]
+    public void Translate_instance_equals_with_string_comparison_throws()
+    {
+        Assert.That(
+            () => Translate(p => p.Name.Equals("bob", StringComparison.OrdinalIgnoreCase)),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void Translate_instance_startswith_with_string_comparison_throws()
+    {
+        Assert.That(
+            () => Translate(p => p.Name.StartsWith("A", StringComparison.OrdinalIgnoreCase)),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void Translate_instance_endswith_with_string_comparison_throws()
+    {
+        Assert.That(
+            () => Translate(p => p.Name.EndsWith("z", StringComparison.OrdinalIgnoreCase)),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void Translate_instance_contains_with_string_comparison_throws()
+    {
+        Assert.That(
+            () => Translate(p => p.Name.Contains("b", StringComparison.OrdinalIgnoreCase)),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void Translate_static_equals_with_string_comparison_throws()
+    {
+        Assert.That(
+            () => Translate(p => string.Equals(p.Name, "bob", StringComparison.OrdinalIgnoreCase)),
+            Throws.TypeOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void Translate_instance_contains_char_overload_is_still_supported()
+    {
+        // The single-argument char overload carries no comparison modifier and
+        // is evaluated ordinally, exactly matching the compiled lambda, so it
+        // must keep translating rather than being caught by the rejection.
+        var node = Translate(p => p.Name.Contains('b'));
+        Assert.That(node.Kind, Is.EqualTo(LatticePredicateNodeKind.StringMethod));
+        Assert.That(node.StringMethod, Is.EqualTo(LatticeStringMethod.Contains));
+        Assert.That(node.Children![1].Constant.StringValue, Is.EqualTo("b"));
+    }
 }

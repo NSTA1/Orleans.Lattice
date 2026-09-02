@@ -268,7 +268,17 @@ internal static class LatticePredicateEvaluator
             return leftNullish && rightNullish;
 
         if (left.Kind == OperandKind.Number && right.Kind == OperandKind.Number)
-            return left.Number.Equals(right.Number);
+        {
+            // Compare two integral operands exactly as Int64 so 64-bit
+            // identifiers above 2^53 (e.g. snowflake IDs) are distinguished.
+            // Both a JSON integer and an Int64 constant would otherwise funnel
+            // through double and collapse adjacent longs to the same value. A
+            // non-integral operand on either side falls back to a double
+            // comparison.
+            if (left.IsInteger && right.IsInteger)
+                return left.Integer == right.Integer;
+            return left.AsDouble().Equals(right.AsDouble());
+        }
 
         if (left.Kind == OperandKind.String && right.Kind == OperandKind.String)
             return string.Equals(left.String, right.String, StringComparison.Ordinal);
@@ -282,7 +292,13 @@ internal static class LatticePredicateEvaluator
     private static int? CompareOrder(in Operand left, in Operand right)
     {
         if (left.Kind == OperandKind.Number && right.Kind == OperandKind.Number)
-            return left.Number.CompareTo(right.Number);
+        {
+            // Order two integral operands exactly as Int64 (see AreEqual); a
+            // non-integral operand on either side falls back to double order.
+            if (left.IsInteger && right.IsInteger)
+                return left.Integer.CompareTo(right.Integer);
+            return left.AsDouble().CompareTo(right.AsDouble());
+        }
 
         if (left.Kind == OperandKind.String && right.Kind == OperandKind.String)
             return string.CompareOrdinal(left.String, right.String);
@@ -361,7 +377,7 @@ internal static class LatticePredicateEvaluator
         JsonValueKind.True => Operand.OfBoolean(true),
         JsonValueKind.False => Operand.OfBoolean(false),
         JsonValueKind.String => Operand.OfString(element.GetString() ?? string.Empty),
-        JsonValueKind.Number => Operand.OfNumber(element.GetDouble()),
+        JsonValueKind.Number => element.TryGetInt64(out long i) ? Operand.OfInteger(i) : Operand.OfNumber(element.GetDouble()),
         // Objects and arrays are not comparable in the allowlist.
         _ => Operand.Missing(),
     };
@@ -511,7 +527,7 @@ internal static class LatticePredicateEvaluator
         JsonTokenType.True => Operand.OfBoolean(true),
         JsonTokenType.False => Operand.OfBoolean(false),
         JsonTokenType.String => Operand.OfString(reader.GetString() ?? string.Empty),
-        JsonTokenType.Number => Operand.OfNumber(reader.GetDouble()),
+        JsonTokenType.Number => reader.TryGetInt64(out long i) ? Operand.OfInteger(i) : Operand.OfNumber(reader.GetDouble()),
         // Objects and arrays are not comparable in the allowlist.
         _ => Operand.Missing(),
     };
@@ -521,7 +537,7 @@ internal static class LatticePredicateEvaluator
         LatticeConstantKind.Null => Operand.Null(),
         LatticeConstantKind.Boolean => Operand.OfBoolean(constant.BooleanValue),
         LatticeConstantKind.String => constant.StringValue is null ? Operand.Null() : Operand.OfString(constant.StringValue),
-        LatticeConstantKind.Int64 => Operand.OfNumber(constant.Int64Value),
+        LatticeConstantKind.Int64 => Operand.OfInteger(constant.Int64Value),
         LatticeConstantKind.Double => Operand.OfNumber(constant.DoubleValue),
         _ => Operand.Missing(),
     };
@@ -535,10 +551,25 @@ internal static class LatticePredicateEvaluator
         public string? String { get; private init; }
         public double Number { get; private init; }
 
+        /// <summary>The exact Int64 value when <see cref="IsInteger"/> is true.</summary>
+        public long Integer { get; private init; }
+
+        /// <summary>
+        /// True when this numeric operand carries an exact integral value in
+        /// <see cref="Integer"/>. Integral operands compare exactly as Int64
+        /// rather than through <see cref="Number"/>, so 64-bit identifiers
+        /// above 2^53 are not collapsed by double rounding.
+        /// </summary>
+        public bool IsInteger { get; private init; }
+
         public static Operand Missing() => new() { Kind = OperandKind.Missing };
         public static Operand Null() => new() { Kind = OperandKind.Null };
         public static Operand OfBoolean(bool value) => new() { Kind = OperandKind.Boolean, Boolean = value };
         public static Operand OfString(string value) => new() { Kind = OperandKind.String, String = value };
         public static Operand OfNumber(double value) => new() { Kind = OperandKind.Number, Number = value };
+        public static Operand OfInteger(long value) => new() { Kind = OperandKind.Number, Number = value, Integer = value, IsInteger = true };
+
+        /// <summary>The double view of a numeric operand, for mixed integer/real comparison.</summary>
+        public double AsDouble() => IsInteger ? Integer : Number;
     }
 }
