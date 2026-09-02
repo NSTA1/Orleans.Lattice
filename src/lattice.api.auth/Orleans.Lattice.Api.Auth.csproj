@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Auth</PackageId>
-    <Version>9.4.0</Version>
+    <Version>9.5.0</Version>
     <Description>Optional configuration and control facade add-on for Orleans.Lattice authorization. Exposes a single transport-agnostic admin surface (and, via a sibling binding, a gRPC surface) for administering the membership directory and the authorization policy store: CRUD users, groups, memberships, and rules, plus ExplainAsync (why a subject is or is not authorized) and EffectivePermissionsAsync (the rules in effect for a subject). Every operation is authorized as an administrator through the same enforcement the in-cluster path uses, so an admin API can never rewrite policy for an unauthorized caller. Opt-in and absent by default; registered with a single AddLatticeAuthApi(...) call.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

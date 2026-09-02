@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.Telemetry.Grpc</PackageId>
-    <Version>9.4.0</Version>
+    <Version>9.5.0</Version>
     <Description>Code-first gRPC transport binding and client-safe client for Orleans.Lattice.Api.Telemetry. Exposes the read-only telemetry facade (curated named-query catalogue discovery and query evaluation by id) as a routable per-region gRPC surface, with a default-deny authorization interceptor, a caller-credential bridge, and an unauthenticated auth-scheme discovery RPC. Transport only: the effective tenant stays derived server-side by the facade, which remains the single enforcement point. References the shared contract package alone, so a desktop or web client head can consume telemetry without taking the MCP server surface.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
