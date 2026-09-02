@@ -522,32 +522,20 @@ code {
     padding: 0.4rem;
 }
 
-.lx-shell-nav-state {
-    display: flex;
-    flex-direction: column;
-    gap: var(--lx-space-4);
-    padding: var(--lx-space-7) var(--lx-space-5);
-    color: var(--lx-color-text-muted);
-    font-size: var(--lx-text-small);
-}
-
 /*
-  The state's one-line summary. An empty catalog now says WHICH of the several
-  reasons it is empty for, so the summary is a real heading for the sentences
-  under it rather than the whole message.
+  The shared selection-state block, as the catalog rail places it. The message
+  itself is rendered by SelectionStateView, exactly as every plugin surface
+  renders its own - the rail owns only where it sits, which is why this is a
+  placement rule and not a second copy of the block's styling.
+
+  The rail is a narrow column, so the shared card's wide gutters and reading
+  measure are relaxed here; its tone border and sunken surface are kept, so a
+  refusal and a failure read the same in the catalog as they do in the detail
+  panel.
 */
-.lx-shell-nav-state-headline {
-    margin: 0;
-    color: var(--lx-color-text);
-    font-weight: var(--lx-weight-semibold);
-}
-
-.lx-shell-nav-state p {
-    margin: 0;
-}
-
-.lx-shell-nav-error {
-    color: var(--lx-color-danger);
+.lx-shell-nav-state {
+    padding: var(--lx-space-5) var(--lx-space-4);
+    max-width: none;
 }
 
 .lx-shell-nav-list {

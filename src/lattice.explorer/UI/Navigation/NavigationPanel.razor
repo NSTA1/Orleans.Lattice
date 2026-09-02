@@ -3,6 +3,7 @@
 @using Orleans.Lattice.Explorer.Core.DeadLetter
 @using Orleans.Lattice.Explorer.Core.Navigation
 @using Orleans.Lattice.Explorer.Core.Session
+@using Orleans.Lattice.Explorer.Core.Tenancy
 @using Orleans.Lattice.Explorer.Core.Vocabulary
 @implements IDisposable
 @inject ICatalogReader CatalogReader
@@ -68,28 +69,30 @@
     <div class="lx-shell-nav-body"
          id="@ExplorerShellRegions.CatalogList"
          role="tabpanel"
+         tabindex="0"
          aria-labelledby="@_kindTabElementId">
-        @if (_loading && _items.Count == 0)
+        @*
+            One renderer for ExplorerStateMessage, shared with every plugin
+            selection surface.
+
+            The panel used to hand-roll this block, which is how the message type
+            came to carry a field - ActionLabel - that reached one surface and
+            silently not the other: the catalog told a reader what would fix the
+            state and then gave them nothing to click. Two renderers for one type
+            is the drift, so there is now one.
+
+            What is offered is still decided by the state, not by the renderer.
+            _stateAction carries a delegate only for a state THIS panel can
+            actually resolve, and SelectionStateView renders no button without
+            one - so a refusal is still not offered the "Try again" that would
+            have the reader hammer a door that will not open, and the scope
+            remedy appears only for a caller permitted to widen the scope.
+        *@
+        @if (_items.Count == 0 || _error is not null)
         {
-            <div class="lx-shell-nav-state">Loading catalog...</div>
-        }
-        else if (_error is not null)
-        {
-            <div class="lx-shell-nav-state lx-shell-nav-error">
-                <span>@_error</span>
-                <button type="button" class="lx-btn-link" @onclick="RefreshAsync">Try again</button>
-            </div>
-        }
-        else if (_items.Count == 0)
-        {
-            <div class="lx-shell-nav-state">
-                <p class="lx-shell-nav-state-headline">@_state.Headline</p>
-                <p>@_state.Explanation</p>
-                @if (!string.IsNullOrEmpty(_state.Remedy))
-                {
-                    <p><strong>@_state.RemedyLabel</strong> @_state.Remedy</p>
-                }
-            </div>
+            <SelectionStateView Message="_state"
+                                Class="lx-shell-nav-state"
+                                OnAction="_stateAction" />
         }
         else
         {
@@ -280,6 +283,36 @@
     private readonly Func<Task> _adoptRoute;
     private readonly Func<Task> _reload;
 
+    /// <summary>
+    /// The tenant-scope seam, resolved optionally: it is registered only when
+    /// tenant scoping is enabled, and a head without it simply never offers the
+    /// scope remedy.
+    /// </summary>
+    private IExplorerTenantSwitcher? _tenantSwitcher;
+
+    /// <summary>
+    /// Whether this caller may actually widen the tenant scope, re-read whenever
+    /// the scope is what emptied the catalog.
+    /// </summary>
+    /// <remarks>
+    /// Gating the remedy on the seam's own answer rather than offering it to
+    /// everyone: <see cref="IExplorerTenantSwitcher.SetVisibilityAsync"/> is
+    /// fail-closed and honours only an operator, so rendering the button for
+    /// anyone else would promise a way out that silently refuses - the same
+    /// defect, in the opposite direction, as describing the remedy in prose and
+    /// never offering it.
+    /// </remarks>
+    private bool _canClearTenantScope;
+
+    /// <summary>
+    /// The action offered alongside the current state, or the default (no
+    /// delegate) when this panel cannot resolve it. Composed on the load path,
+    /// so the render path binds a field rather than deciding per pass.
+    /// </summary>
+    private EventCallback _stateAction;
+
+    private readonly EventCallback _resolveState;
+
     /// <summary>Creates the panel, caching the delegates it binds and marshals.</summary>
     public NavigationPanel()
     {
@@ -288,8 +321,78 @@
         // route and tenant subscriptions fire for the panel's whole lifetime, so
         // a lambda at either site would allocate a delegate on all of them.
         _switchKind = EventCallback.Factory.Create<string>(this, SwitchKindAsync);
+        _resolveState = EventCallback.Factory.Create(this, ResolveStateAsync);
         _adoptRoute = AdoptRouteAsync;
         _reload = ReloadAsync;
+    }
+
+    /// <summary>
+    /// Performs whatever the current state's action is. One handler rather than
+    /// one per state, because <see cref="SelectionStateView"/> offers a single
+    /// action and the state already names which one it is.
+    /// </summary>
+    private Task ResolveStateAsync() => _state.Kind switch
+    {
+        ExplorerStateKind.ScopedOut => ClearTenantScopeAsync(),
+        ExplorerStateKind.Failed => RefreshAsync(),
+        _ => Task.CompletedTask,
+    };
+
+    /// <summary>
+    /// Widens the scope to every tenant the caller can reach and reloads, which
+    /// is the remedy a scoped-out catalog names.
+    /// </summary>
+    /// <remarks>
+    /// The seam states its own outcome and is the enforcement point; this reloads
+    /// regardless, so a refusal re-renders the state that still applies rather
+    /// than leaving the catalog looking as though the button did nothing.
+    /// </remarks>
+    private async Task ClearTenantScopeAsync()
+    {
+        if (_tenantSwitcher is not null)
+        {
+            await _tenantSwitcher.SetVisibilityAsync(ExplorerTenantVisibility.AllTenants);
+        }
+
+        await ReloadAsync();
+    }
+
+    /// <summary>
+    /// Re-reads whether the scope remedy can be offered, once a load has settled
+    /// on a state that would offer it.
+    /// </summary>
+    /// <remarks>
+    /// Asked only when the scope is what emptied the catalog, so the ordinary
+    /// path - a catalog with rows, or empty for any other reason - never pays for
+    /// the probe.
+    /// </remarks>
+    private async Task RefreshScopeRemedyAsync()
+    {
+        if (_state.Kind != ExplorerStateKind.ScopedOut || _tenantSwitcher is not { IsActive: true })
+        {
+            return;
+        }
+
+        bool permitted;
+        try
+        {
+            permitted = await _tenantSwitcher.IsOperatorAsync();
+        }
+        catch
+        {
+            // Presentation only: a seam that cannot answer withholds the remedy
+            // rather than disrupting a catalog that has already rendered.
+            permitted = false;
+        }
+
+        if (permitted == _canClearTenantScope || _disposed)
+        {
+            return;
+        }
+
+        _canClearTenantScope = permitted;
+        Announce();
+        await InvokeAsync(StateHasChanged);
     }
 
     /// <summary>The route kind slug naming <paramref name="kind"/>.</summary>
@@ -358,6 +461,12 @@
         // reload occasion. The host state is the seam that publishes it, and it
         // is optional so a head without the plugin host still renders.
         _hostState = Services.GetService(typeof(ExplorerPluginHostState)) as ExplorerPluginHostState;
+
+        // The seam that can widen the scope, so a scoped-out catalog can offer
+        // the way out it already describes. Optional: registered only when tenant
+        // scoping is enabled, and a head without it simply never offers it.
+        _tenantSwitcher = Services.GetService(typeof(IExplorerTenantSwitcher)) as IExplorerTenantSwitcher;
+
         if (_hostState is not null)
         {
             _hostState.Changed += OnHostChanged;
@@ -477,6 +586,17 @@
         _loading = true;
         _error = null;
         _refusal = null;
+
+        if (reset)
+        {
+            // The state block now renders the shared message rather than a fixed
+            // "Loading catalog..." string, so a reload has to say it is loading
+            // THIS kind. Leaving the previous kind's settled state in place would
+            // show the outgoing catalog's answer over the incoming one's wait.
+            _state = ExplorerStateCopy.Loading(ExplorerSubjects.ForCatalogKind(_kind));
+            _stateAction = default;
+        }
+
         StateHasChanged();
 
         List<CatalogItem>? trees = null;
@@ -536,6 +656,10 @@
             Announce();
             StateHasChanged();
         }
+
+        // After the state has settled, because the probe is only worth making for
+        // the one state that offers the remedy it gates.
+        await RefreshScopeRemedyAsync();
 
         if (trees is not null)
         {
@@ -689,6 +813,7 @@
         if (_error is not null || _refusal is not null)
         {
             _announcement = _state.Headline + " " + _state.Explanation;
+            ComposeStateAction();
             return;
         }
 
@@ -698,7 +823,28 @@
                 ? KindLabel + ": 1 " + subject.Singular + "."
                 : KindLabel + ": " + _items.Count.ToString(System.Globalization.CultureInfo.CurrentCulture)
                     + " " + subject.Plural + ".";
+
+        ComposeStateAction();
     }
+
+    /// <summary>
+    /// Resolves the action offered with the current state to the one this panel
+    /// can actually perform, or to no action at all.
+    /// </summary>
+    /// <remarks>
+    /// The two states with a way out are the two this panel owns: a failed read
+    /// it can re-issue, and a scope it can widen for a caller permitted to. Every
+    /// other state - absent, refused, sign-in-required - is resolved somewhere
+    /// other than here, so the panel offers no control for it and the copy's
+    /// remedy prose stands alone.
+    /// </remarks>
+    private void ComposeStateAction() =>
+        _stateAction = _state.Kind switch
+        {
+            ExplorerStateKind.Failed => _resolveState,
+            ExplorerStateKind.ScopedOut when _canClearTenantScope => _resolveState,
+            _ => default,
+        };
 
     // Fetches the dead-letter count for each of the given trees and records the
     // non-zero counts for the badge. Counts are fetched concurrently (no delays /

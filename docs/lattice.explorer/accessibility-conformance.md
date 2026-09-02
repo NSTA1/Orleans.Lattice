@@ -33,9 +33,9 @@ contrast regression fails the pull request rather than a nightly job.
 **Rendered conformance is checked in a browser lane.** An axe sweep runs the
 `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa` rule sets across both
 themes, all three breakpoint bands, signed in and signed out, and every area the
-shell offers. Alongside it, explicit structural assertions cover what axe cannot
-see, and a journey suite exercises the console the way a person moves through
-it.
+shell offers, plus a targeted high-contrast pass over both palettes. Alongside
+it, explicit structural assertions cover what axe cannot see, and a journey suite
+exercises the console the way a person moves through it.
 
 Two disciplines make those results mean something:
 
@@ -47,20 +47,21 @@ Two disciplines make those results mean something:
   blank page, so a misconfigured sweep passes hardest exactly when the app is
   most broken. Each case asserts the shell rendered, the theme genuinely changed
   what the browser resolved, the viewport was genuinely classified into the band
-  requested, and the identity is genuinely the one rendered, before asserting
-  anything is clean. The rule set is checked for vacuity too: `target-size`, the
-  only rule carrying the `wcag22aa` tag in the bundled axe-core, ships disabled,
+  requested, the contrast overlay genuinely resolved different colour tokens
+  from the standard one, and the identity is genuinely the one rendered, before
+  asserting anything is clean. The rule set is checked for vacuity too:
+  `target-size`, the only rule carrying the `wcag22aa` tag in the bundled
+  axe-core, ships disabled,
   so requesting the tag without enabling the rule would have reported a
   meaningless clean WCAG 2.2 AA pass.
 
 ## Known limitations
 
-- **High contrast is guarded at the token layer but not swept in a browser.** The
-  browserless contrast guard measures all four palettes, including
-  `dark high contrast` and `light high contrast`, so the arithmetic is covered in
-  the required build. The axe sweep, however, drives `data-theme` and the
-  breakpoint band but not `data-contrast`, so no rendered-DOM conformance run has
-  been made with high contrast in effect. Tracked in #1890.
+- **Density is not driven by the sweep.** The axe sweep drives theme, breakpoint
+  band, identity and contrast, but not `data-lx-density`, so the compact spacing
+  scale has never been measured in a rendered DOM. It is a spacing concern rather
+  than a contrast one, and `target-size` - the WCAG 2.2 AA rule this suite
+  force-enables - is exactly the kind of rule a denser scale could regress.
 - **Automated scanning finds a minority of real barriers.** It cannot tell
   whether a tab is bound to a panel, whether a heading outline is navigable,
   whether a keyboard user can bypass the chrome, or whether a change was
