@@ -224,6 +224,62 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
     }
 
     [Test]
+    public async Task A_failed_file_coverage_probe_still_embeds_the_changed_files()
+    {
+        // The file arm's twin of the probe guard above. Its coverage probe is a
+        // single whole-candidate-set call rather than per-page, so the degraded
+        // mode differs: embed the changed files, which need no coverage because
+        // they are re-embedded regardless, and defer the gap sweep. Guessing
+        // "uncovered" instead would re-embed the entire repository.
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            Method = nameof(ILattice.GetManyAsync),
+            FailFirst = 1,
+        };
+
+        var options = new RepoContextMcpHarnessOptions
+        {
+            Posture = RepoContextMcpAuthPosture.Writer,
+            ConfigureSilo = silo =>
+            {
+                silo.Services.AddSingleton(injector);
+                silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeFaultInjectingFilter>();
+            },
+        };
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
+        var root = Path.Combine(Path.GetTempPath(), $"rc-probe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var changed = new List<RepoFileEntry>();
+            for (var i = 0; i < 3; i++)
+            {
+                var rel = $"src/Changed{i}.cs";
+                var full = Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                await File.WriteAllTextAsync(full, $"public class Changed{i} {{ public int Value => {i}; }}", Ct);
+                changed.Add(new RepoFileEntry { RelativePath = rel, Digest = $"d{i}", SizeBytes = 64 });
+            }
+
+            var embedded = await Ingestor(harness).IngestAsync(
+                RepoId, root, changed, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(injector.Failed, Is.EqualTo(1), "The coverage probe was faulted.");
+                Assert.That(embedded, Is.EqualTo(3),
+                    "The changed files still embed; only the gap sweep is deferred.");
+            });
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task An_unfaulted_pass_still_embeds_everything_in_one_go()
     {
         var (options, injector) = FaultingOptions(failFirst: 0);

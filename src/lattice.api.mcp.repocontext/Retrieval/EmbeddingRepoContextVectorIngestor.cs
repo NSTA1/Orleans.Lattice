@@ -129,8 +129,40 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             candidateKeys.Add(RepoContextKeys.File(repoId, file.RelativePath));
         }
 
-        var coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken).ConfigureAwait(false);
-        var toEmbed = SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
+        // Losing this probe must not cost the whole arm. Without coverage we cannot
+        // tell an embedded file from a missing one, so the gap sweep is skipped for
+        // this pass rather than guessed at - guessing "uncovered" would re-embed the
+        // entire repository. The changed files are embedded regardless, because they
+        // are re-embedded whatever their coverage says, so the pass still does its
+        // primary job and the back-fill simply resumes next reconcile.
+        //
+        // This is the file-arm twin of the symbol arm's per-page probe guard. Both
+        // were needed: guarding only the arm that happened to be failing at the time
+        // left this one to become the next thing that broke, which is exactly what
+        // happened on the live deployment once the symbol arm was fixed.
+        RepoContextEmbeddingCoverage coverage;
+        var coverageProbeFailed = false;
+        try
+        {
+            coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            coverageProbeFailed = true;
+            coverage = RepoContextEmbeddingCoverage.Empty;
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: the embedding-coverage probe failed; embedding the {Changed} changed file(s) "
+                + "and deferring the gap sweep over {Unchanged} unchanged file(s) to the next reconcile.",
+                repoId,
+                changedFiles.Count,
+                unchangedFiles.Count);
+        }
+
+        var toEmbed = coverageProbeFailed
+            ? new List<RepoFileEntry>(changedFiles)
+            : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
         if (toEmbed.Count == 0)
         {
             return 0;
