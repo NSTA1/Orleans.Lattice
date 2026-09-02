@@ -179,7 +179,8 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'repoId' parameter is required and must be a non-empty identifier.");
         }
 
-        if (!Enum.TryParse<RepoContextScanScope>(scope, ignoreCase: true, out var parsedScope))
+        if (!Enum.TryParse<RepoContextScanScope>(scope, ignoreCase: true, out var parsedScope)
+            || !Enum.IsDefined(parsedScope))
         {
             throw new McpException(
                 $"The 'scope' value '{scope}' is not recognised. Use one of: Files, Packages, Symbols, Memory, MemoryTopic.");
@@ -272,7 +273,8 @@ internal static class RepoContextToolHandlers
 
         var memoryKind = MemoryKind.Note;
         if (!string.IsNullOrWhiteSpace(kind)
-            && !Enum.TryParse(kind, ignoreCase: true, out memoryKind))
+            && (!Enum.TryParse(kind, ignoreCase: true, out memoryKind)
+                || !Enum.IsDefined(memoryKind)))
         {
             throw new McpException(
                 $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");

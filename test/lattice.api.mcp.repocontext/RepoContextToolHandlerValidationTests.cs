@@ -62,6 +62,16 @@ public sealed class RepoContextToolHandlerValidationTests
             Throws.InstanceOf<McpException>(),
             "An unrecognised scope must be rejected rather than silently walking the wrong range.");
 
+    [TestCase("99")]
+    [TestCase("-1")]
+    [TestCase("2147483647")]
+    public void ScanAsync_rejects_an_out_of_range_numeric_scope(string scope)
+        => Assert.That(
+            () => RepoContextToolHandlers.ScanAsync(null!, "acme", scope),
+            Throws.InstanceOf<McpException>(),
+            "A numeric string is not a scope name: Enum.TryParse binds it to an undefined value, "
+            + "so without an Enum.IsDefined guard it slips past validation and walks the wrong range.");
+
     [TestCase("")]
     [TestCase("   ")]
     public void ListTopicsAsync_rejects_a_blank_repo_id(string repoId)
@@ -83,6 +93,16 @@ public sealed class RepoContextToolHandlerValidationTests
             () => RepoContextToolHandlers.RememberAsync(null!, "acme", "decisions", kind: "NotAKind"),
             Throws.InstanceOf<McpException>(),
             "An unrecognised kind must be rejected so an entry is never filed under a kind the store cannot honour.");
+
+    [TestCase("99")]
+    [TestCase("-1")]
+    [TestCase("2147483647")]
+    public void RememberAsync_rejects_an_out_of_range_numeric_kind(string kind)
+        => Assert.That(
+            () => RepoContextToolHandlers.RememberAsync(null!, "acme", "decisions", kind: kind),
+            Throws.InstanceOf<McpException>(),
+            "A numeric string is not a kind name: Enum.TryParse binds it to an undefined value, "
+            + "so without an Enum.IsDefined guard an entry would be filed under a kind the store cannot honour.");
 
     [TestCase("")]
     [TestCase("   ")]
