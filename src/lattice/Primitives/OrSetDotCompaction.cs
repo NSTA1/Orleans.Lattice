@@ -54,6 +54,55 @@ namespace Orleans.Lattice;
 internal static class OrSetDotCompaction
 {
     /// <summary>
+    /// The <see cref="AppContext"/> switch that suppresses dot compaction while
+    /// leaving coverage-based cancellation in place.
+    /// <para>
+    /// It exists for one situation: an <b>active-active multi-cluster</b> fleet
+    /// mid-upgrade. Compaction drops a superseded dot that an un-upgraded peer
+    /// still holds and still cancels by exact equality, so for a slot that was
+    /// both re-asserted and then retracted the two builds can read the same
+    /// converged dot set differently until both are upgraded. Setting this
+    /// switch on the upgraded nodes makes them retain dots exactly as the old
+    /// build does, so a fleet can be upgraded in any order; clear it once every
+    /// replica is on the new build and the bounded normal form re-establishes
+    /// itself on its own through the ordinary self-healing path.
+    /// </para>
+    /// <para>
+    /// Cancellation stays coverage-based either way, because on data that was
+    /// never compacted the two predicates agree: a retraction tombstones every
+    /// live dot it observed, so a replica never holds a tombstone for one of its
+    /// own later dots without also holding one for the earlier dot it
+    /// supersedes.
+    /// </para>
+    /// <para>
+    /// A single-cluster deployment - which is what the defect was reported
+    /// against - never needs this. It defaults to off, so the fix is on by
+    /// default.
+    /// </para>
+    /// </summary>
+    internal const string DisableCompactionSwitch = "Orleans.Lattice.Crdt.DisableDotCompaction";
+
+    /// <summary>
+    /// Read once at type initialisation: an <see cref="AppContext"/> switch is
+    /// host wiring, not a per-call knob, and these run on the hot merge path.
+    /// </summary>
+    private static bool compactionDisabled =
+        AppContext.TryGetSwitch(DisableCompactionSwitch, out var disabled) && disabled;
+
+    /// <summary>
+    /// Whether compaction is currently suppressed. Exposed so the rollout
+    /// behaviour behind <see cref="DisableCompactionSwitch"/> is testable rather
+    /// than untested configuration; the setter is test-only and must not be used
+    /// to toggle the gate at runtime, which would leave a fleet's replicas
+    /// disagreeing about the normal form mid-flight.
+    /// </summary>
+    internal static bool CompactionDisabled
+    {
+        get => compactionDisabled;
+        set => compactionDisabled = value;
+    }
+
+    /// <summary>
     /// The distinct-replica count below which the in-place linear scan beats
     /// building a dictionary. A slot carries one live dot per replica after
     /// compaction, and a deployment's replica count is a small constant (one
@@ -104,7 +153,7 @@ internal static class OrSetDotCompaction
     /// <returns><see langword="true"/> when at least one dot was removed.</returns>
     internal static bool CompactMaxPerReplica(List<OrSetDot> dots)
     {
-        if (dots.Count <= 1)
+        if (dots.Count <= 1 || CompactionDisabled)
         {
             return false;
         }
