@@ -43,14 +43,21 @@ namespace Orleans.Lattice.Explorer.UiTests;
 public sealed class ExplorerAppHost : IAsyncDisposable
 {
     private readonly WebApplication _app;
-    private readonly string _publishRoot;
+    private readonly ExplorerHostFaultRecorder _faults;
 
-    private ExplorerAppHost(WebApplication app, Uri baseUri, string publishRoot)
+    private ExplorerAppHost(WebApplication app, Uri baseUri, ExplorerHostFaultRecorder faults)
     {
         _app = app;
         BaseUri = baseUri;
-        _publishRoot = publishRoot;
+        _faults = faults;
     }
+
+    /// <summary>
+    /// What this head logged at warning level or above since the last read, as one
+    /// reportable block, or <see langword="null"/> when it logged nothing. Reading
+    /// clears the buffer, so each test reports only its own faults.
+    /// </summary>
+    internal string? DescribeFaults() => _faults.DescribeFaults();
 
     /// <summary>The loopback base address Playwright should navigate to.</summary>
     public Uri BaseUri { get; }
@@ -111,6 +118,14 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         });
 
         builder.Logging.ClearProviders();
+
+        // ClearProviders is right - an unfiltered ASP.NET Core console log would bury the
+        // test output - but on its own it discarded every server-side fault, including
+        // the circuit exceptions that leave the page rendered but inert. Re-attach a
+        // capture-only provider so a failing test can report what the server said instead
+        // of only the locator that timed out at the end of the chain.
+        var faults = new ExplorerHostFaultRecorder();
+        builder.Logging.AddProvider(faults);
 
         // Bind port 0 and read back what the OS assigned.
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -174,7 +189,7 @@ public sealed class ExplorerAppHost : IAsyncDisposable
 
         var address = ResolveAddress(app);
         await VerifyFrameworkAssetServedAsync(address);
-        return new ExplorerAppHost(app, address, publishRoot);
+        return new ExplorerAppHost(app, address, faults);
     }
 
     private static async Task VerifyFrameworkAssetServedAsync(Uri baseUri)
@@ -243,17 +258,9 @@ public sealed class ExplorerAppHost : IAsyncDisposable
         await _app.StopAsync();
         await _app.DisposeAsync();
 
-        try
-        {
-            Directory.Delete(_publishRoot, recursive: true);
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup of the temp publish directory; a leftover temp folder
-            // must never fail the run.
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        // The published content root is deliberately NOT deleted here: it is shared by
+        // every head in the process (see ExplorerPublishedAssets), so a head that
+        // deleted it on its own disposal would pull the static assets out from under a
+        // head still serving. ExplorerAppHostSetup cleans it up once, after all of them.
     }
 }

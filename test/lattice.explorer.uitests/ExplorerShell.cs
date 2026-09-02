@@ -78,6 +78,9 @@ internal static class ExplorerShell
     private const string LoginDialogSelector = ".lx-shell-config-overlay [role=dialog]";
     private const string AreaStripTabSelector = ".lx-shell-areastrip [role=tab]";
     private const string AreaStripSelectedTabSelector = ".lx-shell-areastrip [role=tab][aria-selected='true']";
+
+    /// <summary>The rail once every area gate has reported, so its offered set is final.</summary>
+    private const string SettledRailSelector = ".lx-shell-rail[data-lx-rail-settled='true']";
     private const string AreaOverflowToggleSelector = ".lx-shell-areastrip .lx-tabstrip-overflow-toggle";
 
     // The three band selectors are composed once as constants rather than interpolated
@@ -402,6 +405,20 @@ internal static class ExplorerShell
     internal static async Task<IReadOnlyList<string>> OfferedAreaLabelsAsync(IPage page)
     {
         await AssertShellRenderedAsync(page);
+
+        // Wait for the rail to settle before reading it at all.
+        //
+        // The remarks above describe the set as a snapshot rather than a settled answer,
+        // and say there is no DOM signal for "every gate has reported". There is one now
+        // - the rail publishes data-lx-rail-settled - so the caller no longer has to
+        // treat an unsettled read as a fact of life. This matters because the sweep does
+        // not merely read the set, it then ACTIVATES each label in it: an area read
+        // before its gate reported can be demoted out of the strip by the time it is
+        // clicked, and the activation then waits out its whole action timeout for a tab
+        // that is never coming back, which is exactly how the sweep was failing on
+        // "Backups". Settling first makes the enumerated set final, so every label it
+        // returns is still there to be activated.
+        await Assertions.Expect(page.Locator(SettledRailSelector)).ToBeAttachedAsync();
 
         await Assertions
             .Expect(page.Locator(AreaOverflowToggleSelector))
