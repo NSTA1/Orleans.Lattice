@@ -2688,7 +2688,12 @@ internal sealed partial class BPlusLeafGrain(
         var splitKey = state.State.SplitKey;
         var (outcomes, pendingKeys) = await SnapshotPendingForReadAsync();
 
-        var entries = new List<KeyValuePair<string, byte[]>>();
+        // Pre-size the result list to bound the small-end resize chain, mirroring
+        // the sibling GetKeysAsync path above: capped at 256 so small leaves
+        // collapse to Cache.Count (no waste) while large leaves avoid the ~10x
+        // over-allocation a bare Cache.Count would cause when the range filter or
+        // split-key bound truncates iteration well below the leaf's entry count.
+        var entries = new List<KeyValuePair<string, byte[]>>(capacity: Math.Min(Cache.Count, 256));
         foreach (var (key, lww) in Cache.EnumerateRange(
             MaxOrdinal(startInclusive, afterExclusive),
             MinOrdinal(MinOrdinal(endExclusive, beforeExclusive), splitInProgress ? splitKey : null)))

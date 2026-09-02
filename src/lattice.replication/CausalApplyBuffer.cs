@@ -169,7 +169,7 @@ internal sealed class CausalApplyBuffer
     public List<WalRecord> DrainSatisfied(VersionVector localVc, string? localClusterId = null)
     {
         ArgumentNullException.ThrowIfNull(localVc);
-        var ready = new List<WalRecord>();
+        List<WalRecord> ready;
         // Single auxiliary list for per-entry wait samples; bytes
         // accumulate into a scalar so there is no second list.
         // Allocated lazily on first drained entry.
@@ -179,6 +179,11 @@ internal sealed class CausalApplyBuffer
 
         lock (_gate)
         {
+            // Pre-size to the parked-entry count read under the gate: the drain
+            // yields at most one record per buffered entry, so this is a tight
+            // upper bound. On the empty steady-state buffer this is a zero-capacity
+            // list (no backing array), so the common no-reorder path is unaffected.
+            ready = new List<WalRecord>(_entries.Count);
             var node = _entries.First;
             while (node is not null)
             {
