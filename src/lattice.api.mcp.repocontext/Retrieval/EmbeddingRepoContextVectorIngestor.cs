@@ -129,8 +129,40 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             candidateKeys.Add(RepoContextKeys.File(repoId, file.RelativePath));
         }
 
-        var coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken).ConfigureAwait(false);
-        var toEmbed = SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
+        // Losing this probe must not cost the whole arm. Without coverage we cannot
+        // tell an embedded file from a missing one, so the gap sweep is skipped for
+        // this pass rather than guessed at - guessing "uncovered" would re-embed the
+        // entire repository. The changed files are embedded regardless, because they
+        // are re-embedded whatever their coverage says, so the pass still does its
+        // primary job and the back-fill simply resumes next reconcile.
+        //
+        // This is the file-arm twin of the symbol arm's per-page probe guard. Both
+        // were needed: guarding only the arm that happened to be failing at the time
+        // left this one to become the next thing that broke, which is exactly what
+        // happened on the live deployment once the symbol arm was fixed.
+        RepoContextEmbeddingCoverage coverage;
+        var coverageProbeFailed = false;
+        try
+        {
+            coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            coverageProbeFailed = true;
+            coverage = RepoContextEmbeddingCoverage.Empty;
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: the embedding-coverage probe failed; embedding the {Changed} changed file(s) "
+                + "and deferring the gap sweep over {Unchanged} unchanged file(s) to the next reconcile.",
+                repoId,
+                changedFiles.Count,
+                unchangedFiles.Count);
+        }
+
+        var toEmbed = coverageProbeFailed
+            ? new List<RepoFileEntry>(changedFiles)
+            : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
         if (toEmbed.Count == 0)
         {
             return 0;
@@ -395,6 +427,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var prefix = RepoContextKeys.MemoryPrefix(repoId);
         var sources = new List<EmbeddingSource>();
 
+        // The embedded-key markers this repository already holds, read once and
+        // used twice: as a skip signal during the walk below, and as the recorded
+        // half of the orphan set afterwards.
+        //
+        // Consulting it as a skip signal is what stops an entry being re-embedded
+        // forever. The source-id flag probed per page is written by AddMembersAsync,
+        // which shares the membership tree with the file and symbol arms' gap
+        // sweeps and is the write that times out under that load; when it does not
+        // land, an entry looks un-embedded on every later pass even though its
+        // vectors are stored. This marker is written by a small targeted call that
+        // does not contend with the sweep, so it survives exactly the pressure that
+        // loses the flag. Either being present is sufficient evidence, and each is
+        // only ever written after the corresponding vectors landed.
+        var recordedMemoryKeys = await _writer
+            .LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken)
+            .ConfigureAwait(false);
+
         // Every memory key that is live right now. Collected during the same walk
         // that selects what to embed, so the orphan sweep below costs one extra
         // set rather than a second pass over the store.
@@ -430,7 +479,9 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 var sourceKey = record.Key;
-                if (!changed.Contains(sourceKey) && embeddedMembers.Contains(VectorCodec.SourceId(sourceKey)))
+                if (!changed.Contains(sourceKey)
+                    && (embeddedMembers.Contains(VectorCodec.SourceId(sourceKey))
+                        || recordedMemoryKeys.Contains(sourceKey)))
                 {
                     continue;
                 }
@@ -469,26 +520,25 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
-        await SweepOrphanedMemoryVectorsAsync(repoId, liveKeys, cancellationToken).ConfigureAwait(false);
-
-        var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken)
+        await SweepOrphanedMemoryVectorsAsync(repoId, liveKeys, recordedMemoryKeys, cancellationToken)
             .ConfigureAwait(false);
 
-        // Record what is now embedded so a later pass can compute the orphan set.
-        // Written after the store so a marker never claims an embedding that did
-        // not land; a source whose batch failed stays unmarked and is retried.
-        if (sources.Count > 0)
-        {
-            var marked = new List<string>(sources.Count);
-            foreach (var source in sources)
-            {
-                marked.Add(source.SourceKey);
-            }
+        var landed = await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress: null, cancellationToken)
+            .ConfigureAwait(false);
 
-            await _writer.MarkMemoryEmbeddedAsync(repoId, marked, cancellationToken).ConfigureAwait(false);
+        // Record only what actually landed. Marking every source the pass intended
+        // to embed would assert an embedding that a failed batch never stored, and
+        // this marker is the recorded half of the orphan set (recorded - live), so
+        // a false entry there is a phantom record rather than a wasted write. It
+        // matters more since each batch gained its own failure boundary: the arm
+        // now survives a failed batch and reaches this line, where previously the
+        // whole arm unwound and nothing was marked at all.
+        if (landed.Count > 0)
+        {
+            await _writer.MarkMemoryEmbeddedAsync(repoId, landed, cancellationToken).ConfigureAwait(false);
         }
 
-        return embedded;
+        return landed.Count;
     }
 
     /// <summary>
@@ -504,15 +554,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </para>
     /// <para>
     /// The orphan set is exactly (recorded - live), both of which this pass already
-    /// holds: the recorded keys come from one small add-wins record, and the live
-    /// keys were collected during the enumeration above. So the sweep adds one read
-    /// and touches only entries that actually vanished.
+    /// holds: the recorded keys were loaded once by the caller for its skip check,
+    /// and the live keys were collected during the enumeration above. So the sweep
+    /// adds no read at all and touches only entries that actually vanished.
     /// </para>
     /// </summary>
+    /// <param name="repoId">The repository being swept.</param>
+    /// <param name="liveKeys">The memory keys observed live during this pass's walk.</param>
+    /// <param name="recorded">
+    /// The embedded-key markers, already loaded by the caller for its skip check so
+    /// the sweep costs no additional read.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the sweep.</param>
     private async Task SweepOrphanedMemoryVectorsAsync(
-        string repoId, HashSet<string> liveKeys, CancellationToken cancellationToken)
+        string repoId,
+        HashSet<string> liveKeys,
+        IReadOnlySet<string> recorded,
+        CancellationToken cancellationToken)
     {
-        var recorded = await _writer.LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken).ConfigureAwait(false);
         if (recorded.Count == 0)
         {
             return;
@@ -606,10 +665,35 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         IReadOnlyList<EmbeddingSource> sources,
         Func<int, CancellationToken, ValueTask>? onProgress,
         CancellationToken cancellationToken)
+        => (await EmbedAndStoreReportingLandedAsync(repoId, sources, onProgress, cancellationToken)
+            .ConfigureAwait(false)).Count;
+
+    /// <summary>
+    /// The variant of <see cref="EmbedAndStoreAsync"/> that reports <b>which</b>
+    /// sources actually landed, rather than only how many.
+    /// <para>
+    /// A caller that records a marker per source needs the identities, not a
+    /// count: marking a source whose batch failed would assert an embedding that
+    /// does not exist. The memory arm's embedded-key marker is exactly that kind
+    /// of caller - it is what makes the orphan set (recorded - live) computable -
+    /// so a false entry there is a phantom record, not merely a wasted write.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository being embedded.</param>
+    /// <param name="sources">The sources to embed.</param>
+    /// <param name="onProgress">Optional incremental progress callback.</param>
+    /// <param name="cancellationToken">Cancels the pass.</param>
+    /// <returns>The source keys whose vectors were stored and whose membership was recorded.</returns>
+    private async Task<List<string>> EmbedAndStoreReportingLandedAsync(
+        string repoId,
+        IReadOnlyList<EmbeddingSource> sources,
+        Func<int, CancellationToken, ValueTask>? onProgress,
+        CancellationToken cancellationToken)
     {
+        var landed = new List<string>();
         if (sources.Count == 0)
         {
-            return 0;
+            return landed;
         }
 
         // Flatten every source's passages into one unit list, remembering each
@@ -696,6 +780,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     // batched CRDT write (one read to mint the deltas, one apply), not
                     // one round trip per source.
                     await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
+
+                    // Only now is a source genuinely landed: its vectors are stored
+                    // AND its membership recorded. Reporting it before the membership
+                    // write would let a caller mark an embedding the store cannot see.
+                    landed.AddRange(pendingMembers);
                     pendingMembers.Clear();
                 }
 
@@ -746,7 +835,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             throw firstBatchFailure;
         }
 
-        return embedded;
+        return landed;
     }
 
     /// <summary>

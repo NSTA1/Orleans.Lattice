@@ -28,4 +28,13 @@ internal readonly record struct RepoContextEmbeddingCoverage(
     /// <returns><see langword="true"/> when the source is embedded or contentless-marked.</returns>
     public bool IsCovered(string sourceId) =>
         Embedded.Contains(sourceId) || Contentless.Contains(sourceId);
+
+    /// <summary>
+    /// Coverage that knows nothing. Used when a coverage probe could not be
+    /// completed, so a caller can degrade deliberately rather than treat a failed
+    /// probe as authoritative: nothing is covered, so a caller that would re-embed
+    /// on the strength of it must instead skip the gap sweep for that pass.
+    /// </summary>
+    public static RepoContextEmbeddingCoverage Empty { get; } =
+        new(new HashSet<string>(StringComparer.Ordinal), new HashSet<string>(StringComparer.Ordinal));
 }
