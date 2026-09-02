@@ -224,7 +224,8 @@ internal static class BackupToolMappings
             return BackupScopeKind.WholeTree;
         }
 
-        if (Enum.TryParse<BackupScopeKind>(scopeKind, ignoreCase: true, out var kind))
+        if (Enum.TryParse<BackupScopeKind>(scopeKind, ignoreCase: true, out var kind)
+            && Enum.IsDefined(kind))
         {
             return kind;
         }
@@ -249,7 +250,8 @@ internal static class BackupToolMappings
             return LatticeRestoreMode.InPlace;
         }
 
-        if (Enum.TryParse<LatticeRestoreMode>(mode, ignoreCase: true, out var parsed))
+        if (Enum.TryParse<LatticeRestoreMode>(mode, ignoreCase: true, out var parsed)
+            && Enum.IsDefined(parsed))
         {
             return parsed;
         }

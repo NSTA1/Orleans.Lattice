@@ -57,6 +57,8 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
 {
     private readonly LatticeApiMcpGroup _group;
     private readonly Tool _protocolTool;
+    private readonly IReadOnlySet<string> _allowedArguments;
+    private readonly string _acceptedArgumentsDescription;
 
     /// <summary>Wraps <paramref name="inner"/> with per-invocation credential stamping and region routing.</summary>
     /// <param name="inner">The facade-backed tool to run under the caller's credential.</param>
@@ -66,6 +68,10 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
     {
         _group = group;
         _protocolTool = LatticeApiMcpRegionToolSchema.WithRegionProperty(base.ProtocolTool);
+        _allowedArguments = ExtractAllowedArgumentNames(_protocolTool.InputSchema);
+        _acceptedArgumentsDescription = _allowedArguments.Count == 0
+            ? "(none)"
+            : string.Join(", ", _allowedArguments.OrderBy(static n => n, StringComparer.Ordinal).Select(static n => $"'{n}'"));
     }
 
     /// <inheritdoc />
@@ -91,6 +97,11 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
             throw new McpException(
                 $"Caller is not authorized to invoke the '{toolName}' tool.");
         }
+
+        // Strict binding: an argument the tool does not declare is a caller error
+        // (typically a misspelled or unsupported parameter name), so reject it with
+        // a message naming the offending argument rather than silently ignoring it.
+        EnsureNoUnknownArguments(request);
 
         var requestedRegion = ReadRequestedRegion(request);
 
@@ -208,6 +219,61 @@ internal sealed class CredentialStampingTool : DelegatingMcpServerTool
 
         var region = value.GetString();
         return string.IsNullOrWhiteSpace(region) ? null : region;
+    }
+
+    /// <summary>
+    /// Rejects a call that carries any argument the wrapped tool does not declare in
+    /// its input schema. The set of accepted names is the tool's schema properties
+    /// (including the decorator-added <c>region</c>), computed once when the tool is
+    /// wrapped. An unknown argument is a caller mistake - most often a misspelled
+    /// parameter - and silently discarding it lets the call run with a meaning the
+    /// caller never intended, so it faults fast with a message naming the offenders.
+    /// </summary>
+    private void EnsureNoUnknownArguments(RequestContext<CallToolRequestParams> request)
+    {
+        var arguments = request.Params?.Arguments;
+        if (arguments is null || arguments.Count == 0)
+        {
+            return;
+        }
+
+        List<string>? unknown = null;
+        foreach (var name in arguments.Keys)
+        {
+            if (!_allowedArguments.Contains(name))
+            {
+                (unknown ??= new List<string>()).Add(name);
+            }
+        }
+
+        if (unknown is null)
+        {
+            return;
+        }
+
+        unknown.Sort(StringComparer.Ordinal);
+        var offending = string.Join(", ", unknown.Select(static n => $"'{n}'"));
+        throw new McpException(
+            $"The '{ProtocolTool.Name}' tool does not accept the argument(s): {offending}. "
+            + $"Accepted arguments: {_acceptedArgumentsDescription}. "
+            + "Check for a misspelled or unsupported argument name; unknown arguments are "
+            + "rejected rather than silently ignored.");
+    }
+
+    private static HashSet<string> ExtractAllowedArgumentNames(JsonElement inputSchema)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (inputSchema.ValueKind == JsonValueKind.Object
+            && inputSchema.TryGetProperty("properties", out var properties)
+            && properties.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in properties.EnumerateObject())
+            {
+                names.Add(property.Name);
+            }
+        }
+
+        return names;
     }
 
     private static void AnnotateServedRegion(CallToolResult result, string regionId)
