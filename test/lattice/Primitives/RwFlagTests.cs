@@ -281,8 +281,14 @@ public class RwFlagTests
 
         Assert.Multiple(() =>
         {
+            // Independence is that the clone did not observe the later enable,
+            // which the counters prove: both sides hold one dot per replica, but
+            // the clone's is still the pre-clone one.
             Assert.That(clone.Enables, Has.Count.EqualTo(1));
-            Assert.That(a.Enables, Has.Count.EqualTo(2));
+            Assert.That(clone.Enables[0].Counter, Is.EqualTo(1));
+            Assert.That(a.Enables, Has.Count.EqualTo(1),
+                "Repeated same-replica enables compact to the newest dot.");
+            Assert.That(a.Enables[0].Counter, Is.EqualTo(2));
         });
     }
 

@@ -136,7 +136,8 @@ public class RwSetProvenanceDecoderTests
 
         Assert.That(set.Contains(E("x")), Is.True);
         Assert.That(events.Count(e => e.Kind == CrdtMemberChangeKind.Removed), Is.EqualTo(1));
-        Assert.That(events.Count(e => e.Kind == CrdtMemberChangeKind.Added), Is.EqualTo(2));
+        Assert.That(events.Count(e => e.Kind == CrdtMemberChangeKind.Added), Is.EqualTo(1),
+            "Compaction retains the latest same-replica add while preserving the remove event.");
     }
 
     [Test]

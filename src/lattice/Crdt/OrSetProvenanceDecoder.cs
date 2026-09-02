@@ -171,6 +171,22 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
                 for (var i = 0; i < tombDots.Count; i++)
                 {
                     var dot = tombDots[i];
+                    if (addDots is not null && !ContainsExact(addDots, in dot))
+                    {
+                        // A compacted add list can retain only this replica's
+                        // newest add. The tombstone is still proof that the
+                        // removed dot once existed, so synthesize its Added half
+                        // to keep add-then-remove history decodable.
+                        result.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Added,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+
                     result.Add(new CrdtMemberChange
                     {
                         Element = element,
@@ -254,16 +270,21 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
     }
 
     private static bool IsTombstoned(List<OrSetDot>? tombstones, OrSetDot dot)
+        => tombstones is not null && OrSetDotCompaction.Covers(tombstones, in dot);
+
+    private static bool ContainsExact(List<OrSetDot>? dots, in OrSetDot dot)
     {
-        if (tombstones is null) return false;
-        for (var i = 0; i < tombstones.Count; i++)
+        if (dots is null) return false;
+        for (var i = 0; i < dots.Count; i++)
         {
-            var t = tombstones[i];
-            if (t.Counter == dot.Counter && string.Equals(t.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
+            var candidate = dots[i];
+            if (candidate.Counter == dot.Counter
+                && string.Equals(candidate.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
             {
                 return true;
             }
         }
+
         return false;
     }
 
