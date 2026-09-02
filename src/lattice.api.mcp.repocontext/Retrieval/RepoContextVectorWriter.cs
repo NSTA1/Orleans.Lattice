@@ -115,9 +115,19 @@ internal sealed class RepoContextVectorWriter
     /// <summary>
     /// The maximum number of distinct source identifiers folded into a single
     /// bounded <see cref="ILattice.GetManyAsync(System.Collections.Generic.List{string}, CancellationToken)"/>
-    /// point-probe. Chosen to match the paged-scan page size so a probe RPC touches
-    /// a comparable, bounded key count and can never approach the response deadline,
-    /// no matter how large or churn-bloated the membership tree has grown.
+    /// point-probe. Chosen to match the paged-scan page size so a probe RPC
+    /// touches a comparable, bounded key count.
+    /// <para>
+    /// Bounding the batch bounds the FAN-OUT, not the latency on its own: a
+    /// probe's keys are source-id hashes, so they scatter across the membership
+    /// tree and bucket into many distinct leaves. The shard's batch read
+    /// dispatches those buckets in parallel, which is what keeps a batch this
+    /// wide inside the Orleans response deadline - when it awaited one leaf at a
+    /// time the cost was the SUM of every bucket's round trip and a probe over a
+    /// large tree timed out (issue #1918). Treat this constant and that fan-out
+    /// as a pair: raising it without the parallel dispatch reintroduces the
+    /// timeout.
+    /// </para>
     /// </summary>
     private const int MembershipProbeBatchSize = 256;
 
