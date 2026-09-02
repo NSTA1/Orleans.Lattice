@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Hosting;
@@ -71,6 +72,71 @@ public class LatticeReplicationServiceCollectionExtensionsTests
 
         var provider = services.BuildServiceProvider();
         Assert.That(provider.GetRequiredService<IReplicationTransport>(), Is.SameAs(custom));
+    }
+
+    [Test]
+    public void AddLatticeReplication_registers_the_real_backup_sink_sharing_probe_over_the_backup_no_op()
+    {
+        // The capture-side guard is wired exactly like the restore-saga seam: the
+        // backup package installs a no-op with TryAddSingleton and replication wins
+        // with AddSingleton, so the backup package never depends on replication.
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        services.TryAddSingleton<Orleans.Lattice.Backup.IBackupSinkSharingProbe, StubNoOpSharingProbe>();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
+
+        var provider = services.BuildServiceProvider();
+        Assert.That(
+            provider.GetRequiredService<Orleans.Lattice.Backup.IBackupSinkSharingProbe>(),
+            Is.InstanceOf<CrossClusterBackupSinkSharingProbe>());
+    }
+
+    [Test]
+    public void AddLatticeReplication_backup_sink_sharing_probe_resolves_without_a_saga_control_channel()
+    {
+        // Regression guard: only the gRPC transport package registers an
+        // ISagaControlChannel, and the backup package's startup guard resolves this
+        // probe eagerly as a hosted service. A hard dependency here would stop a
+        // replication + backup host on the no-op transport from starting at all.
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        services.AddLogging();
+        var builder = Substitute.For<ISiloBuilder>();
+        builder.Services.Returns(services);
+
+        builder.AddLatticeReplication(o => o.ClusterId = "test-cluster");
+
+        var provider = services.BuildServiceProvider();
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetService<ISagaControlChannel>(), Is.Null, "Precondition: no control channel wired.");
+            Assert.That(
+                () => provider.GetRequiredService<Orleans.Lattice.Backup.IBackupSinkSharingProbe>(),
+                Throws.Nothing);
+        });
+    }
+
+    /// <summary>
+    /// Stands in for the backup package's <c>NoBackupSinkSharingProbe</c>, which is
+    /// internal to that assembly, so the registration-ordering test can assert the
+    /// replication implementation wins over a pre-registered default.
+    /// </summary>
+    private sealed class StubNoOpSharingProbe : Orleans.Lattice.Backup.IBackupSinkSharingProbe
+    {
+        public Orleans.Lattice.Backup.BackupSinkSharingReport? LastReport => null;
+
+        public Task<Orleans.Lattice.Backup.BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new Orleans.Lattice.Backup.BackupSinkSharingReport(
+                Orleans.Lattice.Backup.BackupSinkSharingStatus.NotApplicable,
+                clusterId: string.Empty,
+                peerCount: 0,
+                unconfirmedPeerClusterIds: [],
+                probedAtUtc: DateTimeOffset.UtcNow,
+                explanation: "stub"));
     }
 
     [Test]

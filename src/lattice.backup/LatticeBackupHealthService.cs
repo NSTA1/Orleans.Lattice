@@ -14,8 +14,22 @@ namespace Orleans.Lattice.Backup;
 /// a deletion. Missing artifacts are not downloaded (the probe already classified
 /// them), so the extra cost over the probe is one streamed hash per present
 /// artifact.
+/// <para>
+/// For a backup of a <b>replicated</b> tree the local verdict is not the whole
+/// story: a coordinated restore resolves the same manifest chain from every
+/// cluster's own sink, so a backup that is locally intact but sits in a sink no
+/// peer can read is not a usable restore point. The service therefore reads the
+/// most recent cross-cluster verdict from <see cref="IBackupSinkSharingProbe"/> -
+/// a cached value, never fresh I/O, because sink sharing is a slow-moving
+/// deployment fact refreshed once per health sweep - and downgrades an otherwise
+/// healthy replicated-tree backup to <see cref="BackupHealthStatus.Warning"/> with
+/// a reason naming the peers.
+/// </para>
 /// </summary>
-internal sealed class LatticeBackupHealthService(ILatticeBackupSink sink) : ILatticeBackupHealthService
+internal sealed class LatticeBackupHealthService(
+    ILatticeBackupSink sink,
+    IBackupSinkSharingProbe? sharingProbe = null,
+    IReplicatedTreeMembership? membership = null) : ILatticeBackupHealthService
 {
     private readonly ILatticeBackupSink _sink = sink ?? throw new ArgumentNullException(nameof(sink));
 
@@ -80,7 +94,18 @@ internal sealed class LatticeBackupHealthService(ILatticeBackupSink sink) : ILat
             ? BackupHealthStatus.Healthy
             : BackupHealthStatus.Warning;
 
-        var explanation = BuildExplanation(backupId, status, missing, mismatches);
+        // A replicated tree's backup is only a restore point if every peer can read
+        // the sink holding it. Fold the last cross-cluster verdict in: a positively
+        // refuted sink downgrades an otherwise healthy backup to Warning so the
+        // misconfiguration is visible in the Explorer HEALTH column long before
+        // anyone attempts a coordinated restore.
+        var sharing = ResolveSharing(manifest.Scope.TreeId);
+        if (sharing is { Status: BackupSinkSharingStatus.NotShared } && status == BackupHealthStatus.Healthy)
+        {
+            status = BackupHealthStatus.Warning;
+        }
+
+        var explanation = BuildExplanation(backupId, status, missing, mismatches, sharing);
         return new BackupHealthReport(
             backupId,
             status,
@@ -88,7 +113,31 @@ internal sealed class LatticeBackupHealthService(ILatticeBackupSink sink) : ILat
             missingArtifactIds: missing,
             hashMismatchArtifactIds: mismatches,
             checkedAt,
-            explanation);
+            explanation,
+            peerVisibility: sharing?.Status ?? BackupSinkSharingStatus.NotApplicable,
+            peerUnconfirmedClusterIds: sharing?.UnconfirmedPeerClusterIds);
+    }
+
+    /// <summary>
+    /// Resolves the cached cross-cluster sharing verdict for a backup of
+    /// <paramref name="treeId"/>, or <see langword="null"/> when the verdict does
+    /// not apply. Returns <see langword="null"/> for a non-replicated tree, when the
+    /// replication package is not wired, when the probe has never run, and when the
+    /// probe reported <see cref="BackupSinkSharingStatus.NotApplicable"/> - so a
+    /// single-cluster deployment's health reports are byte-for-byte what they were
+    /// before the probe existed.
+    /// </summary>
+    private BackupSinkSharingReport? ResolveSharing(string treeId)
+    {
+        if (sharingProbe is null || membership is null || !membership.IsReplicated(treeId))
+        {
+            return null;
+        }
+
+        var report = sharingProbe.LastReport;
+        return report is null || report.Status == BackupSinkSharingStatus.NotApplicable
+            ? null
+            : report;
     }
 
     private async Task<string> ComputeArtifactHashAsync(string artifactId, CancellationToken cancellationToken)
@@ -109,16 +158,24 @@ internal sealed class LatticeBackupHealthService(ILatticeBackupSink sink) : ILat
         string backupId,
         BackupHealthStatus status,
         IReadOnlyList<string> missing,
-        IReadOnlyList<string> mismatches)
+        IReadOnlyList<string> mismatches,
+        BackupSinkSharingReport? sharing)
     {
+        var peerFault = sharing is { Status: BackupSinkSharingStatus.NotShared };
         if (status == BackupHealthStatus.Healthy)
         {
-            return $"Backup '{backupId}' is healthy: its manifest and every referenced "
+            var healthy = $"Backup '{backupId}' is healthy: its manifest and every referenced "
                 + "artifact are present, committed, and hash-verified against the manifest.";
+            return sharing is { Status: BackupSinkSharingStatus.Unverified }
+                ? healthy + " " + DescribeSharing(sharing)
+                : healthy;
         }
 
         var builder = new StringBuilder();
-        builder.Append($"Backup '{backupId}' is not fully resolvable. ");
+        builder.Append(
+            missing.Count == 0 && mismatches.Count == 0
+                ? $"Backup '{backupId}' is intact locally but is not a usable restore point for the replication set. "
+                : $"Backup '{backupId}' is not fully resolvable. ");
         if (missing.Count > 0)
         {
             builder.Append($"Missing or uncommitted artifact(s): {string.Join(", ", missing)}. ");
@@ -130,7 +187,30 @@ internal sealed class LatticeBackupHealthService(ILatticeBackupSink sink) : ILat
                 $"Artifact(s) whose stored content no longer matches the manifest's recorded hash: {string.Join(", ", mismatches)}. ");
         }
 
-        builder.Append("Do not rely on this backup as a restore point until the fault is investigated.");
+        if (sharing is not null && sharing.Status != BackupSinkSharingStatus.Shared)
+        {
+            builder.Append(DescribeSharing(sharing)).Append(' ');
+        }
+
+        builder.Append(
+            peerFault
+                ? "A coordinated restore of this replicated tree would abort until every cluster is pointed at the same backup sink."
+                : "Do not rely on this backup as a restore point until the fault is investigated.");
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Renders the cross-cluster sharing verdict as one sentence naming the peers
+    /// that could not be confirmed, so the Explorer HEALTH column's reason states
+    /// the remediation rather than merely that something is wrong.
+    /// </summary>
+    private static string DescribeSharing(BackupSinkSharingReport sharing)
+    {
+        var peers = sharing.UnconfirmedPeerClusterIds.Count > 0
+            ? string.Join(", ", sharing.UnconfirmedPeerClusterIds)
+            : "(none reported)";
+        return sharing.Status == BackupSinkSharingStatus.NotShared
+            ? $"The backup sink is NOT shared with peer cluster(s) {peers}, which are running but cannot see this cluster's sink marker."
+            : $"Backup sink sharing with peer cluster(s) {peers} is unconfirmed because they were not reachable.";
     }
 }
