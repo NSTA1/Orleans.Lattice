@@ -11,7 +11,15 @@ namespace Orleans.Lattice.Tests.Primitives;
 /// slot that was both re-asserted and then retracted.
 /// </para>
 /// </summary>
+/// <remarks>
+/// Marked <see cref="NonParallelizableAttribute"/> because one test toggles the
+/// process-wide compaction gate. NUnit does not parallelise without an explicit
+/// opt-in, so this is belt and braces against a future assembly-level
+/// <c>[Parallelizable]</c> silently making a neighbouring fixture observe the
+/// suppressed gate.
+/// </remarks>
 [TestFixture]
+[NonParallelizable]
 public class OrFlagMixedVersionRolloutTests
 {
     /// <summary>
