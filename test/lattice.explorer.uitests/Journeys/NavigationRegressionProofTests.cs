@@ -47,15 +47,20 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
 
-        // Settle the detail strip before measuring anything about its overflow.
+        // Settle BOTH strips before measuring anything about overflow.
         //
-        // Whether the strip overflows is a function of how many tabs it has, and that
-        // number is still changing while the surface gates report: an unprobed surface
-        // renders as Pending, which is enabled and takes space, and is then removed or
-        // disabled when its gate answers. So the overflow toggle genuinely appears and
-        // then disappears on its own - which is what made this proof intermittent. It
-        // would see a toggle, and by the time it opened the menu the strip had lost a tab,
-        // stopped overflowing, and taken the toggle with it.
+        // Whether a strip overflows is a function of how many tabs it has, and that
+        // number is still changing while the gates report: an unprobed area or surface
+        // renders as Pending, which is enabled and takes space, and is then demoted or
+        // disabled when its gate answers. So an overflow toggle genuinely appears and
+        // then disappears on its own.
+        //
+        // Both strips matter, not just the detail one. OverflowToggleSelector matches
+        // EVERY strip's toggle and this loop takes .First, so the toggle it measures can
+        // belong to the area rail - and the rail's tab count changes as areas are demoted
+        // out of it. Settling only the detail strip left exactly that hole, and the proof
+        // went on failing in the coverage lane with the toggle vanishing mid-measurement.
+        await JourneyShell.AssertRailSettledAsync(page);
         await JourneyShell.AssertDetailStripSettledAsync(page);
 
         var measured = new List<string>();
@@ -66,31 +71,22 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             await page.SetViewportSizeAsync(width, Height);
             await Assertions.Expect(page.Locator(JourneyShell.DetailTabSelector).First).ToBeVisibleAsync();
 
-            // Decide whether this width overflows by waiting for the toggle to become
-            // visible, not by counting it once.
-            //
-            // Resizing re-runs the strip's overflow measurement, and the toggle is added
-            // and removed as that settles - so a bare count taken immediately after the
-            // resize could see a toggle that was gone by the time the menu was opened,
-            // and the open then waited out its whole action timeout on it. A bounded wait
-            // both settles and decides: a width that never shows a toggle simply does not
-            // overflow and is skipped, which is what the count was trying to express. The
-            // anti-vacuity assertion below still fails the proof if no width overflowed at
-            // all, so skipping cannot quietly empty this test.
-            var toggle = page.Locator(JourneyShell.OverflowToggleSelector).First;
-            if (!await BecomesVisibleAsync(toggle))
+            // One decision, not two: TryMeasureOverflowMenuAsync waits for a toggle once
+            // and opens it, so there is no window between "a toggle is here" and "open the
+            // toggle" for it to disappear in. A width that offers none simply does not
+            // overflow and is skipped; the anti-vacuity assertion below still fails the
+            // proof if no width overflowed at all, so skipping cannot quietly empty it.
+            var geometry = await JourneyShell.TryMeasureOverflowMenuAsync(page);
+            if (geometry is null)
             {
                 continue;
             }
 
-            var geometry = await JourneyShell.OpenOverflowMenuAsync(page);
             measured.Add($"{width}px: {geometry}");
             if (!geometry.IsContained)
             {
                 clipped.Add($"{width}px: {geometry}");
             }
-
-            await page.Locator(JourneyShell.OverflowToggleSelector).First.ClickAsync();
         }
 
         Assert.That(measured, Is.Not.Empty,
@@ -543,38 +539,5 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
     // Generous relative to a healthy round trip (milliseconds), because the coverage lane
     // runs this instrumented by coverlet, where the same round trip is markedly slower.
     private const int FocusMoveTimeoutMs = 10_000;
-
-    // Long enough for the strip's overflow measurement to settle after a resize, short
-    // enough that a width which genuinely does not overflow is skipped promptly rather
-    // than costing a full action timeout at every sampled width.
-    private const int OverflowSettleMs = 5_000;
-
-    /// <summary>
-    /// Whether <paramref name="locator"/> becomes visible within the settle window,
-    /// rather than whether it happens to exist at this instant.
-    /// </summary>
-    private static async Task<bool> BecomesVisibleAsync(ILocator locator)
-    {
-        try
-        {
-            await locator.WaitForAsync(new LocatorWaitForOptions
-            {
-                State = WaitForSelectorState.Visible,
-                Timeout = OverflowSettleMs,
-            });
-            return true;
-        }
-        catch (PlaywrightException)
-        {
-            return false;
-        }
-        catch (System.TimeoutException)
-        {
-            // As above: a Playwright wait timeout arrives as System.TimeoutException, and
-            // here it is the ordinary answer rather than an error - this width simply does
-            // not overflow.
-            return false;
-        }
-    }
 }
 
