@@ -87,6 +87,60 @@ public sealed class TenantAdminCapabilityScopeTests
         Assert.That(allowed, Is.False);
     }
 
+    // ---- the all-trees wildcard tier never confers the capability --------
+
+    [Test]
+    public async Task All_trees_wildcard_grant_does_not_confer_delegated_tenant_administration()
+    {
+        // A cluster-wide "Tree:*" Admin grant is a data-plane wildcard. It must never
+        // be laundered into the tenant-administration control plane, or one wildcard
+        // rule would silently confer delegated administration over every tenant in
+        // the cluster - including tenants the policy has never named.
+        var wildcard = AdminGrant("wildcard", "wildcard-admin", LatticeScope.ClusterWide());
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny, AllTreesGrantsEnabled = true }, wildcard);
+        var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
+        var subject = new LatticeSubject("wildcard-admin");
+
+        Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Acme), subject), Is.False);
+        Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Beta), subject), Is.False);
+        Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.Platform, subject), Is.False,
+            "the platform capability is the reserved policy tree, already excluded from the tier");
+    }
+
+    [Test]
+    public async Task All_trees_wildcard_grant_does_not_expose_the_capability_to_the_existence_probe()
+    {
+        // The gate's existence-hiding probe has to agree with its enforcement branch:
+        // if HasAnyGrantAsync reported a grant the gate would refuse to honour, a
+        // wildcard holder could enumerate the tenant-administration control plane.
+        var wildcard = AdminGrant("wildcard", "wildcard-admin", LatticeScope.ClusterWide());
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny, AllTreesGrantsEnabled = true }, wildcard);
+        var scope = LatticeTenantAdminScope.ForTenant(Acme).TreeScope;
+
+        var probed = await harness.Gate.HasAnyGrantAsync(scope, new LatticeSubject("wildcard-admin"), LatticeOperation.Admin);
+
+        Assert.That(probed, Is.False);
+    }
+
+    [Test]
+    public async Task A_delegated_grant_still_works_with_the_all_trees_tier_enabled()
+    {
+        // Positive control for the two denials above: excluding the capability
+        // namespace from the wildcard tier must not disturb the legitimate,
+        // explicitly delegated per-tenant grant.
+        var harness = await AuthGateHarness.CreateAsync(
+            new LatticeAuthOptions { DefaultEffect = LatticeEffect.Deny, AllTreesGrantsEnabled = true },
+            DelegatedTenantGrant("acme-admin", Acme));
+        var authorizer = new LatticeTenantAdminAuthorizer(harness.Gate);
+
+        Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Acme), new LatticeSubject("acme-admin")),
+            Is.True);
+        Assert.That(await authorizer.IsAuthorizedAsync(LatticeTenantAdminScope.ForTenant(Beta), new LatticeSubject("acme-admin")),
+            Is.False);
+    }
+
     // ---- platform operator via the access-administration delegation grant --
 
     [Test]

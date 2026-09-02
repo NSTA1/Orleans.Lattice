@@ -246,7 +246,10 @@ internal sealed partial class LatticeGrain
     public async Task SnapshotAsync(string destinationTreeId, SnapshotMode mode,
         int? maxLeafKeys = null, int? maxInternalChildren = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(destinationTreeId);
         ThrowIfSystemTree();
+        ThrowIfProtectedView();
+        ThrowIfReservedSnapshotDestination(destinationTreeId);
         cancellationToken.ThrowIfCancellationRequested();
         await EnforceWholeTreeAsync(LatticeOperation.Admin, cancellationToken);
         var snapshot = grainFactory.GetGrain<ITreeSnapshotGrain>(TreeId);
@@ -437,6 +440,54 @@ internal sealed partial class LatticeGrain
                 $"internal '{LatticeConstants.SystemTreePrefix}' namespace, the '{LatticeConstants.SystemDataTreePrefix}' " +
                 $"system-data namespace, or the '{LatticeTenantTrees.SegmentPrefix}' tenant namespace. Merging such a " +
                 "tree would copy control-plane or cross-tenant state into a tree governed only by its own read policy.");
+        }
+    }
+
+    /// <summary>
+    /// Rejects a user-origin snapshot whose <paramref name="destinationTreeId"/>
+    /// names a tree in a reserved namespace: the internal <c>_lattice_</c> system
+    /// namespace, the dogfooded <c>sys-</c> system-data namespace (authorization
+    /// policy, membership, backup catalogs), or a <c>t/</c> tenant namespace the
+    /// ambient active tenant does not own. A snapshot <em>creates and registers</em>
+    /// its destination and seeds it with the source tree's contents, so an
+    /// unguarded destination lets a caller holding Admin on one ordinary tree it
+    /// owns plant a fully-populated tree inside a control-plane or foreign-tenant
+    /// namespace that is otherwise uncreatable from the public surface - squatting
+    /// a lazily-created <c>sys-</c> control-plane id, or landing attacker-chosen
+    /// content inside another tenant's namespace where the victim reads it as its
+    /// own data. This is the destination-side mirror of
+    /// <see cref="ThrowIfReservedMergeSource"/>, which guards a merge's
+    /// caller-supplied second tree id on the read side.
+    /// <para>
+    /// Suppressed under <see cref="LatticeAccessGateContext.EnterSystemOrigin"/> so
+    /// first-party machinery that legitimately composes these ids (tree resize's
+    /// <c>{treeId}/resized/{operationId}</c> staging target, backup shadow
+    /// cutover, schema remediation) is unaffected, exactly as
+    /// <see cref="ThrowIfUserOriginSystemDataTree"/> is on the mutation surface.
+    /// The tenant-ownership exit mirrors that same guard, so a tenant may still
+    /// snapshot into its own <c>t/{activeTenant}/...</c> namespace.
+    /// </para>
+    /// </summary>
+    /// <param name="destinationTreeId">The caller-supplied snapshot destination.</param>
+    private static void ThrowIfReservedSnapshotDestination(string destinationTreeId)
+    {
+        if (LatticeAccessGateContext.IsSystemOrigin)
+        {
+            return;
+        }
+
+        if (destinationTreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal)
+            || destinationTreeId.StartsWith(LatticeConstants.SystemDataTreePrefix, StringComparison.Ordinal)
+            || (LatticeTenantTrees.IsTenantScoped(destinationTreeId) && !IsOwnedByActiveTenant(destinationTreeId)))
+        {
+            throw new LatticeReservedTreeNamespaceException(
+                destinationTreeId,
+                $"Snapshot destination tree ID '{destinationTreeId}' is reserved: a snapshot destination may not " +
+                $"name a tree in the internal '{LatticeConstants.SystemTreePrefix}' namespace, the " +
+                $"'{LatticeConstants.SystemDataTreePrefix}' system-data namespace, or a " +
+                $"'{LatticeTenantTrees.SegmentPrefix}' tenant namespace owned by another tenant. A snapshot " +
+                "creates and populates its destination, so allowing one would plant a fully-readable tree inside " +
+                "a control-plane or foreign-tenant namespace.");
         }
     }
 
