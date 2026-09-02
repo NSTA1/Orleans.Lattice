@@ -77,6 +77,71 @@ public readonly record struct LatticeValueTransform
     [Id(6)] public LatticeValueTransform[]? Children { get; init; }
 
     /// <summary>
+    /// Compares two transform nodes by structure: every scalar field, the
+    /// embedded <see cref="Condition"/> predicate and <see cref="Constant"/>
+    /// literal, plus an ordered, recursive comparison of <see cref="Children"/>.
+    /// The compiler-generated record equality compares <see cref="Children"/>
+    /// with <see cref="EqualityComparer{T}.Default"/>, which for an array is
+    /// reference equality, so two structurally identical transform trees would
+    /// otherwise never be equal - and a tree that round-trips through
+    /// serialization would never equal its pre-serialization self. This mirrors
+    /// the value-equality contract of the sibling <see cref="LatticePredicateNode"/>.
+    /// </summary>
+    public bool Equals(LatticeValueTransform other) =>
+        Kind == other.Kind
+        && string.Equals(MemberPath, other.MemberPath, StringComparison.Ordinal)
+        && string.Equals(ToPath, other.ToPath, StringComparison.Ordinal)
+        && Constant.Equals(other.Constant)
+        && Condition.Equals(other.Condition)
+        && ComputeOperator == other.ComputeOperator
+        && ChildrenEqual(Children, other.Children);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Kind);
+        hash.Add(MemberPath, StringComparer.Ordinal);
+        hash.Add(ToPath, StringComparer.Ordinal);
+        hash.Add(Constant);
+        hash.Add(Condition);
+        hash.Add(ComputeOperator);
+        if (Children is { } children)
+        {
+            hash.Add(children.Length);
+            foreach (var child in children)
+            {
+                hash.Add(child);
+            }
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool ChildrenEqual(LatticeValueTransform[]? left, LatticeValueTransform[]? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Creates the document-pipeline root: copy the input document, then apply
     /// <paramref name="operations"/> (<see cref="SetMember"/> /
     /// <see cref="DropMember"/> / <see cref="RenameMember"/>) in order. Pass no

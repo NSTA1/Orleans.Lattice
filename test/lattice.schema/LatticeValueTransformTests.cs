@@ -31,9 +31,9 @@ public sealed class LatticeValueTransformTests
         return _serializer.Deserialize(bytes);
     }
 
-    // Record-struct equality compares the Children array by reference, so it is
-    // not a structural round-trip check. Determinism is asserted by re-serializing
-    // the decoded tree and comparing the wire bytes.
+    // Asserts serialization determinism: re-serializing the decoded tree yields
+    // identical wire bytes. Structural value equality of a round-tripped tree is
+    // covered separately by LatticeValueTransformEqualityRegressionTests.
     private void AssertRoundTrips(LatticeValueTransform transform)
     {
         var bytes = _serializer.SerializeToArray(transform);

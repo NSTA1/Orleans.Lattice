@@ -68,4 +68,62 @@ internal sealed record RuntimeViewRegistration
     /// <summary>The bounded opaque state supplied to the configured provider.</summary>
     [Id(7)]
     public byte[]? ProjectionProviderPayload { get; init; }
+
+    /// <summary>
+    /// Compares two registrations by structure, including a content comparison of
+    /// <see cref="ProjectionProviderPayload"/>. The compiler-generated record
+    /// equality compares the <c>byte[]</c> payload with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for an array is reference
+    /// equality. <see cref="LatticeRuntimeViewProjectionDescriptor.Payload"/>
+    /// returns a fresh array on every access, so re-issuing the same
+    /// <c>CreateAsync</c> would produce a registration whose payload is
+    /// content-identical but a distinct instance - defeating the idempotent
+    /// re-registration dedup guard in
+    /// <see cref="IViewRegistryGrain.RegisterAsync(RuntimeViewRegistration)"/> and
+    /// forcing a redundant durable write.
+    /// </summary>
+    public bool Equals(RuntimeViewRegistration? other) =>
+        other is not null
+        && string.Equals(ViewName, other.ViewName, StringComparison.Ordinal)
+        && string.Equals(SourceTreeId, other.SourceTreeId, StringComparison.Ordinal)
+        && string.Equals(ProjectionTypeName, other.ProjectionTypeName, StringComparison.Ordinal)
+        && string.Equals(ProjectionVersion, other.ProjectionVersion, StringComparison.Ordinal)
+        && IsAggregation == other.IsAggregation
+        && Accumulative == other.Accumulative
+        && string.Equals(ProjectionProviderKey, other.ProjectionProviderKey, StringComparison.Ordinal)
+        && PayloadEqual(ProjectionProviderPayload, other.ProjectionProviderPayload);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(ViewName, StringComparer.Ordinal);
+        hash.Add(SourceTreeId, StringComparer.Ordinal);
+        hash.Add(ProjectionTypeName, StringComparer.Ordinal);
+        hash.Add(ProjectionVersion, StringComparer.Ordinal);
+        hash.Add(IsAggregation);
+        hash.Add(Accumulative);
+        hash.Add(ProjectionProviderKey, StringComparer.Ordinal);
+        if (ProjectionProviderPayload is { } payload)
+        {
+            hash.AddBytes(payload);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool PayloadEqual(byte[]? left, byte[]? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null)
+        {
+            return false;
+        }
+
+        return left.AsSpan().SequenceEqual(right);
+    }
 }

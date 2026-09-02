@@ -61,6 +61,28 @@ public sealed class ViewRegistryGrainTests
         Assert.That(state.WriteCount, Is.Zero);
     }
 
+    [Test]
+    public async Task RegisterAsync_reregistration_with_distinct_but_equal_payload_does_not_write()
+    {
+        var stored = Registration("runtime") with
+        {
+            ProjectionProviderKey = "provider",
+            ProjectionProviderPayload = [1, 2, 3],
+        };
+        var state = new FakePersistentState<ViewRegistryState>();
+        state.State.Registrations[stored.ViewName] = stored;
+        var grain = CreateGrain(state);
+
+        var incoming = stored with { ProjectionProviderPayload = [1, 2, 3] };
+        Assert.That(
+            ReferenceEquals(stored.ProjectionProviderPayload, incoming.ProjectionProviderPayload),
+            Is.False);
+
+        await grain.RegisterAsync(incoming);
+
+        Assert.That(state.WriteCount, Is.Zero);
+    }
+
     private static ViewRegistryGrain CreateGrain(FakePersistentState<ViewRegistryState> state) =>
         new(Substitute.For<IGrainContext>(), state);
 
