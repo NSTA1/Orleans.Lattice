@@ -147,14 +147,17 @@ internal static class PolicyEvaluator
     /// Whether the all-trees (<c>Tree:*</c>) tier participates in this evaluation:
     /// the opt-in flag is set, a compiled <c>"*"</c> bucket exists, and the target
     /// tree is a genuine application tree - not a control-plane namespace (the
-    /// reserved authorization namespace <c>sys-auth-*</c> or the tenant-registry
-    /// system-data namespace <c>sys-tenant-*</c>) and not the sentinel id <c>"*"</c>
-    /// itself. The control-plane exclusion is the fail-closed guard that keeps a
-    /// wildcard data grant from ever reaching the control plane - membership,
-    /// policy, or the cross-tenant registry - so an all-trees read cannot exfiltrate
-    /// tenant metadata; the sentinel exclusion keeps a literal telemetry request on
-    /// <c>"*"</c> resolving against its own bucket exactly as before, with no second
-    /// all-trees fold.
+    /// reserved authorization namespace <c>sys-auth-*</c>, the tenant-registry
+    /// system-data namespace <c>sys-tenant-*</c>, or the tenant-administration
+    /// capability namespace <c>_lattice_tenant_admin_*</c>) and not the sentinel id
+    /// <c>"*"</c> itself. The control-plane exclusion is the fail-closed guard that
+    /// keeps a wildcard data grant from ever reaching the control plane -
+    /// membership, policy, the cross-tenant registry, or a delegated tenant-admin
+    /// capability - so an all-trees read cannot exfiltrate tenant metadata and an
+    /// all-trees <see cref="LatticeOperation.Admin"/> grant cannot be laundered into
+    /// tenant administration over every tenant; the sentinel exclusion keeps a
+    /// literal telemetry request on <c>"*"</c> resolving against its own bucket
+    /// exactly as before, with no second all-trees fold.
     /// </summary>
     private static bool ShouldConsultAllTrees(CompiledPolicy policy, LatticeAuthOptions options, string treeId)
     {
@@ -169,8 +172,22 @@ internal static class PolicyEvaluator
         }
 
         return !LatticeAuthReservedTrees.IsReserved(treeId)
-            && !AuthConstants.IsTenantRegistryTree(treeId);
+            && !AuthConstants.IsTenantRegistryTree(treeId)
+            && !IsTenantAdminCapabilityNamespace(treeId);
     }
+
+    /// <summary>
+    /// Whether <paramref name="treeId"/> names a delegated per-tenant-administration
+    /// capability scope (<see cref="LatticeTenantAdminScope.TenantScopePrefix"/>).
+    /// Such an id is a control-plane capability, not an application tree, so the
+    /// all-trees tier must never fold into it: the id starts with neither
+    /// <c>sys-auth-</c> nor <c>sys-tenant-</c>, so without this test it was the one
+    /// control-plane namespace a <c>Tree:*</c> wildcard could still reach.
+    /// Mirrors <c>PolicyAccessGate.IsTenantAdminCapabilityNamespace</c>, which routes
+    /// the same ids to the fail-closed control-plane branch.
+    /// </summary>
+    private static bool IsTenantAdminCapabilityNamespace(string treeId) =>
+        treeId.StartsWith(LatticeTenantAdminScope.TenantScopePrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Whether the request targets the all-trees sentinel itself, which means a

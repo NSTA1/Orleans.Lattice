@@ -242,6 +242,53 @@ public sealed class AllTreesGrantEvaluationTests
     }
 
     [Test]
+    public void Evaluate_all_trees_tier_never_applies_to_the_tenant_admin_capability_namespace()
+    {
+        var rules = new[] { User("all", "alice", LatticeScope.ClusterWide(), LatticeOperation.Admin, LatticeEffect.Allow) };
+
+        // The delegated per-tenant administration capability is modelled as Admin on a
+        // reserved id in its own namespace, which the gate routes to the fail-closed
+        // control plane. That namespace starts with neither the reserved policy-tree id
+        // nor the tenant-registry prefix, so it has to be excluded from the all-trees
+        // tier explicitly - otherwise a cluster-wide data grant would silently confer
+        // delegated administration over every tenant.
+        var scope = LatticeTenantAdminScope.ForTenant(TenantId.Parse("acme")).TreeScope;
+
+        var decision = Eval(rules, Subject("alice"), LatticeOperation.Admin, Enabled(), treeId: scope, key: null);
+
+        Assert.That(decision.Allowed, Is.False, "the tenant-admin capability namespace is excluded from the all-trees tier");
+    }
+
+    [Test]
+    public void Evaluate_all_trees_tier_never_applies_to_any_tenant_admin_capability_id()
+    {
+        var rules = new[] { User("all", "alice", LatticeScope.ClusterWide(), LatticeOperation.Admin, LatticeEffect.Allow) };
+
+        // The exclusion is by namespace prefix, not by a per-tenant enumeration, so it
+        // holds for a tenant the policy has never heard of.
+        foreach (var tenant in new[] { "acme", "beta", "tenant-the-policy-never-saw" })
+        {
+            var scope = LatticeTenantAdminScope.ForTenant(TenantId.Parse(tenant)).TreeScope;
+
+            Assert.That(Eval(rules, Subject("alice"), LatticeOperation.Admin, Enabled(), treeId: scope, key: null).Allowed,
+                Is.False, $"'{tenant}' administration is not conferred by a wildcard grant");
+        }
+    }
+
+    [Test]
+    public void Tenant_admin_capability_prefix_is_not_covered_by_the_reserved_tree_exclusion()
+    {
+        // Drift guard for the reason the dedicated exclusion is needed at all: a
+        // tenant-admin capability id is not itself a reserved sys-auth- id, so the
+        // reserved-tree test alone never covered it. If this ever starts failing the
+        // dedicated exclusion has become redundant; while it passes, removing that
+        // exclusion silently reopens the gap.
+        var scope = LatticeTenantAdminScope.ForTenant(TenantId.Parse("acme")).TreeScope;
+
+        Assert.That(LatticeAuthReservedTrees.IsReserved(scope), Is.False);
+    }
+
+    [Test]
     public void Evaluate_request_on_the_sentinel_resolves_its_own_bucket_without_double_fold()
     {
         // A rule scoped Tree:* granting Telemetry, and a request literally targeting
@@ -388,6 +435,18 @@ public sealed class AllTreesGrantEvaluationTests
         var policy = CompiledPolicy.Compile(rules);
 
         Assert.That(PolicyEvaluator.HasAnyGrant(policy, Enabled(), Subject("alice"), ReservedTree, LatticeOperation.Admin), Is.False);
+    }
+
+    [Test]
+    public void HasAnyGrant_ignores_an_all_trees_allow_for_the_tenant_admin_capability_namespace()
+    {
+        var rules = new[] { User("all", "alice", LatticeScope.ClusterWide(), LatticeOperation.Admin, LatticeEffect.Allow) };
+        var policy = CompiledPolicy.Compile(rules);
+        var scope = LatticeTenantAdminScope.ForTenant(TenantId.Parse("acme")).TreeScope;
+
+        // The existence-hiding probe must agree with the enforcement decision, or a
+        // wildcard grant leaks the shape of the control plane it cannot act on.
+        Assert.That(PolicyEvaluator.HasAnyGrant(policy, Enabled(), Subject("alice"), scope, LatticeOperation.Admin), Is.False);
     }
 
     [Test]

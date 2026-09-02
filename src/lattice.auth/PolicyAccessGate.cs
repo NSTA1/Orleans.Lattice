@@ -291,16 +291,18 @@ internal sealed class PolicyAccessGate(
         }
 
         // Control-plane isolation: the reserved authorization namespace, the
-        // tenant-registry system-data namespace, and the all-trees capability sentinel
+        // tenant-administration capability namespace, the tenant-registry system-data
+        // namespace, and the all-trees capability sentinel
         // are never visible to a non-bootstrap caller by default effect - only an
         // explicit matched allow grant makes them so. Mirror the enforcement path so a
         // caller that cannot administer (or, for the registry, read) the namespace also
         // cannot learn it exists, and so a probe can never out-reach the decision the
         // enforcement path would return for the same scope. As on the AuthorizeAsync
-        // path, a cluster-wide all-trees wildcard never satisfies the first two, because
-        // the evaluator excludes both namespaces from the all-trees tier.
+        // path, a cluster-wide all-trees wildcard never satisfies these, because
+        // the evaluator excludes each namespace from the all-trees tier.
         if (LatticeAuthReservedTrees.IsReserved(treeId)
             || IsClusterWideCapabilityScope(treeId)
+            || IsTenantAdminCapabilityNamespace(treeId)
             || AuthConstants.IsTenantRegistryTree(treeId))
         {
             var reserved = engine.Evaluate(subject, treeId, operation, key: null, rangeStart: null, rangeEnd: null, out var match);
