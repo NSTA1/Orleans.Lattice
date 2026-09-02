@@ -25,7 +25,10 @@ public sealed class BackupHealthMonitorGrainTests
         bool durable = true,
         bool enabled = true,
         TimeSpan? interval = null,
-        IReminderRegistry? reminders = null)
+        IReminderRegistry? reminders = null,
+        IBackupSinkSharingProbe? sharingProbe = null,
+        BackupSinkSharingEnforcement enforcement = BackupSinkSharingEnforcement.Warn,
+        TimeSpan? probeTimeout = null)
     {
         var sink = Substitute.For<ILatticeBackupSink>();
         sink.IsDurable.Returns(durable);
@@ -38,6 +41,17 @@ public sealed class BackupHealthMonitorGrainTests
         var monitor = Substitute.For<IOptionsMonitor<LatticeBackupHealthOptions>>();
         monitor.CurrentValue.Returns(options);
 
+        // A short probe deadline keeps the hanging-probe test fast: the shipped
+        // default is 15 seconds, which would otherwise stall the fixture for the
+        // full timeout just to observe the cancellation.
+        var backupOptions = new LatticeBackupOptions
+        {
+            SinkSharingEnforcement = enforcement,
+            SinkSharingProbeTimeout = probeTimeout ?? TimeSpan.FromMilliseconds(50),
+        };
+        var backupMonitor = Substitute.For<IOptionsMonitor<LatticeBackupOptions>>();
+        backupMonitor.CurrentValue.Returns(backupOptions);
+
         return new BackupHealthMonitorGrain(
             Substitute.For<IGrainContext>(),
             reminders ?? Substitute.For<IReminderRegistry>(),
@@ -45,10 +59,156 @@ public sealed class BackupHealthMonitorGrainTests
             catalog,
             service,
             store,
-            new NoBackupSinkSharingProbe(),
+            sharingProbe ?? new NoBackupSinkSharingProbe(),
             monitor,
+            backupMonitor,
             NullLogger<BackupHealthMonitorGrain>.Instance,
             new FakePersistentState<BackupHealthMonitorState>());
+    }
+
+    /// <summary>
+    /// The sweep refreshes the cross-cluster sharing verdict once per sweep, so the
+    /// misconfiguration is re-decided periodically rather than only at silo start.
+    /// </summary>
+    [Test]
+    public async Task SweepAsync_refreshes_the_sink_sharing_verdict_once_per_sweep()
+    {
+        var probe = new CountingSharingProbe();
+
+        await CreateGrain(new FakeCatalog("a", "b"), new FakeHealthStore(), new FakeHealthService(), sharingProbe: probe)
+            .SweepAsync();
+
+        Assert.That(probe.Calls, Is.EqualTo(1));
+    }
+
+    /// <summary>
+    /// Regression: <see cref="BackupSinkSharingEnforcement.Disabled"/> must disable
+    /// the probe everywhere, not only in the startup guard. The sweep previously
+    /// probed unconditionally, so an operator who opted out still had a canary
+    /// marker written into their sink every sweep and still had backup health
+    /// downgraded by the refreshed verdict - a knob that only half worked.
+    /// </summary>
+    [Test]
+    public async Task SweepAsync_disabled_enforcement_never_probes_the_sink()
+    {
+        var probe = new CountingSharingProbe();
+
+        var verified = await CreateGrain(
+                new FakeCatalog("a"),
+                new FakeHealthStore(),
+                new FakeHealthService(),
+                sharingProbe: probe,
+                enforcement: BackupSinkSharingEnforcement.Disabled)
+            .SweepAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probe.Calls, Is.Zero, "Disabled enforcement must not probe.");
+            Assert.That(verified, Is.EqualTo(1), "Local verification must still run.");
+        });
+    }
+
+    /// <summary>
+    /// Regression: the sweep bounds the probe with
+    /// <see cref="LatticeBackupOptions.SinkSharingProbeTimeout"/>. The probe writes
+    /// to the sink and calls peers, and the sweep holds an activation-local overlap
+    /// guard, so an unbounded await would wedge backup health monitoring for the
+    /// lifetime of the activation.
+    /// </summary>
+    [Test]
+    public async Task SweepAsync_cancels_a_hanging_probe_and_still_verifies_locally()
+    {
+        var probe = new HangingSharingProbe();
+        var service = new FakeHealthService();
+
+        var verified = await CreateGrain(new FakeCatalog("a"), new FakeHealthStore(), service, sharingProbe: probe)
+            .SweepAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(probe.Cancelled, Is.True, "The probe must be given a deadline.");
+            Assert.That(verified, Is.EqualTo(1));
+            Assert.That(service.VerifiedIds, Is.EqualTo(new[] { "a" }));
+        });
+    }
+
+    /// <summary>
+    /// A probe that faults must never abort the sweep: local verification is still
+    /// worth doing and the previous verdict stands.
+    /// </summary>
+    [Test]
+    public async Task SweepAsync_probe_failure_does_not_abort_local_verification()
+    {
+        var service = new FakeHealthService();
+
+        var verified = await CreateGrain(
+                new FakeCatalog("a"),
+                new FakeHealthStore(),
+                service,
+                sharingProbe: new ThrowingSharingProbe())
+            .SweepAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(verified, Is.EqualTo(1));
+            Assert.That(service.VerifiedIds, Is.EqualTo(new[] { "a" }));
+        });
+    }
+
+    /// <summary>Counts probe invocations so a test can assert the sweep gate.</summary>
+    private sealed class CountingSharingProbe : IBackupSinkSharingProbe
+    {
+        public int Calls { get; private set; }
+
+        public BackupSinkSharingReport? LastReport { get; private set; }
+
+        public Task<BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            LastReport = new BackupSinkSharingReport(
+                BackupSinkSharingStatus.Shared,
+                clusterId: "region-a",
+                peerCount: 1,
+                unconfirmedPeerClusterIds: [],
+                probedAtUtc: DateTimeOffset.UnixEpoch,
+                explanation: "shared");
+            return Task.FromResult(LastReport);
+        }
+    }
+
+    /// <summary>
+    /// Never completes on its own, so the sweep can only proceed if it supplied a
+    /// deadline the probe observes.
+    /// </summary>
+    private sealed class HangingSharingProbe : IBackupSinkSharingProbe
+    {
+        public bool Cancelled { get; private set; }
+
+        public BackupSinkSharingReport? LastReport => null;
+
+        public async Task<BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Cancelled = true;
+                throw;
+            }
+
+            throw new InvalidOperationException("The hanging probe must never complete on its own.");
+        }
+    }
+
+    /// <summary>Faults on every probe, to prove the sweep survives it.</summary>
+    private sealed class ThrowingSharingProbe : IBackupSinkSharingProbe
+    {
+        public BackupSinkSharingReport? LastReport => null;
+
+        public Task<BackupSinkSharingReport> ProbeAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("probe unavailable");
     }
 
     [Test]
@@ -172,6 +332,8 @@ public sealed class BackupHealthMonitorGrainTests
         sink.IsDurable.Returns(true);
         var monitor = Substitute.For<IOptionsMonitor<LatticeBackupHealthOptions>>();
         monitor.CurrentValue.Returns(new LatticeBackupHealthOptions { Enabled = true });
+        var backupMonitor = Substitute.For<IOptionsMonitor<LatticeBackupOptions>>();
+        backupMonitor.CurrentValue.Returns(new LatticeBackupOptions());
         var grain = new BackupHealthMonitorGrain(
             ctx,
             Substitute.For<IReminderRegistry>(),
@@ -179,7 +341,9 @@ public sealed class BackupHealthMonitorGrainTests
             new FakeCatalog(),
             new FakeHealthService(),
             new FakeHealthStore(),
+            new NoBackupSinkSharingProbe(),
             monitor,
+            backupMonitor,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<BackupHealthMonitorGrain>.Instance,
             new FakePersistentState<BackupHealthMonitorState>());
 

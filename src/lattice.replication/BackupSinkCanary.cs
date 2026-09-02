@@ -97,15 +97,22 @@ internal static class BackupSinkCanary
         // U+FFFD rather than throwing - and a replaced byte can never equal the
         // magic line or a peer id, so the comparison below still fails closed.
         //
-        // The decode-and-split allocates a string plus a small string[]. That is
-        // deliberate: this is a fail-closed security check that runs once per peer
-        // on a cold path (silo start, then once per six-hourly health sweep), and a
-        // hand-rolled span scan would trade an obviously-correct comparison for an
-        // off-by-one risk in exactly the code that must never wrongly return true.
+        // The decode-and-compare allocates two strings. That is deliberate: this is
+        // a fail-closed security check that runs once per peer on a cold path (silo
+        // start, then once per six-hourly health sweep), and a hand-rolled span scan
+        // would trade an obviously-correct comparison for an off-by-one risk in
+        // exactly the code that must never wrongly return true.
+        //
+        // The expected prefix is matched whole rather than by splitting on the
+        // line separator. Splitting compared only the text up to the first
+        // separator, so a cluster id that itself contained one could never match
+        // its own marker - failing closed in the one direction the three-valued
+        // verdict exists to avoid, because a reachable peer with such an id would
+        // be wrongly accused of an unshared sink. An exact prefix match round-trips
+        // any cluster id and is still strictly fail-closed: it demands the magic
+        // line, the full expected id, and the terminating separator, so no foreign
+        // or truncated blob can satisfy it and no shorter id can prefix a longer one.
         var text = Encoding.UTF8.GetString(body);
-        var lines = text.Split('\n');
-        return lines.Length >= 2
-            && string.Equals(lines[0], Magic, StringComparison.Ordinal)
-            && string.Equals(lines[1], expectedClusterId, StringComparison.Ordinal);
+        return text.StartsWith(string.Concat(Magic, "\n", expectedClusterId, "\n"), StringComparison.Ordinal);
     }
 }

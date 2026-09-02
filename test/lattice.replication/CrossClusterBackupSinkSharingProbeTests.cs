@@ -394,6 +394,53 @@ public sealed class CrossClusterBackupSinkSharingProbeTests
     }
 
     /// <summary>
+    /// Regression: a cluster id containing the marker's own line separator must
+    /// still round-trip. The verdict was previously decided by splitting the body on
+    /// that separator and comparing only the first segment, so such an id could
+    /// never match its own marker. That failed closed in the one direction the
+    /// three-valued verdict exists to prevent: a reachable peer would be reported
+    /// <see cref="BackupSinkSharingStatus.NotShared"/> - a false accusation of a
+    /// perfectly shared sink - purely because of how its id was spelled.
+    /// </summary>
+    [Test]
+    public void Attests_round_trips_a_cluster_id_containing_the_line_separator()
+    {
+        const string awkward = "region\na";
+
+        Assert.That(
+            BackupSinkCanary.Attests(BackupSinkCanary.Encode(awkward, DateTimeOffset.UnixEpoch), awkward),
+            Is.True);
+    }
+
+    /// <summary>
+    /// The whole-prefix match must not let one cluster's marker attest for another
+    /// whose id merely prefixes it, in either direction.
+    /// </summary>
+    [Test]
+    public void Attests_rejects_a_cluster_id_that_only_prefixes_the_marker()
+    {
+        var body = BackupSinkCanary.Encode("region-b-secondary", DateTimeOffset.UnixEpoch);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BackupSinkCanary.Attests(body, "region-b"), Is.False);
+            Assert.That(BackupSinkCanary.Attests(body, "region-b-secondary"), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// A marker truncated before its terminating separator is not proof: the body
+    /// must carry the complete attested id, not an unbounded prefix of one.
+    /// </summary>
+    [Test]
+    public void Attests_rejects_a_body_truncated_before_the_id_terminator()
+    {
+        var truncated = Encoding.UTF8.GetBytes($"{BackupSinkCanary.Magic}\n{Peer}");
+
+        Assert.That(BackupSinkCanary.Attests(truncated, Peer), Is.False);
+    }
+
+    /// <summary>
     /// An in-memory backup sink that records the marker ids written and read, so a
     /// test can assert the probe touched the sink exactly as expected - or, for the
     /// inertness tests, not at all.

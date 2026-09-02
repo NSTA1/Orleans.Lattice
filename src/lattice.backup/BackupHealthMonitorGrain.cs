@@ -30,6 +30,7 @@ internal sealed class BackupHealthMonitorGrain(
     ILatticeBackupHealthStore healthStore,
     IBackupSinkSharingProbe sharingProbe,
     IOptionsMonitor<LatticeBackupHealthOptions> optionsMonitor,
+    IOptionsMonitor<LatticeBackupOptions> backupOptionsMonitor,
     ILogger<BackupHealthMonitorGrain> logger,
     [PersistentState("backup-health-monitor", LatticeOptions.StorageProviderName)]
     IPersistentState<BackupHealthMonitorState> state)
@@ -82,20 +83,7 @@ internal sealed class BackupHealthMonitorGrain(
         _sweepInFlight = true;
         try
         {
-            // Refresh the cross-cluster sink-sharing verdict once per sweep, not
-            // once per backup: sharing is a slow-moving deployment fact and the
-            // per-backup verification reads only the cached result. A probe that
-            // faults must never abort the sweep - local verification is still
-            // worth doing - so the failure is logged and the previous verdict
-            // stands.
-            try
-            {
-                await sharingProbe.ProbeAsync();
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "The cross-cluster backup sink sharing probe failed during the health sweep.");
-            }
+            await RefreshSinkSharingAsync();
 
             var now = DateTimeOffset.UtcNow;
             var defaultInterval = Options.DefaultInterval;
@@ -140,6 +128,48 @@ internal sealed class BackupHealthMonitorGrain(
         finally
         {
             _sweepInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// Refreshes the cross-cluster sink-sharing verdict once per sweep, not once
+    /// per backup: sharing is a slow-moving deployment fact and the per-backup
+    /// verification reads only the cached result.
+    /// <para>
+    /// Two guards make this safe to run on the sweep path. It honours
+    /// <see cref="LatticeBackupOptions.SinkSharingEnforcement"/>, so
+    /// <see cref="BackupSinkSharingEnforcement.Disabled"/> genuinely disables the
+    /// probe everywhere rather than only at silo start - otherwise an operator who
+    /// opted out would still have a canary marker written into their sink on every
+    /// sweep, and a stale verdict would still downgrade backup health. It also
+    /// bounds the probe with <see cref="LatticeBackupOptions.SinkSharingProbeTimeout"/>,
+    /// the same deadline the startup guard applies: the probe writes to the sink and
+    /// calls peers over the control channel, and an unbounded await here would hold
+    /// the overlap guard forever and wedge backup health monitoring for the lifetime
+    /// of the activation.
+    /// </para>
+    /// <para>
+    /// A probe that faults or times out must never abort the sweep - local
+    /// verification is still worth doing - so the failure is logged and the previous
+    /// verdict stands.
+    /// </para>
+    /// </summary>
+    private async Task RefreshSinkSharingAsync()
+    {
+        var backupOptions = backupOptionsMonitor.CurrentValue;
+        if (backupOptions.SinkSharingEnforcement == BackupSinkSharingEnforcement.Disabled)
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(backupOptions.SinkSharingProbeTimeout);
+            await sharingProbe.ProbeAsync(timeout.Token);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The cross-cluster backup sink sharing probe failed during the health sweep.");
         }
     }
 
