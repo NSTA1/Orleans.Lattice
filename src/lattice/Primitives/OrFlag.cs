@@ -62,7 +62,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
     }
 
     /// <summary>Returns <c>true</c> when at least one enable dot is not tombstoned.</summary>
-    public bool IsEnabled => LiveEnableCount() > 0;
+    public bool IsEnabled => OrSetDotCompaction.AnyLive(Enables, Tombstones);
 
     /// <inheritdoc />
     /// <remarks>
@@ -74,13 +74,24 @@ public sealed class OrFlag : ICrdt<OrFlag>
     /// </remarks>
     public bool IsBottom => !IsEnabled;
 
-    /// <summary>Enables the flag with a fresh causal dot.</summary>
+    /// <summary>
+    /// Enables the flag with a fresh causal dot, then compacts this replica's
+    /// dot history so re-enabling an already-enabled flag does not grow state.
+    /// <para>
+    /// The fresh dot is what preserves add-wins: it is concurrent with, and so
+    /// survives, a disable authored elsewhere that never observed it. The
+    /// compaction that follows only ever collapses <b>this</b> replica's own
+    /// superseded dots, which carry no information the new dot does not - see
+    /// <see cref="OrSetDotCompaction"/>.
+    /// </para>
+    /// </summary>
     /// <param name="replicaId">The replica authoring the enable. Must be non-empty.</param>
     /// <param name="counter">The replica-local monotonic counter for the dot.</param>
     public void Enable(string replicaId, long counter)
     {
         ArgumentException.ThrowIfNullOrEmpty(replicaId);
         Enables.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
+        Compact();
     }
 
     /// <summary>
@@ -89,34 +100,64 @@ public sealed class OrFlag : ICrdt<OrFlag>
     /// the local <see cref="Enables"/> at the time of the disable) survive
     /// a later merge because their dots are not tombstoned here. Returns
     /// <c>true</c> when at least one new dot was tombstoned.
+    /// <para>
+    /// Tombstoning the observed dots is sufficient even though
+    /// <see cref="Enable(string, long)"/> may have compacted a replica's
+    /// earlier dots away: cancellation is coverage-based
+    /// (<see cref="OrSetDotCompaction.Covers"/>), so a tombstone at a
+    /// replica's highest observed counter also cancels every lower dot from
+    /// that replica - including one this replica compacted away but a peer
+    /// still holds.
+    /// </para>
     /// </summary>
     public bool Disable()
     {
         if (Enables.Count == 0) return false;
         var anyAdded = false;
-        if (Tombstones.Count <= DotLinearScanThreshold || Enables.Count <= DotLinearScanThreshold)
-        {
-            // Tiny tombstone list (the common 0-1-dot case), or few enable dots
-            // to tombstone: a linear Contains against the growing list beats
-            // allocating a HashSet. A flag is typically enabled once or twice
-            // between disables, so the enable side is the small one even when
-            // the tombstone history is long.
-            foreach (var dot in Enables)
-            {
-                if (!Tombstones.Contains(dot)) { Tombstones.Add(dot); anyAdded = true; }
-            }
-            return anyAdded;
-        }
-        var tombSet = OrSetDotSet.Build(Tombstones);
         foreach (var dot in Enables)
         {
-            if (tombSet.Add(dot))
+            if (!OrSetDotCompaction.Covers(Tombstones, in dot))
             {
                 Tombstones.Add(dot);
                 anyAdded = true;
             }
         }
+
+        if (anyAdded)
+        {
+            Compact();
+        }
+
         return anyAdded;
+    }
+
+    /// <summary>
+    /// Collapses this flag's dot history to its bounded normal form: at most one
+    /// enable dot and one tombstone per replica. Idempotent, and never changes
+    /// <see cref="IsEnabled"/>.
+    /// <para>
+    /// A cancelled enable dot is deliberately <b>retained</b> rather than pruned.
+    /// Pruning it would save a few bytes, but the durable per-key history view
+    /// decodes a flag's state into its add/remove events, and dropping the
+    /// cancelled dot would erase the "enabled" half of an enable-then-disable
+    /// pair. Keeping one dot per replica on each side already bounds the state
+    /// at O(replicas), which is the whole point, so the prune bought nothing the
+    /// per-replica collapse had not already banked.
+    /// </para>
+    /// <para>
+    /// Running this on every mutation and every merge is what makes the fix
+    /// <b>self-healing</b>: a flag that already accumulated an unbounded dot
+    /// history under an older build collapses the first time anything merges
+    /// into it or folds a delta onto it, with no re-derivation, migration, or
+    /// operator step. Write-ahead-log replay folds deltas through
+    /// <see cref="MergeDelta"/>, so a replayed history heals on the way back in
+    /// too.
+    /// </para>
+    /// </summary>
+    private void Compact()
+    {
+        OrSetDotCompaction.CompactMaxPerReplica(Tombstones);
+        OrSetDotCompaction.CompactMaxPerReplica(Enables);
     }
 
     /// <summary>
@@ -143,6 +184,7 @@ public sealed class OrFlag : ICrdt<OrFlag>
         ArgumentNullException.ThrowIfNull(other);
         UnionInto(Enables, other.Enables);
         UnionInto(Tombstones, other.Tombstones);
+        Compact();
     }
 
     /// <summary>Creates a deep copy of this flag.</summary>
@@ -165,32 +207,10 @@ public sealed class OrFlag : ICrdt<OrFlag>
     {
         UnionDots(Enables, delta.Enables);
         UnionDots(Tombstones, delta.Disables);
+        Compact();
     }
 
-    private int LiveEnableCount()
-    {
-        if (Enables.Count == 0) return 0;
-        if (Tombstones.Count == 0) return Enables.Count;
-        if (Tombstones.Count <= DotLinearScanThreshold || Enables.Count <= DotLinearScanThreshold)
-        {
-            // Tiny tombstone list, or few enable dots: linear scan beats
-            // hashing. Enables is the small side on any flag that has been
-            // toggled repeatedly, so this keeps IsSet allocation-free there.
-            var liveLinear = 0;
-            foreach (var dot in Enables)
-            {
-                if (!Tombstones.Contains(dot)) liveLinear++;
-            }
-            return liveLinear;
-        }
-        var tombSet = OrSetDotSet.Build(Tombstones);
-        var live = 0;
-        foreach (var dot in Enables)
-        {
-            if (!tombSet.Contains(dot)) live++;
-        }
-        return live;
-    }
+    private int LiveEnableCount() => OrSetDotCompaction.CountLive(Enables, Tombstones);
 
     private static void UnionInto(List<OrSetDot> target, List<OrSetDot> source)
     {

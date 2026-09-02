@@ -208,6 +208,51 @@ Because a `Disable()` only tombstones the dots the local replica has actually ob
 
 **Example use case:** a tag/key secondary index built on composite keys (`tag/{tag}/{key}`). Two sites concurrently associate a key with a tag while a third removes the association; the per-row `OrFlag` converges enable-wins so the association survives unless every observed enable has been disabled.
 
+## Dot-history compaction (bounded state under re-assertion)
+
+The four dot-based primitives above - `OrSet`, `OrFlag`, `RwSet`, and `RwFlag` - represent a slot's causal history as a list of `OrSetDot`. Left alone, that list grows on every **re-assertion**: enabling an already-enabled flag, or re-adding an element already present, mints a fresh dot and appends it, and a merge is a union that never removes anything. A slot re-asserted N times would carry N dots forever, so every read, merge, and serialisation of that one row would cost O(N) - unbounded in any workload that re-asserts on a schedule, presence marking being the obvious one.
+
+The shared `OrSetDotCompaction` helper bounds it. Each slot keeps **at most one dot per replica per side**, so state is O(replicas), not O(assertions):
+
+```
+before:  Enables = [(A,1), (A,2), (A,3), ... (A,1000)]
+after:   Enables = [(A,1000)]
+```
+
+### Why it is lossless
+
+Only replica `A` ever mints `A`'s dots, and it mints them from a monotonically increasing counter. Within one slot `A`'s dots are therefore totally ordered, and a later dot represents the same assertion as - and causally dominates - `A`'s earlier ones.
+
+That holds **only because cancellation is coverage-based**. A cancelling dot from `A` at counter `t` cancels every dot from `A` at counter `<= t`, rather than only the one it equals:
+
+```
+IsCancelled(dot, cover) = exists c in cover : c.ReplicaId == dot.ReplicaId && c.Counter >= dot.Counter
+```
+
+The two halves are a package. Compacting while cancelling by exact equality would diverge: a peer that still held the superseded dot would never see it cancelled, so a retraction that should have emptied the slot would leave that dot live and the slot spuriously present.
+
+### What it does not change
+
+Compaction **never merges dots across replicas**, so a concurrent assertion on another replica keeps its own distinct dot and still wins or loses its primitive's tie-break exactly as before. Add-wins (`OrSet`, `OrFlag`) and remove-wins (`RwSet`, `RwFlag`) are unaffected, as are commutativity, associativity, and idempotence.
+
+A **cancelled** dot is deliberately retained rather than pruned. The durable per-key history view decodes a slot's dots into its add and remove events, and dropping the cancelled dot would erase the "added" half of an add-then-remove pair. Keeping one dot per replica on each side already bounds the state, so pruning bought nothing.
+
+### Self-healing
+
+Compaction runs on every mutation and every merge, including the delta fold used by replication and by write-ahead-log replay. A store written by a build that predates this therefore repairs itself the first time each key is written or merged - no migration, re-derivation, or operator step. A key that is never re-asserted never grew in the first place.
+
+This is distinct from [tombstone compaction](tombstone-compaction.md), which reclaims whole dead **rows** at the tree level and cannot shrink a live row's own value.
+
+### OR-Map is excluded
+
+`OrMap` entries carry a **value**, not just a dot, so two entries from one replica are two real value contributions that its live-value fold merges - not a redundant re-assertion. Collapsing them would lose data, and pre-merging them would change what a concurrent remove removes, because a tombstone cancels a specific entry. `OrMap` therefore keeps one entry per `Set`.
+
+### Rolling out across an active-active fleet
+
+Compaction drops a superseded dot that a peer running an older build still holds and still cancels by exact equality, so mid-upgrade the two builds can read one slot differently - only for a slot that was both re-asserted and then retracted. The replicated **state** still converges (a merge is still a union of dot sets); what differs is only how it is read, and it resolves when the peer upgrades, with nothing to repair.
+
+To avoid even that, set the `Orleans.Lattice.Crdt.DisableDotCompaction` `AppContext` switch on upgraded nodes. It suppresses compaction while leaving coverage-based cancellation in place, so an upgraded node retains dots exactly as the old build does; a fleet can then upgrade in any order and clear the switch once every replica is on the new build, at which point the bounded form re-establishes itself through the ordinary self-healing path. It defaults to off, so a single-cluster deployment needs no configuration.
+
 ## Remove-Wins Flag (RW-Flag)
 
 `RwFlag` is the **inverse of the OR-Flag**: a remove-wins (disable-wins) flag where a concurrent disable beats a concurrent enable. Like `OrFlag` it carries no element payload, but it tracks three grow-only dot lists rather than two:

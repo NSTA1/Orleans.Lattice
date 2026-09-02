@@ -247,7 +247,10 @@ public class OrSetProvenanceDecoderTests
 
         var events = Decoder.DecodeState(set);
 
-        Assert.That(events.Select(e => e.Ordinal), Is.EqualTo(new[] { 1L, 2L, 3L }));
+        // The old unbounded representation emitted all three hand-authored
+        // same-replica adds. Compaction retains the newest dot, matching the
+        // accessor contract that counters only move forward.
+        Assert.That(events.Select(e => e.Ordinal), Is.EqualTo(new[] { 3L }));
     }
 
     [Test]

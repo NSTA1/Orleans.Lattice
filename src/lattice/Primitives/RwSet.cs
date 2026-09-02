@@ -157,7 +157,11 @@ public sealed class RwSet : ICrdt<RwSet>
             // subsequent membership check sees the element present, unless a
             // concurrent unobserved remove survives.
             var removeLookup = Removes.GetAlternateLookup<ReadOnlySpan<char>>();
-            if (!removeLookup.TryGetValue(key, out var removeDots) || removeDots.Count == 0) return;
+            if (!removeLookup.TryGetValue(key, out var removeDots) || removeDots.Count == 0)
+            {
+                OrSetDotCompaction.CompactMaxPerReplica(dots);
+                return;
+            }
             var tombLookup = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
             if (!tombLookup.TryGetValue(key, out var tomb))
             {
@@ -165,6 +169,7 @@ public sealed class RwSet : ICrdt<RwSet>
                 Tombstones[new string(key)] = tomb;
             }
             AddObservedTombstones(tomb, removeDots);
+            CompactSlot(dots, removeDots, tomb);
         }
         finally
         {
@@ -201,6 +206,7 @@ public sealed class RwSet : ICrdt<RwSet>
                 Removes[new string(key)] = removeDots;
             }
             removeDots.Add(new OrSetDot { ReplicaId = replicaId, Counter = counter });
+            OrSetDotCompaction.CompactMaxPerReplica(removeDots);
             return wasMember;
         }
         finally
@@ -298,6 +304,7 @@ public sealed class RwSet : ICrdt<RwSet>
         MergeMap(Adds, other.Adds);
         MergeMap(Removes, other.Removes);
         MergeMap(Tombstones, other.Tombstones);
+        Compact();
     }
 
     /// <summary>Creates a deep copy of this set.</summary>
@@ -335,6 +342,7 @@ public sealed class RwSet : ICrdt<RwSet>
         UnionDeltaDots(Adds, delta.Adds);
         UnionDeltaDots(Removes, delta.Removes);
         UnionDeltaDots(Tombstones, delta.Tombstones);
+        Compact();
     }
 
     private bool ContainsKey(ReadOnlySpan<char> key)
@@ -362,55 +370,54 @@ public sealed class RwSet : ICrdt<RwSet>
 
     private static void AddObservedTombstones(List<OrSetDot> tomb, List<OrSetDot> observed)
     {
-        if (tomb.Count <= DotLinearScanThreshold || observed.Count <= DotLinearScanThreshold)
-        {
-            // Tiny tombstone list, or few observed dots: a linear membership
-            // scan beats allocating a HashSet. When the observed list is the
-            // small side - the common case, a key removed after a handful of
-            // adds against a long observed-remove history - the scan is
-            // O(observed.Count * tomb.Count), bounded by
-            // O(DotLinearScanThreshold * tomb.Count): the same asymptotic as
-            // building the tomb-sized set, but allocation-free.
-            foreach (var dot in observed)
-            {
-                if (!tomb.Contains(dot)) tomb.Add(dot);
-            }
-            return;
-        }
-        var tombSet = OrSetDotSet.Build(tomb);
         foreach (var dot in observed)
         {
-            if (tombSet.Add(dot)) tomb.Add(dot);
+            if (!OrSetDotCompaction.Covers(tomb, in dot)) tomb.Add(dot);
         }
     }
 
-    private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
+    /// <summary>
+    /// Collapses every element's dot history to its bounded normal form: at most
+    /// one add, remove, and tombstone dot per replica for each element.
+    /// Idempotent, and never changes <see cref="Contains(byte[])"/> or
+    /// <see cref="Count"/>.
+    /// <para>
+    /// Cancelled remove dots are retained for causal history; one dot per replica
+    /// on each side already bounds state at O(replicas). Running this on every
+    /// mutation and merge makes the fix self-healing: a set written by an older
+    /// build collapses the first time any state or delta merges into it.
+    /// </para>
+    /// </summary>
+    private void Compact()
     {
-        if (tomb is null || tomb.Count == 0) return dots.Count;
-        if (tomb.Count <= DotLinearScanThreshold || dots.Count <= DotLinearScanThreshold)
+        foreach (var (key, addDots) in Adds)
         {
-            // Tiny tombstone list, or few live dots: a linear membership scan
-            // beats allocating a HashSet. Mirrors OrSet.LiveDotCount - when the
-            // live side is the small one the scan is
-            // O(DotLinearScanThreshold * tomb.Count), the same asymptotic as
-            // building the tomb-sized set, but allocation-free on every read
-            // (IsEmpty / Count / Elements / Contains) of a heavily-tombstoned
-            // key.
-            var live = 0;
-            foreach (var d in dots)
-            {
-                if (!tomb.Contains(d)) live++;
-            }
-            return live;
+            Removes.TryGetValue(key, out var removeDots);
+            Tombstones.TryGetValue(key, out var tomb);
+            CompactSlot(addDots, removeDots, tomb);
         }
-        var tombSet = OrSetDotSet.Build(tomb);
-        var n = 0;
-        foreach (var d in dots)
+
+        foreach (var (key, removeDots) in Removes)
         {
-            if (!tombSet.Contains(d)) n++;
+            Tombstones.TryGetValue(key, out var tomb);
+            CompactSlot(null, removeDots, tomb);
         }
-        return n;
+
+        foreach (var dots in Tombstones.Values)
+        {
+            OrSetDotCompaction.CompactMaxPerReplica(dots);
+        }
     }
+
+    private static void CompactSlot(List<OrSetDot>? adds, List<OrSetDot>? removes, List<OrSetDot>? tomb)
+    {
+        if (adds is not null) OrSetDotCompaction.CompactMaxPerReplica(adds);
+        if (removes is not null) OrSetDotCompaction.CompactMaxPerReplica(removes);
+        if (tomb is not null) OrSetDotCompaction.CompactMaxPerReplica(tomb);
+    }
+
+    private static int LiveDotCount(List<OrSetDot> dots, List<OrSetDot>? tomb)
+        => tomb is null ? dots.Count : OrSetDotCompaction.CountLive(dots, tomb);
 
     private static void MergeMap(Dictionary<string, List<OrSetDot>> target, Dictionary<string, List<OrSetDot>> source)
     {

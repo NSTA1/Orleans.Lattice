@@ -340,8 +340,14 @@ public class RwSetTests
 
         Assert.Multiple(() =>
         {
+            // Independence is that the clone did not observe the later add,
+            // which the counters prove: both sides hold one dot per replica, but
+            // the clone's is still the pre-clone one.
             Assert.That(clone.Adds["eA=="], Has.Count.EqualTo(1));
-            Assert.That(a.Adds["eA=="], Has.Count.EqualTo(2));
+            Assert.That(clone.Adds["eA=="][0].Counter, Is.EqualTo(1));
+            Assert.That(a.Adds["eA=="], Has.Count.EqualTo(1),
+                "Repeated same-replica adds compact to the newest dot.");
+            Assert.That(a.Adds["eA=="][0].Counter, Is.EqualTo(2));
         });
     }
 
