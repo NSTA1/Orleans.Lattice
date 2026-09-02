@@ -34,12 +34,20 @@ internal sealed class FakeLatticeBackupControl : ILatticeBackupControl
     /// <summary>The most recent restore result passed to <see cref="RevertRestoreAsync"/>.</summary>
     public LatticeRestoreResult? LastReverted { get; private set; }
 
+    /// <summary>
+    /// Invoked inside every gated operation, so a test can observe the ambient
+    /// state (the stamped credential in particular) exactly as the real facade
+    /// would see it during the call.
+    /// </summary>
+    public Action? OnOperation { get; set; }
+
     /// <summary>Seeds an artifact's bytes so <see cref="ExportArtifactAsync"/> can stream them.</summary>
     public void SeedArtifact(string backupId, string artifactId, byte[] bytes)
         => _artifacts[(backupId, artifactId)] = bytes;
 
     private void Gate()
     {
+        OnOperation?.Invoke();
         if (!Authorized)
         {
             throw new LatticeAuthorizationDeniedException("The caller is not authorized for the backup scope.");
