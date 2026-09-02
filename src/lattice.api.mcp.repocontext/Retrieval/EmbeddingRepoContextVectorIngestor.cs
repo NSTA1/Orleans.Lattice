@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
 
@@ -303,6 +304,234 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         while (token is not null);
 
         return await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Embeds the repository's durable agent-memory entries as their own passages
+    /// (issue #1878). Mirrors the symbol path: an entry changed this pass is
+    /// re-embedded, one retired this pass has its vector retired, and any entry
+    /// with no live embedding is back-filled - which is what converts an existing
+    /// store, captured entirely before memory embedding existed, without a
+    /// re-walk.
+    /// </summary>
+    public async Task<int> IngestMemoryAsync(
+        string repoId,
+        IReadOnlyCollection<string> changedMemoryKeys,
+        IReadOnlyCollection<string> retiredMemoryKeys,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        ArgumentNullException.ThrowIfNull(changedMemoryKeys);
+        ArgumentNullException.ThrowIfNull(retiredMemoryKeys);
+
+        // Retire regardless of the provider: an entry that was forgotten or
+        // expired must drop its vector, or the membership count drifts high and
+        // the semantic path ranks a key that no longer hydrates. Retirement only
+        // deletes stored records, so it needs no embedder.
+        foreach (var key in retiredMemoryKeys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _writer.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_embeddingProvider is null)
+        {
+            return 0;
+        }
+
+        if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Skipping memory vectorisation for repository {RepoId}: the embedding provider is unavailable. Search will use keyword recall.",
+                repoId);
+            return 0;
+        }
+
+        var changed = new HashSet<string>(changedMemoryKeys, StringComparer.Ordinal);
+
+        var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.Memory);
+        var prefix = RepoContextKeys.MemoryPrefix(repoId);
+        var sources = new List<EmbeddingSource>();
+
+        // Every memory key that is live right now. Collected during the same walk
+        // that selects what to embed, so the orphan sweep below costs one extra
+        // set rather than a second pass over the store.
+        var liveKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        string? token = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var page = await RepoContextPortability
+                .EnumerateAsync(tree, prefix, token, RepoContextPortability.DefaultPageSize, vectorExport: null, cancellationToken)
+                .ConfigureAwait(false);
+
+            var pageKeys = new List<string>(page.Records.Count);
+            foreach (var record in page.Records)
+            {
+                if (record.Value is not null)
+                {
+                    pageKeys.Add(record.Key);
+                    liveKeys.Add(record.Key);
+                }
+            }
+
+            var embeddedMembers = await _writer
+                .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var record in page.Records)
+            {
+                if (record.Value is null)
+                {
+                    continue;
+                }
+
+                var sourceKey = record.Key;
+                if (!changed.Contains(sourceKey) && embeddedMembers.Contains(VectorCodec.SourceId(sourceKey)))
+                {
+                    continue;
+                }
+
+                // The memory value is an MvRegister blob whose concurrent values are
+                // serialized MemoryRecords, not a bare record: fold it exactly as the
+                // projection does so the embedded passage reflects the same converged
+                // entry that recall and keyword search return. Deserializing the
+                // envelope directly as a MemoryRecord would read the wrong shape.
+                var folded = RepoContextMemoryCodec.Fold(record.Value, _serializer);
+                if (folded is null)
+                {
+                    continue;
+                }
+
+                var text = BuildMemoryText(folded);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    continue;
+                }
+
+                // A memory body is prose and can be long, so chunk it exactly as a
+                // file is chunked rather than truncating: a gotcha's operative
+                // detail is as often at its end (the fix, the corollaries) as at
+                // its start, and a single truncated passage would drop it.
+                var windows = RepoContextTextChunker.Chunk(text);
+                if (windows.Count == 0)
+                {
+                    continue;
+                }
+
+                sources.Add(new EmbeddingSource(sourceKey, windows));
+            }
+
+            token = page.HasMore ? page.ContinuationToken : null;
+        }
+        while (token is not null);
+
+        await SweepOrphanedMemoryVectorsAsync(repoId, liveKeys, cancellationToken).ConfigureAwait(false);
+
+        var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Record what is now embedded so a later pass can compute the orphan set.
+        // Written after the store so a marker never claims an embedding that did
+        // not land; a source whose batch failed stays unmarked and is retried.
+        if (sources.Count > 0)
+        {
+            var marked = new List<string>(sources.Count);
+            foreach (var source in sources)
+            {
+                marked.Add(source.SourceKey);
+            }
+
+            await _writer.MarkMemoryEmbeddedAsync(repoId, marked, cancellationToken).ConfigureAwait(false);
+        }
+
+        return embedded;
+    }
+
+    /// <summary>
+    /// Retires the embeddings of memory entries that no longer exist.
+    /// <para>
+    /// An entry removed through <c>forget</c> has its vector retired on the spot by
+    /// the store, but an entry that simply <b>expires by its own time-to-live</b> -
+    /// a coordination handoff written with <c>ttlSeconds</c>, say - vanishes with no
+    /// code path observing it. Without this sweep its vector would survive its
+    /// entry indefinitely, inflating the membership tally and spending ranking slots
+    /// on a key that no longer hydrates. Vectorising memory is only a complete
+    /// feature with this half present.
+    /// </para>
+    /// <para>
+    /// The orphan set is exactly (recorded - live), both of which this pass already
+    /// holds: the recorded keys come from one small add-wins record, and the live
+    /// keys were collected during the enumeration above. So the sweep adds one read
+    /// and touches only entries that actually vanished.
+    /// </para>
+    /// </summary>
+    private async Task SweepOrphanedMemoryVectorsAsync(
+        string repoId, HashSet<string> liveKeys, CancellationToken cancellationToken)
+    {
+        var recorded = await _writer.LoadEmbeddedMemoryKeysAsync(repoId, cancellationToken).ConfigureAwait(false);
+        if (recorded.Count == 0)
+        {
+            return;
+        }
+
+        var swept = 0;
+        foreach (var key in recorded)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (liveKeys.Contains(key))
+            {
+                continue;
+            }
+
+            await _writer.RetireAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+            await _writer.UnmarkMemoryEmbeddedAsync(repoId, key, cancellationToken).ConfigureAwait(false);
+            swept++;
+        }
+
+        if (swept > 0)
+        {
+            _logger.LogInformation(
+                "Repo {RepoId}: retired {Swept} orphaned memory embedding(s) whose entries no longer exist.",
+                repoId, swept);
+        }
+    }
+
+    /// <summary>
+    /// Builds the passage text for a memory entry: its topic, title, tags and
+    /// body. The title and body carry the meaning; the topic and tags are
+    /// included because they are how an agent actually reaches for a memory
+    /// ("the gotcha about allocation probes"), and they are short enough that
+    /// prepending them costs almost nothing against the body.
+    /// </summary>
+    private static string BuildMemoryText(MemoryRecord record)
+    {
+        var title = RepoContextValues.ReadString(record.Title);
+        var body = RepoContextValues.ReadString(record.Body);
+        var kind = record.Kind == MemoryKind.Unspecified ? "memory" : record.Kind.ToString();
+
+        var builder = new StringBuilder();
+        builder.Append(kind).Append(' ').Append(record.Topic).Append('/').Append(record.Id);
+
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            builder.Append('\n').Append(title);
+        }
+
+        var tags = RepoContextEntryProjection.ReadElements(record.Tags);
+        if (tags.Count > 0)
+        {
+            builder.Append("\ntags: ").AppendJoin(", ", tags);
+        }
+
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+            builder.Append('\n').Append(body);
+        }
+
+        var text = builder.ToString();
+        return text.Length > MaxEmbedChars ? text[..MaxEmbedChars] : text;
     }
 
     /// <summary>

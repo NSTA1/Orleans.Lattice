@@ -72,4 +72,22 @@ public sealed class NoOpRepoContextVectorIngestorTests
 
         Assert.That(embedded, Is.EqualTo(0));
     }
+
+    [Test]
+    public async Task IngestMemoryAsync_completes_without_embedding_anything()
+    {
+        var ingestor = new NoOpRepoContextVectorIngestor();
+
+        // The default seam owns no embedder, so memory vectorisation is inert too:
+        // it reports zero entries embedded and ignores both the changed and retired
+        // keys, letting a host without the retrieval surface run the reconcile
+        // unchanged.
+        var embedded = await ingestor.IngestMemoryAsync(
+            "repo",
+            new[] { "repo/repo/mem/gotchas/a" },
+            new[] { "repo/repo/mem/gotchas/b" },
+            TestContext.CurrentContext.CancellationToken);
+
+        Assert.That(embedded, Is.EqualTo(0));
+    }
 }

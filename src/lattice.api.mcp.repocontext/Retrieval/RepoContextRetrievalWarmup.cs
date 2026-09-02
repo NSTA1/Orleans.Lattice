@@ -53,8 +53,14 @@ internal sealed class RepoContextRetrievalWarmup : IRepoContextRetrievalWarmup
     {
         try
         {
-            var repos = await _store.ListReposAsync(cancellationToken).ConfigureAwait(false);
-            if (repos.Repos.Count == 0)
+            // Ids only, deliberately. The warmup uses nothing but the repository id,
+            // and a full summary carries embeddedVectorCount, which is scanned from
+            // the membership tree - the largest tree in the store. Paying that scan
+            // here means paying it at startup, while the vector trees are still
+            // replaying and that scan is at its slowest; it timed out and failed the
+            // warmup on a real deployment (issue #1819).
+            var repoIds = await _store.ListRepoIdsAsync(cancellationToken).ConfigureAwait(false);
+            if (repoIds.Count == 0)
             {
                 // Nothing is indexed, so the vector plane holds nothing it could fail to
                 // serve. Blocking readiness here would wedge a fresh box before its first
@@ -65,14 +71,14 @@ internal sealed class RepoContextRetrievalWarmup : IRepoContextRetrievalWarmup
                 return true;
             }
 
-            foreach (var repo in repos.Repos)
+            foreach (var repoId in repoIds)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // The result is deliberately discarded: the readiness observation the
                 // search service makes on the way through is the point of the call.
                 _ = await _search
-                    .SearchAsync(repo.RepoId, WarmupQuery, 1, cancellationToken)
+                    .SearchAsync(repoId, WarmupQuery, 1, cancellationToken)
                     .ConfigureAwait(false);
 
                 if (_readiness.IsReady)

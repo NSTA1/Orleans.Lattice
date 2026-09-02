@@ -4,8 +4,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Retrieval;
 /// Tests for <see cref="RepoContextSearchReasons.ForSemantic(string?)"/>: the
 /// semantic-path reason vocabulary derived server-side from the matched vector's
 /// canonical source key. A symbol vector explains itself as a symbol chunk with
-/// its fully-qualified name; a file-chunk vector as a file chunk; anything else
-/// degrades to the bare <c>semantic</c> reason.
+/// its fully-qualified name; a file-chunk vector as a file chunk; a memory vector
+/// as a memory chunk with its topic; anything else degrades to the bare
+/// <c>semantic</c> reason.
 /// </summary>
 [TestFixture]
 public sealed class RepoContextSearchReasonsTests
@@ -29,10 +30,12 @@ public sealed class RepoContextSearchReasonsTests
             Is.EqualTo(new[] { "semantic", "chunk:file" }));
 
     [Test]
-    public void ForSemantic_falls_back_to_semantic_only_for_a_non_structural_source()
+    public void ForSemantic_explains_a_memory_vector_with_its_topic()
         => Assert.That(
             RepoContextSearchReasons.ForSemantic("repo/acme/mem/decisions/x"),
-            Is.EqualTo(new[] { "semantic" }));
+            Is.EqualTo(new[] { "semantic", "chunk:memory", "topic:decisions" }),
+            "A memory entry is embedded and reachable on the semantic path (issue #1878), so it "
+            + "explains itself as a memory chunk rather than degrading to the bare reason.");
 
     [Test]
     public void ForSemantic_falls_back_to_semantic_only_for_an_unparseable_key()

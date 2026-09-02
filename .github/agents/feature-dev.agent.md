@@ -31,13 +31,12 @@ Follow these phases in order. Complete each phase fully before moving to the nex
 
 0. **Orient from memory first.** Run `repocontext_health` and
    `repocontext_index_status`, then sweep what earlier sessions already learned
-   about this area: `repocontext_search` the feature in natural language (it ranks
-   code and memory together), and `repocontext_scan` scope `Memory` - plus
-   `MemoryTopic` for your workstream topic if a coordinator gave you one, and for
-   the component you are about to touch. Report in the chat reply the decisions,
-   gotchas, and conventions you found that bear on this issue, or state plainly
-   that there were none. Do not skip this because the issue looks small: the
-   entries that save the most time are the ones you did not know to look for.
+   about this area by following the memory retrieval protocol in
+   `.github/instructions/repocontext.instructions.md` (Moment 1). Report in the
+   chat reply the decisions, gotchas, and conventions you found that bear on this
+   issue, or state plainly that there were none. Do not skip this because the
+   issue looks small: the entries that save the most time are the ones you did
+   not know to look for.
 1. Find the GitHub issue for the feature being requested. Feature planning lives on [GitHub Issues](https://github.com/NSTA1/Orleans.Lattice/issues), labelled `lattice` or `lattice.replication`.
 2. Read `.github/copilot-instructions.md` and all files under `.github/instructions/` to internalize project conventions.
 3. Read `docs/lattice/api.md` and any other docs referenced by the feature to understand the current public API surface.

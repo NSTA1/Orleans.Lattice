@@ -51,6 +51,7 @@ internal static class CoreDocsSnippetScope
         "docs/lattice.explorer.entra.web",
         "docs/lattice.grainindex",
         "docs/lattice.membership",
+        "docs/lattice.membership.oidc",
         "docs/lattice.replication.grpc",
         "docs/lattice.scaling",
         "docs/lattice.schema",
