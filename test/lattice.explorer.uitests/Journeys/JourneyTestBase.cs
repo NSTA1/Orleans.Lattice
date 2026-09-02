@@ -31,6 +31,9 @@ public abstract class JourneyTestBase : UiTestBase
     /// <inheritdoc />
     protected override Uri BaseUri => JourneyAppHostSetup.Host.BaseUri;
 
+    /// <inheritdoc />
+    protected override ExplorerAppHost FaultSource => JourneyAppHostSetup.Host;
+
     /// <summary>The demo cluster's facts, which a journey may move between visits.</summary>
     private protected static JourneyWorld World => JourneyAppHostSetup.World;
 

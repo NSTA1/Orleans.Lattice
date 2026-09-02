@@ -42,13 +42,69 @@ internal static class ExplorerPublishedAssets
     private static readonly TimeSpan PublishTimeout = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Publishes this test project's static web assets into a fresh temp directory and
-    /// returns that directory. Uses <c>--no-build</c> so it reuses the assemblies the
-    /// build step already produced (CI builds before it tests), keeping the step to a
-    /// few seconds.
+    /// The one published content root this process uses, produced on first request and
+    /// shared by every head afterwards.
+    /// <para>
+    /// Shared deliberately. The suite runs two heads - the shared disconnected one every
+    /// accessibility fixture measures, and the journey world's - and each used to publish
+    /// its own private copy, so a journey shard paid the publish twice and kept two full
+    /// copies of the same immutable static assets on disk. The assets are identical (both
+    /// heads publish this same project) and nothing mutates them, so the second publish
+    /// bought nothing and spent it during the window in which the first head's circuits
+    /// were establishing.
+    /// </para>
+    /// <para>
+    /// <see cref="Lazy{T}"/> with <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/>
+    /// so two heads starting concurrently still publish exactly once and both await the
+    /// same task, rather than racing into the same output directory.
+    /// </para>
+    /// </summary>
+    private static readonly Lazy<Task<string>> Published = new(
+        PublishAsync,
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
+    /// <summary>
+    /// Returns the process-wide published content root to host from, publishing this
+    /// test project's static web assets on the first call and reusing that output on
+    /// every later one. Uses <c>--no-build</c> so it reuses the assemblies the build step
+    /// already produced (CI builds before it tests), keeping the step to a few seconds.
     /// </summary>
     /// <returns>The absolute path of the published content root to host from.</returns>
-    public static async Task<string> EnsureAsync()
+    public static Task<string> EnsureAsync() => Published.Value;
+
+    /// <summary>
+    /// Deletes the shared published root, if one was produced. Call once, after every
+    /// head has stopped - a head must not delete it on its own disposal, because the
+    /// other head is still serving from it.
+    /// </summary>
+    public static void Cleanup()
+    {
+        if (!Published.IsValueCreated)
+        {
+            return;
+        }
+
+        var task = Published.Value;
+        if (!task.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(task.Result, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup of the temp publish directory; a leftover temp folder
+            // must never fail the run.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static async Task<string> PublishAsync()
     {
         var projectPath = ResolveProjectPath();
         var outputDir = Path.Combine(

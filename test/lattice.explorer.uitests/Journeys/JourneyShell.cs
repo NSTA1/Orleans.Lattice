@@ -26,6 +26,9 @@ internal static class JourneyShell
     /// <summary>The rail once every area gate has reported.</summary>
     internal const string SettledRailSelector = ".lx-shell-rail[data-lx-rail-settled='true']";
 
+    /// <summary>The detail strip once every surface gate has reported.</summary>
+    internal const string SettledDetailSelector = ".lx-shell-detail[data-lx-detail-settled='true']";
+
     /// <summary>One refused area's entry, carrying its label and its remedy disclosure.</summary>
     internal const string DemotedEntrySelector = ".lx-shell-rail-demoted-entry";
 
@@ -307,6 +310,28 @@ internal static class JourneyShell
     {
         await Assertions.Expect(page.Locator(RailTabSelector).First).ToBeVisibleAsync();
         await Assertions.Expect(page.Locator(SettledRailSelector)).ToBeAttachedAsync();
+    }
+
+    /// <summary>
+    /// Waits until the detail strip's operable set has stopped changing: every surface
+    /// gate has reported, and at least one tab is present and not disabled.
+    /// </summary>
+    /// <remarks>
+    /// The strip needs this for the same reason the rail does, and waiting only for a
+    /// non-disabled tab is not enough. A surface nobody has probed yet renders as
+    /// <c>Pending</c>, which is <b>enabled</b> - deliberately, because "not asked" is
+    /// not "refused" - so a caller that samples the strip mid-probe sees more operable
+    /// tabs than the strip will settle with, and every one of them can still turn
+    /// disabled or disappear. Waiting for the strip's own settled statement removes
+    /// that window rather than narrowing it.
+    /// </remarks>
+    /// <param name="page">The page to check.</param>
+    internal static async Task AssertDetailStripSettledAsync(IPage page)
+    {
+        await Assertions
+            .Expect(page.Locator(DetailTabSelector + ":not([disabled])").First)
+            .ToBeVisibleAsync();
+        await Assertions.Expect(page.Locator(SettledDetailSelector)).ToBeAttachedAsync();
     }
 
     /// <summary>

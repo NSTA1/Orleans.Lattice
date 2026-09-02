@@ -22,7 +22,22 @@ public sealed class ExplorerShellPreferences : IExplorerShellPreferences, IDispo
     // Keyed by the declared key instance (reference equality is the type's
     // identity), so the scoped name is composed once per key per scope rather
     // than concatenated on every read.
+    //
+    // Guarded by _namesGate. This is a scoped service, so it is tempting to assume
+    // one circuit means one thread - but the two paths that touch this dictionary
+    // do NOT share a thread. Reads run on the render path, while OnScopeChanged
+    // clears it from whatever thread raised IExplorerPreferenceScopeProvider's
+    // ScopeChanged - which is the authentication or configuration event, i.e. the
+    // sign-in path. A Dictionary mutated from two threads at once corrupts its
+    // internal state and then throws InvalidOperationException ("Operations that
+    // change non-concurrent collections must have exclusive access") on an
+    // unrelated later read. Thrown from a component's render, Blazor treats that
+    // as an unhandled circuit exception and TEARS THE CIRCUIT DOWN: the page stays
+    // rendered but goes completely inert, so every later interaction silently does
+    // nothing. That is what it was doing - intermittently, and most often right
+    // after sign-in, which is exactly when the scope changes.
     private readonly Dictionary<ExplorerPreferenceKey, string> _scopedNames = [];
+    private readonly Lock _namesGate = new();
 
     /// <summary>Creates the contract over its collaborators.</summary>
     /// <param name="store">The durable preference store. Must not be <see langword="null"/>.</param>
@@ -254,9 +269,12 @@ public sealed class ExplorerShellPreferences : IExplorerShellPreferences, IDispo
     {
         ArgumentNullException.ThrowIfNull(key);
 
-        if (_scopedNames.TryGetValue(key, out var name))
+        lock (_namesGate)
         {
-            return name;
+            if (_scopedNames.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
         }
 
         if (!_catalog.Contains(key))
@@ -266,15 +284,29 @@ public sealed class ExplorerShellPreferences : IExplorerShellPreferences, IDispo
                 nameof(key));
         }
 
-        name = string.Concat(_scope.Current.ToScopeToken(key.Scope), ".", key.Name);
-        _scopedNames[key] = name;
+        // Composed outside the lock: it reads the current scope, which is exactly what
+        // a concurrent scope change is in the middle of moving, so holding the lock
+        // across it would widen the critical section without making the answer any
+        // fresher. A name composed against a scope that changes underneath is
+        // discarded by the Clear that follows, and recomposed on the next read.
+        var name = string.Concat(_scope.Current.ToScopeToken(key.Scope), ".", key.Name);
+
+        lock (_namesGate)
+        {
+            _scopedNames[key] = name;
+        }
+
         return name;
     }
 
     private void OnScopeChanged()
     {
         // Every cached name embedded the previous identity's token.
-        _scopedNames.Clear();
+        lock (_namesGate)
+        {
+            _scopedNames.Clear();
+        }
+
         Changed?.Invoke();
     }
 }

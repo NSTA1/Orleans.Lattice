@@ -41,7 +41,7 @@
     lifetime token by hand.
 *@
 
-<section class="lx-shell-detail" aria-label="Detail">
+<section class="lx-shell-detail" aria-label="Detail" data-lx-detail-settled="@(_surfacesPending ? "false" : "true")">
     <header class="lx-shell-detail-header">
         <h2 class="lx-shell-detail-heading">@DetailHeading</h2>
         @*
@@ -157,6 +157,12 @@
     private IReadOnlyList<IExplorerPlugin> _plugins = NoPlugins;
     private SelectionTab[] _tabSources = NoTabSources;
     private LatticeTabItem[] _tabs = NoTabs;
+
+    // True while at least one surface's gate has not reported. Published as
+    // data-lx-detail-settled so a caller can wait for the strip's operable set to
+    // stop changing, rather than sampling it mid-probe. Mirrors _railPending in
+    // AppShell, which exists for the same reason.
+    private bool _surfacesPending;
 
     // Each applicable plugin's route surface slug, derived once with the
     // applicable set rather than on the resolve path: deriving a slug takes the
@@ -426,6 +432,32 @@
     private void RebuildTabs()
     {
         var sources = _tabSources;
+
+        // True while at least one surface's gate has not reported. Published as
+        // data-lx-detail-settled so a caller - a test, or anything driving the
+        // shell - can wait for the strip to mean something instead of racing its
+        // probes, exactly as the area rail publishes data-lx-rail-settled.
+        //
+        // The strip needs this signal for the same reason the rail does, and the
+        // absence of it was a real defect rather than a missing convenience: an
+        // unprobed surface renders as Pending, which is ENABLED (see below), so a
+        // caller that samples the strip mid-probe sees more operable tabs than it
+        // will settle with. The arrow-key proof did exactly that and failed
+        // intermittently in CI - it snapshotted two operable tabs, the probes
+        // landed and disabled one, and by the time it pressed ArrowRight the
+        // strip had a single enabled tab, where not moving focus is the correct
+        // behaviour. The product was right and the observer was early.
+        var pending = false;
+        for (var i = 0; i < sources.Length; i++)
+        {
+            if (!AccessStore.HasReported(sources[i].PluginId))
+            {
+                pending = true;
+                break;
+            }
+        }
+
+        _surfacesPending = pending;
 
         var visible = 0;
         for (var i = 0; i < sources.Length; i++)

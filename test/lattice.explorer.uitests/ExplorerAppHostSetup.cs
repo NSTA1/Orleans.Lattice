@@ -78,6 +78,11 @@ public sealed class ExplorerAppHostSetup
         }
 
         _instance = null;
+
+        // Last, and only here: this is the assembly-level teardown, so it runs after
+        // every namespace-level one - including the journeys' - and therefore after
+        // every head sharing the published root has stopped.
+        ExplorerPublishedAssets.Cleanup();
     }
 
     private static async Task<IBrowser> LaunchChromiumOrExplainAsync(IPlaywright playwright)

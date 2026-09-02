@@ -27,6 +27,14 @@ public abstract class UiTestBase
 {
     private readonly List<IBrowserContext> _contexts = [];
     private readonly List<IPage> _pages = [];
+    private readonly List<string> _clientFaults = [];
+
+    /// <summary>
+    /// The web head this fixture's failures should report faults from. Defaults to the
+    /// shared disconnected head; the journey suite overrides it alongside
+    /// <see cref="BaseUri"/> so a journey failure reports its own head's log.
+    /// </summary>
+    protected virtual ExplorerAppHost FaultSource => ExplorerAppHostSetup.Host;
 
     /// <summary>
     /// The base address of the running Explorer web head this fixture drives.
@@ -73,6 +81,22 @@ public abstract class UiTestBase
         });
 
         var page = await context.NewPageAsync();
+
+        // Record what the browser itself reports. A Blazor Server circuit that faults
+        // logs "There was an unhandled exception on the current circuit" to the console
+        // and then stops responding, so the page stays rendered and every later
+        // assertion fails against a frozen document. Without this the only evidence is
+        // the locator that timed out at the end of that chain, which is what made these
+        // failures look environmental for so long.
+        page.Console += (_, message) =>
+        {
+            if (message.Type is "error" or "warning")
+            {
+                _clientFaults.Add($"  [console.{message.Type}] {message.Text}");
+            }
+        };
+
+        page.PageError += (_, error) => _clientFaults.Add($"  [pageerror] {error}");
 
         // Every fixture shares one browser, so a page created earlier can still hold
         // the browser's focus target. Claim it on creation: a page without focus
@@ -148,6 +172,15 @@ public abstract class UiTestBase
             == NUnit.Framework.Interfaces.TestStatus.Failed;
         var slug = Slug(TestContext.CurrentContext.Test.Name);
 
+        // Always drain the head's log, pass or fail, so one test's faults can never be
+        // attributed to the next one that happens to fail.
+        var serverFaults = FaultSource.DescribeFaults();
+
+        if (failed)
+        {
+            ReportFaults(serverFaults);
+        }
+
         for (var i = 0; i < _contexts.Count; i++)
         {
             var context = _contexts[i];
@@ -166,6 +199,35 @@ public abstract class UiTestBase
 
         _contexts.Clear();
         _pages.Clear();
+        _clientFaults.Clear();
+    }
+
+    /// <summary>
+    /// Writes what the server and the browser reported into the test's output, so the
+    /// cause of a frozen page travels with the failure instead of being discarded.
+    /// </summary>
+    private void ReportFaults(string? serverFaults)
+    {
+        if (serverFaults is not null)
+        {
+            TestContext.Out.WriteLine(serverFaults);
+        }
+
+        if (_clientFaults.Count > 0)
+        {
+            TestContext.Out.WriteLine(
+                "The browser reported the following while this test ran:"
+                + Environment.NewLine
+                + string.Join(Environment.NewLine, _clientFaults));
+        }
+
+        if (serverFaults is null && _clientFaults.Count == 0)
+        {
+            TestContext.Out.WriteLine(
+                "Neither the web head nor the browser logged a warning or error while this "
+                + "test ran, so the failure is not a server-side or client-side fault being "
+                + "swallowed - look to the assertion itself and the Playwright trace.");
+        }
     }
 
     private async Task DumpPageArtifactsAsync(int index, string slug)

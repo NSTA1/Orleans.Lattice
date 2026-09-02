@@ -30,6 +30,12 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _loaded;
 
+    // Set by Dispose so work that arrives after the scope has ended stops instead of
+    // hydrating or persisting into a store nobody will read again. Volatile because it
+    // is written on the disposing thread and read on whichever thread a pending
+    // continuation resumes on.
+    private volatile bool _disposed;
+
     /// <summary>Initialises the store over <paramref name="backing"/>.</summary>
     public UiPreferenceStore(IUiPreferenceBackingStore backing)
         : this(backing, TimeProvider.System, DefaultRetention)
@@ -50,7 +56,7 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
     /// <inheritdoc />
     public async Task EnsureLoadedAsync(CancellationToken cancellationToken = default)
     {
-        if (_loaded)
+        if (_loaded || _disposed)
         {
             return;
         }
@@ -59,8 +65,10 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
         try
         {
             // Re-check under the gate: a sibling component may have hydrated while
-            // this caller was waiting, so hydration runs exactly once.
-            if (_loaded)
+            // this caller was waiting, so hydration runs exactly once. The disposal
+            // check is here for the same reason - the scope can end while this
+            // caller was queued behind another component's hydration.
+            if (_loaded || _disposed)
             {
                 return;
             }
@@ -280,7 +288,28 @@ public sealed class UiPreferenceStore : IUiPreferenceStore, IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => _gate.Dispose();
+    /// <summary>
+    /// Detaches the store. The gate is deliberately left to the garbage collector.
+    /// </summary>
+    /// <remarks>
+    /// This used to call <c>_gate.Dispose()</c>, which was an active defect rather than
+    /// tidiness. The store is registered <b>scoped</b>, so it is disposed when the
+    /// circuit's DI scope ends - and that routinely happens while
+    /// <see cref="EnsureLoadedAsync"/> is still awaiting the backing store, whose read is
+    /// a JS interop call that never completes once the circuit is going away. The
+    /// abandoned continuation then reached its <c>finally { _gate.Release(); }</c> against
+    /// a disposed semaphore and threw <see cref="ObjectDisposedException"/>. Blazor
+    /// reports that as an unhandled exception on the circuit and tears the circuit down,
+    /// leaving the page rendered but inert - so the visible symptom was an unrelated
+    /// later interaction doing nothing at all.
+    /// <para>
+    /// A <see cref="SemaphoreSlim"/> only needs disposal when its
+    /// <see cref="SemaphoreSlim.AvailableWaitHandle"/> has been allocated, and this type
+    /// never touches it, so letting the GC reclaim it leaks nothing and removes the
+    /// fault outright.
+    /// </para>
+    /// </remarks>
+    public void Dispose() => _disposed = true;
 
     /// <summary>One persisted preference: its JSON-encoded value plus GC metadata.</summary>
     internal sealed class PreferenceEntry

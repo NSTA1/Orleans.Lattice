@@ -47,6 +47,17 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         await ExplorerShell.SignInAsync(page, JourneyWorld.PlatformAdmin);
         await JourneyShell.OpenCatalogItemAsync(page, JourneyCatalogReader.OrdersTree);
 
+        // Settle the detail strip before measuring anything about its overflow.
+        //
+        // Whether the strip overflows is a function of how many tabs it has, and that
+        // number is still changing while the surface gates report: an unprobed surface
+        // renders as Pending, which is enabled and takes space, and is then removed or
+        // disabled when its gate answers. So the overflow toggle genuinely appears and
+        // then disappears on its own - which is what made this proof intermittent. It
+        // would see a toggle, and by the time it opened the menu the strip had lost a tab,
+        // stopped overflowing, and taken the toggle with it.
+        await JourneyShell.AssertDetailStripSettledAsync(page);
+
         var measured = new List<string>();
         var clipped = new List<string>();
 
@@ -55,7 +66,19 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             await page.SetViewportSizeAsync(width, Height);
             await Assertions.Expect(page.Locator(JourneyShell.DetailTabSelector).First).ToBeVisibleAsync();
 
-            if (await page.Locator(JourneyShell.OverflowToggleSelector).CountAsync() == 0)
+            // Decide whether this width overflows by waiting for the toggle to become
+            // visible, not by counting it once.
+            //
+            // Resizing re-runs the strip's overflow measurement, and the toggle is added
+            // and removed as that settles - so a bare count taken immediately after the
+            // resize could see a toggle that was gone by the time the menu was opened,
+            // and the open then waited out its whole action timeout on it. A bounded wait
+            // both settles and decides: a width that never shows a toggle simply does not
+            // overflow and is skipped, which is what the count was trying to express. The
+            // anti-vacuity assertion below still fails the proof if no width overflowed at
+            // all, so skipping cannot quietly empty this test.
+            var toggle = page.Locator(JourneyShell.OverflowToggleSelector).First;
+            if (!await BecomesVisibleAsync(toggle))
             {
                 continue;
             }
@@ -239,9 +262,17 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
         // tabs are disabled while the selected tree's surfaces resolve - and the walk
         // exercises it too, so it must be waited for on the same terms rather than
         // only the catalog strip.
-        await Assertions
-            .Expect(page.Locator("[role=tablist][aria-label='Detail tabs'] [role=tab]:not([disabled])").First)
-            .ToBeVisibleAsync();
+        //
+        // Waiting for a non-disabled tab is NOT sufficient here, and assuming it was is
+        // how this proof failed intermittently in CI. An unprobed surface renders as
+        // Pending, which is deliberately ENABLED ("not asked" is not "refused"), so the
+        // strip reports more operable tabs mid-probe than it settles with. The snapshot
+        // below then recorded two operable tabs, the probes landed and disabled one, and
+        // the walk pressed ArrowRight against a strip with a single enabled tab - where
+        // leaving focus put is the correct behaviour, so the proof reported the product
+        // as broken when it was the observer that was early. Wait for the strip's own
+        // settled statement instead.
+        await JourneyShell.AssertDetailStripSettledAsync(page);
 
         // The rail settles independently of both, as its area gates report.
         await JourneyShell.AssertRailSettledAsync(page);
@@ -294,16 +325,59 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             var tabs = located.Locator("[role=tab]:not([disabled])");
             var forward = strip.Vertical ? "ArrowDown" : "ArrowRight";
 
-            await tabs.First.FocusAsync();
+            // Start from the strip's roving tab - the one carrying tabindex="0" - not
+            // from its first tab.
+            //
+            // That is where a keyboard user actually arrives: the roving tabindex makes
+            // the strip a single tab stop, so Tab lands on exactly this tab and the
+            // arrow key is pressed from there. It is also the origin the component steps
+            // from, and starting anywhere else made this proof report false failures. The
+            // strip's roving tab is normally the SELECTED one, so when the selected
+            // surface happened to be the last enabled tab, a forward arrow wrapped around
+            // to index 0 - which is precisely where focusing "the first tab" had just put
+            // DOM focus - and the proof recorded focus as not having moved when the
+            // component had done exactly the right thing. Which surface is selected
+            // depends on the restored preference, so this failed intermittently with a
+            // completely stable tab count.
+            var roving = located.Locator("[role=tab][tabindex='0']");
+
+            // The roving tabindex is itself part of the pattern under test, so a strip
+            // that does not carry exactly one is reported as that defect rather than
+            // being allowed to fail later as an opaque focus timeout.
+            var inSequenceBefore = await roving.CountAsync();
+            if (inSequenceBefore != 1)
+            {
+                failures.Add($"'{strip.Label}' puts {inSequenceBefore} tabs in the tab sequence; a "
+                    + "roving tabindex requires exactly one");
+                continue;
+            }
+
+            await roving.FocusAsync();
+
             var before = await FocusedTabIdAsync(page);
             if (before is null)
             {
-                failures.Add($"'{strip.Label}' would not accept keyboard focus on its first tab");
+                failures.Add($"'{strip.Label}' would not accept keyboard focus on its roving tab");
                 continue;
             }
 
             await page.Keyboard.PressAsync(forward);
-            var after = await FocusedTabIdAsync(page);
+
+            // Wait for focus to move rather than sampling it immediately.
+            //
+            // Moving focus is a server round trip: the keydown goes to the circuit, the
+            // component moves its roving index, re-renders, and only then does
+            // OnAfterRender call focus() on the new element. Reading document.activeElement
+            // straight after PressAsync therefore races that round trip, and read once it
+            // reports the tab focus started on. That is why this passed locally and on the
+            // uninstrumented UI lane but failed under the coverage lane, where coverlet
+            // makes every one of those steps slower - the proof was fast enough to beat
+            // the product, not wrong about it.
+            //
+            // Every other assertion in this suite is web-first and auto-waiting; this one
+            // was the exception. A timeout here means focus genuinely never moved, which
+            // is the defect the proof is for.
+            var after = await WaitForFocusedTabChangeAsync(page, before);
             exercised.Add($"{strip.Label} ({forward})");
 
             if (after is null)
@@ -312,18 +386,26 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
             }
             else if (after == before)
             {
+                // Report what the strip actually offered at press time, not just that
+                // focus did not move. A strip that has collapsed to a single enabled
+                // tab is one where staying put is correct, so the two cases have to be
+                // distinguishable from the log alone - telling them apart by hand cost
+                // a CI investigation once already.
+                var operableNow = await tabs.CountAsync();
                 failures.Add($"pressing {forward} in '{strip.Label}' left focus on '{before}', so the "
-                    + "strip is not keyboard operable");
+                    + $"strip is not keyboard operable (it offered {operableNow} enabled tab(s) at "
+                    + $"press time, and {strip.Operable} when snapshotted)");
             }
 
-            // The other half of the pattern: exactly one tab of the strip is in the
-            // document's tab sequence, so a caller tabs past the strip rather than
-            // through it.
-            var inSequence = await located.Locator("[role=tab][tabindex='0']").CountAsync();
+            // The other half of the pattern, re-checked after the move: exactly one tab
+            // of the strip is in the document's tab sequence, so a caller tabs past the
+            // strip rather than through it. Checked before the move too, above, since
+            // the move starts from that tab.
+            var inSequence = await roving.CountAsync();
             if (inSequence != 1)
             {
-                failures.Add($"'{strip.Label}' puts {inSequence} tabs in the tab sequence; a roving "
-                    + "tabindex requires exactly one");
+                failures.Add($"'{strip.Label}' puts {inSequence} tabs in the tab sequence after "
+                    + $"{forward}; a roving tabindex requires exactly one");
             }
         }
 
@@ -369,15 +451,29 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
 
         Record("entry", page.Url);
 
-        var tabs = page.Locator(JourneyShell.RailTabSelector);
-        var count = await tabs.CountAsync();
-        Assert.That(count, Is.GreaterThan(1),
-            $"Only {count} area was offered, so walking 'every navigation path' would visit one "
-            + "address and prove nothing about slug composition.");
+        // Snapshot the rail's labels once it has settled, then walk it by name.
+        //
+        // Reading the tab count straight after sign-in raced the area probes and was the
+        // second flake in this fixture. An area nobody has probed yet is offered plainly
+        // in the rail - "not asked" is not "refused" - and is demoted out of it when its
+        // gate reports a refusal, so the rail's tab COUNT shrinks as the probes land. A
+        // count taken early therefore indexed a rail that no longer existed, and
+        // tabs.Nth(count - 1) waited out a full 30s action timeout against a tab that had
+        // been demoted. Waiting for the rail's own settled statement first, and then
+        // addressing tabs by label rather than by index, removes both halves of that:
+        // the set is final before it is read, and nothing downstream depends on
+        // positions staying put across the re-render each navigation causes.
+        await JourneyShell.AssertRailSettledAsync(page);
 
-        for (var i = 0; i < count; i++)
+        var labels = await page.Locator(JourneyShell.RailTabSelector).EvaluateAllAsync<string[]>(
+            "tabs => tabs.map(t => (t.textContent || '').trim()).filter(t => t.length > 0)");
+
+        Assert.That(labels.Length, Is.GreaterThan(1),
+            $"Only {labels.Length} area was offered, so walking 'every navigation path' would visit "
+            + "one address and prove nothing about slug composition.");
+
+        foreach (var label in labels)
         {
-            var label = (await tabs.Nth(i).TextContentAsync() ?? string.Empty).Trim();
             await JourneyShell.OpenAreaAsync(page, label);
             Record(label, page.Url);
         }
@@ -400,5 +496,85 @@ public sealed class NavigationRegressionProofTests : JourneyTestBase
                 return el.id || (el.textContent || '').trim();
             }
             """);
+
+    /// <summary>
+    /// Waits for the focused tab to become something other than <paramref name="before"/>
+    /// and returns it, or returns the unchanged value when it never moves.
+    /// </summary>
+    /// <remarks>
+    /// Focus movement in this strip is a Blazor Server round trip, so it is asynchronous
+    /// with respect to the key press. This waits for it the way the rest of the suite
+    /// waits for everything else, instead of sampling once and racing the product. The
+    /// timeout is what turns "never moved" into a reportable failure, so it is caught and
+    /// converted rather than thrown.
+    /// </remarks>
+    private static async Task<string?> WaitForFocusedTabChangeAsync(IPage page, string before)
+    {
+        try
+        {
+            await page.WaitForFunctionAsync(
+                """
+                expected => {
+                    const el = document.activeElement;
+                    if (!el || el.getAttribute('role') !== 'tab') { return false; }
+                    const id = el.id || (el.textContent || '').trim();
+                    return id !== expected;
+                }
+                """,
+                before,
+                new PageWaitForFunctionOptions { Timeout = FocusMoveTimeoutMs });
+        }
+        catch (PlaywrightException)
+        {
+            // Focus never moved (the wait timed out). Fall through and report whatever
+            // currently holds it, so the caller's message describes the real end state.
+        }
+        catch (System.TimeoutException)
+        {
+            // Playwright surfaces a wait timeout as System.TimeoutException here rather
+            // than as a PlaywrightException, so both have to be caught; catching only the
+            // latter lets the timeout escape as an opaque error instead of the reportable
+            // "focus did not move" failure this method exists to produce.
+        }
+
+        return await FocusedTabIdAsync(page);
+    }
+
+    // Generous relative to a healthy round trip (milliseconds), because the coverage lane
+    // runs this instrumented by coverlet, where the same round trip is markedly slower.
+    private const int FocusMoveTimeoutMs = 10_000;
+
+    // Long enough for the strip's overflow measurement to settle after a resize, short
+    // enough that a width which genuinely does not overflow is skipped promptly rather
+    // than costing a full action timeout at every sampled width.
+    private const int OverflowSettleMs = 5_000;
+
+    /// <summary>
+    /// Whether <paramref name="locator"/> becomes visible within the settle window,
+    /// rather than whether it happens to exist at this instant.
+    /// </summary>
+    private static async Task<bool> BecomesVisibleAsync(ILocator locator)
+    {
+        try
+        {
+            await locator.WaitForAsync(new LocatorWaitForOptions
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = OverflowSettleMs,
+            });
+            return true;
+        }
+        catch (PlaywrightException)
+        {
+            return false;
+        }
+        catch (System.TimeoutException)
+        {
+            // As above: a Playwright wait timeout arrives as System.TimeoutException, and
+            // here it is the ordinary answer rather than an error - this width simply does
+            // not overflow.
+            return false;
+        }
+    }
 }
 
