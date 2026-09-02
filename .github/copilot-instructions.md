@@ -2,7 +2,13 @@
 
 ## Project Overview
 
-Orleans.Lattice is a distributed B+ tree built on top of [Microsoft Orleans](https://learn.microsoft.com/dotnet/orleans/). It provides a sharded, CRDT-backed key-value store where every key is a `string` and every value is `byte[]`.
+See [README.md](../README.md) for what Orleans.Lattice is, why it exists, the
+seam-oriented architecture, and the Local -> Team -> Global deployment journey.
+The capability catalogue is [FEATURES.md](../FEATURES.md) and the package
+inventory is [PACKAGES.md](../PACKAGES.md). Deliberately not restated here, so
+this file cannot drift from the README.
+
+The rest of this document is repository conventions only.
 
 ## Finding things in the repo
 
@@ -61,9 +67,10 @@ test/lattice/              → NUnit test project (Orleans.Lattice.Tests)
 The tree above covers the core `src/lattice/` library and its test project only.
 For the full set of optional add-on packages (replication, the API facade family
 and gRPC bindings, auth/membership, backup, storage backends, schema, scaling,
-caching, dashboards, and the Explorer), see the **Child Packages** table in
-[README.md](../README.md#child-packages) - the authoritative, maintained
-inventory. Convention: package `foo` lives at `src/foo/`, `test/foo/`, and
+caching, dashboards, and the Explorer), see [PACKAGES.md](../PACKAGES.md) - the
+authoritative, maintained inventory, grouped by the seam each package fills. The
+matching capability catalogue is [FEATURES.md](../FEATURES.md). Convention:
+package `foo` lives at `src/foo/`, `test/foo/`, and
 `docs/foo/` (`docs/crdt/` is a docs-only conceptual topic with no code).
 
 ## Target Framework & Language

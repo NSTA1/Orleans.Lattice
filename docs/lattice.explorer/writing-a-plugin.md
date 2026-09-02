@@ -333,4 +333,4 @@ Tests must be reliable: nothing timing-dependent, ordering-dependent,
       asserted individually across the reflow; and every row action still
       reachable in the card. See [Testing](#testing).
 - [ ] Tag glob in `publish.yml` and rows in both `docs/RELEASING.md` tables.
-- [ ] A `README.md` row under Child Packages.
+- [ ] A [`PACKAGES.md`](../../PACKAGES.md) row under Explorer.

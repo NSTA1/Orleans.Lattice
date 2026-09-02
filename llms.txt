@@ -1,12 +1,14 @@
 # Orleans.Lattice
 
-> Orleans.Lattice is a sorted, durable, horizontally-scalable key-value store embedded directly in a Microsoft Orleans cluster. Keys are `string`, values are `byte[]`; the keyspace is sharded across self-balancing B+ trees whose state is backed by conflict-free (CRDT) lattice primitives, so the store converges deterministically without external databases, coordinators, or queues.
+> Orleans.Lattice is a platform for building durable, distributed state systems on Microsoft Orleans. At its centre is a sorted, horizontally-scalable key-value store embedded directly in an Orleans cluster: keys are `string`, values are `byte[]`, and the keyspace is sharded across self-balancing B+ trees whose state is backed by conflict-free (CRDT) lattice primitives, so the store converges deterministically without external databases, coordinators, or queues. Around that core, storage, identity, governance, replication, administration and observability are companion packages filling documented seams rather than core features, so the same programming model carries from a single local-first deployment on one machine to a globally distributed, active-active estate.
 
 This file is the entry point for AI agents and LLM tooling. Documentation lives in-repo as Markdown under `docs/`, and every public type carries XML doc comments that ship in the NuGet packages. Prefer the linked Markdown over crawling source.
 
 ## Start here
 
-- [README](README.md): Overview, the full feature matrix, quick start, and performance characteristics.
+- [README](README.md): What the platform is, why it exists, the Local/Team/Global deployment journey, the seam-oriented architecture, and quick start.
+- [Features](FEATURES.md): The complete capability catalogue, grouped by concern, each row linking its docs and sample.
+- [Packages](PACKAGES.md): The complete package inventory, grouped by the seam each package fills.
 - [API Reference](docs/lattice/api.md): The public `ILattice` interface, batch operations, options, and serializable types.
 - [Configuration](docs/lattice/configuration.md): Options reference, per-tree overrides, immutability constraints, storage-provider registration.
 - [Samples](docs/lattice/samples.md): Runnable sample projects exercising `ILattice`.
