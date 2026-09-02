@@ -208,6 +208,43 @@ internal sealed class RepoContextVectorWriter
         => _reDeriver.GuardAsync(RepoContextTrees.VectorMembership, operation, cancellationToken);
 
     /// <summary>
+    /// Enables a whole batch of membership flags in <b>one</b> batched CRDT write:
+    /// a single read to mint every enable delta from the current flags, then a
+    /// single <see cref="ILattice.ApplyCrdtDeltaManyAsync"/> to land them.
+    /// <para>
+    /// This is the single seam every presence-marking path on this tree goes
+    /// through, and it exists because the per-key alternative -
+    /// <c>foreach (key) await tree.OrFlag(key).EnableAsync(...)</c> - costs two
+    /// sequential grain round trips per key and one leaf state write and
+    /// write-ahead-log append per key. Under a wide batch that is not merely slow:
+    /// the later writes in the chain time out, their markers never land, the
+    /// sources they cover still look un-embedded on the next reconcile, and the
+    /// same passages are re-embedded forever. Batching collapses the whole batch
+    /// to one leaf write per leaf, which is the cost that actually drives the
+    /// livelock.
+    /// </para>
+    /// <para>
+    /// Keys are de-duplicated first: a batch may legitimately name the same source
+    /// twice, and while a repeated enable is idempotent under OR-Flag merge, a
+    /// repeated key would still probe and mint twice inside the one batch.
+    /// </para>
+    /// <para>
+    /// <b>Not atomic</b>, like the underlying batch - a partial failure leaves some
+    /// flags enabled. That is safe here precisely because enabling is idempotent
+    /// and add-wins: a retried batch converges, and any marker that did not land
+    /// simply re-embeds on a later pass.
+    /// </para>
+    /// </summary>
+    /// <param name="keys">The fully-formed membership keys to enable.</param>
+    /// <param name="cancellationToken">Cancels the batched read or the batched apply.</param>
+    private Task EnableMembershipManyAsync(HashSet<string> keys, CancellationToken cancellationToken)
+        => GuardMembershipAsync(
+            () => _grainFactory
+                .GetGrain<ILattice>(RepoContextTrees.VectorMembership)
+                .EnableManyAsync(keys, ReplicaId(), cancellationToken),
+            cancellationToken);
+
+    /// <summary>
     /// Stores <paramref name="vectors"/> as the current embedding of
     /// <paramref name="sourceKey"/> - one vector per passage (a file's overlapping
     /// windows, or a symbol's single passage) - retiring any prior embedding of the
@@ -524,17 +561,14 @@ internal sealed class RepoContextVectorWriter
             return;
         }
 
-        await GuardMembershipAsync(async () =>
+        var keys = new HashSet<string>(sourceKeys.Count, StringComparer.Ordinal);
+        foreach (var sourceKey in sourceKeys)
         {
-            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-            var replicaId = ReplicaId();
-            foreach (var sourceKey in sourceKeys)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var key = RepoContextKeys.VectorMembership(repoId, VectorCodec.SourceId(sourceKey));
-                await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            keys.Add(RepoContextKeys.VectorMembership(repoId, VectorCodec.SourceId(sourceKey)));
+        }
+
+        await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
 
         // Membership does not feed the gather, but a batch's membership write always
         // trails its StoreAsync vectors, so invalidate defensively to keep the cache
@@ -577,17 +611,14 @@ internal sealed class RepoContextVectorWriter
             return;
         }
 
-        await GuardMembershipAsync(async () =>
+        var keys = new HashSet<string>(memoryKeys.Count, StringComparer.Ordinal);
+        foreach (var memoryKey in memoryKeys)
         {
-            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-            var replicaId = ReplicaId();
-            foreach (var memoryKey in memoryKeys)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var key = RepoContextKeys.VectorMembership(repoId, MemoryKeyMarkerPrefix + memoryKey);
-                await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            keys.Add(RepoContextKeys.VectorMembership(repoId, MemoryKeyMarkerPrefix + memoryKey));
+        }
+
+        await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -698,18 +729,15 @@ internal sealed class RepoContextVectorWriter
             return;
         }
 
-        await GuardMembershipAsync(async () =>
+        var keys = new HashSet<string>(sourceKeys.Count, StringComparer.Ordinal);
+        foreach (var sourceKey in sourceKeys)
         {
-            var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
-            var replicaId = ReplicaId();
-            foreach (var sourceKey in sourceKeys)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var key = RepoContextKeys.VectorMembership(
-                    repoId, ContentlessMarkerPrefix + VectorCodec.SourceId(sourceKey));
-                await tree.OrFlag(key).EnableAsync(replicaId, cancellationToken).ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            keys.Add(RepoContextKeys.VectorMembership(
+                repoId, ContentlessMarkerPrefix + VectorCodec.SourceId(sourceKey)));
+        }
+
+        await EnableMembershipManyAsync(keys, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

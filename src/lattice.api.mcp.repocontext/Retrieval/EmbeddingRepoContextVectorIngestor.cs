@@ -621,8 +621,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
             if (pendingMembers.Count > 0)
             {
-                // Record membership for the sources completed in this batch in one
-                // read-modify-write, after their vectors have landed.
+                // Record membership for the sources completed in this batch, after
+                // their vectors have landed. The writer lands the whole batch in one
+                // batched CRDT write (one read to mint the deltas, one apply), not
+                // one round trip per source.
                 await _writer.AddMembersAsync(repoId, pendingMembers, cancellationToken).ConfigureAwait(false);
                 pendingMembers.Clear();
             }
