@@ -257,6 +257,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var sources = new List<EmbeddingSource>();
 
         string? token = null;
+        var probeFailures = 0;
+        Exception? firstProbeFailure = null;
         do
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -273,9 +275,33 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
             }
 
-            var embeddedMembers = await _writer
-                .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
-                .ConfigureAwait(false);
+            // The coverage probe reads the membership tree, which is the busiest
+            // tree in the plane during a reconcile - the gap sweep drives a point
+            // read per page across the whole symbol space - so this call is the one
+            // that times out under load. Losing it must cost one page, not the
+            // whole arm: without coverage for this page we cannot tell embedded
+            // from missing, so we skip the page rather than guess, and the next
+            // pass picks up whatever it was hiding.
+            IReadOnlySet<string> embeddedMembers;
+            try
+            {
+                embeddedMembers = await _writer
+                    .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                firstProbeFailure ??= ex;
+                probeFailures++;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: the embedding-coverage probe failed for a page of {Count} symbol(s); skipping "
+                    + "the page and continuing. Its symbols are re-checked on the next reconcile.",
+                    repoId,
+                    pageKeys.Count);
+                token = page.HasMore ? page.ContinuationToken : null;
+                continue;
+            }
 
             foreach (var record in page.Records)
             {
@@ -303,7 +329,23 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
         while (token is not null);
 
-        return await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken).ConfigureAwait(false);
+        var symbolsEmbedded = await EmbedAndStoreAsync(repoId, sources, onProgress: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Same rule as the batch boundary: a pass that achieved nothing at all
+        // still has to surface its fault, but one that made progress counts as
+        // progress even though part of the symbol space went unexamined.
+        if (symbolsEmbedded == 0 && firstProbeFailure is not null)
+        {
+            _logger.LogWarning(
+                "Repo {RepoId}: {Failed} coverage probe(s) failed and nothing was embedded; surfacing the first "
+                + "fault so the arm reports incomplete.",
+                repoId,
+                probeFailures);
+            throw firstProbeFailure;
+        }
+
+        return symbolsEmbedded;
     }
 
     /// <summary>

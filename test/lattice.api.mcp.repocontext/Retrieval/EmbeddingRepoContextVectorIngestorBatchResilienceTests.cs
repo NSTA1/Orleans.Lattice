@@ -176,6 +176,54 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
     }
 
     [Test]
+    public async Task A_failed_coverage_probe_costs_one_page_not_the_whole_arm()
+    {
+        // The gap sweep's coverage probe is a read against the busiest tree in the
+        // plane, so it is the call that times out under load - and on the live
+        // deployment it was killing the arm before a single batch ran.
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            Method = nameof(ILattice.GetManyAsync),
+            FailFirst = 1,
+        };
+
+        var options = new RepoContextMcpHarnessOptions
+        {
+            Posture = RepoContextMcpAuthPosture.Writer,
+            ConfigureSilo = silo =>
+            {
+                silo.Services.AddSingleton(injector);
+                silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeFaultInjectingFilter>();
+            },
+        };
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
+
+        // Two pages' worth: the walk pages at RepoContextPortability.DefaultPageSize
+        // (256), and the whole point is that losing one page leaves the other to
+        // make progress. With a single page there is nothing left to salvage and
+        // surfacing the fault is the correct behaviour, which the all-failing test
+        // above already covers.
+        var keys = await SeedSymbolsAsync(harness, RepoContextPortability.DefaultPageSize + 44, Ct);
+
+        var embedded = await Ingestor(harness)
+            .IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(injector.Failed, Is.EqualTo(1), "Exactly one coverage probe was faulted.");
+            Assert.That(embedded, Is.GreaterThan(0),
+                "The walk continues past the unprobeable page instead of unwinding the arm.");
+        });
+
+        // The skipped page is not lost - it is simply re-examined next pass.
+        await Ingestor(harness).IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+        Assert.That(await EmbeddedCountAsync(harness, keys, Ct), Is.EqualTo(keys.Count),
+            "Everything settles once the transient fault clears.");
+    }
+
+    [Test]
     public async Task An_unfaulted_pass_still_embeds_everything_in_one_go()
     {
         var (options, injector) = FaultingOptions(failFirst: 0);
