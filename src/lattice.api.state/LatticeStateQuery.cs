@@ -660,7 +660,12 @@ internal sealed class LatticeStateQuery(
         // Scope views to those whose source tree the subject may read, so a view
         // does not leak the existence of data over an unreadable source. An
         // anonymous subject sees no views.
-        ViewListing[] ordered;
+        // Typed as IReadOnlyList so the authenticated branch can hand back the
+        // presized `visible` List directly; the prior `visible.ToArray()` copied
+        // an already-right-sized list into a throwaway array on every
+        // authenticated request. Iteration below is index-based (not foreach) so
+        // reading through the interface does not box List<T>'s struct enumerator.
+        IReadOnlyList<ViewListing> ordered;
         if (subject is { } resolved)
         {
             var visible = new List<ViewListing>(candidates.Length);
@@ -674,7 +679,7 @@ internal sealed class LatticeStateQuery(
                 }
             }
 
-            ordered = visible.ToArray();
+            ordered = visible;
         }
         else
         {
@@ -683,11 +688,12 @@ internal sealed class LatticeStateQuery(
 
         var pageSize = request.EffectivePageSize;
         var factory = request.IncludeViewStats ? _services.GetService<ILatticeViewFactory>() : null;
-        var entries = new List<ViewStateSummary>(Math.Min(pageSize, ordered.Length));
+        var entries = new List<ViewStateSummary>(Math.Min(pageSize, ordered.Count));
         string? nextToken = null;
 
-        foreach (var registration in ordered)
+        for (var i = 0; i < ordered.Count; i++)
         {
+            var registration = ordered[i];
             cancellationToken.ThrowIfCancellationRequested();
             if (entries.Count == pageSize)
             {
