@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// collects the shadow, and lifts the fence.
 /// </summary>
 [TestFixture]
-public class RestoreParticipantTests
+public partial class RestoreParticipantTests
 {
     private const string SagaId = "saga-1";
     private const string TargetTree = "orders";
