@@ -496,9 +496,29 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
             }
 
-            var embeddedMembers = await _writer
-                .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
-                .ConfigureAwait(false);
+            // The last of the four membership reads in this file to need a guard.
+            // Unlike the symbol arm's equivalent, a failure here need not skip the
+            // page: the marker set loaded above is an independent source of the
+            // same evidence, so the walk can fall back to it alone and still make
+            // the right decision for most entries. Only an entry that has neither
+            // signal is re-embedded, which is idempotent.
+            IReadOnlySet<string> embeddedMembers;
+            try
+            {
+                embeddedMembers = await _writer
+                    .ProbeEmbeddedMembersAsync(repoId, pageKeys, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                embeddedMembers = EmptyMemoryKeys;
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: the embedded-member probe failed for a page of {Count} memory entr(ies); "
+                    + "falling back to the embedded-key markers alone for this page.",
+                    repoId,
+                    pageKeys.Count);
+            }
 
             foreach (var record in page.Records)
             {
