@@ -306,7 +306,14 @@ internal sealed class StoragePressureCollector(
             var partitions = tree.Partitions;
             for (var p = 0; p < partitions.Count; p++)
             {
-                if (!string.Equals(partitions[p].ProviderKey, providerKey, StringComparison.Ordinal))
+                // Normalise the raw partition key the same way the reduce loop
+                // does when it builds per-account totals, so a null provider key
+                // (the default account) matches the normalised account key the
+                // hot-account selection carries. Comparing the raw key here would
+                // never match the default account, collapsing the advice to the
+                // empty-tree, partition-zero fallback.
+                var partitionKey = partitions[p].ProviderKey ?? IWalStorageProviderCatalog.DefaultProviderKey;
+                if (!string.Equals(partitionKey, providerKey, StringComparison.Ordinal))
                 {
                     continue;
                 }

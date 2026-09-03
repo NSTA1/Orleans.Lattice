@@ -333,15 +333,47 @@ public sealed class LatticeTenantQuotaUsageTests
             Assert.That(report.OpsPerSecond.Limit, Is.EqualTo(250));
             Assert.That(
                 report.OpsPerSecond.BurstLimit,
-                Is.EqualTo(270),
-                "the burst ceiling matches the engine evaluator exactly, which divides before multiplying "
-                + "(250 / 100 * 10) so a large ceiling cannot overflow");
+                Is.EqualTo(275),
+                "the burst ceiling matches the engine evaluator exactly, which multiplies before dividing "
+                + "through a 128-bit intermediate (250 + 250 * 10 / 100 = 275) so a ceiling that is not a "
+                + "multiple of 100 keeps its full burst allowance rather than losing it to a floored divide");
             Assert.That(report.OpsPerSecond.IsBounded, Is.True);
             Assert.That(
                 report.OpsPerSecond.Usage,
                 Is.Null,
                 "the engine samples no operation rate, so an unmeasured usage must not be faked as zero");
             Assert.That(report.OpsPerSecond.IsMeasured, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task GetQuotaUsageAsync_reports_the_burst_ceiling_the_evaluator_admits_at()
+    {
+        // Regression for a report/enforcement divergence: the mapping computed the
+        // burst ceiling as ceiling / 100 * burstPercent (divide first), which
+        // floors the allowance to zero for any ceiling below 100 and understates
+        // any ceiling that is not a multiple of 100. The evaluator multiplies
+        // first (ceiling + ceiling * burstPercent / 100), so a 50% burst over a
+        // ceiling of 10 admits up to 15 while the report claimed 10, and over a
+        // ceiling of 250 admits 375 while the report claimed 350. The report must
+        // name the same ceiling the evaluator enforces.
+        var quotas = new TenantQuotas { MaxTreeCount = 10, MaxBytes = 250, BurstPercent = 50 };
+        var registry = new FakeTenantRegistry();
+        registry.Seed(Record(Acme, quotas));
+        var reader = new FakeTenantUsageReader().With(Acme, Usage(bytes: 1, treeCount: 1), quotas);
+
+        var report = await Facade(registry, reader, OperatorSubject).GetQuotaUsageAsync("acme");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                report.TreeCount.BurstLimit,
+                Is.EqualTo(15),
+                "10 + 50% is 15; a sub-100 ceiling must not floor its burst to zero (the old divide-first gave 10)");
+            Assert.That(
+                report.Bytes.BurstLimit,
+                Is.EqualTo(375),
+                "250 + 50% is 375; the old divide-first floored 250 / 100 to 2 and gave 350");
         });
     }
 
