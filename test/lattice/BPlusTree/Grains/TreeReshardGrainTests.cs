@@ -64,7 +64,8 @@ public partial class TreeReshardGrainTests
         // Emptiness is now probed per-shard via IShardRootGrain.AnyAsync, so
         // the fast-path tests override the shard stub (not ILattice).
         var defaultShard = Substitute.For<IShardRootGrain>();
-        defaultShard.AnyAsync().Returns(Task.FromResult(true));
+        defaultShard.AnyBoundedAsync(Arg.Any<string?>())
+            .Returns(Task.FromResult(new ShardAnyPage { Found = true }));
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(defaultShard);
 
         var defaultLattice = Substitute.For<ILattice>();

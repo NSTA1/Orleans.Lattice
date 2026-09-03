@@ -263,6 +263,27 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive);
 
     /// <summary>
+    /// Work-bounded form of <see cref="CountAsync(string?, string?)"/>: counts
+    /// matching entries across a bounded number of leaves, then returns so the
+    /// non-reentrant shard is released and other traffic can interleave.
+    /// <para>
+    /// Drive it by re-calling with the previous batch's
+    /// <see cref="ShardCountPage.ResumeFromInclusive"/> as
+    /// <paramref name="startInclusive"/> until it comes back
+    /// <see langword="null"/>, then sum the batches. A batch is a partial count
+    /// and is never a valid answer on its own.
+    /// </para>
+    /// <para>
+    /// This weakens no documented guarantee. <c>ILattice.CountAsync</c> remains
+    /// a single logical call, and its atomic visibility comes from the
+    /// saga-decision snapshot pinned for the lifetime of the enumeration rather
+    /// than from the granularity of any one shard call, so a batch boundary
+    /// observes the identical view an uninterrupted walk would (issue 1971).
+    /// </para>
+    /// </summary>
+    Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns <see langword="true"/> as soon as this shard is found to hold at
     /// least one live (non-tombstoned) key, short-circuiting at the first
     /// non-empty leaf rather than walking the whole chain and summing as
@@ -288,6 +309,21 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </para>
     /// </summary>
     Task<bool> AnyAsync();
+
+    /// <summary>
+    /// Work-bounded form of <see cref="AnyAsync"/>: probes a bounded number of
+    /// leaves, then returns so the non-reentrant shard is released.
+    /// <para>
+    /// A <see cref="ShardAnyPage.Found"/> of <see langword="true"/> ends the
+    /// walk. Otherwise re-call with the previous batch's
+    /// <see cref="ShardAnyPage.ResumeFromInclusive"/> until it comes back
+    /// <see langword="null"/>, which is the only state that means the shard is
+    /// genuinely empty. The bound only ever engages on an empty or
+    /// fully-tombstoned shard, since a populated one short-circuits at its
+    /// first non-empty leaf (issue 1971).
+    /// </para>
+    /// </summary>
+    Task<ShardAnyPage> AnyBoundedAsync(string? resumeFromInclusive);
 
     /// <summary>
     /// Returns a page of live keys in this shard's B+ tree in sorted order,
@@ -889,6 +925,22 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardCountResult> CountWithMovedAwayAsync();
 
     /// <summary>
+    /// Work-bounded form of <see cref="CountWithMovedAwayAsync"/>: counts a
+    /// bounded number of leaves, then returns so the non-reentrant shard is
+    /// released.
+    /// <para>
+    /// Drive it by re-calling with the previous batch's
+    /// <see cref="ShardCountWithMovedAwayPage.ResumeFromInclusive"/> until it
+    /// comes back <see langword="null"/>. Sum
+    /// <see cref="ShardCountWithMovedAwayPage.Count"/> and <b>union</b>
+    /// <see cref="ShardCountWithMovedAwayPage.MovedAwaySlots"/> across batches;
+    /// taking only the last batch's slot set would silently lose slots
+    /// observed earlier in the walk (issue 1971).
+    /// </para>
+    /// </summary>
+    Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedAsync(string? resumeFromInclusive);
+
+    /// <summary>
     /// Returns the number of live (non-tombstoned) keys in this shard whose
     /// virtual slot is in <paramref name="sortedSlots"/>. Used by
     /// <c>ILattice.CountAsync</c> after detecting a topology change to count
@@ -915,6 +967,20 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// authoritative <see cref="ShardMap"/>.
     /// </summary>
     Task<int> CountForSlotsAsync(int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive);
+
+    /// <summary>
+    /// Work-bounded form of
+    /// <see cref="CountForSlotsAsync(int[], int, string?, string?)"/>: counts a
+    /// bounded number of leaves, then returns so the non-reentrant shard is
+    /// released. Drive it by re-calling with the previous batch's
+    /// <see cref="ShardCountPage.ResumeFromInclusive"/> as
+    /// <paramref name="startInclusive"/> until it comes back
+    /// <see langword="null"/>, then sum the batches. It also stops once the
+    /// walk is past <paramref name="endExclusive"/>, so a bounded range no
+    /// longer costs a walk to the end of the chain (issue 1971).
+    /// </summary>
+    Task<ShardCountPage> CountForSlotsBoundedAsync(
+        int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive);
 
     /// <summary>
     /// Returns a page of live keys in this shard whose virtual slot is in
