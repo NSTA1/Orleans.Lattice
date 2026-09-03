@@ -85,7 +85,17 @@ public sealed class CrdtProvenanceDecoderRegistry
     /// <returns><see langword="true"/> when a decoder is registered for the shape.</returns>
     public bool TryGet(string? shape, out ICrdtProvenanceDecoder decoder)
     {
-        if (shape is not null && Enum.TryParse<LatticeMergeMode>(shape, out var mode))
+        // The shape tag is defined as the mode's Enum.ToString() form (e.g.
+        // "OrSet"), so accept only an exact enum-member name. Enum.TryParse on its
+        // own also accepts a numeric ordinal string ("3"), a comma-separated
+        // combination ("OrSet,GSet", which folds to the defined RwSet ordinal and
+        // would resolve the wrong decoder), and surrounding whitespace - none of
+        // which is a shape tag. A round-trip name-equality check rejects them while
+        // leaving every genuine tag resolvable.
+        if (shape is not null
+            && Enum.TryParse<LatticeMergeMode>(shape, out var mode)
+            && Enum.IsDefined(mode)
+            && string.Equals(mode.ToString(), shape, StringComparison.Ordinal))
         {
             return _byMode.TryGetValue(mode, out decoder!);
         }

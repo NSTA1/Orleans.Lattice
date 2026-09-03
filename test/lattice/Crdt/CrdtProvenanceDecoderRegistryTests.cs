@@ -95,6 +95,60 @@ public class CrdtProvenanceDecoderRegistryTests
         Assert.That(decoder, Is.Null);
     }
 
+    // A shape tag is the mode's Enum.ToString() form (e.g. "OrSet"), never its
+    // numeric ordinal. A bare Enum.TryParse also accepts the ordinal string, so
+    // "3" would otherwise wrongly resolve the ordinal-3 (VersionVector) decoder -
+    // a contract violation the round-trip name guard closes.
+    [TestCase("3")]
+    [TestCase("0")]
+    [TestCase("13")]
+    public void TryGet_returns_false_for_numeric_ordinal_shape(string shape)
+    {
+        var ok = CrdtProvenanceDecoderRegistry.Default.TryGet(shape, out var decoder);
+
+        Assert.That(ok, Is.False, $"numeric ordinal shape '{shape}' must not resolve a decoder");
+        Assert.That(decoder, Is.Null);
+    }
+
+    // Enum.TryParse also accepts a comma-separated combination and folds it to a
+    // single value: "OrSet,GSet" (1 | 10) folds to 11, which is the defined
+    // RwSet ordinal, so without the guard it silently resolves the *wrong*
+    // decoder. A combination is not a shape tag and must be rejected.
+    [TestCase("OrSet,GSet")]
+    [TestCase("OrSet,OrSet")]
+    public void TryGet_returns_false_for_comma_combined_shape(string shape)
+    {
+        var ok = CrdtProvenanceDecoderRegistry.Default.TryGet(shape, out var decoder);
+
+        Assert.That(ok, Is.False, $"combined shape '{shape}' must not resolve a decoder");
+        Assert.That(decoder, Is.Null);
+    }
+
+    // Enum.TryParse trims surrounding whitespace; a shape tag is the exact
+    // ToString() form, so a padded tag is not a shape tag.
+    [TestCase(" OrSet")]
+    [TestCase("OrSet ")]
+    [TestCase(" OrSet ")]
+    public void TryGet_returns_false_for_whitespace_padded_shape(string shape)
+    {
+        var ok = CrdtProvenanceDecoderRegistry.Default.TryGet(shape, out var decoder);
+
+        Assert.That(ok, Is.False, $"whitespace-padded shape '{shape}' must not resolve a decoder");
+        Assert.That(decoder, Is.Null);
+    }
+
+    // The shape tag matches the enum member name case-sensitively (the ToString()
+    // form is exact case); a differently-cased token is not a shape tag.
+    [TestCase("orset")]
+    [TestCase("ORSET")]
+    public void TryGet_returns_false_for_wrong_case_shape(string shape)
+    {
+        var ok = CrdtProvenanceDecoderRegistry.Default.TryGet(shape, out var decoder);
+
+        Assert.That(ok, Is.False, $"wrong-case shape '{shape}' must not resolve a decoder");
+        Assert.That(decoder, Is.Null);
+    }
+
     [Test]
     public void Constructor_null_decoders_throws()
     {
