@@ -188,7 +188,17 @@ internal sealed partial class BPlusLeafGrain
             current[i] = Math.Max(current[i], perPartition[i]);
     }
     /// <inheritdoc />
-    public async Task CaptureSnapshotAsync()
+    public Task CaptureSnapshotAsync() => CaptureSnapshotCoreAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Cancellable core of the snapshot-capture seam. The grain-interface
+    /// entrypoint keeps its parameterless wire signature and delegates here
+    /// with <see cref="CancellationToken.None"/>; the graceful-deactivation
+    /// path (issue #1965) supplies Orleans' deactivation token instead, so a
+    /// leaf that overruns the deactivation deadline abandons its blob write
+    /// rather than being cancelled inside the runtime's own frame.
+    /// </summary>
+    private async Task CaptureSnapshotCoreAsync(CancellationToken cancellationToken)
     {
         // No-op for an uninitialised leaf. TreeId is assigned during
         // SetTreeIdAsync (called by the shard root on first attach);
@@ -321,7 +331,7 @@ internal sealed partial class BPlusLeafGrain
 
             var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(
                 context.GrainId.GetGuidKey());
-            await snapshotGrain.SaveAsync(blob, CancellationToken.None);
+            await snapshotGrain.SaveAsync(blob, cancellationToken);
             _lastCapturedSnapshotBytes = blob.SnapshotBytes;
             // The blob is now durable, so the checkpointed prefix it covers
             // is recoverable independently of the WAL. Advance the coverage
@@ -345,12 +355,24 @@ internal sealed partial class BPlusLeafGrain
     /// a transient snapshot-storage failure does not block the leaf
     /// coming online. The next periodic recheck (or the next
     /// reactivation's advisory) re-attempts the capture.
+    /// <para>
+    /// A cancellation raised by the caller's token is <b>not</b> a failure
+    /// and is swallowed without logging: the graceful-deactivation caller
+    /// (issue #1965) passes Orleans' deactivation token, and thousands of
+    /// leaves going idle together would otherwise turn one log flood into
+    /// another. Coverage is only ever advanced after a confirmed save, so an
+    /// abandoned capture leaves the pin conservative and the WAL retained.
+    /// </para>
     /// </summary>
-    private async Task TryCaptureSnapshotForAdvisoryAsync()
+    private async Task TryCaptureSnapshotForAdvisoryAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            await CaptureSnapshotAsync();
+            await CaptureSnapshotCoreAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Deliberate abandonment on a deactivation deadline; see above.
         }
         catch (Exception ex)
         {
@@ -488,7 +510,7 @@ internal sealed partial class BPlusLeafGrain
     /// checkpoint still bounds the next activation's replay cost.
     /// </para>
     /// </summary>
-    private async Task TryCaptureSnapshotOnDeactivateAsync()
+    private async Task TryCaptureSnapshotOnDeactivateAsync(CancellationToken cancellationToken)
     {
         if (state.State.TreeId is null)
         {
@@ -546,7 +568,7 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        await TryCaptureSnapshotForAdvisoryAsync();
+        await TryCaptureSnapshotForAdvisoryAsync(cancellationToken);
     }
 
     /// <summary>

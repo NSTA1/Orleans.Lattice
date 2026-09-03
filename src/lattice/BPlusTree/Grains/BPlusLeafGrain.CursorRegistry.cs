@@ -176,7 +176,18 @@ internal sealed partial class BPlusLeafGrain
     /// throws; a no-op when the host has no cursor reporter (pre-WAL), the tree
     /// id is unset, or the leaf has not checkpointed yet.
     /// </summary>
-    private async Task FlushDurableMaterialiserFrontierAsync()
+    /// <param name="cancellationToken">
+    /// Deadline for the flush. This runs on the deactivation path, where
+    /// Orleans awaits <c>OnDeactivateAsync</c> under a deactivation deadline
+    /// and reports a <c>TaskCanceledException</c> from its own frame when the
+    /// hook overruns - so a flush that ignores the token cannot be interrupted,
+    /// the grain never returns in time, and the caller's exception handling
+    /// never gets the chance to swallow it (issue 1965). Passing the token
+    /// through lets the flush abandon promptly, which is safe because the pin
+    /// is best-effort: the WAL is the durability boundary and the next
+    /// activation re-reports the frontier.
+    /// </param>
+    private async Task FlushDurableMaterialiserFrontierAsync(CancellationToken cancellationToken = default)
     {
         var clock = state.State.Clock;
         if (clock <= HybridLogicalClock.Zero)
@@ -210,7 +221,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         await reporter.FlushDurableMaterialiserFrontierAsync(
-            treeId, reports, CancellationToken.None);
+            treeId, reports, cancellationToken);
     }
 
     /// <summary>

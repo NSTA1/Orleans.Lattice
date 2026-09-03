@@ -465,7 +465,16 @@ internal sealed partial class BPlusLeafGrain
     /// staleness-tolerant and the next mutation on reactivation will
     /// republish.
     /// </summary>
-    internal async Task FlushPendingDigestPublishAsync()
+    /// <param name="cancellationToken">
+    /// Deadline for the publish. Runs on the deactivation path, where Orleans
+    /// awaits <c>OnDeactivateAsync</c> under a deactivation deadline; a publish
+    /// that ignores the token keeps running against storage after the deadline
+    /// fires, so the grain never returns in time and Orleans reports a
+    /// <c>TaskCanceledException</c> from its own frame (issue 1965). Abandoning
+    /// is safe: the digest is staleness-tolerant and the next mutation after
+    /// reactivation republishes it.
+    /// </param>
+    internal async Task FlushPendingDigestPublishAsync(CancellationToken cancellationToken = default)
     {
         var timer = System.Threading.Interlocked.Exchange(ref _digestPublishTimer, null);
         timer?.Dispose();
@@ -473,16 +482,20 @@ internal sealed partial class BPlusLeafGrain
         if (!_maintainProjectionDigest) return;
         if (!_digestDirty) return;
         if (state.State.ParentId is not { } parentId) return;
+        if (cancellationToken.IsCancellationRequested) return;
 
         try
         {
-            await PublishCurrentDigestAsync(parentId);
+            await PublishCurrentDigestAsync(parentId).WaitAsync(cancellationToken);
             _digestDirty = false;
             LatticeMetrics.LeafDigestPublishes.Add(1, LeafTreeTag(), LatticeMetrics.PathDeactivationFlushTag, LeafTenantTag());
         }
         catch
         {
-            // Match OnDeactivateAsync's swallow-on-shutdown contract.
+            // Match OnDeactivateAsync's swallow-on-shutdown contract. This also
+            // absorbs the deadline cancellation above, which is the point: the
+            // grain returns promptly instead of overrunning the deactivation
+            // budget, and the digest is republished on the next mutation.
         }
     }
 
