@@ -35,6 +35,23 @@ public sealed class LatticeTreeFaultInjector
     /// </summary>
     public int FailFirst { get; set; }
 
+    /// <summary>
+    /// Whether a shard or leaf grain of <see cref="TreeId"/> (keyed
+    /// <c>{treeId}/{index}</c>) also matches. Off by default so a fault aimed at a
+    /// tree hits the facade call once rather than the facade plus each shard it
+    /// fans out to, which would make call-ordering assertions ambiguous. Turn it on
+    /// to reach a call that only ever executes on a shard, such as a range scan.
+    /// </summary>
+    public bool IncludeShardGrains { get; init; }
+
+    /// <summary>
+    /// How many matching calls to let through untouched before faulting begins.
+    /// Lets a test isolate the second or later use of a method that several code
+    /// paths share - the membership write and the marker write, for instance, are
+    /// the same method called in a known order.
+    /// </summary>
+    public int FailAfterMatches { get; set; }
+
     /// <summary>How many matching calls have been seen.</summary>
     public int Matched => Volatile.Read(ref matched);
 
@@ -49,16 +66,24 @@ public sealed class LatticeTreeFaultInjector
         }
 
         // A tree's work is split across a facade grain keyed by the tree id and
-        // shard/leaf grains keyed by "{treeId}/{index}", so a fault aimed at a tree
-        // has to match both shapes to reach a call that only ever lands on a shard.
+        // shard/leaf grains keyed by "{treeId}/{index}". Shards are matched only on
+        // request, because a facade call fans out to them and counting both makes
+        // call-ordering assertions ambiguous.
         if (TreeId is not null
             && !string.Equals(treeId, TreeId, StringComparison.Ordinal)
-            && !(treeId is not null && treeId.StartsWith(TreeId + "/", StringComparison.Ordinal)))
+            && !(IncludeShardGrains
+                && treeId is not null
+                && treeId.StartsWith(TreeId + "/", StringComparison.Ordinal)))
         {
             return false;
         }
 
-        Interlocked.Increment(ref matched);
+        var seen = Interlocked.Increment(ref matched);
+        if (seen <= FailAfterMatches)
+        {
+            return false;
+        }
+
         if (Volatile.Read(ref failed) >= FailFirst)
         {
             return false;
