@@ -11,10 +11,42 @@ name: Coverage
 on:
   push:
     branches: [main]
+    # Only run when something that can actually move the coverage number changed.
+    # This lane builds the whole solution and runs every non-chaos suite under
+    # coverlet, including the Azurite integration tests and the browser UI suite,
+    # so it is by far the most expensive workflow in the repository - and a
+    # docs-only or workflow-only merge cannot change coverage by a single line.
+    #
+    # A genuine `paths` filter is safe here, unlike in ci.yml: that workflow's
+    # build-and-test job is the required status check on main, so a filtered-out
+    # run would never report and a pull request could never merge, which is why
+    # it always runs and classifies the diff internally instead. Coverage gates
+    # nothing, so a skipped run simply leaves the badge on its last value.
+    #
+    # test/** is included deliberately. Adding tests is the single most direct
+    # way to change coverage, and this repository does it often in isolation: of
+    # the last 60 commits on main, 8 touched test/** with no src/ or apps/ change
+    # at all, and several were explicitly coverage-closing work. Filtering to
+    # src/ and apps/ alone would have skipped the badge update for exactly the
+    # commits whose purpose was to raise it.
+    #
+    # The root build files are included because they decide what is compiled and
+    # therefore what is measured, and this workflow's own helper files are
+    # included so a change to the lane itself is validated by running it.
+    paths:
+      - 'src/**'
+      - 'apps/**'
+      - 'test/**'
+      - 'Directory.Build.targets'
+      - 'Orleans.Lattice.slnx'
+      - '.github/workflows/coverage.yml'
+      - '.github/workflows/failed-tests-filter.py'
+      - '.github/workflows/ui-test-shards.json'
   # Manual trigger. Coverage is a post-merge lane, so without this there is no way
   # to re-run it after a transient failure, or to validate a change to the lane
   # itself on a branch before merging it - the change would have to land on main
-  # unverified.
+  # unverified. It is also the escape hatch when the paths filter above skips a
+  # merge whose coverage you nonetheless want re-measured.
   workflow_dispatch:
 
 # Least-privilege: this workflow only reads source and uploads a coverage report.
