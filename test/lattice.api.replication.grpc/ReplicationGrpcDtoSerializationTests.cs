@@ -151,6 +151,60 @@ public sealed class ReplicationGrpcDtoSerializationTests
         Assert.That(RoundTrip(new ReplicationConfigResponse()).Trees, Is.Empty);
 
     [Test]
+    public void ReplicationTreeConfigMessage_round_trips_every_enrollment_source()
+    {
+        var original = new ReplicationConfigResponse
+        {
+            Trees = new[]
+            {
+                new ReplicationTreeConfigMessage
+                {
+                    TreeId = "runtime",
+                    Enabled = true,
+                    HasMode = true,
+                    Mode = LatticeMergeMode.OrSet,
+                    Source = ReplicationEnrollmentSource.Runtime,
+                },
+                new ReplicationTreeConfigMessage
+                {
+                    TreeId = "declared",
+                    Enabled = true,
+                    HasMode = true,
+                    Mode = LatticeMergeMode.LwwRegister,
+                    Source = ReplicationEnrollmentSource.Static,
+                },
+                new ReplicationTreeConfigMessage
+                {
+                    TreeId = "both",
+                    Enabled = true,
+                    HasMode = true,
+                    Mode = LatticeMergeMode.OrMap,
+                    Source = ReplicationEnrollmentSource.RuntimeAndStatic,
+                },
+            },
+        };
+
+        var copy = RoundTrip(original);
+        Assert.That(
+            copy.Trees.Select(t => t.Source),
+            Is.EqualTo(new[]
+            {
+                ReplicationEnrollmentSource.Runtime,
+                ReplicationEnrollmentSource.Static,
+                ReplicationEnrollmentSource.RuntimeAndStatic,
+            }));
+    }
+
+    [Test]
+    public void ReplicationTreeConfigMessage_defaults_its_source_to_runtime() =>
+        Assert.That(
+            RoundTrip(new ReplicationConfigResponse
+            {
+                Trees = new[] { new ReplicationTreeConfigMessage { TreeId = "orders" } },
+            }).Trees[0].Source,
+            Is.EqualTo(ReplicationEnrollmentSource.Runtime));
+
+    [Test]
     public void AuthSchemeAdvertisementRequest_round_trips() =>
         Assert.That(RoundTrip(new AuthSchemeAdvertisementRequest()), Is.Not.Null);
 

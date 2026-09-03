@@ -176,11 +176,13 @@ Runtime per-tree cross-cluster replication control over `ILatticeReplicationCont
 
 | Tool | Kind | Purpose |
 |---|---|---|
-| `lattice_replication_get_config` | inspect | Report each authorized tree's enabled state, fixed merge mode, and ambiguity status. |
+| `lattice_replication_get_config` | inspect | Report each authorized tree's enrolled state, the merge mode in force, its ambiguity status, and which enrollment source (`Runtime`, `Static`, or `RuntimeAndStatic`) put it in force. |
 | `lattice_replication_enable` | control | Enable replication for a tree under a fixed merge mode. |
 | `lattice_replication_disable` | control | Disable replication for a tree without purging already-replicated peer data. |
 
 The control tools carry `destructiveHint = true`; the inspect tool carries `readOnlyHint = true`. Discovery is permission-scoped by the `LatticeOperation.Replication` grant, so a caller without that grant is not shown the group.
+
+`lattice_replication_get_config` reconciles **both** enrollment sources a replication-enabled host resolves against: trees enabled at runtime through `lattice_replication_enable`, and trees declared in the static deployment-time replicated-tree map. Each entry's `source` says which one is in force, so an estate configured purely at deployment time reports its trees rather than an empty set. A tree reported `Static` keeps shipping even after `lattice_replication_disable` - the static map is a floor - and is turned off by editing the deployment configuration instead. See [Runtime replication configuration](../lattice.replication/runtime-config.md).
 
 ## TreeAdmin schema tools (`lattice_treeadmin_schema_*`)
 

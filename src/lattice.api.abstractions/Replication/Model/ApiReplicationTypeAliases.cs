@@ -33,4 +33,7 @@ public static class ApiReplicationTypeAliases
 
     /// <summary>Alias for <see cref="ReplicationDisableResult"/>.</summary>
     public const string ReplicationDisableResult = "oir.dr";
+
+    /// <summary>Alias for <see cref="ReplicationEnrollmentSource"/>.</summary>
+    public const string ReplicationEnrollmentSource = "oir.es";
 }

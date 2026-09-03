@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// deterministic with no cluster.
 /// </summary>
 [TestFixture]
-public sealed class LatticeReplicationConfigAuthorityTests
+public sealed partial class LatticeReplicationConfigAuthorityTests
 {
     private const string LocalReplica = "site-a";
     private const string Tree = "orders";
@@ -23,7 +23,8 @@ public sealed class LatticeReplicationConfigAuthorityTests
         InMemoryConfigStore store,
         string localReplicaId = LocalReplica,
         ILatticeReplicationAdmin? admin = null,
-        ILatticeTreeContentProbe? probe = null)
+        ILatticeTreeContentProbe? probe = null,
+        IReadOnlyDictionary<string, LatticeMergeMode>? staticTrees = null)
     {
         var context = Substitute.For<ILatticeReplicationContext>();
         context.LocalReplicaId.Returns(localReplicaId);
@@ -34,7 +35,25 @@ public sealed class LatticeReplicationConfigAuthorityTests
         admin ??= Substitute.For<ILatticeReplicationAdmin>();
         probe ??= FixedProbe(hasContent: false);
 
-        return new LatticeReplicationConfigAuthority(store, preconditions, context, admin, probe);
+        return new LatticeReplicationConfigAuthority(
+            store, preconditions, context, admin, probe, Monitor(staticTrees));
+    }
+
+    /// <summary>
+    /// An options monitor exposing <paramref name="staticTrees"/> as the host's
+    /// static deployment-time replicated-tree map, which the authority now
+    /// reconciles into its status projections.
+    /// </summary>
+    private static IOptionsMonitor<LatticeReplicationOptions> Monitor(
+        IReadOnlyDictionary<string, LatticeMergeMode>? staticTrees)
+    {
+        var options = new LatticeReplicationOptions { ClusterId = "x", ReplicatedTrees = staticTrees };
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.CurrentValue.Returns(options);
+        monitor.Get(Arg.Any<string>()).Returns(options);
+        monitor.OnChange(Arg.Any<Action<LatticeReplicationOptions, string?>>())
+            .Returns(Substitute.For<IDisposable>());
+        return monitor;
     }
 
     private static ILatticeTreeContentProbe FixedProbe(bool hasContent)

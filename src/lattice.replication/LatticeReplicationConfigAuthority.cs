@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Replication;
@@ -20,13 +21,25 @@ namespace Orleans.Lattice.Replication;
 /// reads and writes as replication infrastructure under the system origin (via
 /// the store) and assumes an already-authorized caller.
 /// </para>
+/// <para>
+/// <b>Reads reconcile both enrollment sources.</b> Authoring only ever touches
+/// the config OR-Map, but a host's <i>effective</i> replicated-tree set is the
+/// OR-Map unioned with the static
+/// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> deployment map,
+/// because <see cref="SnapshotLatticeMergeModeResolver"/> falls back to that map
+/// on the commit path. <see cref="GetTreeStatusAsync"/> and
+/// <see cref="GetAllTreeStatusesAsync"/> therefore project the union under the
+/// same precedence the resolver applies, so an operator report can never say
+/// "no trees" about an estate that is demonstrably replicating.
+/// </para>
 /// </summary>
 internal sealed class LatticeReplicationConfigAuthority(
     ILatticeReplicationConfigStore store,
     ILatticeReplicationPreconditionValidator preconditions,
     ILatticeReplicationContext replicationContext,
     ILatticeReplicationAdmin admin,
-    ILatticeTreeContentProbe treeContentProbe) : ILatticeReplicationConfigAuthority
+    ILatticeTreeContentProbe treeContentProbe,
+    IOptionsMonitor<LatticeReplicationOptions> options) : ILatticeReplicationConfigAuthority
 {
     private readonly ILatticeReplicationConfigStore _store =
         store ?? throw new ArgumentNullException(nameof(store));
@@ -42,6 +55,9 @@ internal sealed class LatticeReplicationConfigAuthority(
 
     private readonly ILatticeTreeContentProbe _treeContentProbe =
         treeContentProbe ?? throw new ArgumentNullException(nameof(treeContentProbe));
+
+    private readonly IOptionsMonitor<LatticeReplicationOptions> _options =
+        options ?? throw new ArgumentNullException(nameof(options));
 
     /// <inheritdoc />
     public async Task<LatticeReplicationEnableResult> EnableReplicationAsync(
@@ -194,7 +210,11 @@ internal sealed class LatticeReplicationConfigAuthority(
         ArgumentException.ThrowIfNullOrEmpty(treeId);
 
         var entry = await _store.ReadEntryAsync(treeId, cancellationToken).ConfigureAwait(false);
-        return entry is null ? null : Project(treeId, entry);
+        var declared = StaticDeclarations();
+        LatticeMergeMode? staticMode =
+            declared is not null && declared.TryGetValue(treeId, out var m) ? m : null;
+
+        return entry is null && staticMode is null ? null : Reconcile(treeId, entry, staticMode);
     }
 
     /// <inheritdoc />
@@ -202,25 +222,135 @@ internal sealed class LatticeReplicationConfigAuthority(
         CancellationToken cancellationToken = default)
     {
         var entries = await _store.ReadEntriesAsync(cancellationToken).ConfigureAwait(false);
-        var result = new Dictionary<string, LatticeReplicationTreeStatus>(entries.Count, StringComparer.Ordinal);
+        var declared = StaticDeclarations();
+        var declaredCount = declared?.Count ?? 0;
+
+        var result = new Dictionary<string, LatticeReplicationTreeStatus>(
+            entries.Count + declaredCount,
+            StringComparer.Ordinal);
+
         foreach (var pair in entries)
         {
-            result[pair.Key] = Project(pair.Key, pair.Value);
+            LatticeMergeMode? staticMode =
+                declared is not null && declared.TryGetValue(pair.Key, out var m) ? m : null;
+            result[pair.Key] = Reconcile(pair.Key, pair.Value, staticMode);
+        }
+
+        if (declared is null)
+        {
+            return result;
+        }
+
+        // Statically declared trees the runtime config tree has never been asked
+        // about are still shipped by the resolver's fallback, so they belong in
+        // the report. Reporting only the OR-Map made a purely statically
+        // configured estate look unreplicated.
+        foreach (var pair in declared)
+        {
+            if (!result.ContainsKey(pair.Key))
+            {
+                result[pair.Key] = Reconcile(pair.Key, entry: null, pair.Value);
+            }
         }
 
         return result;
     }
 
     /// <summary>
-    /// Projects a stored <see cref="LatticeReplicationConfigEntry"/> into the
-    /// read-only <see cref="LatticeReplicationTreeStatus"/> surface, mirroring how
-    /// the compiled snapshot distils enablement, unambiguous mode, and ambiguity.
+    /// The static deployment-time replicated-tree map currently in effect, or
+    /// <see langword="null"/> when the host declared none. Read from
+    /// <see cref="IOptionsMonitor{TOptions}.CurrentValue"/> on every call, so a
+    /// reloaded configuration is reflected without a restart - matching how
+    /// <see cref="SnapshotReplicatedTreeMembership"/> reads the same map.
     /// </summary>
-    private static LatticeReplicationTreeStatus Project(string treeId, LatticeReplicationConfigEntry entry)
+    private IReadOnlyDictionary<string, LatticeMergeMode>? StaticDeclarations()
+        => _options.CurrentValue.ReplicatedTrees;
+
+    /// <summary>
+    /// Projects a tree's two enrollment sources - its stored
+    /// <see cref="LatticeReplicationConfigEntry"/> (when the runtime config tree
+    /// carries one) and its static
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> declaration (when
+    /// the deployment declared one) - into the effective
+    /// <see cref="LatticeReplicationTreeStatus"/> an operator surface reports.
+    /// <para>
+    /// The precedence deliberately mirrors
+    /// <see cref="SnapshotLatticeMergeModeResolver.Resolve"/> exactly, so the
+    /// report describes what the commit path actually does: ambiguity fails
+    /// closed and is never resolved by the static declaration; otherwise an
+    /// enabled, unambiguous runtime mode wins; otherwise the static declaration
+    /// is the floor that keeps the tree shipping.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree the status describes.</param>
+    /// <param name="entry">The runtime config entry, or <see langword="null"/> when the OR-Map has none.</param>
+    /// <param name="staticMode">The statically declared merge mode, or <see langword="null"/> when undeclared.</param>
+    /// <returns>The reconciled per-tree status.</returns>
+    private static LatticeReplicationTreeStatus Reconcile(
+        string treeId,
+        LatticeReplicationConfigEntry? entry,
+        LatticeMergeMode? staticMode)
     {
-        var ambiguous = entry.HasAmbiguousMode;
-        LatticeMergeMode? mode = !ambiguous && entry.TryGetMode(out var resolved) ? resolved : null;
-        return new LatticeReplicationTreeStatus(treeId, entry.IsEnabled, mode, ambiguous);
+        if (entry is null)
+        {
+            // Static-only: the resolver returns the declared mode unconditionally,
+            // so the tree is effectively enrolled even though no operator ever
+            // called enable.
+            return new LatticeReplicationTreeStatus(treeId, Enabled: true, staticMode, Ambiguous: false)
+            {
+                Source = LatticeReplicationEnrollmentSource.Static,
+            };
+        }
+
+        var bothDeclare = staticMode is not null;
+
+        // Fail closed: a divergent runtime mode pauses shipping for this tree and
+        // must never fall through to the static declaration, which would silently
+        // pick a mode.
+        if (entry.HasAmbiguousMode)
+        {
+            return new LatticeReplicationTreeStatus(treeId, entry.IsEnabled, Mode: null, Ambiguous: true)
+            {
+                Source = bothDeclare
+                    ? LatticeReplicationEnrollmentSource.RuntimeAndStatic
+                    : LatticeReplicationEnrollmentSource.Runtime,
+            };
+        }
+
+        var hasRuntimeMode = entry.TryGetMode(out var runtimeMode);
+        if (entry.IsEnabled && hasRuntimeMode)
+        {
+            return new LatticeReplicationTreeStatus(treeId, Enabled: true, runtimeMode, Ambiguous: false)
+            {
+                Source = bothDeclare
+                    ? LatticeReplicationEnrollmentSource.RuntimeAndStatic
+                    : LatticeReplicationEnrollmentSource.Runtime,
+            };
+        }
+
+        if (bothDeclare)
+        {
+            // The runtime entry yields no enabled, unambiguous mode, so the
+            // resolver falls back to the static declaration and the tree keeps
+            // shipping under it. A runtime disable does not override the
+            // deployment-time floor, and saying otherwise here would reproduce
+            // the very under-reporting this projection exists to prevent.
+            return new LatticeReplicationTreeStatus(treeId, Enabled: true, staticMode, Ambiguous: false)
+            {
+                Source = LatticeReplicationEnrollmentSource.Static,
+            };
+        }
+
+        // Runtime-only and not currently shipping: report the flag state and the
+        // mode the entry retains, which a later re-enable reuses.
+        return new LatticeReplicationTreeStatus(
+            treeId,
+            entry.IsEnabled,
+            hasRuntimeMode ? runtimeMode : null,
+            Ambiguous: false)
+        {
+            Source = LatticeReplicationEnrollmentSource.Runtime,
+        };
     }
 
     /// <summary>

@@ -23,6 +23,7 @@ internal static class ReplicationToolMappings
             Enabled = entry.Enabled,
             Mode = entry.Mode?.ToString(),
             Ambiguous = entry.Ambiguous,
+            Source = entry.Source.ToString(),
         };
     }
 

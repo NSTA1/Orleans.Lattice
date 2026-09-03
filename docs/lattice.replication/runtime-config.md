@@ -49,6 +49,18 @@ The engine authoring seam is `ILatticeReplicationConfigAuthority`, installed onl
 - **Enable on a non-empty tree** composes the existing snapshot bootstrap: when a bootstrap source cluster is named and the tree already holds rows, a receiver-driven snapshot is requested (through `ILatticeBootstrapCoordinator` / `ILatticeReplicationAdmin.RequestSnapshotAsync`) so the peer converges on the pre-existing rows the change feed will not carry.
 - **Disable** writes the disable-wins dot. It pauses shipping new mutations; it never purges data already replicated to peers, and it keeps the fixed mode so a later re-enable is a clean re-bootstrap.
 
+## Reading the effective configuration
+
+`ILatticeReplicationConfigAuthority.GetTreeStatusAsync` / `GetAllTreeStatusesAsync` - and therefore the operator-facing control facade, its gRPC binding, and the `lattice_replication_get_config` MCP tool - report the **union of both enrollment sources**, not just the runtime tree. Authoring only ever writes the config OR-Map, but the commit path resolves against the static map too, so a report limited to the OR-Map would tell an operator "no trees replicate here" on an estate configured entirely through `LatticeReplicationOptions.ReplicatedTrees` and demonstrably shipping.
+
+The projection applies exactly the precedence `SnapshotLatticeMergeModeResolver` applies on the commit path, so the report always describes what the host actually does:
+
+1. An **ambiguous** runtime mode fails closed - the mode is reported `null` and shipping is paused. A static declaration never resolves the ambiguity.
+2. Otherwise an **enabled runtime entry with an unambiguous mode** wins, and that mode is reported.
+3. Otherwise the **static declaration** is the floor that keeps the tree shipping, and its mode is reported.
+
+Each status carries a `Source` (`LatticeReplicationEnrollmentSource`) naming which of the two is in force: `Runtime`, `Static`, or `RuntimeAndStatic`. The distinction is operationally load-bearing, because a tree reported `Static` is **not** turned off by a runtime disable - the static map is a floor, so the resolver falls back to it and the tree keeps shipping. Such a tree is disabled by removing it from the deployment configuration.
+
 ## See also
 
 - [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/README.md) - the control facade an operator drives this through.

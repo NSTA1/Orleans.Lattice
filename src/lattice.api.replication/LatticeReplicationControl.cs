@@ -117,9 +117,30 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
                 status.TreeId,
                 status.Enabled,
                 status.Mode,
-                status.Ambiguous));
+                status.Ambiguous)
+            {
+                Source = ToApi(status.Source),
+            });
         }
 
         return new ReplicationConfigReport(entries);
     }
+
+    /// <summary>
+    /// Maps the engine's enrollment-source discriminator onto the
+    /// transport-agnostic abstraction enum. The two are declared separately so
+    /// the abstraction package carries no dependency on the engine, and the
+    /// mapping is exhaustive with a fail-safe default of
+    /// <see cref="ReplicationEnrollmentSource.Runtime"/> - the value the report
+    /// has always implied.
+    /// </summary>
+    /// <param name="source">The engine-side enrollment source.</param>
+    /// <returns>The abstraction-side enrollment source.</returns>
+    private static ReplicationEnrollmentSource ToApi(LatticeReplicationEnrollmentSource source)
+        => source switch
+        {
+            LatticeReplicationEnrollmentSource.Static => ReplicationEnrollmentSource.Static,
+            LatticeReplicationEnrollmentSource.RuntimeAndStatic => ReplicationEnrollmentSource.RuntimeAndStatic,
+            _ => ReplicationEnrollmentSource.Runtime,
+        };
 }
