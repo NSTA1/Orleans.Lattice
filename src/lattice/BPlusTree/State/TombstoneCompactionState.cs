@@ -52,18 +52,20 @@ internal sealed class TombstoneCompactionState
     [Id(5)] public Dictionary<int, DateTimeOffset> LastTriggerAt { get; set; } = [];
 
     /// <summary>
-    /// In-shard leaf-walk cursor for the current shard. Points at the next
-    /// leaf id to visit within the shard the coordinator is currently
-    /// compacting (i.e. the shard at index
-    /// <see cref="NextShardIndex"/> in <see cref="PhysicalShardIndices"/>).
-    /// <c>null</c> means \"start from the leftmost leaf when this shard's
-    /// turn comes\" (the legacy and end-of-shard semantic). The cursor is
-    /// persisted between leaf batches so progress survives silo crashes
-    /// the same way <see cref="NextShardIndex"/> does, and is cleared
-    /// when the shard's leaf walk completes.
+    /// Superseded by <see cref="NextLeafKeyInShard"/> (for the chain walk) and
+    /// <see cref="CurrentShardDirtyIndex"/> (for the dirty-leaves fast path),
+    /// and no longer written. Retained because the alias is wire format: state
+    /// persisted by an older build can still carry a leaf id here.
     /// <para>
-    /// Legacy persisted state decodes the missing slot to <c>null</c>,
-    /// which is the correct semantic default.
+    /// A leaf grain id is not a safe resume position for a chain walk. Orleans
+    /// grains are virtual, so an id persisted across a batch boundary can
+    /// activate a fresh, empty grain whose sibling pointer is
+    /// <see langword="null"/>, and the resumed walk would report the shard done
+    /// with most of it never visited - a silent under-compaction that looks
+    /// exactly like a clean end-of-shard. On load a non-null value here is
+    /// discarded and the shard restarts from its leftmost leaf, which costs a
+    /// re-walk and nothing else because per-leaf compaction is idempotent
+    /// (issue 1973).
     /// </para>
     /// </summary>
     [Id(6)] public string? NextLeafIdInShard { get; set; }
@@ -93,4 +95,48 @@ internal sealed class TombstoneCompactionState
     /// preserved for the next pass.
     /// </summary>
     [Id(8)] public Orleans.Lattice.HybridLogicalClock CurrentShardDirtyAdvance { get; set; }
+
+    /// <summary>
+    /// In-shard leaf-walk resume position for the current shard's <b>chain
+    /// walk</b>: the key the next leaf batch re-descends onto within the shard
+    /// at index <see cref="NextShardIndex"/> of
+    /// <see cref="PhysicalShardIndices"/>. <see langword="null"/> means "start
+    /// from the leftmost leaf when this shard's turn comes" (also the
+    /// end-of-shard semantic). Persisted between leaf batches so progress
+    /// survives silo crashes the same way <see cref="NextShardIndex"/> does,
+    /// and cleared when the shard's walk completes.
+    /// <para>
+    /// A <b>key</b>, never a leaf grain id, so a resumed walk always re-descends
+    /// onto whichever leaf now owns the position instead of trusting an id that
+    /// may activate empty. Replaces <see cref="NextLeafIdInShard"/>
+    /// (issue 1973).
+    /// </para>
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(9)] public string? NextLeafKeyInShard { get; set; }
+
+    /// <summary>
+    /// In-shard resume position for the current shard's <b>dirty-leaves fast
+    /// path</b>: the index of the next entry to visit in
+    /// <see cref="CurrentShardDirtyLeaves"/>.
+    /// <para>
+    /// The fast path walks a persisted, finite list the shard root nominated
+    /// rather than following sibling pointers, so its natural cursor is a
+    /// position in that list. An index is exact where a leaf id was only
+    /// locatable by a linear search that fell back to restarting the list, and
+    /// it cannot silently truncate the way an id can, because the list itself -
+    /// not a chain of virtual grains - bounds the walk. Ignored, and reset to
+    /// zero, whenever <see cref="CurrentShardDirtyLeaves"/> is
+    /// <see langword="null"/> (issue 1973).
+    /// </para>
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <c>0</c>, which is
+    /// the correct semantic default: re-walk the snapshot from its start, which
+    /// per-leaf compaction makes idempotent.
+    /// </para>
+    /// </summary>
+    [Id(10)] public int CurrentShardDirtyIndex { get; set; }
 }

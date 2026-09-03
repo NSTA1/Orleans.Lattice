@@ -2972,4 +2972,15 @@ internal sealed partial class ShardRootGrain(
             ? null
             : await TraverseToLeftmostLeafAsync();
     }
+
+    /// <inheritdoc />
+    public async Task<GrainId?> GetLeafIdForKeyAsync(string? resumeFromInclusive)
+    {
+        // Same node-TYPE guard as GetLeftmostLeafIdAsync: ResolveWalkStartLeafAsync
+        // re-descends when a baked-inconsistent RootIsLeaf flag resolves an
+        // internal node (issue 899), so the caller always receives a real leaf id.
+        return state.State.RootNodeId is null
+            ? null
+            : await ResolveWalkStartLeafAsync(resumeFromInclusive);
+    }
 }

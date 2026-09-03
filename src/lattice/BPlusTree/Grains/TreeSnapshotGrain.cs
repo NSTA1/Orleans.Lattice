@@ -149,6 +149,7 @@ internal sealed class TreeSnapshotGrain(
         var prevPhase = state.State.Phase;
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
+        var prevCopyCursorKeyStart = state.State.CopyCursorKey;
         var prevDestinationTreeId = state.State.DestinationTreeId;
         var prevMode = state.State.Mode;
         var prevOperationId = state.State.OperationId;
@@ -168,6 +169,7 @@ internal sealed class TreeSnapshotGrain(
         };
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        state.State.CopyCursorKey = null;
         state.State.DestinationTreeId = destinationTreeId;
         state.State.Mode = mode;
         state.State.OperationId = operationId ?? Guid.NewGuid().ToString("N");
@@ -186,6 +188,7 @@ internal sealed class TreeSnapshotGrain(
             state.State.Phase = prevPhase;
             state.State.NextShardIndex = prevNextShardIndex;
             state.State.ShardRetries = prevShardRetries;
+            state.State.CopyCursorKey = prevCopyCursorKeyStart;
             state.State.DestinationTreeId = prevDestinationTreeId;
             state.State.Mode = prevMode;
             state.State.OperationId = prevOperationId;
@@ -304,9 +307,40 @@ internal sealed class TreeSnapshotGrain(
             switch (state.State.Phase)
             {
                 case SnapshotPhase.Copy:
-                    await CopyShardAsync(shardIndex);
+                    var cursorBeforeCopy = state.State.CopyCursorKey;
+                    var copyBudget = state.State.Mode == SnapshotMode.Online
+                        ? LeafWalkBudget.ForBackgroundDrain(await optionsResolver.ResolveAsync(SourceTreeId))
+                        : LeafWalkBudget.Unbounded();
+                    var (copyComplete, copyResumeFrom) = await CopyShardAsync(
+                        shardIndex, cursorBeforeCopy, copyBudget);
 
-                    // Snapshot the three fields the Copy-success flip mutates
+                    if (!copyComplete)
+                    {
+                        // A bounded online pass that yielded. Persist the resume
+                        // position and stay on this shard and phase; the next
+                        // tick continues from the key. The retry budget is reset
+                        // only when the cursor actually moved, so a partial pass
+                        // counts as progress rather than as a failed attempt and
+                        // a large-but-healthy shard is never retried out.
+                        var madeProgress = !string.Equals(
+                            copyResumeFrom, cursorBeforeCopy, StringComparison.Ordinal);
+                        var prevRetriesPartial = state.State.ShardRetries;
+                        state.State.CopyCursorKey = copyResumeFrom;
+                        if (madeProgress) state.State.ShardRetries = 0;
+                        try
+                        {
+                            await state.WriteStateAsync();
+                        }
+                        catch
+                        {
+                            state.State.CopyCursorKey = cursorBeforeCopy;
+                            state.State.ShardRetries = prevRetriesPartial;
+                            throw;
+                        }
+                        break;
+                    }
+
+                    // Snapshot the fields the Copy-success flip mutates
                     // so a failing persist doesn't leak Phase=Unmark/Copy /
                     // NextShardIndex+1 / ShardRetries=0 ahead of disk. The
                     // outer try/catch below would otherwise see the dirty
@@ -319,6 +353,7 @@ internal sealed class TreeSnapshotGrain(
                     var prevPhaseCopy = state.State.Phase;
                     var prevNextShardIndexCopy = state.State.NextShardIndex;
                     var prevShardRetriesCopy = state.State.ShardRetries;
+                    var prevCopyCursorKey = state.State.CopyCursorKey;
 
                     if (state.State.Mode == SnapshotMode.Offline)
                     {
@@ -334,6 +369,10 @@ internal sealed class TreeSnapshotGrain(
                         state.State.Phase = SnapshotPhase.Copy;
                     }
                     state.State.ShardRetries = 0;
+                    // Each shard owns its own sweep, so the cursor never carries
+                    // across a shard advance - a stale key would re-descend into
+                    // the wrong shard's keyspace.
+                    state.State.CopyCursorKey = null;
                     try
                     {
                         await state.WriteStateAsync();
@@ -343,6 +382,7 @@ internal sealed class TreeSnapshotGrain(
                         state.State.Phase = prevPhaseCopy;
                         state.State.NextShardIndex = prevNextShardIndexCopy;
                         state.State.ShardRetries = prevShardRetriesCopy;
+                        state.State.CopyCursorKey = prevCopyCursorKey;
                         throw;
                     }
                     break;
@@ -357,10 +397,12 @@ internal sealed class TreeSnapshotGrain(
                     var prevPhaseUnmark = state.State.Phase;
                     var prevNextShardIndexUnmark = state.State.NextShardIndex;
                     var prevShardRetriesUnmark = state.State.ShardRetries;
+                    var prevCopyCursorUnmark = state.State.CopyCursorKey;
 
                     state.State.NextShardIndex++;
                     state.State.Phase = SnapshotPhase.Copy;
                     state.State.ShardRetries = 0;
+                    state.State.CopyCursorKey = null;
                     try
                     {
                         await state.WriteStateAsync();
@@ -370,6 +412,7 @@ internal sealed class TreeSnapshotGrain(
                         state.State.Phase = prevPhaseUnmark;
                         state.State.NextShardIndex = prevNextShardIndexUnmark;
                         state.State.ShardRetries = prevShardRetriesUnmark;
+                        state.State.CopyCursorKey = prevCopyCursorUnmark;
                         throw;
                     }
                     break;
@@ -427,45 +470,138 @@ internal sealed class TreeSnapshotGrain(
     /// regardless of which write wins the race: whichever carries the
     /// higher HLC is observable in the final destination state.
     /// </para>
+    /// <para>
+    /// <b>The online copy is work-bounded and resumable; the offline copy is
+    /// deliberately atomic</b> (issue 1973).
+    /// </para>
+    /// <para>
+    /// <i>Online.</i> One pass visits at most
+    /// <see cref="LatticeOptions.BackgroundDrainLeavesPerPass"/> source leaves,
+    /// merges what it read, and persists the key the next pass re-descends
+    /// onto. A pass boundary makes nothing observable that a shard boundary did
+    /// not already: the destination tree is populated shard by shard across
+    /// timer ticks anyway, shadow-forwarding mirrors concurrent writes onto it
+    /// throughout, and every entry carries its source HLC, so a partially
+    /// copied destination is a state this mode has always been able to present
+    /// and every ordering converges to the same LWW result. An online snapshot
+    /// is a converging mirror, not a point-in-time image, so there is no
+    /// instant of consistency for a bound to break.
+    /// </para>
+    /// <para>
+    /// <i>Offline.</i> <b>DELIBERATELY NOT WORK-BOUNDED.</b> The offline copy
+    /// assembles the destination shard bottom-up through
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.BulkLoadRawAsync"/>,
+    /// which by contract refuses a shard that already has a root node and needs
+    /// the complete sorted entry set in one call. There is therefore no
+    /// intermediate state for a cursor to name: a bounded pass could only
+    /// resume by abandoning the bulk-load path for per-pass merges, which would
+    /// trade a single bottom-up build for repeated top-down inserts on every
+    /// offline snapshot and restore. The source is quiesced by
+    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MarkDeletedAsync"/>
+    /// before the copy begins, so nothing it reads can change while it runs.
+    /// Made attributable through <see cref="AtomicLeafWalk"/> instead.
+    /// </para>
     /// </summary>
-    private async Task CopyShardAsync(int shardIndex)
+    /// <returns>
+    /// Whether the source shard's whole leaf chain has been copied, and the key
+    /// the next pass resumes from when it has not. The offline path always
+    /// reports the copy complete.
+    /// </returns>
+    private async Task<(bool CopyComplete, string? ResumeFromInclusive)> CopyShardAsync(
+        int shardIndex,
+        string? resumeFromInclusive,
+        LeafWalkBudget budget)
     {
         var sourceShardKey = $"{SourceTreeId}/{shardIndex}";
         var sourceShard = grainFactory.GetGrain<IShardRootGrain>(sourceShardKey);
-        var leafId = await sourceShard.GetLeftmostLeafIdAsync();
+        var offline = state.State.Mode != SnapshotMode.Online;
+
+        var atomicWalk = offline ? new AtomicLeafWalk("SnapshotOfflineCopyShardAsync") : default;
+
+        // The offline path never resumes and is never bounded: it must read the
+        // source's whole chain so the bulk load receives the complete sorted
+        // set. Forcing both here rather than trusting the caller means a stray
+        // cursor or budget can never turn a bulk load into a partial one, which
+        // would be silent data loss on the destination.
+        var walk = await BoundedLeafWalk.StartAsync(
+            grainFactory,
+            sourceShard,
+            offline ? null : resumeFromInclusive,
+            offline ? LeafWalkBudget.Unbounded() : budget);
 
         var entries = new List<LwwEntry>();
-        while (leafId is not null)
+        while (walk.HasLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-            var liveRaw = await leaf.GetLiveRawEntriesAsync();
+            var liveRaw = await walk.CurrentLeaf.GetLiveRawEntriesAsync();
             entries.AddRange(liveRaw);
-            leafId = await leaf.GetNextSiblingAsync();
+            if (!await walk.MoveNextAsync()) break;
         }
 
-        if (entries.Count == 0) return;
-
-        var destShardKey = $"{state.State.DestinationTreeId}/{shardIndex}";
-        var destShard = grainFactory.GetGrain<IShardRootGrain>(destShardKey);
-
-        if (state.State.Mode == SnapshotMode.Online)
+        if (offline)
         {
-            // Online drain: destination shard may already have entries from
-            // concurrent shadow-forward writes. Use LWW MergeManyAsync so
-            // the two populate streams converge - whichever entry carries
-            // the higher HLC wins, per the CRDT invariant.
+            atomicWalk.RecordLeavesVisited(walk.LeavesVisited);
+            atomicWalk.ReportIfSlow(Logger, Context.GrainId);
+
+            if (entries.Count == 0) return (true, null);
+
+            // Offline drain: source is locked, destination is guaranteed empty.
+            // Use the bottom-up bulk-load path for minimal storage I/O.
+            entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
+            var operationId = $"{state.State.OperationId}-snapshot-{shardIndex}";
+            var offlineDest = grainFactory.GetGrain<IShardRootGrain>($"{state.State.DestinationTreeId}/{shardIndex}");
+            await offlineDest.BulkLoadRawAsync(operationId, entries);
+            return (true, null);
+        }
+
+        // Online drain: destination shard may already have entries from
+        // concurrent shadow-forward writes. Use LWW MergeManyAsync so
+        // the two populate streams converge - whichever entry carries
+        // the higher HLC wins, per the CRDT invariant.
+        //
+        // The merge is issued before the cursor is returned, so the position
+        // the caller persists is never ahead of the entries the destination has
+        // accepted; a cursor past an unmerged batch would drop those entries
+        // permanently, because the next pass resumes beyond them.
+        if (entries.Count > 0)
+        {
+            var destShard = grainFactory.GetGrain<IShardRootGrain>($"{state.State.DestinationTreeId}/{shardIndex}");
             var merge = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
             foreach (var e in entries)
                 merge[e.Key] = e.ToLwwValue();
             await destShard.MergeManyAsync(merge);
-            return;
         }
 
-        // Offline drain: source is locked, destination is guaranteed empty.
-        // Use the bottom-up bulk-load path for minimal storage I/O.
-        entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
-        var operationId = $"{state.State.OperationId}-snapshot-{shardIndex}";
-        await destShard.BulkLoadRawAsync(operationId, entries);
+        return (walk.Completed, walk.ResumeFromInclusive);
+    }
+
+    /// <summary>
+    /// Copies one shard through to the end of its leaf chain, running as many
+    /// bounded passes as it takes and carrying the resume key in a local rather
+    /// than in persisted state.
+    /// <para>
+    /// Used by the concurrent online drain, where several shards are in flight
+    /// at once and so cannot share the single persisted
+    /// <see cref="TreeSnapshotState.CopyCursorKey"/> - one shard's cursor would
+    /// overwrite another's. Bounding each pass still holds peak memory to a
+    /// batch of leaves rather than a whole shard.
+    /// </para>
+    /// <para>
+    /// A fresh budget is built for every pass. A <see cref="LeafWalkBudget"/>
+    /// fixes its wall-clock deadline at construction, so reusing one across
+    /// passes would leave every pass after the first already past its deadline
+    /// and yielding at the first leaf it could resume from.
+    /// </para>
+    /// </summary>
+    private async Task CopyShardToEndAsync(int shardIndex, LatticeOptions options)
+    {
+        string? cursor = null;
+        while (true)
+        {
+            var (complete, resumeFrom) = await CopyShardAsync(
+                shardIndex, cursor, LeafWalkBudget.ForBackgroundDrain(options));
+            if (complete) return;
+            cursor = resumeFrom;
+        }
     }
 
     private async Task UnmarkSourceShardAsync(int shardIndex)
@@ -547,11 +683,15 @@ internal sealed class TreeSnapshotGrain(
 
         using var sem = new SemaphoreSlim(cap);
         var tasks = new List<Task>(shardCount - start);
+        // Resolve options once; each pass builds its own budget from them, so
+        // the leaf cap and the wall-clock net apply per pass rather than
+        // across the whole concurrent drain.
+        var drainOptions = await optionsResolver.ResolveAsync(SourceTreeId);
         for (int i = start; i < shardCount; i++)
         {
             var idx = i;
             await sem.WaitAsync();
-            tasks.Add(DrainOneShardOnlineAsync(idx, sem));
+            tasks.Add(DrainOneShardOnlineAsync(idx, sem, drainOptions));
         }
         await Task.WhenAll(tasks);
 
@@ -576,11 +716,11 @@ internal sealed class TreeSnapshotGrain(
         }
     }
 
-    private async Task DrainOneShardOnlineAsync(int shardIndex, SemaphoreSlim sem)
+    private async Task DrainOneShardOnlineAsync(int shardIndex, SemaphoreSlim sem, LatticeOptions options)
     {
         try
         {
-            await CopyShardAsync(shardIndex);
+            await CopyShardToEndAsync(shardIndex, options);
             await MarkShardDrainedAsync(shardIndex);
         }
         finally

@@ -53,6 +53,15 @@ public partial class TombstoneCompactionGrainTests
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 
+    /// <summary>
+    /// The key the bounded chain walk resumes at when it parks before the leaf
+    /// at <paramref name="leafIndex"/> in a shard set up by
+    /// <see cref="SetupShardWithLeaves"/>. Mirrors the rig's key layout: leaf
+    /// <c>i</c> owns <c>[k{i}, k{i+1})</c>, so the exclusive high bound of leaf
+    /// <c>i-1</c> is exactly where leaf <c>i</c> begins.
+    /// </summary>
+    private static string LeafResumeKey(int leafIndex) => $"k{leafIndex:D4}";
+
     private static void SetupShardWithLeaves(
         IGrainFactory grainFactory,
         int shardIndex,
@@ -76,23 +85,35 @@ public partial class TombstoneCompactionGrainTests
         if (leafIds.Length == 0)
         {
             shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
+            shardRoot.GetLeafIdForKeyAsync(Arg.Any<string?>()).Returns(Task.FromResult<GrainId?>(null));
             return;
         }
 
         shardRoot.GetLeftmostLeafIdAsync()
             .Returns(Task.FromResult<GrainId?>(leafIds[0]));
 
+        // The bounded walk resumes by KEY, so the rig has to model the shard's
+        // key-routed descent: a null cursor lands on the leftmost leaf, and a
+        // resume key lands on whichever leaf owns it.
+        shardRoot.GetLeafIdForKeyAsync(null).Returns(Task.FromResult<GrainId?>(leafIds[0]));
+
         for (int i = 0; i < leafIds.Length; i++)
         {
             var leafMock = Substitute.For<IBPlusLeafGrain>();
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
             leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
-
-            // A leaf with live state reports its tree id. The resume path uses
-            // this to tell a live leaf from a reclaimed one, which Orleans would
-            // otherwise virtual-activate as an empty grain (issue 1970), so the
-            // rig has to model it or every resumed walk looks reclaimed.
             leafMock.GetTreeIdAsync().Returns(Task.FromResult<string?>(TreeId));
+
+            // Leaf i owns [k{i}, k{i+1}); the last leaf has no high bound, which
+            // is also what makes it a non-stopping point for the walk.
+            leafMock.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            {
+                LowKeyInclusive = LeafResumeKey(i),
+                HighKeyExclusive = i + 1 < leafIds.Length ? LeafResumeKey(i + 1) : null,
+            }));
+
+            var target = leafIds[i];
+            shardRoot.GetLeafIdForKeyAsync(LeafResumeKey(i)).Returns(Task.FromResult<GrainId?>(target));
 
             var nextId = i + 1 < leafIds.Length ? (GrainId?)leafIds[i + 1] : null;
             leafMock.GetNextSiblingAsync().Returns(Task.FromResult(nextId));

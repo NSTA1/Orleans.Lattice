@@ -323,7 +323,15 @@ internal sealed class TreeShardSplitGrain(
         }
 
         if (state.State.Phase == ShardSplitPhase.Drain)
-            await DrainAsync();
+        {
+            // Drive the bounded drain to completion inside this one call. The
+            // per-tick path (ProcessNextPhaseAsync) runs a single bounded pass
+            // instead, so the work bound is what a live split actually gets;
+            // this API keeps its "run the pass through" contract for callers
+            // that drive a split explicitly.
+            while (state.State.Phase == ShardSplitPhase.Drain)
+                await DrainAsync();
+        }
 
         if (state.State.Phase == ShardSplitPhase.Swap)
             await SwapAsync();
@@ -375,16 +383,42 @@ internal sealed class TreeShardSplitGrain(
     }
 
     /// <summary>
-    /// Drains all moved-slot entries from the source shard's leaf chain to the
-    /// target shard, preserving HLC timestamps via
-    /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.MergeManyAsync"/>. Idempotent: re-running
-    /// after a crash converges via CRDT LWW. Exposed as <c>internal</c> for unit testing.
+    /// Runs one bounded pass of the background drain, forwarding moved-slot
+    /// entries from the source shard's leaf chain to the target shard and
+    /// advancing to <see cref="ShardSplitPhase.Swap"/> only once the source's
+    /// whole leaf chain has been swept. Idempotent: re-running after a crash
+    /// converges via CRDT LWW. Returns whether the sweep finished on this pass.
+    /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    internal async Task DrainAsync()
+    internal async Task<bool> DrainAsync()
     {
-        await ForwardMovedSlotEntriesAsync();
+        var (sweepComplete, resumeFrom, _) = await ForwardMovedSlotEntriesAsync(
+            state.State.DrainCursorKey,
+            LeafWalkBudget.ForBackgroundDrain(Options));
+
+        if (!sweepComplete)
+        {
+            // Persist the resume position and stay in Drain; the next tick
+            // continues from the key. The phase is deliberately not advanced -
+            // Swap's ordering invariants assume the historical sweep is done.
+            var prevCursor = state.State.DrainCursorKey;
+            state.State.DrainCursorKey = resumeFrom;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.DrainCursorKey = prevCursor;
+                throw;
+            }
+            return false;
+        }
+
         var prevPhase = state.State.Phase;
+        var prevCursorOnComplete = state.State.DrainCursorKey;
         state.State.Phase = ShardSplitPhase.Swap;
+        state.State.DrainCursorKey = null;
         try
         {
             await state.WriteStateAsync();
@@ -392,8 +426,10 @@ internal sealed class TreeShardSplitGrain(
         catch
         {
             state.State.Phase = prevPhase;
+            state.State.DrainCursorKey = prevCursorOnComplete;
             throw;
         }
+        return true;
     }
 
     /// <summary>
@@ -491,7 +527,7 @@ internal sealed class TreeShardSplitGrain(
         // (bypassing the shard read gate) so the post-reject freeze does
         // not block it, and MergeManyAsync is LWW-idempotent so a crash-
         // recovery re-entry into SwapAsync re-drains harmlessly.
-        await ForwardMovedSlotEntriesAsync();
+        await ForwardMovedSlotEntriesAtomicallyAsync("SplitSwapFinalDrain");
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         // Re-read the current map so concurrent splits compose correctly:
@@ -557,7 +593,7 @@ internal sealed class TreeShardSplitGrain(
     internal async Task FinaliseAsync()
     {
         // Final drain captures any deletes that occurred between drain and reject.
-        await ForwardMovedSlotEntriesAsync();
+        await ForwardMovedSlotEntriesAtomicallyAsync("SplitFinaliseFinalDrain");
 
         var physicalTreeId = await GetPhysicalTreeIdAsync();
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
@@ -643,14 +679,43 @@ internal sealed class TreeShardSplitGrain(
     /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetDeltaSinceForSlotsAsync"/> so unrelated
     /// data is never serialised on the wire.
     /// </para>
+    /// <para>
+    /// <b>Work is bounded by <paramref name="budget"/>, and only in the
+    /// background <see cref="ShardSplitPhase.Drain"/> phase</b> (issue 1973).
+    /// The authoritative sweeps in <see cref="SwapAsync"/> and
+    /// <see cref="FinaliseAsync"/> pass an unbounded budget - see the note at
+    /// each of those call sites for why yielding there would be unsafe.
+    /// </para>
+    /// <para>
+    /// <b>What a pass boundary makes observable during Drain.</b> Nothing that
+    /// a batch flush did not already. This walk has never been atomic: it
+    /// flushes to the target every <see cref="LatticeOptions.SplitDrainBatchSize"/>
+    /// entries, so the target has always been observable part-drained. Nor is
+    /// the target observable to a reader yet - the registry's
+    /// <see cref="ShardMap"/> still routes every moved slot to the source
+    /// throughout Drain, and only flips in <see cref="SwapAsync"/>, after the
+    /// sweep has completed and after a further authoritative sweep over the
+    /// frozen source. Writes accepted by the source during Drain are mirrored
+    /// onto the target by the hot-path shadow-forward, and every entry is
+    /// forwarded under its original HLC, so a re-drained leaf and a concurrent
+    /// shadow write converge to the same LWW fixed point regardless of
+    /// ordering. A pass boundary therefore lengthens the drain window without
+    /// widening what any caller can observe.
+    /// </para>
     /// </summary>
-    private async Task ForwardMovedSlotEntriesAsync()
+    /// <returns>
+    /// Whether the source's whole leaf chain has been swept, the key the next
+    /// pass resumes from when it has not, and the leaves this pass visited.
+    /// </returns>
+    private async Task<(bool SweepComplete, string? ResumeFromInclusive, int LeavesVisited)> ForwardMovedSlotEntriesAsync(
+        string? resumeFromInclusive,
+        LeafWalkBudget budget)
     {
         var physicalTreeId = await GetPhysicalTreeIdAsync();
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
-        var leafId = await source.GetLeftmostLeafIdAsync();
-        if (leafId is null) return;
+        var walk = await BoundedLeafWalk.StartAsync(grainFactory, source, resumeFromInclusive, budget);
+        if (!walk.HasLeaf) return (true, null, 0);
 
         var movedSlotsArray = state.State.MovedSlots.ToArray();
         Array.Sort(movedSlotsArray);
@@ -662,9 +727,9 @@ internal sealed class TreeShardSplitGrain(
         var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
         var emptyVector = new VersionVector();
 
-        while (leafId is not null)
+        while (walk.HasLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+            var leaf = walk.CurrentLeaf;
             // Slot filtering is pushed into the leaf so only moved-slot
             // entries are serialised on the response - saves bandwidth and
             // coordinator-side allocations on hot shards where moved slots
@@ -679,11 +744,44 @@ internal sealed class TreeShardSplitGrain(
                     batch.Clear();
                 }
             }
-            leafId = await leaf.GetNextSiblingAsync();
+
+            if (!await walk.MoveNextAsync()) break;
         }
 
+        // Flush before returning, so the cursor this pass persists is never
+        // ahead of the entries the target has actually accepted. Persisting a
+        // cursor past an unflushed batch would drop those entries permanently:
+        // the next pass resumes beyond them and no later sweep re-reads them.
         if (batch.Count > 0)
             await target.MergeManyAsync(batch, isCrossShardMigration: true);
+
+        return (walk.Completed, walk.ResumeFromInclusive, walk.LeavesVisited);
+    }
+
+    /// <summary>
+    /// Sweeps the source's whole leaf chain in one turn, for the two
+    /// authoritative drains that run once the source can no longer accept a
+    /// moved-slot write.
+    /// <para>
+    /// <b>DELIBERATELY NOT WORK-BOUNDED</b> (issues 1956, 1973). Both callers
+    /// are the step that makes the target provably equal to the source's final
+    /// committed state, immediately before or immediately after routing flips
+    /// onto the target. Yielding mid-sweep would stretch that window across
+    /// timer ticks while readers are already being pushed off the source, for
+    /// no correctness gain: the source is frozen for the moved slots, so no
+    /// amount of extra time can change what the sweep would read. It is instead
+    /// made <em>attributable</em> through <see cref="AtomicLeafWalk"/>, so a
+    /// long hold names itself in the log rather than surfacing only as a
+    /// coordinator that stopped answering.
+    /// </para>
+    /// </summary>
+    private async Task ForwardMovedSlotEntriesAtomicallyAsync(string operation)
+    {
+        var walk = new AtomicLeafWalk(operation);
+        var (_, _, leavesVisited) = await ForwardMovedSlotEntriesAsync(
+            resumeFromInclusive: null, LeafWalkBudget.Unbounded());
+        walk.RecordLeavesVisited(leavesVisited);
+        walk.ReportIfSlow(Logger, Context.GrainId);
     }
 
     /// <summary>
@@ -775,6 +873,39 @@ internal sealed class TreeShardSplitGrain(
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         long replayed = 0;
 
+        // DELIBERATELY NOT WORK-BOUNDED (issues 1956, 1973). Do not route this
+        // walk through BoundedLeafWalk, and do not give it a persisted cursor.
+        //
+        // Two invariants make whole-sweep atomicity load-bearing here, and both
+        // are about what the NEXT phase assumes rather than about this walk:
+        //
+        // 1. The Drain phase, which runs immediately after this sweep, imports
+        //    the source's pre-saga values into the destination with
+        //    IsMigrated=true. The destination-side shadow markers this sweep
+        //    installs are the only thing that stops a reader surfacing one of
+        //    those migrated pre-saga values for a saga it observes as
+        //    committed. Persisting a half-finished sweep and advancing on a
+        //    later turn would let Drain start with markers installed for some
+        //    in-flight sagas and not others - which is precisely the torn
+        //    observation against a backstopped sibling this sweep exists to
+        //    prevent.
+        //
+        // 2. The recovery contract is "re-run the entire sweep", asserted by
+        //    the BeginShadowWrite branch of RunSplitPassAsync. That is what
+        //    makes the per-snapshot pre-check below sound for every leaf: each
+        //    re-entry re-reads every prepared mutation still on the source and
+        //    re-decides against the saga's status as of that moment. A durable
+        //    mid-sweep cursor would replace it with "resume where you stopped",
+        //    under which leaves visited before an interruption are never
+        //    re-examined, so a saga that terminalized during the gap is never
+        //    re-decided on those leaves.
+        //
+        // The cost is bounded in practice: this reads only PREPARED mutations
+        // on the moved slots, whose count is active-saga concurrency at
+        // split-begin, and the phase runs once per split. It is made
+        // attributable instead of bounded, so a long hold names itself.
+        var atomicWalk = new AtomicLeafWalk(nameof(RetroactiveSweepPreparedMutationsAsync));
+
         // Track per-txid snapshots so the post-sweep cleanup pass can
         // build per-saga committedValues payloads without re-walking
         // the source chain. Lazily allocated - the steady state is
@@ -786,6 +917,7 @@ internal sealed class TreeShardSplitGrain(
             while (leafId is not null)
             {
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                atomicWalk.RecordLeafVisited();
                 var snapshots = await leaf.GetPendingMutationsForSlotsAsync(sortedSlots, virtualShardCount);
                 foreach (var snapshot in snapshots)
                 {
@@ -908,6 +1040,8 @@ internal sealed class TreeShardSplitGrain(
         }
         finally
         {
+            atomicWalk.ReportIfSlow(Logger, Context.GrainId);
+
             if (replayed > 0)
             {
                 LatticeMetrics.SplitRetroactiveForwardEntries.Add(replayed,

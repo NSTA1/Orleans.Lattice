@@ -88,6 +88,22 @@ public class AtomicLeafWalkTests
     }
 
     /// <summary>
+    /// A call site whose walk is executed by a shared helper already has the
+    /// leaf count in hand, so it hands the whole tally over at once rather than
+    /// replaying it one increment at a time (issue 1973).
+    /// </summary>
+    [Test]
+    public void RecordLeavesVisited_adds_a_whole_tally_at_once()
+    {
+        var walk = new AtomicLeafWalk("TestOp");
+
+        walk.RecordLeafVisited();
+        walk.RecordLeavesVisited(12);
+
+        Assert.That(walk.LeavesVisited, Is.EqualTo(13));
+    }
+
+    /// <summary>
     /// The threshold has to land below Orleans' own long-request warning
     /// (<c>MaxWarningRequestProcessingTime</c> = <c>ResponseTimeout x 5</c>,
     /// 150s by default) so this warning explains the flood rather than

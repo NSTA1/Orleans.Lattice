@@ -57,6 +57,13 @@ public partial class TreeSnapshotGrainTests
         return (grain, state, reminderRegistry, grainFactory, optionsMonitor);
     }
 
+    /// <summary>
+    /// The key the bounded online copy resumes at when it parks before the
+    /// source leaf at <paramref name="leafIndex"/>. Mirrors the rig's key
+    /// layout: leaf <c>i</c> owns <c>[k{i}, k{i+1})</c>.
+    /// </summary>
+    private static string SnapshotLeafResumeKey(int leafIndex) => $"k{leafIndex:D4}";
+
     private static void SetupShardForSnapshot(
         IGrainFactory grainFactory,
         string treeId,
@@ -71,11 +78,16 @@ public partial class TreeSnapshotGrainTests
         if (leafIds.Length == 0)
         {
             shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
+            shardRoot.GetLeafIdForKeyAsync(Arg.Any<string?>()).Returns(Task.FromResult<GrainId?>(null));
             return;
         }
 
         shardRoot.GetLeftmostLeafIdAsync()
             .Returns(Task.FromResult<GrainId?>(leafIds[0]));
+
+        // The bounded online copy resumes by KEY, so the rig models the source's
+        // key-routed descent alongside its sibling chain.
+        shardRoot.GetLeafIdForKeyAsync(null).Returns(Task.FromResult<GrainId?>(leafIds[0]));
 
         var allEntries = liveEntries ?? new Dictionary<string, byte[]>();
         var entriesPerLeaf = SplitEntries(allEntries, leafIds.Length);
@@ -96,6 +108,14 @@ public partial class TreeSnapshotGrainTests
             }
             leafMock.GetLiveRawEntriesAsync().Returns(Task.FromResult(rawPerLeaf));
             leafMock.GetLiveEntriesAsync().Returns(Task.FromResult(entriesPerLeaf[i]));
+
+            leafMock.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            {
+                LowKeyInclusive = SnapshotLeafResumeKey(i),
+                HighKeyExclusive = i + 1 < leafIds.Length ? SnapshotLeafResumeKey(i + 1) : null,
+            }));
+            shardRoot.GetLeafIdForKeyAsync(SnapshotLeafResumeKey(i))
+                .Returns(Task.FromResult<GrainId?>(leafIds[i]));
 
             var nextId = i + 1 < leafIds.Length ? (GrainId?)leafIds[i + 1] : null;
             leafMock.GetNextSiblingAsync().Returns(Task.FromResult(nextId));

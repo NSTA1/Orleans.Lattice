@@ -857,6 +857,53 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultMaxScanPageDuration = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// Maximum number of source leaves a background coordinator - the split
+    /// drain, the cross-tree merge drain, or the online snapshot copy - visits
+    /// in a single pass before persisting its resume cursor and yielding.
+    /// <para>
+    /// These walks do not hold a shard root, so they cannot head-of-line-block
+    /// user traffic the way an unbounded read walk can. What they do hold is
+    /// their own non-reentrant coordinator, so an unbounded pass over a
+    /// thousand-leaf shard makes that coordinator unable to answer a progress
+    /// query or honour a cancellation for the whole sweep, buffers the sweep's
+    /// working set for its whole duration, and puts the entire sweep at risk
+    /// from a single interruption. Bounding the pass turns all three into
+    /// steady background work resumable from a persisted key cursor
+    /// (issue 1973).
+    /// </para>
+    /// <para>
+    /// Raising it drains faster at the cost of longer individual turns; setting
+    /// it to <c>0</c> or less disables the bound and restores the unbounded
+    /// walk. It does not govern the authoritative post-freeze sweeps, which are
+    /// deliberately unbounded because the shard they read can no longer change
+    /// and re-opening a freeze window across many ticks would cost real
+    /// availability for no correctness gain.
+    /// </para>
+    /// </summary>
+    public int BackgroundDrainLeavesPerPass { get; set; } = DefaultBackgroundDrainLeavesPerPass;
+
+    /// <summary>Default value for <see cref="BackgroundDrainLeavesPerPass"/> (64 leaves).</summary>
+    public const int DefaultBackgroundDrainLeavesPerPass = 64;
+
+    /// <summary>
+    /// Wall-clock safety net for a single background coordinator drain pass.
+    /// When a pass has spent this long it persists its resume cursor and yields
+    /// at the next leaf boundary that offers one.
+    /// <para>
+    /// <see cref="BackgroundDrainLeavesPerPass"/> is the primary, deterministic
+    /// bound; this exists for the case where a small number of leaves are
+    /// individually very slow - cold activations rehydrating large snapshots,
+    /// or a fan-out merge into many target shards - which a leaf count alone
+    /// cannot bound. Set to <see cref="TimeSpan.Zero"/> to disable it and rely
+    /// on the leaf count alone.
+    /// </para>
+    /// </summary>
+    public TimeSpan BackgroundDrainMaxDuration { get; set; } = DefaultBackgroundDrainMaxDuration;
+
+    /// <summary>Default value for <see cref="BackgroundDrainMaxDuration"/> (10 seconds).</summary>
+    public static readonly TimeSpan DefaultBackgroundDrainMaxDuration = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// How long an open stateful cursor may remain idle before it is
     /// automatically cleaned up. On every <c>Open</c> / <c>Next</c> /
     /// <c>DeleteRangeStep</c> call, the cursor grain refreshes a grain
