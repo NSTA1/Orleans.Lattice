@@ -263,6 +263,27 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<int> CountAsync(string? startInclusive, string? endExclusive);
 
     /// <summary>
+    /// Work-bounded form of <see cref="CountAsync(string?, string?)"/>: counts
+    /// matching entries across a bounded number of leaves, then returns so the
+    /// non-reentrant shard is released and other traffic can interleave.
+    /// <para>
+    /// Drive it by re-calling with the previous batch's
+    /// <see cref="ShardCountPage.ResumeFromInclusive"/> as
+    /// <paramref name="startInclusive"/> until it comes back
+    /// <see langword="null"/>, then sum the batches. A batch is a partial count
+    /// and is never a valid answer on its own.
+    /// </para>
+    /// <para>
+    /// This weakens no documented guarantee. <c>ILattice.CountAsync</c> remains
+    /// a single logical call, and its atomic visibility comes from the
+    /// saga-decision snapshot pinned for the lifetime of the enumeration rather
+    /// than from the granularity of any one shard call, so a batch boundary
+    /// observes the identical view an uninterrupted walk would (issue 1971).
+    /// </para>
+    /// </summary>
+    Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive);
+
+    /// <summary>
     /// Returns <see langword="true"/> as soon as this shard is found to hold at
     /// least one live (non-tombstoned) key, short-circuiting at the first
     /// non-empty leaf rather than walking the whole chain and summing as

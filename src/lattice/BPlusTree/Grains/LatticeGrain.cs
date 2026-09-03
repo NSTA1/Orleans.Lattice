@@ -3147,17 +3147,56 @@ internal sealed partial class LatticeGrain(
     {
         // Per-shard ShardActivationRetry wrap: a single shard's cold-start
         // seed-timeout retries only that shard, not the whole fan-out.
+        //
+        // Each shard's walk is work-bounded (issue 1971), so it counts a
+        // bounded number of leaves and returns a resume key rather than holding
+        // its non-reentrant shard for the whole chain. This loop drives each
+        // shard's batches to completion and sums them, so ILattice.CountAsync
+        // remains one logical call. Resumption is by key rather than leaf grain
+        // id, so a leaf reclaimed between batches cannot silently end a walk.
+        //
+        // The loop stays inside this single LatticeGrain invocation on purpose:
+        // LatticeGrain is [StatelessWorker] with no persistent state, and the
+        // ambient LatticeRegistrySnapshotContext pin that gives the count its
+        // atomic visibility flows through this one call chain. Pushing the loop
+        // out to the caller would lose the pin and with it the guarantee.
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            tasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.CountAsync(startInclusive, endExclusive));
+            tasks[i] = DriveShardCountAsync(shard, startInclusive, endExclusive);
         }
         await Task.WhenAll(tasks);
         var total = 0;
         for (int i = 0; i < tasks.Length; i++) total += tasks[i].Result;
         return total;
+    }
+
+    /// <summary>
+    /// Drives one shard's work-bounded count to completion, resuming from the
+    /// key each batch reports until the shard reports it has no more of the
+    /// range left, and summing the batches into the shard's total.
+    /// <para>
+    /// Resumption is by key rather than leaf grain id, so a leaf split,
+    /// consolidated, or reclaimed between two batches is re-descended to
+    /// whichever leaf now owns the key instead of silently ending the walk on a
+    /// virtual-activated empty grain.
+    /// </para>
+    /// </summary>
+    private static async Task<int> DriveShardCountAsync(
+        IShardRootGrain shard, string? startInclusive, string? endExclusive)
+    {
+        var total = 0;
+        var cursor = startInclusive;
+        while (true)
+        {
+            var page = await ShardActivationRetry.RunAsync(
+                () => shard.CountBoundedAsync(cursor, endExclusive));
+            total += page.Count;
+            if (page.ResumeFromInclusive is not { } next)
+                return total;
+            cursor = next;
+        }
     }
 
     /// <summary>

@@ -221,6 +221,11 @@ internal static class TypeAliases
     internal const string RangeDeleteResult = "ol.rdr";
     internal const string ShardRangeDeletePage = "ol.srd";
 
+    // Work-bounded shard count batch (issue 1971).
+    // Note "ol.scp" is NOT free - Orleans.Lattice.Scaling.ComputePressure owns
+    // it, and aliases share one registry across every loaded package.
+    internal const string ShardCountPage = "ol.scpg";
+
     // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
     internal const string LeafKeyRange = "ol.lkr";
 

@@ -1518,15 +1518,52 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<int> CountAsync(string? startInclusive, string? endExclusive)
     {
+        // Retained for wire compatibility with a caller from an older build
+        // that has not adopted the bounded protocol. Drives the bounded walk to
+        // completion inside this one call, so such a caller sees exactly the
+        // behaviour it always did.
+        var total = 0;
+        var from = startInclusive;
+        while (true)
+        {
+            var page = await CountBoundedAsync(from, endExclusive);
+            total += page.Count;
+            if (page.ResumeFromInclusive is not { } next)
+                return total;
+            from = next;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
         if (state.State.RootNodeId is null)
-            return 0;
+            return new ShardCountPage { Count = 0 };
 
-        // Find the leftmost leaf and walk the chain.
-        var leafId = await GetLeftmostLeafIdAsync();
-        if (leafId is null) return 0;
+        // Descend to the leaf owning the resume key rather than restarting at
+        // the leftmost leaf, so a resumed walk does not re-count what earlier
+        // batches already counted. Resuming by key (never by leaf grain id) is
+        // what makes this safe across a structural change between batches.
+        GrainId? leafId;
+        if (startInclusive is null || state.State.RootIsLeaf)
+        {
+            // A leaf root holds the shard's only leaf, so there is nothing to
+            // descend through and no resume position to honour.
+            leafId = await GetLeftmostLeafIdAsync();
+        }
+        else
+        {
+            var resolved = await TraverseToLeafAsync(startInclusive);
+            // Guard: route to a real leaf even if a corrupt RootIsLeaf /
+            // ChildrenAreLeaves flag resolved an internal node (issue 899).
+            if (!IsLeafGrainId(resolved))
+                resolved = await DescendToLeafForKeyAsync(resolved, startInclusive);
+            leafId = resolved;
+        }
+        if (leafId is null) return new ShardCountPage { Count = 0 };
 
         // if any virtual slots have been split away, we cannot trust
         // the leaf-level count (it includes orphan moved-slot entries). Walk
@@ -1539,30 +1576,78 @@ internal sealed partial class ShardRootGrain(
         var hasMovedAway = state.State.MovedAwaySlots.Count > 0
             && state.State.MovedAwayVirtualShardCount is not null;
 
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         var total = 0;
+        string? resumeFrom = null;
         var currentId = leafId.Value;
         while (true)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
+            var leafCount = 0;
             if (hasMovedAway)
             {
                 var keys = await leaf.GetKeysAsync(startInclusive, endExclusive);
                 for (int i = 0; i < keys.Count; i++)
                 {
-                    if (!IsSlotMovedAway(keys[i])) total++;
+                    if (!IsSlotMovedAway(keys[i])) leafCount++;
                 }
             }
             else
             {
-                total += await leaf.CountAsync(startInclusive, endExclusive);
+                leafCount = await leaf.CountAsync(startInclusive, endExclusive);
+            }
+            total += leafCount;
+            budget.RecordLeafVisited();
+
+            // Past-range early exit (issue 1971). Without this a narrow range
+            // still costs a walk to the end of the shard's chain. The bounds
+            // probe is paid only when a leaf contributed nothing, so a
+            // productive leaf keeps its single-call cost and only a sterile run
+            // pays for the check that ends it.
+            if (leafCount == 0 && endExclusive is not null)
+            {
+                var probe = await leaf.GetKeyRangeAsync();
+                if (probe.LowKeyInclusive is { } low
+                    && string.CompareOrdinal(low, endExclusive) >= 0)
+                {
+                    break;
+                }
             }
 
+            // Resume by KEY, never by leaf grain id: grains are virtual, so a
+            // leaf reclaimed between two batches would activate empty with no
+            // siblings and silently end the walk, under-counting. The current
+            // leaf's exclusive high bound is exactly where the next leaf
+            // begins. When a leaf declares no usable high bound there is no
+            // safe key to resume from, so the walk continues rather than risk
+            // truncating - the same "only stop where you can resume" rule the
+            // range-delete and page-fill bounds follow.
+            //
+            // The next sibling is resolved FIRST so a resume key is only ever
+            // returned when there is genuinely more chain to walk. Yielding one
+            // from the last leaf would make the caller re-descend to a leaf it
+            // has already counted, which - unlike a range delete, where a
+            // repeated tombstone is idempotent - would double-count and never
+            // terminate.
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
+
+            if (budget.ShouldYield(resultsCollected: 1))
+            {
+                var bounds = await leaf.GetKeyRangeAsync();
+                if (bounds.HighKeyExclusive is { } high
+                    && (startInclusive is null || string.CompareOrdinal(high, startInclusive) > 0)
+                    && (endExclusive is null || string.CompareOrdinal(high, endExclusive) < 0))
+                {
+                    resumeFrom = high;
+                    break;
+                }
+            }
+
             currentId = next.Value;
         }
 
-        return total;
+        return new ShardCountPage { Count = total, ResumeFromInclusive = resumeFrom };
     }
 
     /// <inheritdoc />
