@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// saga completion (the laggard case), not on a single local flip.
 /// </summary>
 [TestFixture]
-public class SagaWriteFenceGrainTests
+public partial class SagaWriteFenceGrainTests
 {
     private const string SagaId = "saga-cutover-1";
     private const int ShardCount = 2;
@@ -32,16 +32,21 @@ public class SagaWriteFenceGrainTests
         public required IReplicationShipperGrain Shipper { get; init; }
         public required ITreeReceiveFenceGrain Receive { get; init; }
         public required FakeSagaCompletionSource Completion { get; init; }
+        public required IReminderRegistry Reminders { get; init; }
     }
 
-    private static Harness CreateGrain(IEnumerable<string> peers)
+    private static Harness CreateGrain(
+        IEnumerable<string> peers, IReminderRegistry? reminderRegistry = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("saga-write-fence", SagaId));
 
-        var reminders = Substitute.For<IReminderRegistry>();
-        reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
-            .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+        var reminders = reminderRegistry ?? Substitute.For<IReminderRegistry>();
+        if (reminderRegistry is null)
+        {
+            reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+                .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+        }
 
         var shardCounts = Substitute.For<IShardCountProvider>();
         shardCounts.GetShardCountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -75,6 +80,7 @@ public class SagaWriteFenceGrainTests
             Shipper = shipper,
             Receive = receive,
             Completion = completion,
+            Reminders = reminders,
         };
     }
 

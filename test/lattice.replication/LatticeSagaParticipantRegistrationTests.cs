@@ -108,6 +108,36 @@ public class LatticeSagaParticipantRegistrationTests
     }
 
     [Test]
+    public async Task Named_wrapper_forwards_the_compensation_and_status_calls_too()
+    {
+        // The wrapper is diagnostic only: it must forward every SPI call
+        // unchanged. An abort or status that stopped at the decorator would
+        // silently drop a rollback the coordinator believes happened.
+        var services = ReplicationServices();
+        BuilderWith(services).AddLatticeSagaParticipant<ExampleSagaParticipant>("orders-config");
+
+        using var provider = services.BuildServiceProvider();
+        var named = provider.GetServices<ISagaParticipant>()
+            .OfType<NamedSagaParticipant<ExampleSagaParticipant>>()
+            .Single();
+        var request = new SagaControlRequest { SagaId = "saga-y", TargetTree = "orders" };
+
+        await named.PrepareAsync(request);
+        Assert.That(await named.GetStatusAsync(request), Is.EqualTo(SagaPhase.Prepared),
+            "status is passed straight through, not synthesised by the decorator");
+
+        await named.AbortAsync(request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(named.Inner.AbortCount, Is.EqualTo(1));
+            Assert.That(named.Inner.HasPendingValue, Is.False,
+                "the compensation reached the inner participant, not just the log");
+        });
+        Assert.That(await named.GetStatusAsync(request), Is.EqualTo(SagaPhase.None));
+    }
+
+    [Test]
     public void AddLatticeSagaParticipant_null_builder_throws()
     {
         Assert.Throws<ArgumentNullException>(

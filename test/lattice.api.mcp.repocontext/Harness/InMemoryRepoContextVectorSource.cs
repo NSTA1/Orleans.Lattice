@@ -47,6 +47,23 @@ internal sealed class InMemoryRepoContextVectorSource : IRepoContextVectorSource
     /// </summary>
     private int _pendingEnumerationFaults;
     private Func<Exception>? _enumerationFault;
+    private int _pendingCountFaults;
+    private Func<Exception>? _countFault;
+
+    /// <summary>
+    /// Arms <paramref name="count"/> consecutive count probes to throw, after which
+    /// counting succeeds normally. The probe is a whole-prefix key walk on the real
+    /// source, so on a large cold tree it can outrun even a generous reconnect
+    /// budget - which is the case the handle must treat as "unknown, therefore
+    /// possibly behind" rather than as a build failure.
+    /// </summary>
+    /// <param name="count">How many probes should fault.</param>
+    /// <param name="fault">Produces the exception each faulting probe throws.</param>
+    public void FailNextCounts(int count, Func<Exception> fault)
+    {
+        _pendingCountFaults = count;
+        _countFault = fault;
+    }
 
     /// <summary>
     /// Arms <paramref name="count"/> consecutive enumeration attempts to throw,
@@ -126,6 +143,12 @@ internal sealed class InMemoryRepoContextVectorSource : IRepoContextVectorSource
     public Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
         CountCalls++;
+        if (_pendingCountFaults > 0)
+        {
+            _pendingCountFaults--;
+            return Task.FromException<int>((_countFault ?? (static () => new TimeoutException("injected")))());
+        }
+
         return Task.FromResult(_entries.Count);
     }
 

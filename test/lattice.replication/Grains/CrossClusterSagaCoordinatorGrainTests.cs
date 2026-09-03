@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// silo.
 /// </summary>
 [TestFixture]
-public class CrossClusterSagaCoordinatorGrainTests
+public partial class CrossClusterSagaCoordinatorGrainTests
 {
     private const string SagaId = "saga-1";
     private const string TargetTree = "orders";
@@ -30,16 +30,20 @@ public class CrossClusterSagaCoordinatorGrainTests
                     ISagaControlChannel channel,
                     IReminderRegistry reminders) CreateGrain(
         FakePersistentState<CrossClusterSagaCoordinatorState>? existingState = null,
-        ISagaControlChannel? channel = null)
+        ISagaControlChannel? channel = null,
+        IReminderRegistry? reminderRegistry = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("saga-coordinator", SagaId));
 
         channel ??= Substitute.For<ISagaControlChannel>();
 
-        var reminders = Substitute.For<IReminderRegistry>();
-        reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
-            .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+        var reminders = reminderRegistry ?? Substitute.For<IReminderRegistry>();
+        if (reminderRegistry is null)
+        {
+            reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
+                .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
+        }
 
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(new LatticeOptions());
