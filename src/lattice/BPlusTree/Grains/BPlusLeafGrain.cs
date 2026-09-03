@@ -83,7 +83,7 @@ internal sealed partial class BPlusLeafGrain(
             // to the now-covered frontier and the WAL GC can trim the prefix;
             // best-effort, so a capture failure simply leaves the block pin in
             // place (retained, never trimmed ahead of coverage).
-            await TryCaptureSnapshotOnDeactivateAsync();
+            await TryCaptureSnapshotOnDeactivateAsync(cancellationToken);
 
             // Retention barrier: after the final checkpoint flush, AWAIT a
             // durable write of this leaf's checkpoint frontier into the
