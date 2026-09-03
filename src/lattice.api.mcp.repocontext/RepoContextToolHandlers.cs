@@ -180,7 +180,8 @@ internal static class RepoContextToolHandlers
         }
 
         if (!Enum.TryParse<RepoContextScanScope>(scope, ignoreCase: true, out var parsedScope)
-            || !Enum.IsDefined(parsedScope))
+            || !Enum.IsDefined(parsedScope)
+            || !string.Equals(parsedScope.ToString(), scope, StringComparison.OrdinalIgnoreCase))
         {
             throw new McpException(
                 $"The 'scope' value '{scope}' is not recognised. Use one of: Files, Packages, Symbols, Memory, MemoryTopic.");
@@ -274,7 +275,8 @@ internal static class RepoContextToolHandlers
         var memoryKind = MemoryKind.Note;
         if (!string.IsNullOrWhiteSpace(kind)
             && (!Enum.TryParse(kind, ignoreCase: true, out memoryKind)
-                || !Enum.IsDefined(memoryKind)))
+                || !Enum.IsDefined(memoryKind)
+                || !string.Equals(memoryKind.ToString(), kind, StringComparison.OrdinalIgnoreCase)))
         {
             throw new McpException(
                 $"The 'kind' value '{kind}' is not recognised. Use one of: Decision, Note, Memory.");

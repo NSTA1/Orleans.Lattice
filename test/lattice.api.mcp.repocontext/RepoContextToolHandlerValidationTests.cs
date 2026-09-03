@@ -72,6 +72,38 @@ public sealed class RepoContextToolHandlerValidationTests
             "A numeric string is not a scope name: Enum.TryParse binds it to an undefined value, "
             + "so without an Enum.IsDefined guard it slips past validation and walks the wrong range.");
 
+    [TestCase("3")] // Memory - a DEFINED ordinal, so an Enum.IsDefined guard alone accepts it.
+    [TestCase("0")] // Files - the default scope; a numeric must still be rejected as not a name.
+    public void ScanAsync_rejects_an_in_range_numeric_scope(string scope)
+        => Assert.That(
+            () => RepoContextToolHandlers.ScanAsync(null!, "acme", scope),
+            Throws.InstanceOf<McpException>(),
+            "A numeric string equal to a defined ordinal is still not a scope NAME; Enum.IsDefined accepts it, "
+            + "so only a round-trip name check rejects it before it walks a scope the caller never named.");
+
+    [TestCase("Packages,Symbols")] // 1|2 = 3 = Memory, a DISTINCT defined member.
+    [TestCase("Files,Packages")]   // 0|1 = 1 = Packages, a defined member.
+    public void ScanAsync_rejects_a_comma_combined_scope(string scope)
+        => Assert.That(
+            () => RepoContextToolHandlers.ScanAsync(null!, "acme", scope),
+            Throws.InstanceOf<McpException>(),
+            "Enum.TryParse treats a comma list as a bitwise OR, so 'Packages,Symbols' folds onto the distinct "
+            + "defined member Memory and slips past Enum.IsDefined; the round-trip name check is what rejects it.");
+
+    [TestCase("Files")]
+    [TestCase("memory")]
+    [TestCase("MEMORYTOPIC")]
+    public async Task ScanAsync_accepts_a_defined_scope_name_case_insensitively(string scope)
+    {
+        var context = await RepoContextRequestContexts.CreateAsync(services: null);
+
+        Assert.That(
+            () => RepoContextToolHandlers.ScanAsync(context, "acme", scope),
+            Throws.InstanceOf<InvalidOperationException>().With.Message.Contains("no service provider"),
+            "A genuine scope name (any case) must pass validation and reach service resolution, which then fails "
+            + "only because this test supplies no provider - proving the round-trip check did not over-reject it.");
+    }
+
     [TestCase("")]
     [TestCase("   ")]
     public void ListTopicsAsync_rejects_a_blank_repo_id(string repoId)
@@ -103,6 +135,37 @@ public sealed class RepoContextToolHandlerValidationTests
             Throws.InstanceOf<McpException>(),
             "A numeric string is not a kind name: Enum.TryParse binds it to an undefined value, "
             + "so without an Enum.IsDefined guard an entry would be filed under a kind the store cannot honour.");
+
+    [TestCase("3")] // Memory - a DEFINED ordinal, so an Enum.IsDefined guard alone accepts it.
+    [TestCase("1")] // Decision - a DEFINED ordinal.
+    public void RememberAsync_rejects_an_in_range_numeric_kind(string kind)
+        => Assert.That(
+            () => RepoContextToolHandlers.RememberAsync(null!, "acme", "decisions", kind: kind),
+            Throws.InstanceOf<McpException>(),
+            "A numeric string equal to a defined MemoryKind ordinal is still not a kind NAME; Enum.IsDefined "
+            + "accepts it, so only the round-trip name check keeps an entry from being filed under a numeric kind.");
+
+    [TestCase("Decision,Note")] // 1|2 = 3 = Memory, a DISTINCT defined member.
+    public void RememberAsync_rejects_a_comma_combined_kind(string kind)
+        => Assert.That(
+            () => RepoContextToolHandlers.RememberAsync(null!, "acme", "decisions", kind: kind),
+            Throws.InstanceOf<McpException>(),
+            "Enum.TryParse OR-folds a comma list, so 'Decision,Note' folds onto the distinct member Memory and "
+            + "slips past Enum.IsDefined; the round-trip name check is what files the entry under the right kind.");
+
+    [TestCase("Decision")]
+    [TestCase("note")]
+    [TestCase("MEMORY")]
+    public async Task RememberAsync_accepts_a_defined_kind_name_case_insensitively(string kind)
+    {
+        var context = await RepoContextRequestContexts.CreateAsync(services: null);
+
+        Assert.That(
+            () => RepoContextToolHandlers.RememberAsync(context, "acme", "decisions", kind: kind),
+            Throws.InstanceOf<InvalidOperationException>().With.Message.Contains("no service provider"),
+            "A genuine kind name (any case) must pass validation and reach service resolution, which then fails "
+            + "only because this test supplies no provider - proving the round-trip check did not over-reject it.");
+    }
 
     [TestCase("")]
     [TestCase("   ")]
