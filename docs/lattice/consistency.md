@@ -236,6 +236,37 @@ round-trips. `GetWithVersionAsync` bypasses the cache for CAS safety.
 an in-flight saga always observe the registry-coordinated outcome
 regardless of `CacheTtl`.
 
+### Operations that hold a shard for their whole duration
+
+Shard reads are deliberately non-reentrant, so while one call runs on a
+shard every other request to that shard queues behind it. Most leaf-chain
+walks are bounded by
+[`MaxLeavesPerScanPage`](configuration.md#maxleavesperscanpage) and return a
+partial page rather than holding the shard indefinitely.
+
+A small set of operations is **deliberately exempt**, because whole-walk
+atomicity is the mechanism delivering a guarantee rather than an accident of
+implementation. Releasing the shard part-way through would open exactly the
+window each one exists to close:
+
+| Operation | Why it stays atomic |
+|---|---|
+| Marking moved-away slots during a shard split | Runs immediately before the source enters Reject phase so no read crosses the Swap boundary observing an unmarked leaf. A partially-marked shard would serve a stale orphan value for a moved key. |
+| Unmarking them during a consolidation | The mirror image: the donor's leaves are unsealed only after it is frozen and drained, so no read crosses the freeze observing an unsealed leaf. |
+| Capturing a snapshot-cursor baseline | The captured WAL head is read only after every leaf has frozen, which is what makes the baseline a single instant. A write landing between two freezes would break the cursor's zero-observable-writes guarantee. |
+| Purging a shard on tree deletion | The tree is already offline, so nothing is waiting on it; the walk is also destructive and cannot be resumed once a leaf's sibling pointer is cleared. |
+| One-shot `DeleteRangeAsync` | Today a write issued into the range during the delete is queued behind it and deterministically survives. Bounding the walk would make its fate depend on where the walk had reached. |
+
+The cost is that a shard holding one of these for a long time is unavailable
+to every other caller meanwhile. Each of them logs a warning naming the
+operation and the number of leaves visited when it exceeds a short internal
+threshold, so a burst of Orleans long-request warnings on a shard can be
+attributed to the walk causing it rather than only to the requests it blocked.
+
+For a range delete that must be **bounded, resumable, or crash-safe**, use
+`OpenDeleteRangeCursorAsync` instead of the one-shot `DeleteRangeAsync`; see
+[Durable Cursors](durable-cursors.md).
+
 ### TTL expiry
 
 Expired entries are filtered on every user-facing read path. See [TTL](ttl.md).
