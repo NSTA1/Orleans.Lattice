@@ -1387,7 +1387,7 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
+    public async Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
@@ -1436,11 +1436,21 @@ internal sealed partial class ShardRootGrain(
         // without re-evaluating the predicate.
         var totalDeleted = 0;
         List<string>? matchedKeys = predicate is null ? null : [];
+        // Work bound (issue 1956). Releasing this non-reentrant shard between
+        // batches does NOT weaken any documented guarantee: LatticeGrain
+        // already fans this out to every physical shard in parallel with no
+        // cross-shard atomicity, and the documented visibility is per-key only
+        // ("a concurrent saga may be observed as committed for some keys and
+        // pending for others"). The whole-shard atomicity of the old unbounded
+        // walk was an implementation artifact, not a contract.
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        string? resumeFrom = null;
         while (true)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive, predicate);
             totalDeleted += result.Deleted;
+            budget.RecordLeafVisited();
             if (result.Deleted > 0)
                 await MarkLeafDirtyAsync(leafId);
             if (matchedKeys is not null && result.MatchedKeys is { Count: > 0 })
@@ -1448,6 +1458,26 @@ internal sealed partial class ShardRootGrain(
 
             if (result.PastRange)
                 break;
+
+            // Resume by KEY, never by leaf grain id: grains are virtual, so a
+            // leaf reclaimed between two batches would activate empty with no
+            // siblings and silently end the walk, leaving part of the range
+            // undeleted. The current leaf's exclusive high bound is exactly
+            // where the next leaf begins. When a leaf declares no high bound
+            // there is no safe key to resume from, so the walk continues rather
+            // than risk truncating - the same "only stop where you can resume"
+            // rule the read-path bound follows.
+            if (budget.ShouldYield(resultsCollected: 1))
+            {
+                var bounds = await leafGrain.GetKeyRangeAsync();
+                if (bounds.HighKeyExclusive is { } high
+                    && string.CompareOrdinal(high, startInclusive) > 0
+                    && string.CompareOrdinal(high, endExclusive) < 0)
+                {
+                    resumeFrom = high;
+                    break;
+                }
+            }
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -1457,9 +1487,31 @@ internal sealed partial class ShardRootGrain(
         }
 
         await forwardTask;
+        // Published per batch: the union across batches is the same tombstone
+        // closure the single unbounded notification carried, so replication
+        // apply still reproduces it without re-evaluating the predicate.
         await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);
         RecordRecordsWritten(totalDeleted);
-        return totalDeleted;
+        return new ShardRangeDeletePage { Deleted = totalDeleted, ResumeFromInclusive = resumeFrom };
+    }
+
+    /// <inheritdoc />
+    public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
+    {
+        // Retained for wire compatibility with a caller from an older build
+        // that has not adopted the bounded protocol. Drives the bounded walk to
+        // completion inside this one call, so such a caller sees exactly the
+        // behaviour it always did, including the whole-shard atomicity.
+        var total = 0;
+        var from = startInclusive;
+        while (true)
+        {
+            var page = await DeleteRangeBoundedAsync(from, endExclusive, predicate);
+            total += page.Deleted;
+            if (page.ResumeFromInclusive is not { } next)
+                return total;
+            from = next;
+        }
     }
 
     public Task<int> CountAsync() => CountAsync(null, null);

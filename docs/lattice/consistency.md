@@ -236,6 +236,47 @@ round-trips. `GetWithVersionAsync` bypasses the cache for CAS safety.
 an in-flight saga always observe the registry-coordinated outcome
 regardless of `CacheTtl`.
 
+### Operations that hold a shard for their whole duration
+
+Shard reads are deliberately non-reentrant, so while one call runs on a
+shard every other request to that shard queues behind it. Most leaf-chain
+walks are bounded by
+[`MaxLeavesPerScanPage`](configuration.md#maxleavesperscanpage) and return a
+partial page rather than holding the shard indefinitely.
+
+A small set of operations is **deliberately exempt**, because whole-walk
+atomicity is the mechanism delivering a guarantee rather than an accident of
+implementation. Releasing the shard part-way through would open exactly the
+window each one exists to close:
+
+| Operation | Why it stays atomic |
+|---|---|
+| Marking moved-away slots during a shard split | Runs immediately before the source enters Reject phase so no read crosses the Swap boundary observing an unmarked leaf. A partially-marked shard would serve a stale orphan value for a moved key. |
+| Unmarking them during a consolidation | The mirror image: the donor's leaves are unsealed only after it is frozen and drained, so no read crosses the freeze observing an unsealed leaf. |
+| Capturing a snapshot-cursor baseline | The captured WAL head is read only after every leaf has frozen, which is what makes the baseline a single instant. A write landing between two freezes would break the cursor's zero-observable-writes guarantee. |
+| Purging a shard on tree deletion | The tree is already offline, so nothing is waiting on it; the walk is also destructive and cannot be resumed once a leaf's sibling pointer is cleared. |
+
+`DeleteRangeAsync` used to be on this list and is not any more: its per-shard
+walk is now work-bounded, driven to completion by the tree-level call. That
+weakens nothing, because the fan-out across physical shards was already
+parallel with no cross-shard atomicity and the documented visibility is per-key
+only, so the whole-shard atomicity of the old walk was an implementation
+artifact rather than a guarantee.
+
+The cost of the ones that remain is that a shard holding one of them for a long
+time is unavailable to every other caller meanwhile. Each logs a warning naming
+the operation and the number of leaves visited when it exceeds a short internal
+threshold, so a burst of Orleans long-request warnings on a shard can be
+attributed to the walk causing it rather than only to the requests it blocked.
+For the two where the stall is worth removing rather than merely explaining, the
+real fix is a redesign rather than a budget, tracked separately: storing the
+moved-away seal once per shard instead of copying it into every leaf, and
+capturing the snapshot baseline's WAL head before freezing rather than after.
+
+For a range delete that must be **resumable or crash-safe across a process
+restart**, use `OpenDeleteRangeCursorAsync`; see
+[Durable Cursors](durable-cursors.md).
+
 ### TTL expiry
 
 Expired entries are filtered on every user-facing read path. See [TTL](ttl.md).

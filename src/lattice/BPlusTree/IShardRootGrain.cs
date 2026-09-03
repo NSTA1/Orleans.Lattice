@@ -215,6 +215,38 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
+    /// Work-bounded form of <see cref="DeleteRangeAsync"/>: tombstones matching
+    /// keys across at most <see cref="LatticeOptions.MaxLeavesPerScanPage"/>
+    /// leaves and then returns, releasing this non-reentrant shard so other
+    /// traffic can interleave.
+    /// <para>
+    /// The caller drives the walk to completion by re-invoking with the
+    /// returned <see cref="ShardRangeDeletePage.ResumeFromInclusive"/> as the
+    /// next <paramref name="startInclusive"/>, until it comes back
+    /// <see langword="null"/>. Resumption is by key rather than by leaf grain
+    /// id, because Orleans grains are virtual and a leaf reclaimed between two
+    /// batches would silently activate empty and end the walk early (issue 1955).
+    /// </para>
+    /// <para>
+    /// This weakens no documented guarantee. <c>ILattice.DeleteRangeAsync</c>
+    /// already fans out to every physical shard in parallel with no cross-shard
+    /// atomicity, and its documented visibility is per-key only - "a concurrent
+    /// saga may be observed as committed for some keys and pending for others".
+    /// The whole-shard atomicity of the unbounded walk was an implementation
+    /// artifact, not a contract (issue 1956). The end-state guarantee, that
+    /// every key in the range is tombstoned, is preserved by the caller's loop.
+    /// </para>
+    /// <para>
+    /// Each batch publishes its own <c>DeleteRange</c> observer notification
+    /// carrying that batch's matched-key closure; the union across batches is
+    /// the same closure the single unbounded notification carried, so
+    /// replication apply still reproduces the tombstone set without
+    /// re-evaluating the predicate.
+    /// </para>
+    /// </summary>
+    Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
+
+    /// <summary>
     /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree
     /// by walking the leaf chain and summing per-leaf counts.
     /// </summary>

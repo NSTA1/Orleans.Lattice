@@ -265,14 +265,60 @@ public partial class LatticeGrainTests
 
         factory.GetGrain<IShardRootGrain>("my-tree/0", null).Returns(shard0);
         factory.GetGrain<IShardRootGrain>("my-tree/1", null).Returns(shard1);
-        shard0.DeleteRangeAsync("b", "d").Returns(3);
-        shard1.DeleteRangeAsync("b", "d").Returns(2);
+        // The orchestrator drives each shard's work-bounded range delete
+        // (issue 1956). A null ResumeFromInclusive means that shard has no more
+        // of the range left, so one batch completes it.
+        shard0.DeleteRangeBoundedAsync("b", "d")
+            .Returns(new ShardRangeDeletePage { Deleted = 3, ResumeFromInclusive = null });
+        shard1.DeleteRangeBoundedAsync("b", "d")
+            .Returns(new ShardRangeDeletePage { Deleted = 2, ResumeFromInclusive = null });
 
         var result = await grain.DeleteRangeAsync("b", "d");
 
         Assert.That(result, Is.EqualTo(5));
-        await shard0.Received(1).DeleteRangeAsync("b", "d");
-        await shard1.Received(1).DeleteRangeAsync("b", "d");
+        await shard0.Received(1).DeleteRangeBoundedAsync("b", "d");
+        await shard1.Received(1).DeleteRangeBoundedAsync("b", "d");
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_drives_each_shard_until_it_reports_no_more_range()
+    {
+        var (grain, factory) = CreateGrain(shardCount: 1);
+
+        var shard = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>("my-tree/0", null).Returns(shard);
+
+        // Two bounded batches, then done: the tree-level call must sum both
+        // and resume from the key the first batch reported.
+        shard.DeleteRangeBoundedAsync("b", "d")
+            .Returns(new ShardRangeDeletePage { Deleted = 3, ResumeFromInclusive = "c" });
+        shard.DeleteRangeBoundedAsync("c", "d")
+            .Returns(new ShardRangeDeletePage { Deleted = 4, ResumeFromInclusive = null });
+
+        var result = await grain.DeleteRangeAsync("b", "d");
+
+        Assert.That(result, Is.EqualTo(7));
+        await shard.Received(1).DeleteRangeBoundedAsync("b", "d");
+        await shard.Received(1).DeleteRangeBoundedAsync("c", "d");
+    }
+
+    [Test]
+    public async Task DeleteRangeAsync_stops_if_a_shard_reports_a_non_advancing_resume_key()
+    {
+        var (grain, factory) = CreateGrain(shardCount: 1);
+
+        var shard = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>("my-tree/0", null).Returns(shard);
+
+        // A shard that keeps handing back the same cursor would spin the
+        // driving loop forever; the orchestrator must refuse to follow it.
+        shard.DeleteRangeBoundedAsync("b", "d")
+            .Returns(new ShardRangeDeletePage { Deleted = 1, ResumeFromInclusive = "b" });
+
+        var result = await grain.DeleteRangeAsync("b", "d");
+
+        Assert.That(result, Is.EqualTo(1));
+        await shard.Received(1).DeleteRangeBoundedAsync("b", "d");
     }
 
     [Test]

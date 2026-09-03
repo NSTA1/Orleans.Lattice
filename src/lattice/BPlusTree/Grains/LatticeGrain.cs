@@ -2836,12 +2836,18 @@ internal sealed partial class LatticeGrain(
         // Fan out to all physical shards in parallel - any may contain keys in the range.
         // Per-shard ShardActivationRetry wrap: a single shard's cold-start
         // seed-timeout retries only that shard, not the whole fan-out.
+        //
+        // Each shard's walk is work-bounded (issue 1956), so it tombstones a
+        // bounded number of leaves and returns a resume key rather than holding
+        // its non-reentrant shard for the whole range. This loop drives each
+        // shard to completion, preserving the end-state guarantee that every
+        // key in the range is tombstoned. The enclosing hlcScope stays in force
+        // across every batch, so all tombstones keep the single issue HLC.
         var tasks = new Task<int>[physicalShards.Count];
         for (int i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            tasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.DeleteRangeAsync(startInclusive, endExclusive, predicate));
+            tasks[i] = DrainShardRangeDeleteAsync(shard, startInclusive, endExclusive, predicate, cancellationToken);
         }
 
         await Task.WhenAll(tasks);
@@ -2851,6 +2857,42 @@ internal sealed partial class LatticeGrain(
         for (int i = 0; i < tasks.Length; i++)
             total += tasks[i].Result;
         return total;
+    }
+
+    /// <summary>
+    /// Drives one shard's work-bounded range delete to completion, resuming
+    /// from the key each batch reports until the shard reports it has no more
+    /// of the range left. Resumption is by key rather than leaf grain id, so a
+    /// leaf reclaimed between two batches cannot silently truncate the walk.
+    /// </summary>
+    private static async Task<int> DrainShardRangeDeleteAsync(
+        IShardRootGrain shard,
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        CancellationToken cancellationToken)
+    {
+        var total = 0;
+        var from = startInclusive;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var cursor = from;
+            var page = await ShardActivationRetry.RunAsync(
+                () => shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+            total += page.Deleted;
+
+            if (page.ResumeFromInclusive is not { } next)
+                return total;
+
+            // The shard guarantees a strictly advancing resume key, but assert
+            // it here too: a non-advancing cursor would spin this loop forever
+            // against a shard from a build with a different notion of progress.
+            if (string.CompareOrdinal(next, from) <= 0)
+                return total;
+
+            from = next;
+        }
     }
 
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)

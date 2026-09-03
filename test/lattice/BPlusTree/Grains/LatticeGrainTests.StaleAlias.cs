@@ -132,11 +132,11 @@ public partial class LatticeGrainTests
         var shard = Substitute.For<IShardRootGrain>();
         factory.GetGrain<IShardRootGrain>("my-tree/0", null).Returns(shard);
         var callCount = 0;
-        shard.DeleteRangeAsync("a", "z").Returns(_ =>
+        shard.DeleteRangeBoundedAsync("a", "z").Returns(_ =>
         {
             if (callCount++ == 0)
                 throw new InvalidOperationException("This tree has been deleted.");
-            return Task.FromResult(5);
+            return Task.FromResult(new ShardRangeDeletePage { Deleted = 5, ResumeFromInclusive = null });
         });
 
         var result = await grain.DeleteRangeAsync("a", "z");

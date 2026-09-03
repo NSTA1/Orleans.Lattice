@@ -154,17 +154,26 @@ internal sealed partial class ShardRootGrain
             : (await GetLeftmostLeafIdAsync())!.Value;
 
         var leavesVisited = 0;
+        // NOT WORK-BOUNDED, and a budget is not the fix (issue 1956). The
+        // mirror image of MarkLeavesMovedAwayAsync: TreeShardConsolidationGrain
+        // .SwapAsync seals the donor's leaves first so "no read crosses the
+        // freeze observing an unsealed leaf under a frozen shard".
+        // Real fix tracked as issue 1960 (store the seal once per shard);
+        // until then this is instrumented, not fixed.
+        var walk = new AtomicLeafWalk(nameof(UnmarkLeavesMovedAwayAsync));
         while (true)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             await leaf.UnmarkSlotsMovedAwayAsync(sortedSlots, virtualShardCount);
             leavesVisited++;
+            walk.RecordLeafVisited();
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
             leafId = next.Value;
         }
 
+        walk.ReportIfSlow(logger, context.GrainId);
         return leavesVisited;
     }
 }
