@@ -679,35 +679,84 @@ internal sealed partial class ShardRootGrain
             ? state.State.RootNodeId!.Value
             : (await GetLeftmostLeafIdAsync())!.Value;
 
-        var leavesMarked = 0;
-        // NOT WORK-BOUNDED, and a budget is not the fix (issue 1956). The
-        // whole-walk atomicity delivers the Swap-boundary invariant:
-        // TreeShardSplitGrain.SwapAsync calls this immediately before
-        // EnterRejectPhaseAsync precisely so "no read crosses the Swap boundary
-        // observing an unmarked leaf". A half-installed seal is wrong in the
-        // dangerous direction - an already-sealed leaf returns null for a key
-        // whose slot the source shard still owns, which is the U9h-C "key
-        // missing mid-chaos" failure.
-        //
-        // The real fix is to stop copying a shard-level fact into every leaf,
-        // so installing the seal is one O(1) write with no walk to bound:
-        // tracked as issue 1960. Until then this is instrumented, not fixed.
-        var walk = new AtomicLeafWalk(nameof(MarkLeavesMovedAwayAsync));
+        return await FanOutOverLeafChainAsync(
+            leafId,
+            nameof(MarkLeavesMovedAwayAsync),
+            leaf => leaf.MarkSlotsMovedAwayAsync(sortedMovedSlots, virtualShardCount));
+    }
+
+    /// <summary>
+    /// Applies <paramref name="apply"/> to every leaf in this shard's chain,
+    /// inside this single grain turn, and returns the number of leaves visited.
+    /// <para>
+    /// The walk deliberately stays within one turn: for the moved-away seal and
+    /// its consolidation inverse, whole-walk atomicity is the mechanism that
+    /// delivers the Swap-boundary invariant ("no read crosses the Swap boundary
+    /// observing an unmarked leaf"). A half-installed seal is wrong in the
+    /// dangerous direction, because an already-sealed leaf returns null for a
+    /// key whose slot the source shard still owns - the U9h-C "key missing
+    /// mid-chaos" failure. Every read path reaches a leaf through this grain
+    /// (<c>ILeafCacheGrain</c> included, resolved only in
+    /// <c>ShardRootGrain.Traversal</c>), so holding the turn is exactly what
+    /// makes the installation unobservable. Splitting it across turns - whether
+    /// by a work budget or by driving it from the split coordinator - would
+    /// expose that window. See issue 1960.
+    /// </para>
+    /// <para>
+    /// What the walk does <em>not</em> need is to be sequential. Chain
+    /// discovery is a cheap in-memory sibling read per leaf, but the per-leaf
+    /// apply persists state, so a sequential walk paid that cost serially and
+    /// held the shard for the sum of it. Discovery stays sequential (it has to
+    /// - each leaf names the next) while the applies fan out with bounded
+    /// concurrency, so the turn now costs roughly the chain walk plus the
+    /// slowest batch rather than the sum of every write.
+    /// </para>
+    /// </summary>
+    private async Task<int> FanOutOverLeafChainAsync(
+        GrainId firstLeafId,
+        string operation,
+        Func<IBPlusLeafGrain, Task> apply)
+    {
+        var walk = new AtomicLeafWalk(operation);
+
+        // Phase 1: discover the chain. Sequential by necessity - a leaf's
+        // successor is only known once that leaf has been read - but each hop
+        // is a cheap sibling-pointer read rather than a persisting write.
+        var leafIds = new List<GrainId>();
+        var cursor = firstLeafId;
         while (true)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            await leaf.MarkSlotsMovedAwayAsync(sortedMovedSlots, virtualShardCount);
-            leavesMarked++;
+            leafIds.Add(cursor);
             walk.RecordLeafVisited();
+            var next = await grainFactory.GetGrain<IBPlusLeafGrain>(cursor).GetNextSiblingAsync();
+            if (next is null)
+                break;
+            cursor = next.Value;
+        }
 
-            var next = await leaf.GetNextSiblingAsync();
-            if (next is null) break;
-            leafId = next.Value;
+        // Phase 2: apply to every leaf with bounded concurrency. Still inside
+        // this turn, so the whole installation remains unobservable; only its
+        // duration changes.
+        for (var offset = 0; offset < leafIds.Count; offset += LeafFanOutConcurrency)
+        {
+            var batch = Math.Min(LeafFanOutConcurrency, leafIds.Count - offset);
+            var pending = new Task[batch];
+            for (var i = 0; i < batch; i++)
+                pending[i] = apply(grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[offset + i]));
+            await Task.WhenAll(pending);
         }
 
         walk.ReportIfSlow(logger, context.GrainId);
-        return leavesMarked;
+        return leafIds.Count;
     }
+
+    /// <summary>
+    /// How many per-leaf seal writes a shard-wide fan-out issues concurrently.
+    /// High enough to hide per-call latency across a long leaf chain, low
+    /// enough not to swamp the scheduler or the storage provider with a burst
+    /// proportional to the whole shard.
+    /// </summary>
+    private const int LeafFanOutConcurrency = 32;
 
     /// <inheritdoc />
     public async Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
