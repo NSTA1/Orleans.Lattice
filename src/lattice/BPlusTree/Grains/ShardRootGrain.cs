@@ -1436,11 +1436,22 @@ internal sealed partial class ShardRootGrain(
         // without re-evaluating the predicate.
         var totalDeleted = 0;
         List<string>? matchedKeys = predicate is null ? null : [];
+        // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
+        // LeafWalkBudget here without an explicit decision: releasing the
+        // non-reentrant shard between leaves would newly admit a concurrent
+        // write into the range mid-walk, which would then be tombstoned or
+        // survive depending purely on where the walk had reached. Today such a
+        // write is queued behind the whole delete and deterministically
+        // survives. Callers who need a bounded, resumable, crash-safe range
+        // delete already have OpenDeleteRangeCursorAsync. Bounded instead by
+        // observability.
+        var walk = new AtomicLeafWalk(nameof(DeleteRangeAsync));
         while (true)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive, predicate);
             totalDeleted += result.Deleted;
+            walk.RecordLeafVisited();
             if (result.Deleted > 0)
                 await MarkLeafDirtyAsync(leafId);
             if (matchedKeys is not null && result.MatchedKeys is { Count: > 0 })
@@ -1455,6 +1466,8 @@ internal sealed partial class ShardRootGrain(
 
             leafId = nextSibling.Value;
         }
+
+        walk.ReportIfSlow(logger, context.GrainId);
 
         await forwardTask;
         await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);

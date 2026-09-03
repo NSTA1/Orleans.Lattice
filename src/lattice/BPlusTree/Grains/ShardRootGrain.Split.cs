@@ -680,17 +680,28 @@ internal sealed partial class ShardRootGrain
             : (await GetLeftmostLeafIdAsync())!.Value;
 
         var leavesMarked = 0;
+        // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
+        // LeafWalkBudget here. The whole-walk atomicity is the mechanism that
+        // delivers the Swap-boundary invariant: TreeShardSplitGrain.SwapAsync
+        // calls this immediately before EnterRejectPhaseAsync precisely so that
+        // "no read crosses the Swap boundary observing an unmarked leaf".
+        // Releasing the non-reentrant shard between leaves would open exactly
+        // that window, letting a point read be served a stale orphan value from
+        // a not-yet-sealed leaf. Bounded instead by observability.
+        var walk = new AtomicLeafWalk(nameof(MarkLeavesMovedAwayAsync));
         while (true)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             await leaf.MarkSlotsMovedAwayAsync(sortedMovedSlots, virtualShardCount);
             leavesMarked++;
+            walk.RecordLeafVisited();
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
             leafId = next.Value;
         }
 
+        walk.ReportIfSlow(logger, context.GrainId);
         return leavesMarked;
     }
 

@@ -156,13 +156,24 @@ internal sealed partial class ShardRootGrain
             await CollectInternalNodeIds(state.State.RootNodeId!.Value, internalNodeIds);
         }
 
+        // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
+        // LeafWalkBudget here. Two reasons: the tree is already offline by
+        // contract when this runs (DeleteTreeAsync makes every subsequent read
+        // and write throw), so no live traffic is waiting on this shard; and
+        // the walk is destructive, so it cannot resume by key the way a read
+        // walk can - once a leaf's state is cleared its sibling pointer is gone,
+        // which is why nextId is read before the clear. Bounded by observability.
+        var walk = new AtomicLeafWalk("PurgeShardAsync");
         while (leafId is not null)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
             var nextId = await leaf.GetNextSiblingAsync();
             await leaf.ClearGrainStateAsync();
+            walk.RecordLeafVisited();
             leafId = nextId;
         }
+
+        walk.ReportIfSlow(logger, context.GrainId);
 
         foreach (var internalId in internalNodeIds)
         {

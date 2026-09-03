@@ -182,18 +182,29 @@ internal sealed partial class ShardRootGrain
         if (leftmostId is not null)
         {
             var leafId = leftmostId.Value;
+            // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
+            // LeafWalkBudget here. capturedHead is read AFTER every freeze has
+            // returned (see below), which is what makes the baseline a single
+            // consistent point. Releasing the non-reentrant shard mid-freeze
+            // would let writes land between two leaves' freezes, so the
+            // baseline would no longer describe one instant and the snapshot
+            // cursor's zero-observable-writes guarantee would not hold.
+            var walk = new AtomicLeafWalk(nameof(CaptureSnapshotBaselineAsync));
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
                 var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
                 frozen.Add((leaf, freeze));
+                walk.RecordLeafVisited();
 
                 var next = await leaf.GetNextSiblingAsync();
                 if (next is null)
                     break;
                 leafId = next.Value;
             }
+
+            walk.ReportIfSlow(logger, context.GrainId);
         }
 
         // Capture capturedHead AFTER every freeze has returned. Because each
