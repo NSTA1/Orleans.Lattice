@@ -46,7 +46,7 @@ On the receiving HTTP pipeline, map the gRPC endpoints with `MapLatticeReplicati
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `LatticeReplicationServiceCollectionExtensions` | static class | Registers replication services on an Orleans silo. | `AddLatticeReplication`, `ConfigureLatticeReplication`, `AddLatticeAutoSharedDictionary`, `AddLatticeReplicationHealthCheck`, `AddWalSaturationReceiverFlowControl` |
+| `LatticeReplicationServiceCollectionExtensions` | static class | Registers replication services on an Orleans silo. | `AddLatticeReplication`, `ConfigureLatticeReplication`, `AddLatticeAutoSharedDictionary`, `AddLatticeReplicationHealthCheck`, `AddWalSaturationReceiverFlowControl`, `AddLatticeSagaParticipant` |
 | `LatticeReplicationSecurityServiceCollectionExtensions` | static class | Registers shared-secret sources and security options. | `AddLatticeReplicationSecrets`, `AddLatticeReplicationSecretsFromConfiguration`, `ConfigureLatticeReplicationSecurity` |
 
 `AddLatticeReplication` wires the replication pipeline and default no-op transport. A production deployment replaces the transport by adding the gRPC binding or a custom `IReplicationTransport`. `ConfigureLatticeReplication` follows .NET named options: the overload without a tree name sets global defaults; the `treeName` overload overrides a single tree.
@@ -264,6 +264,31 @@ See [Transport Security](transport-security.md).
 | `LatticeReplicationSharedSecret` | static class | Shared-secret header and validation helpers. | Public helper methods and constants |
 
 The gRPC binding requires HTTPS endpoints unless `AllowPlaintextEndpoints` is enabled. Shared-secret authentication is configured through the security extension methods above.
+
+## Cross-cluster saga participation
+
+The saga service-provider interfaces let a host join the coordinated cross-cluster commit protocol that backs a fleet-wide restore. Register an implementation with `AddLatticeSagaParticipant`. See [Coordinated restore](coordinated-restore.md).
+
+| Type | Kind | Purpose | Key public members |
+|---|---|---|---|
+| `ISagaParticipant` | interface | Service-provider interface a host implements to take part in a cross-cluster saga: it votes on prepare, then applies or discards its staged work. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` |
+| `ISagaControlChannel` | interface | Outbound control channel the coordinator uses to drive a named peer cluster through the saga phases. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` (each taking the target `clusterId`) |
+| `ISagaPeerAuthorizer` | interface | Fail-closed gate deciding whether an inbound saga control request from a claimed origin cluster is accepted. | `IsAuthorizedAsync(string? originClusterId, CancellationToken)` |
+| `SagaPhase` | enum | The durable phase a participant reports for a saga. | `None = 0`, `Prepared = 1`, `Committed = 2`, `Aborted = 3` |
+| `SagaVote` | enum | A participant's prepare-phase vote. | `None = 0`, `Commit = 1`, `Abort = 2` |
+| `LatticeSystemTreeNames` | static class | The reserved system-tree names the replication package owns. | Public constant tree-name members |
+
+## Tenant isolation and runtime configuration authority
+
+| Type | Kind | Purpose | Key public members |
+|---|---|---|---|
+| `IReplicationTenantIsolationGate` | interface | Evaluates whether an inbound replicated entry is admissible for its tenant and region, so a peer can never widen tenant or region scope. | `EvaluateAsync(...)` returning `ReplicationTenantIsolationDecision` |
+| `ReplicationTenantIsolationDecision` | enum | The gate's verdict. | `Admit = 0`, `RejectUnknownTenant = 1`, `RejectOutOfRegion = 2` |
+| `ILatticeReplicationConfigAuthority` | interface | Supplies the authoritative runtime replication configuration a silo applies. See [Runtime configuration](runtime-config.md). | Public configuration-resolution members |
+| `LatticeReplicationConfigEntry` | sealed class | One authoritative runtime replication configuration entry. | Public configuration properties |
+| `ILatticeReplicationPreconditionValidator` | interface | Validates that a requested replication mode change is admissible before it is applied. | Public validation member |
+| `LatticeReplicationModeChangeRejectedException` | exception | Thrown when a replication mode change is rejected. | Standard exception members |
+| `LatticeReplicationPreconditionFailedException` | exception | Thrown when a replication precondition fails. | Standard exception members |
 
 ## Azure Table WAL durability
 

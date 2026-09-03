@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <remarks>
 /// <para>
 /// The kernel is fail-closed on embedding space: a candidate whose space does
-/// not match <paramref name="querySpace"/> (a different model, dimension, or
+/// not match <c>querySpace</c> (a different model, dimension, or
 /// normalization) is skipped, so a mixed-space candidate set never yields a
 /// meaningless score. When the query space is L2-normalized and the candidate is
 /// too, the dot product equals the cosine similarity and is used directly;

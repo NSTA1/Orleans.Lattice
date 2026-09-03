@@ -66,7 +66,7 @@ internal sealed class PublicReplicationApiClusterFixture
     /// locally); the ceiling exists only to surface a structured
     /// failure when delivery is actually broken (e.g. a transport that
     /// silently drops batches). Individual call sites can still pass an
-    /// explicit longer <paramref name="timeout"/> for scenarios that
+    /// explicit longer <c>timeout</c> for scenarios that
     /// legitimately need more headroom.
     /// <para>
     /// Sized at 40 s under the multi-partition default

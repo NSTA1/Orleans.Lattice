@@ -532,7 +532,7 @@ per-key `LatticeMutation` the saga emits also carries
 `AtomicBatchSize` (the total entry count of the enclosing transaction)
 and `AtomicBatchIndex` (the zero-based per-key position within the
 batch). The size is captured once on the first `Prepare` from
-`Operations.Count`, persisted on the saga grain's state alongside the
+`Entries.Count`, persisted on the saga grain's state alongside the
 existing capture-once slots, and re-stamped onto Orleans
 `RequestContext` via the ambient `LatticeAtomicBatchContext` helper at
 the head of every per-key call the saga issues - including

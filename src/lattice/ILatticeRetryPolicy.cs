@@ -13,7 +13,7 @@ namespace Orleans.Lattice;
 /// <remarks>
 /// <para>
 /// The policy contract is deliberately minimal: re-run
-/// <paramref name="operation"/> under the same ambient
+/// <c>operation</c> under the same ambient
 /// <see cref="LatticeIdempotencyContext"/> scope until it either
 /// succeeds, the policy's budget is exhausted, or the supplied
 /// <see cref="CancellationToken"/> fires. On budget exhaustion the
