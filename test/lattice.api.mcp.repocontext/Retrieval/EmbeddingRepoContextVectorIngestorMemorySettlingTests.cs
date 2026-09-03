@@ -151,6 +151,52 @@ public sealed class EmbeddingRepoContextVectorIngestorMemorySettlingTests
     }
 
     [Test]
+    public async Task A_failed_marker_write_does_not_fail_a_pass_that_embedded_successfully()
+    {
+        // The marker write is bookkeeping: the vectors are already stored and their
+        // membership recorded by the time it runs, so losing it costs one redundant
+        // re-embed and must not discard a pass that genuinely succeeded.
+        //
+        // Order of ApplyCrdtDeltaManyAsync calls in this arm: one per embedding
+        // batch (the membership write), then one for the marker. Two entries embed
+        // in a single batch, so failing the second call isolates the marker write.
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            Method = nameof(ILattice.ApplyCrdtDeltaManyAsync),
+            FailAfterMatches = 1,
+            FailFirst = 1,
+        };
+
+        var options = new RepoContextMcpHarnessOptions
+        {
+            Posture = RepoContextMcpAuthPosture.Writer,
+            ConfigureSilo = silo =>
+            {
+                silo.Services.AddSingleton(injector);
+                silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeFaultInjectingFilter>();
+            },
+        };
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
+        var keys = await SeedMemoryAsync(harness, 2, Ct);
+        var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
+
+        var embedded = await Ingestor(harness).IngestMemoryAsync(
+            RepoId, keys, Array.Empty<string>(), Ct);
+
+        var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
+        Assert.Multiple(() =>
+        {
+            Assert.That(injector.Failed, Is.EqualTo(1), "The marker write was faulted.");
+            Assert.That(embedded, Is.EqualTo(2),
+                "The pass still reports the work it actually did rather than failing outright.");
+            Assert.That(members.Contains(VectorCodec.SourceId(keys[0])), Is.True,
+                "And the embedding itself landed, which is why losing the marker is only bookkeeping.");
+        });
+    }
+
+    [Test]
     public async Task A_failed_member_probe_falls_back_to_the_markers_for_that_page()
     {
         // The memory arm's own page probe - the last of the four membership reads
@@ -203,6 +249,7 @@ public sealed class EmbeddingRepoContextVectorIngestorMemorySettlingTests
             // The scan reaches the tree through its shard root, so the fault is
             // aimed at the shard-level method the enumeration actually calls.
             Method = "GetSortedEntriesBatchAsync",
+            IncludeShardGrains = true,
             FailFirst = int.MaxValue,
         };
 

@@ -226,18 +226,34 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var embedded = await EmbedAndStoreAsync(repoId, sources, onProgress, cancellationToken)
             .ConfigureAwait(false);
 
-        if (contentlessToMark is not null)
+        // The contentless markers are the file arm's equivalent bookkeeping: losing
+        // them costs a redundant re-read of an empty file next pass, never
+        // correctness, so they must not take a successful pass down with them.
+        try
         {
-            await _writer.MarkContentlessAsync(repoId, contentlessToMark, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (contentfulToUnmark is not null)
-        {
-            foreach (var sourceId in contentfulToUnmark)
+            if (contentlessToMark is not null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                await _writer.UnmarkContentlessAsync(repoId, sourceId, cancellationToken).ConfigureAwait(false);
+                await _writer.MarkContentlessAsync(repoId, contentlessToMark, cancellationToken)
+                    .ConfigureAwait(false);
             }
+
+            if (contentfulToUnmark is not null)
+            {
+                foreach (var sourceId in contentfulToUnmark)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await _writer.UnmarkContentlessAsync(repoId, sourceId, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Repo {RepoId}: could not update the contentless markers; they are re-evaluated on the next "
+                + "reconcile and no embedding is affected.",
+                repoId);
         }
 
         if (embedded == 0 && sources.Count > 0)
@@ -584,7 +600,24 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // whole arm unwound and nothing was marked at all.
         if (landed.Count > 0)
         {
-            await _writer.MarkMemoryEmbeddedAsync(repoId, landed, cancellationToken).ConfigureAwait(false);
+            // Bookkeeping, not the work itself: the vectors are already stored and
+            // their membership recorded, so losing this write costs one redundant
+            // re-embed on a later pass and nothing else. Failing the whole run over
+            // it would discard a pass that genuinely succeeded - the same mistake,
+            // in the same code path, as every other seam guarded here.
+            try
+            {
+                await _writer.MarkMemoryEmbeddedAsync(repoId, landed, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Repo {RepoId}: could not record the embedded-key marker for {Count} memory entr(ies); "
+                    + "their vectors are stored and they will simply be re-checked on the next reconcile.",
+                    repoId,
+                    landed.Count);
+            }
         }
 
         return landed.Count;
