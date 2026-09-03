@@ -151,6 +151,46 @@ public sealed class EmbeddingRepoContextVectorIngestorMemorySettlingTests
     }
 
     [Test]
+    public async Task A_failed_member_probe_falls_back_to_the_markers_for_that_page()
+    {
+        // The memory arm's own page probe - the last of the four membership reads
+        // in this path to be guarded. It can fall back rather than skip, because
+        // the marker set is an independent source of the same evidence.
+        // The probe and the membership write both go through GetManyAsync, and the
+        // probe runs first, so failing exactly the first call isolates the probe
+        // while leaving the write that follows it healthy.
+        var injector = new LatticeTreeFaultInjector
+        {
+            TreeId = RepoContextTrees.VectorMembership,
+            Method = nameof(ILattice.GetManyAsync),
+            FailFirst = 1,
+        };
+
+        var options = new RepoContextMcpHarnessOptions
+        {
+            Posture = RepoContextMcpAuthPosture.Writer,
+            ConfigureSilo = silo =>
+            {
+                silo.Services.AddSingleton(injector);
+                silo.Services.AddSingleton<IIncomingGrainCallFilter, LatticeTreeFaultInjectingFilter>();
+            },
+        };
+
+        await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
+        var keys = await SeedMemoryAsync(harness, 2, Ct);
+
+        var embedded = await Ingestor(harness).IngestMemoryAsync(
+            RepoId, keys, Array.Empty<string>(), Ct);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(injector.Failed, Is.EqualTo(1), "The page's member probe was faulted.");
+            Assert.That(embedded, Is.EqualTo(2),
+                "The arm still completes on the marker evidence alone rather than failing the run.");
+        });
+    }
+
+    [Test]
     public async Task An_unreadable_marker_set_degrades_instead_of_failing_the_arm()
     {
         // The marker load is itself a whole-set range scan over the membership
