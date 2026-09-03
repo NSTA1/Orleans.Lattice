@@ -3112,9 +3112,12 @@ internal sealed partial class LatticeGrain(
                     }
                     // Per-shard ShardActivationRetry wrap: a single shard's
                     // cold-start seed-timeout retries only that shard, not
-                    // the whole fan-out.
-                    pass1Tasks[i] = ShardActivationRetry.RunAsync(
-                        () => shard.CountForSlotsAsync(owned, virtualShardCount, startInclusive, endExclusive));
+                    // the whole fan-out. Each shard's walk is work-bounded
+                    // (issue 1971) and driven to completion here, so the shard
+                    // is released between batches instead of being held for its
+                    // whole leaf chain.
+                    pass1Tasks[i] = DriveShardCountForSlotsAsync(
+                        shard, owned, virtualShardCount, startInclusive, endExclusive);
                 }
                 await Task.WhenAll(pass1Tasks);
             }
@@ -3192,6 +3195,27 @@ internal sealed partial class LatticeGrain(
         {
             var page = await ShardActivationRetry.RunAsync(
                 () => shard.CountBoundedAsync(cursor, endExclusive));
+            total += page.Count;
+            if (page.ResumeFromInclusive is not { } next)
+                return total;
+            cursor = next;
+        }
+    }
+
+    /// <summary>
+    /// Drives one shard's work-bounded per-slot count to completion, resuming
+    /// by key as <see cref="DriveShardCountAsync"/> does.
+    /// </summary>
+    private static async Task<int> DriveShardCountForSlotsAsync(
+        IShardRootGrain shard, int[] owned, int virtualShardCount,
+        string? startInclusive, string? endExclusive)
+    {
+        var total = 0;
+        var cursor = startInclusive;
+        while (true)
+        {
+            var page = await ShardActivationRetry.RunAsync(
+                () => shard.CountForSlotsBoundedAsync(owned, virtualShardCount, cursor, endExclusive));
             total += page.Count;
             if (page.ResumeFromInclusive is not { } next)
                 return total;
@@ -3392,8 +3416,8 @@ internal sealed partial class LatticeGrain(
                     }
                     // Per-shard ShardActivationRetry wrap: see the pass-1
                     // fan-out above for the rationale.
-                    tasks[i] = ShardActivationRetry.RunAsync(
-                        () => shard.CountForSlotsAsync(owned, virtualShardCount));
+                    tasks[i] = DriveShardCountForSlotsAsync(
+                        shard, owned, virtualShardCount, null, null);
                 }
                 await Task.WhenAll(tasks);
             }

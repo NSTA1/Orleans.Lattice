@@ -225,6 +225,8 @@ internal static class TypeAliases
     // Note "ol.scp" is NOT free - Orleans.Lattice.Scaling.ComputePressure owns
     // it, and aliases share one registry across every loaded package.
     internal const string ShardCountPage = "ol.scpg";
+    internal const string ShardAnyPage = "ol.sap";
+    internal const string ShardCountWithMovedAwayPage = "ol.scma";
 
     // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
     internal const string LeafKeyRange = "ol.lkr";
