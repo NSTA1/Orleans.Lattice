@@ -111,14 +111,25 @@ public sealed class BackupHealthMonitorActivationServiceTests
         // catch block. A TCS signals that the first attempt is complete so StopAsync is
         // not called until the retry delay is in flight (preventing cancellation before
         // the delay even starts).
+        //
+        // The TCS is completed in a finally, i.e. AFTER the throw, not before it. Setting
+        // it before the throw did not establish what the comment above claims: the test
+        // could resume and cancel while the service was still unwinding, so the run being
+        // exercised was sometimes the throw-racing-cancellation path rather than the
+        // delay-cancellation path this case is about. That path now has its own test.
         var firstAttemptThrew = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var monitorGrain = Substitute.For<ILatticeBackupHealthMonitorGrain>();
         monitorGrain.EnsureStartedAsync().Returns(_ =>
         {
-            // Signal that we are about to throw so the test can cancel via StopAsync.
-            firstAttemptThrew.TrySetResult();
-            throw new InvalidOperationException("silo not ready");
+            try
+            {
+                throw new InvalidOperationException("silo not ready");
+            }
+            finally
+            {
+                firstAttemptThrew.TrySetResult();
+            }
         });
 
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -139,6 +150,68 @@ public sealed class BackupHealthMonitorActivationServiceTests
         {
             Assert.That(executeTask.IsCompleted, Is.True);
             Assert.That(executeTask.IsFaulted, Is.False);
+        }
+    }
+
+    /// <summary>
+    /// A shutdown that lands between the grain call failing and the exception being
+    /// handled must still stop cleanly, not fault the background service.
+    /// </summary>
+    /// <remarks>
+    /// The previous handler was
+    /// <c>catch (Exception) when (!stoppingToken.IsCancellationRequested)</c>. An
+    /// exception filter is evaluated at throw time, so cancelling in that window made the
+    /// filter false and left the exception uncaught: it escaped <c>ExecuteAsync</c> and
+    /// faulted the task. That matters beyond tidiness, because
+    /// <see cref="BackgroundServiceExceptionBehavior"/> defaults to
+    /// <see cref="BackgroundServiceExceptionBehavior.StopHost"/> - so a benign "silo not
+    /// ready" arriving during shutdown could take the whole host down.
+    /// <para>
+    /// This drives that window deterministically rather than hoping to hit it: the fake
+    /// grain cancels the service's own stopping token <b>first</b> and only then throws,
+    /// which is exactly the interleaving the filter mishandled. It failed reliably against
+    /// the old handler and passes against the current one.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task ExecuteAsync_cancelled_while_the_grain_call_is_failing_returns_cleanly()
+    {
+        var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        BackupHealthMonitorActivationService? service = null;
+
+        var monitorGrain = Substitute.For<ILatticeBackupHealthMonitorGrain>();
+        monitorGrain.EnsureStartedAsync().Returns<Task>(call =>
+        {
+            // Request cancellation BEFORE throwing, so the exception is raised with the
+            // stopping token already cancelled - the exact ordering that made the old
+            // filter decline to catch. StopAsync cancels its token synchronously before
+            // its first await, so the token is already cancelled when the throw happens
+            // even though the returned task is not awaited here (awaiting it would
+            // deadlock: it waits on the very execute task this call is running inside).
+            _ = call;
+            _ = service!.StopAsync(CancellationToken.None);
+            stopping.TrySetResult();
+            throw new InvalidOperationException("silo not ready");
+        });
+
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<ILatticeBackupHealthMonitorGrain>(Arg.Any<string>())
+            .Returns(monitorGrain);
+
+        using var created = CreateService(grainFactory, enabled: true);
+        service = created;
+
+        await created.StartAsync(CancellationToken.None);
+        await stopping.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var executeTask = created.ExecuteTask;
+        if (executeTask is not null)
+        {
+            await executeTask.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.That(executeTask.IsFaulted, Is.False,
+                "A shutdown racing a retryable startup failure faulted the background service. "
+                + "With the default StopHost behaviour that takes the host down over a benign "
+                + "'not ready yet' on the way out.");
         }
     }
 }
