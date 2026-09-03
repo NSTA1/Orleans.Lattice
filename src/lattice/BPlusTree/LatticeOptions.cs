@@ -812,6 +812,51 @@ public class LatticeOptions
     public const int DefaultMaxScanRetries = 3;
 
     /// <summary>
+    /// Maximum number of leaves a single shard range-scan page fill may visit
+    /// before returning a partial page with more available. Bounds the
+    /// <em>work</em> of one grain call rather than only its output.
+    /// <para>
+    /// A leaf can cost a grain call (plus a snapshot rehydration or WAL replay
+    /// when cold) and still contribute nothing to the page, because its entries
+    /// were filtered as moved-away by an adaptive split, tombstoned and still
+    /// inside <see cref="TombstoneGracePeriod"/>, TTL-expired, or rejected by a
+    /// pushed-down predicate. Without this bound a page fill is O(leaves in
+    /// range), and since shard reads are deliberately non-reentrant that call
+    /// head-of-line-blocks every other request to the shard for its whole
+    /// duration (issue 1955).
+    /// </para>
+    /// <para>
+    /// The bound is only applied once the page holds at least one result, so a
+    /// caller can always derive its next continuation token and make forward
+    /// progress. Raising it trades shard fairness for fewer round trips;
+    /// setting it to <c>0</c> or less disables it and restores the unbounded
+    /// walk. The default is deliberately well above a dense scan's needs, so a
+    /// healthy tree never reaches it.
+    /// </para>
+    /// </summary>
+    public int MaxLeavesPerScanPage { get; set; } = DefaultMaxLeavesPerScanPage;
+
+    /// <summary>Default value for <see cref="MaxLeavesPerScanPage"/> (64 leaves).</summary>
+    public const int DefaultMaxLeavesPerScanPage = 64;
+
+    /// <summary>
+    /// Wall-clock safety net for a single shard range-scan page fill. When a
+    /// page fill has spent this long and holds at least one result, it returns
+    /// a partial page rather than continuing to hold the non-reentrant shard.
+    /// <para>
+    /// <see cref="MaxLeavesPerScanPage"/> is the primary, deterministic bound;
+    /// this exists for the case where a small number of leaves are individually
+    /// very slow, typically cold activations rehydrating large snapshots, which
+    /// a leaf count alone cannot bound. Set to <see cref="TimeSpan.Zero"/> to
+    /// disable it and rely on the leaf count alone.
+    /// </para>
+    /// </summary>
+    public TimeSpan MaxScanPageDuration { get; set; } = DefaultMaxScanPageDuration;
+
+    /// <summary>Default value for <see cref="MaxScanPageDuration"/> (5 seconds).</summary>
+    public static readonly TimeSpan DefaultMaxScanPageDuration = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// How long an open stateful cursor may remain idle before it is
     /// automatically cleaned up. On every <c>Open</c> / <c>Next</c> /
     /// <c>DeleteRangeStep</c> call, the cursor grain refreshes a grain

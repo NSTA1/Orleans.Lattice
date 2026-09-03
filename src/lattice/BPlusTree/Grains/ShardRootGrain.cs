@@ -2161,6 +2161,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2169,6 +2170,7 @@ internal sealed partial class ShardRootGrain(
             // discarded here. The optional predicate is evaluated inside the
             // leaf so non-matching values never cross the wire.
             var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
             {
@@ -2192,6 +2194,13 @@ internal sealed partial class ShardRootGrain(
                     HasMore = false,
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
+
+            // Work bound (issue 1955): stop holding this non-reentrant shard
+            // once the leaf/time budget is spent. Only ever fires with at
+            // least one key collected, so the caller can derive its next
+            // continuation and make forward progress.
+            if (budget.ShouldYield(keys.Count))
+                break;
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2249,6 +2258,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2256,6 +2266,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids transferring keys that would be
             // discarded here.
             var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken, predicate: predicate);
+            budget.RecordLeafVisited();
 
             // Walk the leaf's keys in reverse order.
             for (int i = leafKeys.Count - 1; i >= 0; i--)
@@ -2281,6 +2292,11 @@ internal sealed partial class ShardRootGrain(
                     HasMore = false,
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
+
+            // Work bound (issue 1955): see the forward variant. Only fires
+            // with at least one key collected so the caller can resume.
+            if (budget.ShouldYield(keys.Count))
+                break;
 
             var prevSibling = await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
@@ -2332,6 +2348,7 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -2343,6 +2360,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
             var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken, predicate: predicate);
+            budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
             {
@@ -2366,6 +2384,13 @@ internal sealed partial class ShardRootGrain(
                     HasMore = false,
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
+
+            // Work bound (issue 1955): stop holding this non-reentrant shard
+            // once the leaf/time budget is spent. Only ever fires with at
+            // least one entry collected, so the caller can derive its next
+            // continuation and make forward progress.
+            if (budget.ShouldYield(entries.Count))
+                break;
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2416,6 +2441,7 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -2427,6 +2453,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
             var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken, predicate: predicate);
+            budget.RecordLeafVisited();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
@@ -2451,6 +2478,11 @@ internal sealed partial class ShardRootGrain(
                     HasMore = false,
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
+
+            // Work bound (issue 1955): see the forward variant. Only fires
+            // with at least one entry collected so the caller can resume.
+            if (budget.ShouldYield(entries.Count))
+                break;
 
             var prevSibling = await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
@@ -2510,6 +2542,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         var keys = new List<string>(pageSize);
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -2517,6 +2550,7 @@ internal sealed partial class ShardRootGrain(
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
             {
@@ -2530,6 +2564,13 @@ internal sealed partial class ShardRootGrain(
 
             if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
                 return new KeysPage { Keys = keys, HasMore = false };
+
+            // Work bound (issue 1955): a slot filter rejects most keys in a
+            // post-split shard, so this walk is especially prone to visiting
+            // many leaves per page. Only fires with at least one key
+            // collected so the caller can resume.
+            if (budget.ShouldYield(keys.Count))
+                break;
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2579,6 +2620,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -2586,6 +2628,7 @@ internal sealed partial class ShardRootGrain(
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken, predicate: predicate);
+            budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
             {
@@ -2599,6 +2642,13 @@ internal sealed partial class ShardRootGrain(
 
             if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
                 return new EntriesPage { Entries = entries, HasMore = false };
+
+            // Work bound (issue 1955): a slot filter rejects most keys in a
+            // post-split shard, so this walk is especially prone to visiting
+            // many leaves per page. Only fires with at least one entry
+            // collected so the caller can resume.
+            if (budget.ShouldYield(entries.Count))
+                break;
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
