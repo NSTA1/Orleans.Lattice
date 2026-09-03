@@ -126,15 +126,96 @@ jobs:
           # Collecting failures and reporting them together keeps a green project's
           # coverage even when a sibling is broken, and still fails the run.
           failed=()
+          flaky=()
 
           runSuite() {
             local proj="$1" name="$2" label="$3" filter="$4"
+            # Clear this suite's result file first, so that if the run dies without
+            # producing one, the retry step finds nothing rather than reading a
+            # stale file and retrying the wrong thing. A crashed or hung host is
+            # exactly the case that must NOT be treated as a set of named failures.
+            rm -f "coverage/${name}/${name}-${label}.trx"
             dotnet test "$proj" --no-build --configuration Release \
               --filter "$filter" \
               --collect:"XPlat Code Coverage" \
               --results-directory "coverage/${name}" \
               --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
               --logger "trx;LogFileName=${name}-${label}.trx"
+          }
+
+          # Retry exactly the tests that failed, once. Returns 0 when the retry
+          # cleared them, non-zero when it did not or could not be attempted.
+          #
+          # Why this lane retries and the PR gate does not.
+          #
+          # This is the metrics lane: it exists to keep main's coverage report and
+          # the README badge current, and `build-and-test` in ci.yml remains the
+          # required correctness gate, running the same tests with no retries and
+          # no instrumentation. What makes THIS lane different is that it runs the
+          # whole suite under coverlet on a shared runner, which is materially
+          # slower, and that is enough to push time-sensitive machinery past
+          # internal deadlines it clears comfortably everywhere else - an Orleans
+          # reminder service that "is still initializing and it is taking a long
+          # time", a Blazor circuit, a browser relayout. Those failures say
+          # something about the runner, not about the commit, and there are forty-odd
+          # projects any of which can produce one.
+          #
+          # A whole-project rerun would be the blunt version of this and is worse on
+          # both counts: it gives every OTHER test in that project a fresh chance to
+          # flake, and it cannot tell which test was unstable. Retrying only the
+          # named failures keeps the signal - two failures of the same test is a real
+          # failure and still fails the run.
+          #
+          # The retry never silences anything: a test that only passes on the second
+          # attempt is reported as flaky, in the log, as a warning annotation, and in
+          # the job summary. Green-but-flaky is a visible state, not a hidden one.
+          retryFailed() {
+            local proj="$1" name="$2" label="$3"
+            local trx="coverage/${name}/${name}-${label}.trx"
+
+            if [ ! -f "$trx" ]; then
+              echo "::notice::No trx at ${trx}; cannot identify which tests failed, so not retrying."
+              return 1
+            fi
+
+            local filter
+            if ! filter="$(python3 .github/workflows/failed-tests-filter.py "$trx")"; then
+              echo "::notice::Could not read ${trx}; not retrying."
+              return 1
+            fi
+
+            if [ -z "$filter" ]; then
+              # The suite failed but recorded no failed test: a crash, a hang, or a
+              # build/discovery problem. Retrying blind would tell us nothing.
+              echo "::notice::${name} (${label}) failed without a named failing test; not retrying."
+              return 1
+            fi
+
+            echo "Retrying the failed tests of ${name} (${label}) once: ${filter}"
+            dotnet test "$proj" --no-build --configuration Release \
+              --filter "$filter" \
+              --collect:"XPlat Code Coverage" \
+              --results-directory "coverage/${name}" \
+              --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+              --logger "trx;LogFileName=${name}-${label}-retry.trx"
+          }
+
+          # Runs a suite and, if it fails, retries just its failures once.
+          # Records the outcome into `failed` or `flaky`.
+          runSuiteWithRetry() {
+            local proj="$1" name="$2" label="$3" filter="$4"
+
+            if runSuite "$proj" "$name" "$label" "$filter"; then
+              return 0
+            fi
+
+            if retryFailed "$proj" "$name" "$label"; then
+              echo "::warning::${name} (${label}) failed and then passed on retry - treating as FLAKY, not as a failure. It is still a defect; see the job summary."
+              flaky+=("${name} (${label})")
+              return 0
+            fi
+
+            return 1
           }
 
           for proj in "${testProjs[@]}"; do
@@ -171,10 +252,10 @@ jobs:
               # structure takes the non-Journeys fixtures and journeys-a/journeys-b
               # partition the Journeys ones by complement.
               while IFS=$'\t' read -r shard filter; do
-                runSuite "$proj" "$name" "$shard" "$filter" || ok=false
+                runSuiteWithRetry "$proj" "$name" "$shard" "$filter" || ok=false
               done < <(jq -r '.[] | [.shard, .filter] | @tsv' .github/workflows/ui-test-shards.json)
             else
-              runSuite "$proj" "$name" "all" \
+              runSuiteWithRetry "$proj" "$name" "all" \
                 "TestCategory!=Chaos&TestCategory!=Coyote" || ok=false
             fi
             if [ "$ok" != true ]; then
@@ -183,7 +264,38 @@ jobs:
             fi
             echo "::endgroup::"
           done
+
+          # Report flakes loudly even though they did not fail the run. A test that
+          # only passes on the second attempt is still a defect; the point of the
+          # retry is to stop it discarding the coverage report, not to pretend it
+          # did not happen. Writing it to the job summary makes it visible without
+          # anyone having to read the log.
+          if [ ${#flaky[@]} -gt 0 ]; then
+            {
+              echo "### Flaky suites (passed only on retry)"
+              echo
+              echo "These failed once and passed when their failing tests were retried."
+              echo "The run is green because this is the metrics lane, but each of these"
+              echo "is a real instability worth fixing."
+              echo
+              for f in "${flaky[@]}"; do
+                echo "- \`${f}\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::${#flaky[@]} suite(s) passed only on retry: ${flaky[*]}"
+          fi
+
           if [ ${#failed[@]} -gt 0 ]; then
+            {
+              echo "### Failed suites"
+              echo
+              echo "These failed twice - once on the first run and again when only their"
+              echo "failing tests were retried - so they are not being treated as flakes."
+              echo
+              for f in "${failed[@]}"; do
+                echo "- \`${f}\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::Coverage failed for ${#failed[@]} project(s): ${failed[*]}"
             exit 1
           fi

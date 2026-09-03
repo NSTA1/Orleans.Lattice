@@ -335,17 +335,21 @@ internal static class JourneyShell
     }
 
     /// <summary>
-    /// Opens the first overflow menu on the page and returns its bounding rectangle
-    /// together with the viewport width, having first proved the menu genuinely
+    /// Opens the overflow menu behind <paramref name="toggle"/> and returns its bounding
+    /// rectangle together with the viewport width, having first proved the menu genuinely
     /// rendered with items in it.
     /// </summary>
+    /// <remarks>
+    /// Takes the toggle its caller already resolved rather than re-resolving and
+    /// re-asserting one. Re-asserting was the defect: it meant the caller waited for the
+    /// toggle, then this method waited for it again, so the two waits straddled a window
+    /// the toggle could vanish in - which is exactly what kept happening.
+    /// </remarks>
     /// <param name="page">The page to act on.</param>
+    /// <param name="toggle">The overflow trigger to open, already known to be visible.</param>
     /// <returns>The opened menu's geometry.</returns>
-    internal static async Task<OverflowGeometry> OpenOverflowMenuAsync(IPage page)
+    private static async Task<OverflowGeometry> OpenOverflowMenuAsync(IPage page, ILocator toggle)
     {
-        var toggle = page.Locator(OverflowToggleSelector).First;
-        await Assertions.Expect(toggle).ToBeVisibleAsync();
-
         var menuId = await toggle.GetAttributeAsync("aria-controls");
         Assert.That(menuId, Is.Not.Null.And.Not.Empty,
             "The overflow trigger declares no aria-controls, so it names no menu and a "
@@ -380,19 +384,25 @@ internal static class JourneyShell
     /// this width.
     /// </summary>
     /// <remarks>
-    /// This exists so "does this width overflow?" and "open its menu" are one decision
-    /// rather than two.
+    /// The thing being measured genuinely flickers, so the measurement tolerates flicker
+    /// instead of asserting it away.
     /// <para>
-    /// Asking separately - count or wait for the toggle, then call
-    /// <see cref="OpenOverflowMenuAsync"/>, which waits for it again - is a
-    /// time-of-check/time-of-use race, and a real one rather than a theoretical one: the
-    /// toggle is rendered only while its strip reports <c>HasOverflow</c>, and
+    /// Whether a strip overflows is decided by a client-side layout measurement that
+    /// converges asynchronously after a viewport resize, and
     /// <see cref="OverflowToggleSelector"/> matches EVERY strip's toggle, so the answer
-    /// depends on the rail and the detail strip alike. The window between the two waits
-    /// was enough for a strip to lose a tab, stop overflowing, and take the toggle with
-    /// it, after which the second wait timed out on an element the first had genuinely
-    /// seen. Settling both strips first closes the window this races in; asking once
-    /// removes the window itself.
+    /// depends on the rail and the detail strip together. While that settles, a toggle can
+    /// appear and then be withdrawn again. A single wait therefore proves only that a
+    /// toggle existed at one instant, which is why "wait for it, then open it" kept
+    /// failing on the second step against an element the first step had genuinely seen.
+    /// </para>
+    /// <para>
+    /// So each attempt resolves the toggle and opens it as one unit, and a toggle that
+    /// disappears mid-open simply costs an attempt rather than failing the test. The
+    /// attempts are bounded: if the layout never settles enough to complete one open, that
+    /// is a real defect and is reported as one rather than retried forever. Returning
+    /// <see langword="null"/> means no toggle was offered at all, which is the ordinary
+    /// answer for a width that does not overflow - callers keep an anti-vacuity assertion
+    /// so a run where nothing ever overflowed still fails.
     /// </para>
     /// </remarks>
     /// <param name="page">The page to act on.</param>
@@ -402,32 +412,72 @@ internal static class JourneyShell
         IPage page,
         float settleMs = 5_000)
     {
-        var toggle = page.Locator(OverflowToggleSelector).First;
+        const int Attempts = 4;
 
+        for (var attempt = 1; attempt <= Attempts; attempt++)
+        {
+            var toggle = page.Locator(OverflowToggleSelector).First;
+
+            if (!await BecomesVisibleAsync(toggle, settleMs))
+            {
+                // No toggle at all: this width does not overflow.
+                return null;
+            }
+
+            try
+            {
+                var geometry = await OpenOverflowMenuAsync(page, toggle);
+
+                // Close it again, so the next width is measured from the same resting
+                // state. The toggle is still the one that was just opened.
+                await toggle.ClickAsync();
+                return geometry;
+            }
+            catch (PlaywrightException) when (attempt < Attempts)
+            {
+                // The toggle or its menu went away while it was being opened - the layout
+                // was still converging. Re-resolve and try again; if the strip has since
+                // stopped overflowing, the visibility check above will say so and this
+                // width is correctly reported as not overflowing.
+            }
+            catch (TimeoutException) when (attempt < Attempts)
+            {
+            }
+        }
+
+        Assert.Fail(
+            $"The overflow menu could not be opened in {Attempts} attempts: a toggle kept "
+            + "appearing and then disappearing before its menu could be measured. That is no "
+            + "longer the ordinary post-resize settle - it means the strip's overflow layout "
+            + "is not converging.");
+        return null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="locator"/> becomes visible within
+    /// <paramref name="timeoutMs"/>, rather than whether it happens to exist right now.
+    /// </summary>
+    private static async Task<bool> BecomesVisibleAsync(ILocator locator, float timeoutMs)
+    {
         try
         {
-            await toggle.WaitForAsync(new LocatorWaitForOptions
+            await locator.WaitForAsync(new LocatorWaitForOptions
             {
                 State = WaitForSelectorState.Visible,
-                Timeout = settleMs,
+                Timeout = timeoutMs,
             });
+            return true;
         }
         catch (PlaywrightException)
         {
-            return null;
+            return false;
         }
         catch (TimeoutException)
         {
             // Playwright surfaces a wait timeout as System.TimeoutException here rather
             // than as a PlaywrightException, so both have to be caught. This is the
             // ordinary answer, not an error: nothing overflows at this width.
-            return null;
+            return false;
         }
-
-        var geometry = await OpenOverflowMenuAsync(page);
-
-        // Close it again, so the next width is measured from the same resting state.
-        await toggle.ClickAsync();
-        return geometry;
     }
 }

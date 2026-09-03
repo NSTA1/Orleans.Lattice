@@ -43,8 +43,27 @@ internal sealed class BackupHealthMonitorActivationService(
                     .ConfigureAwait(false);
                 return;
             }
-            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            catch (Exception ex)
             {
+                // Deliberately NOT `catch (...) when (!stoppingToken.IsCancellationRequested)`.
+                //
+                // An exception filter is evaluated when the exception is thrown, so a
+                // shutdown that lands between the grain call failing and the filter
+                // running made the filter false and left the exception UNCAUGHT. It then
+                // escaped ExecuteAsync and faulted the BackgroundService task - and
+                // because BackgroundServiceExceptionBehavior defaults to StopHost, a
+                // benign "silo not ready" during shutdown could take the host down with
+                // it. The window is small but real: it turned up as an intermittent
+                // failure of the cancellation test on a loaded CI runner.
+                //
+                // Catch unconditionally and decide afterwards. Once cancellation has been
+                // requested the call was going to be abandoned anyway, so whatever it
+                // threw on the way out is not a fault - it is just the shape of stopping.
+                if (stoppingToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 logger.LogDebug(ex, "Backup health monitor not yet startable; retrying in {Delay}.", delay);
                 try
                 {
