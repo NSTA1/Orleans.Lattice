@@ -23,13 +23,18 @@ Push-Location $PSScriptRoot
 try {
     & (Join-Path $PSScriptRoot 'stage.ps1')
 
+    # Clear previous output so a page that is no longer generated cannot linger.
+    # CI always builds from a fresh checkout, so without this a local build can
+    # disagree with CI and serve stale pages that no longer exist.
+    $site = Join-Path $PSScriptRoot '_site'
+    if (Test-Path $site) { Remove-Item $site -Recurse -Force }
+
     $output = & docfx build (Join-Path $PSScriptRoot 'docfx.json') --logLevel warning 2>&1
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { throw "docfx build failed with exit code $LASTEXITCODE" }
 
     # DocFX resolves inbound README.md links to index.html but emits README.html,
     # so the landing page is published under both names.
-    $site = Join-Path $PSScriptRoot '_site'
     $readme = Join-Path $site 'README.html'
     if (Test-Path $readme) { Copy-Item $readme (Join-Path $site 'index.html') -Force }
 
