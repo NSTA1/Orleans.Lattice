@@ -196,7 +196,7 @@ It does **not** control the leaf state row size and does **not** control the WAL
 | Large values (>2 KB) | Table Storage, DynamoDB | 32 to 128 | Snapshot blob cap dominates |
 | Large values | Blob Storage | 256 to 1,024 | Snapshot blob stays under 10 MB |
 
-> **Applying a new `MaxLeafKeys` / `MaxInternalChildren`:** call [`ResizeAsync`](api.md#resize) on the live tree (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize)), or pre-seed the pin on a new tree via `ILatticeRegistry.RegisterAsync`. See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree). To grow the physical shard count, call [`ReshardAsync`](api.md#resize) (online, grow-only).
+> **Applying a new `MaxLeafKeys` / `MaxInternalChildren`:** call [`ResizeAsync`](api.md#resize-and-reshard) on the live tree (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize-and-reshard)), or pre-seed the pin on a new tree via `ILatticeRegistry.RegisterAsync`. See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree). To grow the physical shard count, call [`ReshardAsync`](api.md#resize-and-reshard) (online, grow-only).
 
 ## Internal node sizing
 
@@ -264,11 +264,11 @@ MaxLeafKeys = floor((921,600 - 200) / (45 + 100 + 1,024)) = floor(921,400 / 1,16
 SafeMaxLeafKeys = floor(788 * 0.75) = 591
 ```
 
-> **Applying the result:** to change `MaxLeafKeys` / `MaxInternalChildren` on a live tree, call [`ResizeAsync`](api.md#resize) (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize)). To grow the physical shard count, call [`ReshardAsync`](api.md#resize) (online, grow-only). For a brand-new tree, either call these on the empty tree (fast path - no coordinator) or pre-register the pin via `ILatticeRegistry.RegisterAsync`. See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree) and [Online Reshard](online-reshard.md).
+> **Applying the result:** to change `MaxLeafKeys` / `MaxInternalChildren` on a live tree, call [`ResizeAsync`](api.md#resize-and-reshard) (online, LWW-safe, undoable via [`UndoResizeAsync`](api.md#resize-and-reshard)). To grow the physical shard count, call [`ReshardAsync`](api.md#resize-and-reshard) (online, grow-only). For a brand-new tree, either call these on the empty tree (fast path - no coordinator) or pre-register the pin via `ILatticeRegistry.RegisterAsync`. See [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree) and [Online Reshard](online-reshard.md).
 
 ## Measuring retained storage at runtime
 
-The three sizing surfaces above are *design-time* models. To read the **exact retained on-wire bytes** a tree is costing right now - not an entry-count estimate - call [`ILattice.GetStorageUsageAsync`](api.md#storage-usage). It fans out across the tree's shards and WAL partitions and returns a `TreeStorageUsageReport` with `WalRetainedBytes`, `SnapshotBytes`, `LeafStateBytes`, and their `TotalBytes` sum. A cluster-wide roll-up across every registered tree is available via [`ILatticeAdmin.GetTotalStorageUsageAsync`](api.md#latticeadmin).
+The three sizing surfaces above are *design-time* models. To read the **exact retained on-wire bytes** a tree is costing right now - not an entry-count estimate - call [`ILattice.GetStorageUsageAsync`](api.md#storage-usage). It fans out across the tree's shards and WAL partitions and returns a `TreeStorageUsageReport` with `WalRetainedBytes`, `SnapshotBytes`, `LeafStateBytes`, and their `TotalBytes` sum. A cluster-wide roll-up across every registered tree is available via [`ILatticeAdmin.GetTotalStorageUsageAsync`](api.md#ilatticeadmin).
 
 Reports are coalesced behind a short TTL cache (`LatticeOptions.StorageUsageCacheTtl`, default 10 s) so repeated dashboard scrapes stay cheap. `Partial = true` marks a report as a **lower bound** rather than an exact figure, for either of two reasons: a WAL provider that does not implement byte accounting (`IWalStorageProvider.GetRetainedByteSizeAsync` returns the `-1` "unsupported" sentinel), or a shard root / WAL partition that failed or timed out during the fan-out. A surface that did not answer contributes **nothing** - not a zero - because summing its zeroes would understate the tree while still presenting the total as complete. Consumers should render a partial figure as "n/a" rather than a misleading number. One failing surface never aborts the report, and the next sample after the surface recovers is exact again.
 
@@ -316,6 +316,6 @@ WAL retention is normally bounded by consumer cursors and an optional wall-clock
 4. **Size the snapshot blob against `MaxLeafKeys * average row size`.** This is the surface most workloads need to verify against the storage-provider per-row limit.
 5. **Defaults (`MaxLeafKeys = 128`, `MaxInternalChildren = 128`) are safe on every supported provider** for values up to a few KB.
 6. **Internal nodes rarely need tuning** for storage limits - only for tree depth versus fan-out trade-offs.
-7. **Apply sizing changes online** via [`ResizeAsync`](api.md#resize) (fan-out) or [`ReshardAsync`](api.md#resize) (shard count). Both run without taking the tree offline and update the registry pin atomically.
+7. **Apply sizing changes online** via [`ResizeAsync`](api.md#resize-and-reshard) (fan-out) or [`ReshardAsync`](api.md#resize-and-reshard) (shard count). Both run without taking the tree offline and update the registry pin atomically.
 
 To change sizing on an existing tree, see [Tree Sizing - Resizing an Existing Tree](tree-sizing.md#resizing-an-existing-tree).

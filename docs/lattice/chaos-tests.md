@@ -391,7 +391,7 @@ The reader's `GetManyAsync` may observe `OperationCanceledException` at the roun
 
 ### Companion observability
 
-See [Metrics](metrics.md#saga-coordinator-lifecycle).
+See [Metrics](metrics.md#saga--coordinator--lifecycle).
 
 ## Test 6
 
@@ -477,7 +477,7 @@ invariant** for `SetManyAtomicAsync`: a saga authored on one site and
 shipped via the WAL replication transport to two peer sites must be
 observed all-or-nothing on every receiver, even when the inter-site
 delivery topology is partitioned and healed mid-workload. It is the
-cross-cluster sibling of [Test 5](#test-5--atomic-write-reader-isolation-atomicvisibilitychaostests)
+cross-cluster sibling of [Test 5](#test-5---atomic-write-reader-isolation-atomicvisibilitychaostests)
 and exercises the same WAL-metadata reader-isolation primitive
 through the receiver-side prepared/terminal apply seam
 (`IReplicationApplyGrain.ApplyPreparedSetAsync` /
@@ -512,7 +512,7 @@ The chaos pump's per-edge loop catches and queues transient grain exceptions ont
 
 ### Companion observability
 
-Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga-coordinator-lifecycle)). On the receiver side the apply seam emits `orleans.lattice.replication.apply.duration` tagged with the source cluster id, the merge mode, and the apply outcome.
+Saga writes emit `orleans.lattice.atomic_write.duration` / `orleans.lattice.atomic_write.batch_size` on the authoring site (see [Metrics](metrics.md#saga--coordinator--lifecycle)). On the receiver side the apply seam emits `orleans.lattice.replication.apply.duration` tagged with the source cluster id, the merge mode, and the apply outcome.
 
 ## Test 9
 

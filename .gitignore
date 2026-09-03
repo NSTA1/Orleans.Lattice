@@ -397,6 +397,12 @@ benchmark/history/grafana-data/
 # PR bodies
 .scratch/
 
+# Documentation site build artifacts. docs-site/ holds the DocFX tooling
+# (docfx.json, the staging script, the template override) which is tracked;
+# the staged corpus copy and the rendered site are generated on every build.
+docs-site/src/
+docs-site/_site/
+
 # Phase A diagnostic reports
 #
 # Markdown reports (one per run) are tracked: they are short, sortable by

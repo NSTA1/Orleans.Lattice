@@ -1014,7 +1014,7 @@ This option can be changed freely at any time.
 
 ### `StorageUsageCacheTtl`
 
-Cache lifetime for `ILattice.GetStorageUsageAsync` reports (default: 10 seconds). The per-tree storage-usage aggregator fans out across the tree's shards and WAL partitions to assemble a byte-accurate `TreeStorageUsageReport`; this TTL coalesces repeat callers (dashboard scrapes, the background poller, and direct API calls) so a single fan-out serves a whole window. Set to `TimeSpan.Zero` to disable caching - every call fans out fresh. See [Tree Storage](tree-storage.md#runtime-measurement).
+Cache lifetime for `ILattice.GetStorageUsageAsync` reports (default: 10 seconds). The per-tree storage-usage aggregator fans out across the tree's shards and WAL partitions to assemble a byte-accurate `TreeStorageUsageReport`; this TTL coalesces repeat callers (dashboard scrapes, the background poller, and direct API calls) so a single fan-out serves a whole window. Set to `TimeSpan.Zero` to disable caching - every call fans out fresh. See [Tree Storage](tree-storage.md#measuring-retained-storage-at-runtime).
 
 ```csharp verify
 // Hold storage reports for 30 s to cut dashboard fan-out cost

@@ -1,0 +1,84 @@
+name: Docs
+
+# Builds the documentation site from the markdown corpus and publishes it to
+# GitHub Pages.
+#
+# Triggers, and why:
+#   pull_request      Build only, never deploy. DocFX reports a broken relative
+#                     link as InvalidFileLink and a broken in-page anchor as
+#                     InvalidBookmark, so building the whole corpus is a
+#                     link-integrity gate. -MaxWarnings 0 makes it fail closed.
+#   push (lattice-v*) Deploy. Packages ship in coordinated waves anchored on the
+#                     core package, so the core tag fires once per wave, from the
+#                     released commit. Hanging this off every per-package tag
+#                     would rebuild and redeploy the whole site up to 39 times
+#                     for a single wave, and would still publish the other
+#                     packages' unreleased docs, since a package tag points at
+#                     main at that moment.
+#   workflow_dispatch Manual deploy, so a docs-only fix does not have to wait for
+#                     a release.
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'docs-site/**'
+      - 'samples/**'
+      - 'README.md'
+      - 'FEATURES.md'
+      - 'PACKAGES.md'
+      - 'reference-architecture.md'
+      - '.github/workflows/docs.yml'
+  push:
+    tags:
+      - 'lattice-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never let two deploys race; queue them instead of cancelling, so a release
+# deploy cannot be dropped. Pull-request builds are cancellable.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install DocFX
+        run: dotnet tool install --global docfx --version 2.78.5
+
+      # -MaxWarnings 0 fails the build on any broken link or anchor. Keep it at
+      # zero: the corpus is clean, so any warning here is a regression.
+      - name: Build site (fails on any broken link or anchor)
+        run: pwsh -File docs-site/build.ps1 -MaxWarnings 0
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/_site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
