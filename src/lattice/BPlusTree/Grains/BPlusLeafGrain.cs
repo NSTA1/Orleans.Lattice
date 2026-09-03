@@ -69,7 +69,7 @@ internal sealed partial class BPlusLeafGrain(
             // hash.
             if (_digestCoalescingWindowMs > 0)
             {
-                await FlushPendingDigestPublishAsync();
+                await FlushPendingDigestPublishAsync(cancellationToken);
             }
             await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
 
@@ -95,7 +95,7 @@ internal sealed partial class BPlusLeafGrain(
             // deactivation. Crash deactivations bypass this hook by design; the
             // first-real-frontier barrier on the checkpoint path already left a
             // durable floor for any leaf that had checkpointed.
-            await FlushDurableMaterialiserFrontierAsync();
+            await FlushDurableMaterialiserFrontierAsync(cancellationToken);
         }
         catch
         {
