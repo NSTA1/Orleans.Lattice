@@ -93,7 +93,8 @@ internal static class ReplicationToolMappings
         }
 
         if (Enum.TryParse<LatticeMergeMode>(mode, ignoreCase: true, out var parsed)
-            && Enum.IsDefined(parsed))
+            && Enum.IsDefined(parsed)
+            && string.Equals(parsed.ToString(), mode, StringComparison.OrdinalIgnoreCase))
         {
             return parsed;
         }
