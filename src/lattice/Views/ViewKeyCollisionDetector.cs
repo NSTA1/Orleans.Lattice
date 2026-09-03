@@ -31,7 +31,16 @@ public static class ViewKeyCollisionDetector
 
         // Track the first source key seen for each view key; on observing a
         // second distinct source key, record the view key as colliding (once).
-        var firstSource = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Presize the first-source map to the batch size when the caller passed
+        // a materialised collection (the maintainer always passes a List): a
+        // filter / re-key drain records one first-source entry per attributable
+        // write, so the map grows to the batch size and a capacity hint removes
+        // its grow / rehash chain on the unconditional per-drain call. The
+        // colliding list and set stay unpresized: a well-configured injective
+        // re-key never collides, so on the common path they never allocate a
+        // backing store (an empty List / HashSet defers it).
+        var capacity = writes.TryGetNonEnumeratedCount(out var count) ? count : 0;
+        var firstSource = new Dictionary<string, string>(capacity, StringComparer.Ordinal);
         var colliding = new List<string>();
         var collidingSet = new HashSet<string>(StringComparer.Ordinal);
 

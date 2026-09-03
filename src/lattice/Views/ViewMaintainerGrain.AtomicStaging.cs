@@ -479,9 +479,15 @@ internal sealed partial class ViewMaintainerGrain
                 }
             }
 
-            var upserts = new List<KeyValuePair<string, byte[]>>();
-            var deletes = new List<string>();
-            foreach (var write in ViewWriteCoalescer.Coalesce(writes))
+            // Coalesce once by view key (LWW on the source HLC), then partition
+            // the survivors into upserts and deletes. The two lists partition the
+            // coalesced survivors, so each is bounded by the coalesced count;
+            // presize both to remove their grow chains on this per-completed-batch
+            // path.
+            var coalesced = ViewWriteCoalescer.Coalesce(writes);
+            var upserts = new List<KeyValuePair<string, byte[]>>(coalesced.Count);
+            var deletes = new List<string>(coalesced.Count);
+            foreach (var write in coalesced)
             {
                 switch (write.Kind)
                 {

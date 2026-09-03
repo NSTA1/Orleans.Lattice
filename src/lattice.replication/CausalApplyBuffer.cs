@@ -42,6 +42,15 @@ internal sealed class CausalApplyBuffer
     private long _totalBytes;
 
     /// <summary>
+    /// Shared empty eviction list handed back on the common no-eviction path
+    /// of <see cref="TryAdd"/>. Callers observe the out parameter only when the
+    /// outcome is <see cref="AddOutcome.AddedWithEviction"/> (which always
+    /// carries a freshly allocated list), so this instance is only ever read as
+    /// empty and must be treated as read-only.
+    /// </summary>
+    private static readonly List<WalRecord> EmptyEvicted = new();
+
+    /// <summary>
     /// Creates a buffer that publishes its observability instruments
     /// tagged with the supplied tree id and a constant shard tag value
     /// of <c>"0"</c>.
@@ -107,7 +116,15 @@ internal sealed class CausalApplyBuffer
     /// </summary>
     public AddOutcome TryAdd(WalRecord entry, int maxEntries, long maxBytes, out List<WalRecord> evicted)
     {
-        evicted = new List<WalRecord>();
+        // Steady state never evicts: the buffer holds well under its caps, so
+        // the eviction list stays empty. Hand back a shared empty sentinel on
+        // that common path and materialise a real list only when the eviction
+        // loop actually displaces an entry, removing the per-add list allocation
+        // from the hot receiver path. The sole caller reads this out parameter
+        // only when the outcome is AddedWithEviction (which implies a real list),
+        // so the shared instance is never mutated or observed non-empty.
+        evicted = EmptyEvicted;
+        List<WalRecord>? displaced = null;
         var size = EstimateSize(entry);
         var key = EntryKey.From(entry);
         long evictedBytes = 0;
@@ -128,11 +145,16 @@ internal sealed class CausalApplyBuffer
                     || (size <= maxBytes && _totalBytes + size > maxBytes))
                    && _entries.First is { } head)
             {
-                evicted.Add(head.Value.Entry);
+                (displaced ??= new List<WalRecord>()).Add(head.Value.Entry);
                 evictedBytes += head.Value.SizeBytes;
                 _index.Remove(EntryKey.From(head.Value.Entry));
                 _totalBytes -= head.Value.SizeBytes;
                 _entries.RemoveFirst();
+            }
+
+            if (displaced is not null)
+            {
+                evicted = displaced;
             }
 
             var buffered = new BufferedEntry(entry, size, DateTime.UtcNow.Ticks);
