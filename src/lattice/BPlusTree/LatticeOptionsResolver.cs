@@ -572,6 +572,8 @@ internal sealed class LatticeOptionsResolver(
             MaxScanRetries = baseOptions.MaxScanRetries,
             MaxLeavesPerScanPage = baseOptions.MaxLeavesPerScanPage,
             MaxScanPageDuration = baseOptions.MaxScanPageDuration,
+            BackgroundDrainLeavesPerPass = baseOptions.BackgroundDrainLeavesPerPass,
+            BackgroundDrainMaxDuration = baseOptions.BackgroundDrainMaxDuration,
             CursorIdleTtl = baseOptions.CursorIdleTtl,
             AtomicWriteRetention = baseOptions.AtomicWriteRetention,
             VersionVectorRetention = baseOptions.VersionVectorRetention,

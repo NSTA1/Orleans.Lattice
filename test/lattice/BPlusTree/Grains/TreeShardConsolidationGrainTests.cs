@@ -44,6 +44,7 @@ public partial class TreeShardConsolidationGrainTests
         public required TreeShardConsolidationGrain Grain { get; init; }
         public required FakePersistentState<TreeShardConsolidationState> State { get; init; }
         public required ILatticeRegistry Registry { get; init; }
+        public required IGrainFactory Factory { get; init; }
         public required IShardRootGrain Donor { get; init; }
         public required IShardRootGrain Survivor { get; init; }
         public required CallLog Log { get; init; }
@@ -171,6 +172,7 @@ public partial class TreeShardConsolidationGrainTests
             Grain = grain,
             State = state,
             Registry = registry,
+            Factory = grainFactory,
             Donor = donor,
             Survivor = survivor,
             Log = log,
@@ -194,6 +196,7 @@ public partial class TreeShardConsolidationGrainTests
         if (leafEntries is null || leafEntries.Count == 0)
         {
             donor.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
+            donor.GetLeafIdForKeyAsync(Arg.Any<string?>()).Returns(Task.FromResult<GrainId?>(null));
             return;
         }
 
@@ -202,6 +205,11 @@ public partial class TreeShardConsolidationGrainTests
             leafIds[i] = GrainId.Create("leaf", $"donor-leaf-{i}");
 
         donor.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafIds[0]));
+
+        // The bounded drain resumes by KEY, so the rig models the donor's
+        // key-routed descent: leaf i owns [k{i}, k{i+1}), so re-descending onto
+        // leaf i-1's exclusive high bound lands on leaf i.
+        donor.GetLeafIdForKeyAsync(null).Returns(Task.FromResult<GrainId?>(leafIds[0]));
 
         var leaves = new IBPlusLeafGrain[leafEntries.Count];
         for (var i = 0; i < leafEntries.Count; i++)
@@ -220,6 +228,13 @@ public partial class TreeShardConsolidationGrainTests
                 });
             leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(
                 index + 1 < leafIds.Length ? leafIds[index + 1] : null));
+            leaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+            {
+                LowKeyInclusive = DonorLeafResumeKey(index),
+                HighKeyExclusive = index + 1 < leafIds.Length ? DonorLeafResumeKey(index + 1) : null,
+            }));
+            donor.GetLeafIdForKeyAsync(DonorLeafResumeKey(index))
+                .Returns(Task.FromResult<GrainId?>(leafIds[index]));
             leaves[i] = leaf;
         }
 
@@ -231,6 +246,13 @@ public partial class TreeShardConsolidationGrainTests
             return leaves[0];
         });
     }
+
+    /// <summary>
+    /// The key the bounded drain resumes at when it parks before the donor leaf
+    /// at <paramref name="leafIndex"/>. Mirrors the rig's key layout: leaf
+    /// <c>i</c> owns <c>[k{i}, k{i+1})</c>.
+    /// </summary>
+    private static string DonorLeafResumeKey(int leafIndex) => $"k{leafIndex:D4}";
 
     private static Dictionary<string, LwwValue<byte[]>> Entries(params string[] keys)
     {
@@ -439,7 +461,7 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(h.State.State.LeavesScanned, Is.EqualTo(2));
         Assert.That(h.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Drain),
             "The fold stays in Drain until the sweep is exhausted.");
-        Assert.That(h.State.State.DrainCursorLeafId, Is.Not.Null,
+        Assert.That(h.State.State.DrainCursorKey, Is.Not.Null,
             "A yielded pass must persist where to resume so an interruption never restarts the sweep.");
     }
 

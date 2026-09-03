@@ -57,11 +57,20 @@ internal sealed class TreeShardConsolidationState
     [Id(7)] public ShardMap? OriginalShardMap { get; set; }
 
     /// <summary>
-    /// Resume cursor for the bounded drain: the leaf whose entries the next
-    /// drain pass starts from, or <see langword="null"/> to start at the
-    /// donor's leftmost leaf. Lets a thousand-leaf donor degrade into steady
-    /// background work rather than one unbounded stall, and lets an
-    /// interrupted drain resume instead of restarting.
+    /// Superseded by <see cref="DrainCursorKey"/> and no longer written.
+    /// Retained because the alias is wire format: state persisted by an older
+    /// build can still carry a leaf id here.
+    /// <para>
+    /// A leaf grain id is not a safe resume position. Orleans grains are
+    /// virtual, so an id persisted across a pass boundary can activate a fresh,
+    /// empty grain whose sibling pointer is <see langword="null"/>, and the
+    /// resumed sweep would conclude it had reached the end of the donor's chain
+    /// and stop - silently leaving folded-slot entries un-drained. On load a
+    /// non-null value here is therefore discarded and the sweep restarts from
+    /// the donor's leftmost leaf, which costs a re-walk and nothing else
+    /// because every entry is forwarded under its original HLC and so
+    /// re-draining is a fixed point under LWW merge (issue 1973).
+    /// </para>
     /// </summary>
     [Id(8)] public GrainId? DrainCursorLeafId { get; set; }
 
@@ -107,6 +116,25 @@ internal sealed class TreeShardConsolidationState
 
     /// <summary>UTC ticks of the most recent persisted phase or drain advance.</summary>
     [Id(15)] public long UpdatedAtTicks { get; set; }
+
+    /// <summary>
+    /// Resume position for the bounded drain: the key the next drain pass
+    /// re-descends onto, or <see langword="null"/> to start at the donor's
+    /// leftmost leaf. Lets a thousand-leaf donor degrade into steady background
+    /// work rather than one unbounded stall, and lets an interrupted drain
+    /// resume instead of restarting.
+    /// <para>
+    /// A <b>key</b>, never a leaf grain id: a key can always be re-descended
+    /// onto whichever leaf now owns it, whereas a virtual leaf id can activate
+    /// empty across a pass boundary and truncate the resumed sweep. Replaces
+    /// <see cref="DrainCursorLeafId"/> (issue 1973).
+    /// </para>
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(16)] public string? DrainCursorKey { get; set; }
 }
 
 /// <summary>

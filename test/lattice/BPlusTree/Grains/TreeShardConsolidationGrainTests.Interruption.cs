@@ -79,7 +79,7 @@ public partial class TreeShardConsolidationGrainTests
             options: options);
 
         await first.Grain.DrainAsync();
-        Assert.That(first.State.State.DrainCursorLeafId, Is.Not.Null);
+        Assert.That(first.State.State.DrainCursorKey, Is.Not.Null);
         Assert.That(first.State.State.LeavesScanned, Is.EqualTo(1));
 
         var resumed = Reactivate(first);
@@ -88,6 +88,74 @@ public partial class TreeShardConsolidationGrainTests
         AssertFoldLanded(resumed);
         Assert.That(resumed.State.State.LeavesScanned, Is.GreaterThanOrEqualTo(3),
             "The resumed sweep must still visit the leaves the interrupted pass had not reached.");
+    }
+
+    /// <summary>
+    /// The definition-of-done case for this grain: the donor's chain is
+    /// structurally changed between two drain passes. The leaf the cursor points
+    /// into splits, and the resumed sweep must still forward both halves rather
+    /// than truncate at the old chain's shape (issue 1973).
+    /// </summary>
+    [Test]
+    public async Task Interruption_mid_drain_after_the_cursor_leaf_splits_still_drains_both_halves()
+    {
+        var options = new LatticeOptions { ConsolidationDrainLeavesPerPass = 1 };
+        var h = CreateGrain(
+            existingState: InFlightState(ShardConsolidationPhase.Drain),
+            leafEntries: [Entries("a"), Entries("b"), Entries("c")],
+            options: options);
+
+        await h.Grain.DrainAsync();
+        var cursor = h.State.State.DrainCursorKey;
+        Assert.That(cursor, Is.Not.Null);
+
+        // The donor leaf the cursor names splits: its right half is grafted in
+        // ahead of the next leaf and holds an entry no earlier pass could see.
+        var rightHalf = GrainId.Create("leaf", "donor-leaf-1-right");
+        var rightHalfLeaf = Substitute.For<IBPlusLeafGrain>();
+        h.Factory.GetGrain<IBPlusLeafGrain>(rightHalf).Returns(rightHalfLeaf);
+        rightHalfLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(_ => Task.FromResult(new StateDelta
+            {
+                Entries = Entries("b-right"),
+                Version = new VersionVector(),
+            }));
+
+        var leaf1 = (await h.Donor.GetLeafIdForKeyAsync(cursor))!.Value;
+        var leaf2 = (await h.Donor.GetLeafIdForKeyAsync(DonorLeafResumeKey(2)))!.Value;
+        rightHalfLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(leaf2));
+        rightHalfLeaf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        {
+            LowKeyInclusive = "k0001m",
+            HighKeyExclusive = DonorLeafResumeKey(2),
+        }));
+
+        var leftHalf = h.Factory.GetGrain<IBPlusLeafGrain>(leaf1);
+        leftHalf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(rightHalf));
+        leftHalf.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        {
+            LowKeyInclusive = DonorLeafResumeKey(1),
+            HighKeyExclusive = "k0001m",
+        }));
+        h.Donor.GetLeafIdForKeyAsync("k0001m").Returns(Task.FromResult<GrainId?>(rightHalf));
+
+        bool complete;
+        var passes = 0;
+        do
+        {
+            complete = await h.Grain.DrainAsync();
+            passes++;
+        }
+        while (!complete && passes < 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.True);
+            Assert.That(h.State.State.LeavesScanned, Is.EqualTo(4),
+                "the half grafted in between two passes must be visited, so the sweep sees four leaves not three");
+            Assert.That(h.State.State.EntriesDrained, Is.EqualTo(4),
+                "every folding-slot entry must be forwarded, including the one on the new half");
+        });
     }
 
     [Test]

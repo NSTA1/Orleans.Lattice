@@ -64,6 +64,49 @@ internal struct LeafWalkBudget
         return new LeafWalkBudget(options.MaxLeavesPerScanPage, options.MaxScanPageDuration);
     }
 
+    /// <summary>
+    /// Builds the budget a background coordinator's drain pass runs under - the
+    /// split drain, the cross-tree merge drain, and the online snapshot copy.
+    /// <para>
+    /// These walks are bounded for a different reason from the read paths: they
+    /// hold their own non-reentrant coordinator rather than a shard root, so
+    /// the cost of an unbounded pass is a coordinator that cannot report
+    /// progress or honour a cancellation until the whole shard is swept. The
+    /// mechanism is nonetheless identical, which is why they share this type
+    /// (issue 1973).
+    /// </para>
+    /// </summary>
+    internal static LeafWalkBudget ForBackgroundDrain(LatticeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new LeafWalkBudget(options.BackgroundDrainLeavesPerPass, options.BackgroundDrainMaxDuration);
+    }
+
+    /// <summary>
+    /// Builds the budget for a background pass whose leaf cap is a
+    /// coordinator-specific option rather than the shared background default -
+    /// the tombstone compactor's <see cref="LatticeOptions.CompactionLeafBatchSize"/>
+    /// and the shard consolidator's
+    /// <see cref="LatticeOptions.ConsolidationDrainLeavesPerPass"/>. Both keep
+    /// their own long-standing knob and inherit the shared wall-clock net.
+    /// </summary>
+    internal static LeafWalkBudget ForBackgroundDrain(int maxLeaves, LatticeOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new LeafWalkBudget(maxLeaves, options.BackgroundDrainMaxDuration);
+    }
+
+    /// <summary>
+    /// A budget that never yields, for a walk whose whole-walk atomicity is
+    /// load-bearing and which therefore runs to the end of the chain in one
+    /// turn. Expressing that as an explicit unbounded budget - rather than as a
+    /// second, un-budgeted copy of the walk - keeps every leaf-chain walk on
+    /// the one implementation, so the intent is visible at the call site and a
+    /// site cannot drift into being unbounded by omission (issue 1973). Pair it
+    /// with <see cref="AtomicLeafWalk"/> so the hold is attributable.
+    /// </summary>
+    internal static LeafWalkBudget Unbounded() => new(0, null);
+
     /// <summary>Leaves visited so far in this turn.</summary>
     internal readonly int LeavesVisited => _leavesVisited;
 

@@ -1,113 +1,36 @@
 using NSubstitute;
-using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
-using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Regression coverage for issue 1970: the cross-batch resume cursor
-/// (<c>NextLeafIdInShard</c>) is a leaf <see cref="GrainId"/>, and Orleans
-/// grains are virtual - so a cursor naming a leaf whose state no longer exists
-/// activates a fresh, EMPTY grain rather than failing.
+/// Regression coverage for issues 1970 and 1973: the compactor's cross-batch
+/// resume position must be a <b>key</b>, not a leaf <see cref="GrainId"/>.
 /// <para>
-/// That empty grain reports a null sibling, so an unvalidated resume walks zero
-/// leaves, concludes it has reached the end of the shard, and reports
-/// <c>done=true</c> with the shard's remainder never compacted. The dangerous
-/// part is that this is indistinguishable from a clean completion: no
-/// exception, no metric, no log line - it simply under-compacts forever.
+/// Orleans grains are virtual, so a cursor naming a leaf whose state no longer
+/// exists activates a fresh, EMPTY grain rather than failing. That empty grain
+/// reports a null sibling, so a walk resumed from an id walks zero leaves,
+/// concludes it has reached the end of the shard, and reports <c>done=true</c>
+/// with the shard's remainder never compacted. The dangerous part is that this
+/// is indistinguishable from a clean completion: no exception, no metric, no
+/// log line - it simply under-compacts forever.
 /// </para>
 /// <para>
-/// No current code path reclaims a leaf: the sibling chain is grow-only
-/// (splits and bulk-load graft insert; nothing unlinks), and leaf state is
-/// cleared only by <c>ShardRootGrain.PurgeAsync</c>, which by contract runs
-/// against an already-offline tree. These tests therefore pin a property that
-/// is currently unreachable, so that a future change which does reclaim leaves
-/// fails here loudly instead of silently under-compacting in production.
+/// Issue 1970 defended against that with a liveness probe on the id. Issue 1973
+/// removes the failure mode instead: the cursor is now a key, which the shard
+/// root re-descends onto whichever leaf currently owns it. These tests pin the
+/// resulting properties - that a resumed walk lands where the key says rather
+/// than where an id used to point, that it does not re-walk from the start, and
+/// that a structural change to the chain between two turns still leaves the
+/// shard fully compacted.
 /// </para>
 /// </summary>
 public partial class TombstoneCompactionGrainTests
 {
-    /// <summary>
-    /// Builds a shard leaf chain in which one leaf is <b>reclaimed</b>: Orleans
-    /// hands back a fresh activation for that identity whose state is empty, so
-    /// it reports no tree id and no sibling.
-    /// <para>
-    /// The reclaimed leaf is stubbed on first registration rather than by
-    /// re-stubbing a live one, so there is exactly one return configuration per
-    /// call and the test cannot be confounded by substitute override semantics.
-    /// </para>
-    /// </summary>
-    private static void SetupShardWithReclaimedLeaf(
-        IGrainFactory grainFactory,
-        int shardIndex,
-        GrainId reclaimedLeaf,
-        params GrainId[] leafIds)
-    {
-        var shardRoot = Substitute.For<IShardRootGrain>();
-        grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{shardIndex}").Returns(shardRoot);
-        shardRoot.GetDirtyLeavesSinceLastCompactionAsync()
-            .Returns(Task.FromResult(new DirtyLeavesSnapshot
-            {
-                DirtyLeaves = [],
-                ObservedAdvance = default,
-            }));
-        shardRoot.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(leafIds[0]));
-
-        for (int i = 0; i < leafIds.Length; i++)
-        {
-            var leafMock = Substitute.For<IBPlusLeafGrain>();
-            grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
-            leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
-
-            var isReclaimed = leafIds[i] == reclaimedLeaf;
-            leafMock.GetTreeIdAsync().Returns(
-                Task.FromResult<string?>(isReclaimed ? null : TreeId));
-
-            var nextId = i + 1 < leafIds.Length ? (GrainId?)leafIds[i + 1] : null;
-            leafMock.GetNextSiblingAsync().Returns(
-                Task.FromResult(isReclaimed ? null : nextId));
-        }
-    }
-
-    /// <summary>
-    /// The core property: a resume cursor pointing at a reclaimed leaf must not
-    /// silently end the shard. Falling back to a full re-walk is safe because
-    /// per-leaf compaction is idempotent - the same trade the dirty-set resume
-    /// path already makes for a cursor it cannot locate.
-    /// </summary>
     [Test]
-    public async Task ProcessNextShard_resuming_from_a_reclaimed_leaf_still_compacts_the_shard()
-    {
-        var (grain, state, _, grainFactory, _) = CreateGrain();
-        var leaf0 = GrainId.Create("leaf", Guid.NewGuid().ToString());
-        var leaf1 = GrainId.Create("leaf", Guid.NewGuid().ToString());
-        var leaf2 = GrainId.Create("leaf", Guid.NewGuid().ToString());
-        SetupShardWithReclaimedLeaf(grainFactory, 0, reclaimedLeaf: leaf1, leaf0, leaf1, leaf2);
-
-        await grain.BeginCompactionStateAsync(startFromShard: 0);
-
-        // A previous batch stopped at leaf1, which has since been reclaimed.
-        state.State.NextLeafIdInShard = leaf1.ToString();
-
-        await grain.ProcessNextShardAsync();
-
-        // The walk must not have accepted the dead cursor and stopped. Falling
-        // back to the leftmost leaf re-walks the chain, so the surviving leaves
-        // are compacted rather than skipped.
-        await grainFactory.GetGrain<IBPlusLeafGrain>(leaf0).Received()
-            .CompactTombstonesAsync(Arg.Any<TimeSpan>());
-    }
-
-    /// <summary>
-    /// A live leaf must still be resumed from directly. Without this the fix
-    /// would "pass" by simply restarting every batch, throwing away the cursor
-    /// and turning a bounded walk into repeated full re-walks.
-    /// </summary>
-    [Test]
-    public async Task ProcessNextShard_resuming_from_a_live_leaf_does_not_rewalk_from_the_start()
+    public async Task ProcessNextShard_resuming_from_a_key_cursor_does_not_rewalk_from_the_start()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         var leaf0 = GrainId.Create("leaf", Guid.NewGuid().ToString());
@@ -116,7 +39,7 @@ public partial class TombstoneCompactionGrainTests
         SetupShardWithLeaves(grainFactory, 0, leaf0, leaf1, leaf2);
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
-        state.State.NextLeafIdInShard = leaf1.ToString();
+        state.State.NextLeafKeyInShard = LeafResumeKey(1);
 
         await grain.ProcessNextShardAsync();
 
@@ -129,30 +52,76 @@ public partial class TombstoneCompactionGrainTests
     }
 
     /// <summary>
-    /// A cursor probe that throws is a reachable-but-faulting leaf, not a
-    /// reclaimed one - an empty virtual activation returns null cleanly. It
-    /// must therefore be treated as live and left to the walk's existing
-    /// per-leaf retry and skip handling, so a transient blip does not restart
-    /// the whole shard on every batch.
+    /// The property the key cursor exists for. The leaf a previous batch parked
+    /// before is reclaimed between turns, so its identity now activates empty
+    /// with a null sibling. Because the resume position is a key, the shard root
+    /// re-descends it onto the leaf that now owns that key and the walk
+    /// continues - where an id cursor would have handed the walk the dead
+    /// activation and ended the shard silently.
     /// </summary>
     [Test]
-    public async Task ProcessNextShard_treats_a_faulting_cursor_probe_as_live()
+    public async Task ProcessNextShard_resuming_after_the_cursor_leaf_is_reclaimed_still_compacts_the_rest_of_the_shard()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var leaf0 = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var reclaimed = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var replacement = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        var leaf2 = GrainId.Create("leaf", Guid.NewGuid().ToString());
+
+        SetupShardWithLeaves(grainFactory, 0, leaf0, replacement, leaf2);
+
+        // The identity a previous batch would have persisted as an id cursor is
+        // now an empty virtual activation: no tree id, no sibling. The key
+        // cursor never consults it, which is the whole point.
+        var dead = Substitute.For<IBPlusLeafGrain>();
+        grainFactory.GetGrain<IBPlusLeafGrain>(reclaimed).Returns(dead);
+        dead.GetTreeIdAsync().Returns(Task.FromResult<string?>(null));
+        dead.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
+        dead.GetKeyRangeAsync().Returns(Task.FromResult(default(LeafKeyRange)));
+
+        await grain.BeginCompactionStateAsync(startFromShard: 0);
+        state.State.NextLeafKeyInShard = LeafResumeKey(1);
+
+        await grain.ProcessNextShardAsync();
+
+        await dead.DidNotReceive().CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        await grainFactory.GetGrain<IBPlusLeafGrain>(replacement).Received(1)
+            .CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        await grainFactory.GetGrain<IBPlusLeafGrain>(leaf2).Received(1)
+            .CompactTombstonesAsync(Arg.Any<TimeSpan>());
+
+        Assert.That(state.State.NextShardIndex, Is.EqualTo(1),
+            "the shard must be reported complete only after its remaining leaves were visited");
+        Assert.That(state.State.NextLeafKeyInShard, Is.Null);
+    }
+
+    /// <summary>
+    /// A leaf-id cursor persisted by an older build must not be trusted as a
+    /// key. It is discarded and the shard restarts from its leftmost leaf, which
+    /// costs a re-walk and nothing else because per-leaf compaction is
+    /// idempotent (issue 1973).
+    /// </summary>
+    [Test]
+    public async Task ProcessNextShard_discards_a_legacy_leaf_id_cursor_and_restarts_the_shard()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         var leaf0 = GrainId.Create("leaf", Guid.NewGuid().ToString());
         var leaf1 = GrainId.Create("leaf", Guid.NewGuid().ToString());
         SetupShardWithLeaves(grainFactory, 0, leaf0, leaf1);
 
-        var faulting = grainFactory.GetGrain<IBPlusLeafGrain>(leaf1);
-        faulting.GetTreeIdAsync().Throws(new InvalidOperationException("transient"));
-
         await grain.BeginCompactionStateAsync(startFromShard: 0);
+
+        // State written by a build that persisted the cursor as a leaf id.
         state.State.NextLeafIdInShard = leaf1.ToString();
+        state.State.NextLeafKeyInShard = null;
 
         await grain.ProcessNextShardAsync();
 
-        await grainFactory.GetGrain<IBPlusLeafGrain>(leaf0).DidNotReceive()
+        await grainFactory.GetGrain<IBPlusLeafGrain>(leaf0).Received(1)
             .CompactTombstonesAsync(Arg.Any<TimeSpan>());
-        await faulting.Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        await grainFactory.GetGrain<IBPlusLeafGrain>(leaf1).Received(1)
+            .CompactTombstonesAsync(Arg.Any<TimeSpan>());
+        Assert.That(state.State.NextLeafIdInShard, Is.Null,
+            "the superseded leaf-id cursor must be cleared so it cannot be re-read");
     }
 }

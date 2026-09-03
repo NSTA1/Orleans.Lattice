@@ -12,8 +12,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="LatticeOptions.CompactionLeafBatchSize"/> is snapshotted at pass
 /// start, that mid-pass option changes do not reshape an in-flight pass,
 /// that values below <see cref="LatticeOptions.MinCompactionLeafBatchSize"/>
-/// are clamped, and that the in-shard cursor (NextLeafIdInShard) is persisted
-/// between batches so progress survives silo crashes the same way the
+/// are clamped, and that the in-shard key cursor (NextLeafKeyInShard) is
+/// persisted between batches so progress survives silo crashes the same way the
 /// shard cursor does.
 /// </summary>
 public partial class TombstoneCompactionGrainTests
@@ -86,19 +86,19 @@ public partial class TombstoneCompactionGrainTests
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
 
-        // Tick 1: visits leaf0, leaf1 -> cursor parks at leaf2.
+        // Tick 1: visits leaf0, leaf1 -> cursor parks at leaf2's key.
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(0),
             "shard cursor must not advance until the shard's leaf walk completes");
-        Assert.That(state.State.NextLeafIdInShard, Is.EqualTo(leaf2.ToString()));
+        Assert.That(state.State.NextLeafKeyInShard, Is.EqualTo(LeafResumeKey(2)));
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf0).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf1).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf2).DidNotReceive().CompactTombstonesAsync(Arg.Any<TimeSpan>());
 
-        // Tick 2: visits leaf2, leaf3 -> cursor parks at leaf4.
+        // Tick 2: visits leaf2, leaf3 -> cursor parks at leaf4's key.
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
-        Assert.That(state.State.NextLeafIdInShard, Is.EqualTo(leaf4.ToString()));
+        Assert.That(state.State.NextLeafKeyInShard, Is.EqualTo(LeafResumeKey(4)));
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf2).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf3).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
 
@@ -106,7 +106,7 @@ public partial class TombstoneCompactionGrainTests
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(1),
             "shard cursor must advance after the leaf walk completes");
-        Assert.That(state.State.NextLeafIdInShard, Is.Null);
+        Assert.That(state.State.NextLeafKeyInShard, Is.Null);
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf4).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
     }
 
@@ -118,14 +118,14 @@ public partial class TombstoneCompactionGrainTests
         var leaf2 = GrainId.Create("leaf", Guid.NewGuid().ToString());
 
         // Simulate a silo restart mid-shard: InProgress=true, NextShardIndex=0,
-        // NextLeafIdInShard=leaf1 (i.e. the previous activation completed
+        // NextLeafKeyInShard=leaf1's key (i.e. the previous activation completed
         // leaf0 and parked at leaf1 before crashing).
         var existingState = new FakePersistentState<TombstoneCompactionState>();
         existingState.State.InProgress = true;
         existingState.State.NextShardIndex = 0;
         existingState.State.PhysicalTreeId = TreeId;
         existingState.State.PhysicalShardIndices = new[] { 0, 1 };
-        existingState.State.NextLeafIdInShard = leaf1.ToString();
+        existingState.State.NextLeafKeyInShard = LeafResumeKey(1);
 
         var options = new LatticeOptions
         {
@@ -144,7 +144,7 @@ public partial class TombstoneCompactionGrainTests
         await grain.BeginCompactionStateAsync(startFromShard: state.State.NextShardIndex);
         // The cursor must survive Begin when startFromShard matches the
         // persisted NextShardIndex (the keepalive-fired resume path).
-        Assert.That(state.State.NextLeafIdInShard, Is.EqualTo(leaf1.ToString()),
+        Assert.That(state.State.NextLeafKeyInShard, Is.EqualTo(LeafResumeKey(1)),
             "cursor must be preserved across the resume call");
 
         await grain.ProcessNextShardAsync();
@@ -155,6 +155,6 @@ public partial class TombstoneCompactionGrainTests
         await grainFactory.GetGrain<IBPlusLeafGrain>(leaf2).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
 
         Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
-        Assert.That(state.State.NextLeafIdInShard, Is.Null);
+        Assert.That(state.State.NextLeafKeyInShard, Is.Null);
     }
 }

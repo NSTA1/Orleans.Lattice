@@ -132,10 +132,12 @@ internal sealed class TreeMergeGrain(
         var prevTargetPhysicalTreeId = state.State.TargetPhysicalTreeId;
         var prevSourcePhysicalShards = state.State.SourcePhysicalShards;
         var prevComplete = state.State.Complete;
+        var prevDrainCursor = state.State.DrainCursorKey;
 
         state.State.InProgress = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        state.State.DrainCursorKey = null;
         state.State.SourceTreeId = sourceTreeId;
         state.State.SourceShardCount = sourceShardCount;
         state.State.SourcePhysicalTreeId = sourcePhysicalTreeId;
@@ -157,6 +159,7 @@ internal sealed class TreeMergeGrain(
             state.State.TargetPhysicalTreeId = prevTargetPhysicalTreeId;
             state.State.SourcePhysicalShards = prevSourcePhysicalShards;
             state.State.Complete = prevComplete;
+            state.State.DrainCursorKey = prevDrainCursor;
             throw;
         }
     }
@@ -280,8 +283,13 @@ internal sealed class TreeMergeGrain(
             // shard while disk still pointed at this one.
             var prevNextShardIndex = state.State.NextShardIndex;
             var prevShardRetries = state.State.ShardRetries;
+            var prevDrainCursor = state.State.DrainCursorKey;
             state.State.NextShardIndex++;
             state.State.ShardRetries = 0;
+            // Each shard owns its own sweep, so the cursor never carries across
+            // a shard advance - a stale key would re-descend into the wrong
+            // shard's keyspace.
+            state.State.DrainCursorKey = null;
             try
             {
                 await state.WriteStateAsync();
@@ -290,6 +298,7 @@ internal sealed class TreeMergeGrain(
             {
                 state.State.NextShardIndex = prevNextShardIndex;
                 state.State.ShardRetries = prevShardRetries;
+                state.State.DrainCursorKey = prevDrainCursor;
                 throw;
             }
             return;
@@ -319,17 +328,48 @@ internal sealed class TreeMergeGrain(
 
         try
         {
-            await MergeShardAsync(shardIndex);
+            var cursorBefore = state.State.DrainCursorKey;
+            var (sweepComplete, resumeFrom) = await MergeShardAsync(shardIndex);
 
-            // Snapshot the two fields the success-advance mutates. A
+            if (!sweepComplete)
+            {
+                // A bounded pass that yielded. Persist the resume position and
+                // stay on this shard; the next tick continues from the key.
+                //
+                // The retry budget is reset only when the cursor actually moved.
+                // A partial pass that advanced the cursor is forward progress,
+                // not a failed attempt, and burning budget for it would poison a
+                // large but perfectly healthy shard after two passes. A pass
+                // that somehow yielded without moving the cursor keeps the
+                // increment, so a genuinely stuck shard still reaches the cap.
+                var madeProgress = !string.Equals(resumeFrom, cursorBefore, StringComparison.Ordinal);
+                var prevRetriesPartial = state.State.ShardRetries;
+                state.State.DrainCursorKey = resumeFrom;
+                if (madeProgress) state.State.ShardRetries = 0;
+                try
+                {
+                    await state.WriteStateAsync();
+                }
+                catch
+                {
+                    state.State.DrainCursorKey = cursorBefore;
+                    state.State.ShardRetries = prevRetriesPartial;
+                    throw;
+                }
+                return;
+            }
+
+            // Snapshot the fields the success-advance mutates. A
             // failing persist here would otherwise advance the in-memory
             // shard cursor past a shard whose drain disk doesn't yet
             // know was complete - a reactivation would then re-drain
             // it (safe, LWW-idempotent on payloads, but burns budget).
             var prevNextShardIndexSuccess = state.State.NextShardIndex;
             var prevShardRetriesSuccess = state.State.ShardRetries;
+            var prevDrainCursorSuccess = state.State.DrainCursorKey;
             state.State.NextShardIndex++;
             state.State.ShardRetries = 0;
+            state.State.DrainCursorKey = null;
             try
             {
                 await state.WriteStateAsync();
@@ -338,6 +378,7 @@ internal sealed class TreeMergeGrain(
             {
                 state.State.NextShardIndex = prevNextShardIndexSuccess;
                 state.State.ShardRetries = prevShardRetriesSuccess;
+                state.State.DrainCursorKey = prevDrainCursorSuccess;
                 throw;
             }
         }
@@ -389,19 +430,53 @@ internal sealed class TreeMergeGrain(
     }
 
     /// <summary>
-    /// Drains all entries (including tombstones) from the source shard's leaf chain,
+    /// Drains entries (including tombstones) from the source shard's leaf chain,
     /// streaming each leaf's delta to the target shards before loading the next
     /// leaf. Streaming (rather than buffering the entire shard) bounds peak memory
     /// for shards holding millions of keys (audit bug #4).
+    /// <para>
+    /// <b>Work-bounded and resumable</b> (issue 1973). One call visits at most
+    /// <see cref="LatticeOptions.BackgroundDrainLeavesPerPass"/> leaves and then
+    /// returns the key the next pass must re-descend onto, so merging a
+    /// thousand-leaf shard is steady background work rather than one unbounded
+    /// turn that leaves this coordinator unable to report progress or complete.
+    /// </para>
+    /// <para>
+    /// <b>What a pass boundary makes observable.</b> Nothing on the target that
+    /// a leaf boundary did not already. This drain has never been atomic: it
+    /// merges each leaf's delta into the target shards as it goes, so a reader
+    /// of the target has always been able to observe some source keys merged
+    /// and others not. Every entry is forwarded under its original HLC, so both
+    /// a re-drained leaf and an interleaved concurrent write resolve to the same
+    /// LWW fixed point. What a bound adds is that the partial state is now
+    /// durable across a crash instead of restarting the shard, which strictly
+    /// reduces the work an interruption costs.
+    /// </para>
+    /// <para>
+    /// <b>What it does not change.</b> The merge neither freezes the source nor
+    /// shadow-forwards its writes - the source tree is unmodified by contract -
+    /// so a write landing on a region the drain has already passed is not
+    /// carried across. That is pre-existing and inherent to the documented
+    /// "eventually convergent (LWW)" guarantee rather than to the work bound:
+    /// the drain already advanced a shard at a time across timer ticks, so a
+    /// write behind the drain position was already missed at a shard boundary.
+    /// Bounding subdivides that same boundary; it does not introduce a window
+    /// the operation did not already have. A merge that must not miss
+    /// concurrent writes needs a source-side barrier, which this operation does
+    /// not offer.
+    /// </para>
     /// </summary>
-    private async Task MergeShardAsync(int sourceShardIndex)
+    /// <returns>
+    /// Whether the source shard's whole leaf chain has been swept, and the key
+    /// the next pass resumes from when it has not.
+    /// </returns>
+    private async Task<(bool SweepComplete, string? ResumeFromInclusive)> MergeShardAsync(int sourceShardIndex)
     {
         var sourceTreeId = state.State.SourceTreeId!;
         var sourcePhysicalTreeId = state.State.SourcePhysicalTreeId ?? sourceTreeId;
         var targetPhysicalTreeId = state.State.TargetPhysicalTreeId ?? TargetTreeId;
         var sourceShardKey = $"{sourcePhysicalTreeId}/{sourceShardIndex}";
         var sourceShard = grainFactory.GetGrain<IShardRootGrain>(sourceShardKey);
-        var leafId = await sourceShard.GetLeftmostLeafIdAsync();
 
         // Resolve the target tree's shard map (falling back to the default
         // identity map when the tree has no custom map persisted).
@@ -413,9 +488,15 @@ internal sealed class TreeMergeGrain(
         // Walk the source leaf chain, flushing each leaf's delta through the
         // target shard map before loading the next leaf.
         var emptyVector = new VersionVector();
-        while (leafId is not null)
+        var walk = await BoundedLeafWalk.StartAsync(
+            grainFactory,
+            sourceShard,
+            state.State.DrainCursorKey,
+            LeafWalkBudget.ForBackgroundDrain(targetResolvedOpts));
+
+        while (walk.HasLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+            var leaf = walk.CurrentLeaf;
             var delta = await leaf.GetDeltaSinceAsync(emptyVector);
 
             if (delta.Entries.Count > 0)
@@ -444,8 +525,10 @@ internal sealed class TreeMergeGrain(
                 await Task.WhenAll(tasks);
             }
 
-            leafId = await leaf.GetNextSiblingAsync();
+            if (!await walk.MoveNextAsync()) break;
         }
+
+        return (walk.Completed, walk.ResumeFromInclusive);
     }
 
     internal async Task CompleteMergeAsync()
@@ -465,11 +548,13 @@ internal sealed class TreeMergeGrain(
         var prevComplete = state.State.Complete;
         var prevNextShardIndex = state.State.NextShardIndex;
         var prevShardRetries = state.State.ShardRetries;
+        var prevDrainCursorComplete = state.State.DrainCursorKey;
 
         state.State.InProgress = false;
         state.State.Complete = true;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
+        state.State.DrainCursorKey = null;
         try
         {
             await state.WriteStateAsync();
@@ -480,6 +565,7 @@ internal sealed class TreeMergeGrain(
             state.State.Complete = prevComplete;
             state.State.NextShardIndex = prevNextShardIndex;
             state.State.ShardRetries = prevShardRetries;
+            state.State.DrainCursorKey = prevDrainCursorComplete;
             throw;
         }
 

@@ -117,20 +117,24 @@ public partial class TombstoneCompactionGrainTests
 
         await grain.BeginCompactionStateAsync(startFromShard: 0);
 
-        // Tick 1: visits dirty0, dirty1 -> cursor parks at dirty2 in
+        // Tick 1: visits dirty0, dirty1 -> cursor parks at index 2 in
         // the persisted dirty-leaves snapshot.
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(0));
-        Assert.That(state.State.NextLeafIdInShard, Is.EqualTo(dirty2.ToString()));
+        Assert.That(state.State.CurrentShardDirtyIndex, Is.EqualTo(2));
+        Assert.That(state.State.NextLeafKeyInShard, Is.Null,
+            "the fast path resumes by list index, not by key");
         Assert.That(state.State.CurrentShardDirtyLeaves, Is.Not.Null);
         Assert.That(state.State.CurrentShardDirtyLeaves!.Length, Is.EqualTo(3));
+        await grainFactory.GetGrain<IBPlusLeafGrain>(dirty2).DidNotReceive().CompactTombstonesAsync(Arg.Any<TimeSpan>());
         await shardRoot.DidNotReceive().ClearDirtyLeavesUpToAsync(Arg.Any<HybridLogicalClock>());
 
         // Tick 2: visits dirty2 -> shard advances, snapshot cleared,
         // watermark drained.
         await grain.ProcessNextShardAsync();
         Assert.That(state.State.NextShardIndex, Is.EqualTo(1));
-        Assert.That(state.State.NextLeafIdInShard, Is.Null);
+        Assert.That(state.State.CurrentShardDirtyIndex, Is.EqualTo(0));
+        Assert.That(state.State.NextLeafKeyInShard, Is.Null);
         Assert.That(state.State.CurrentShardDirtyLeaves, Is.Null);
         await grainFactory.GetGrain<IBPlusLeafGrain>(dirty2).Received(1).CompactTombstonesAsync(Arg.Any<TimeSpan>());
         await shardRoot.Received(1).ClearDirtyLeavesUpToAsync(advance);

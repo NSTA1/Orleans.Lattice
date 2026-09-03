@@ -270,7 +270,7 @@ internal sealed class TreeShardConsolidationGrain(
         state.State.SurvivorShardIndex = survivorShardIndex;
         state.State.DonorSlots = new List<int>(plan.DonorSlots);
         state.State.OriginalShardMap = currentMap;
-        state.State.DrainCursorLeafId = null;
+        state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
         state.State.EntriesDrained = 0;
         state.State.LeavesScanned = 0;
@@ -465,7 +465,8 @@ internal sealed class TreeShardConsolidationGrain(
     /// </summary>
     internal async Task<bool> DrainAsync()
     {
-        var sweepComplete = await DrainPassAsync(Options.ConsolidationDrainLeavesPerPass);
+        var sweepComplete = await DrainPassAsync(
+            LeafWalkBudget.ForBackgroundDrain(Options.ConsolidationDrainLeavesPerPass, Options));
         if (!sweepComplete) return false;
 
         await AdvancePhaseAsync(ShardConsolidationPhase.Swap);
@@ -514,13 +515,14 @@ internal sealed class TreeShardConsolidationGrain(
         await donor.MarkLeavesMovedAwayAsync(slots, vsc);
         await donor.EnterRejectPhaseAsync();
 
-        // Authoritative final sweep over the now-frozen donor. Unbounded by
-        // the per-pass leaf cap on purpose: the donor's folded slots can no
-        // longer change, and leaving the freeze window open across many timer
-        // ticks would be a real availability cost for no correctness gain.
-        state.State.DrainCursorLeafId = null;
+        // Authoritative final sweep over the now-frozen donor. Unbounded on
+        // purpose: the donor's folded slots can no longer change, and leaving
+        // the freeze window open across many timer ticks would be a real
+        // availability cost for no correctness gain. See
+        // DrainToEndAtomicallyAsync.
+        state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
-        await DrainPassAsync(int.MaxValue);
+        await DrainToEndAtomicallyAsync("ConsolidationSwapFinalDrain");
 
         // Lift the survivor's seal only now that its copy is authoritative.
         var survivor = await GetSurvivorAsync();
@@ -562,9 +564,9 @@ internal sealed class TreeShardConsolidationGrain(
     /// </summary>
     internal async Task FinaliseAsync()
     {
-        state.State.DrainCursorLeafId = null;
+        state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
-        await DrainPassAsync(int.MaxValue);
+        await DrainToEndAtomicallyAsync("ConsolidationFinaliseFinalDrain");
 
         var donor = await GetDonorAsync();
         await donor.CompleteSplitAsync();
@@ -575,7 +577,7 @@ internal sealed class TreeShardConsolidationGrain(
         state.State.Cancelled = false;
         state.State.CancelRequested = false;
         state.State.Phase = ShardConsolidationPhase.None;
-        state.State.DrainCursorLeafId = null;
+        state.State.DrainCursorKey = null;
         state.State.UpdatedAtTicks = Clock.GetUtcNow().UtcTicks;
         try
         {
@@ -623,7 +625,7 @@ internal sealed class TreeShardConsolidationGrain(
         state.State.Cancelled = true;
         state.State.CancelRequested = false;
         state.State.Phase = ShardConsolidationPhase.None;
-        state.State.DrainCursorLeafId = null;
+        state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
         state.State.UpdatedAtTicks = Clock.GetUtcNow().UtcTicks;
         try
@@ -645,9 +647,9 @@ internal sealed class TreeShardConsolidationGrain(
 
     /// <summary>
     /// Copies the donor's entries for the folding slots onto the survivor,
-    /// visiting at most <paramref name="maxLeaves"/> donor leaves and resuming
-    /// from the persisted cursor. Returns <see langword="true"/> when the
-    /// donor's whole leaf chain has been swept.
+    /// visiting at most the leaves <paramref name="budget"/> allows and
+    /// resuming from the persisted key cursor. Returns <see langword="true"/>
+    /// when the donor's whole leaf chain has been swept.
     /// <para>
     /// <b>Allocation.</b> The per-entry path allocates nothing: the batch
     /// dictionary is created once per pass at the configured capacity and
@@ -662,18 +664,53 @@ internal sealed class TreeShardConsolidationGrain(
     /// re-draining a leaf - after a crash, a cursor reset, or the
     /// authoritative final sweep - is a fixed point under LWW merge.
     /// </para>
+    /// <para>
+    /// <b>What a pass boundary makes observable.</b> Nothing new. The bounded
+    /// drain runs while the routing map still points every folding slot at the
+    /// donor, the donor keeps serving reads and writes, and its hot-path
+    /// shadow-forward mirrors accepted writes onto the survivor. The survivor's
+    /// copy only becomes authoritative in <see cref="SwapAsync"/>, after the
+    /// donor is sealed and frozen and an unbounded final sweep has run. So a
+    /// yield here lengthens the pre-freeze window without changing what any
+    /// reader can see (issue 1973).
+    /// </para>
     /// </summary>
-    private async Task<bool> DrainPassAsync(int maxLeaves)
+    private async Task<bool> DrainPassAsync(LeafWalkBudget budget)
     {
         if (state.State.DrainSweepComplete) return true;
 
+        // Discard a leaf-id cursor left by an older build and restart the
+        // sweep. Re-draining is a fixed point under LWW merge, so the cost is a
+        // re-walk; trusting the id would risk a resumed sweep ending early
+        // against a leaf that activated empty.
+        var prevLegacyCursor = state.State.DrainCursorLeafId;
+        if (prevLegacyCursor is not null)
+        {
+            state.State.DrainCursorLeafId = null;
+            state.State.DrainCursorKey = null;
+        }
+
         var donor = await GetDonorAsync();
 
-        var leafId = state.State.DrainCursorLeafId ?? await donor.GetLeftmostLeafIdAsync();
-        if (leafId is null)
+        var walk = await BoundedLeafWalk.StartAsync(
+            grainFactory, donor, state.State.DrainCursorKey, budget);
+        if (!walk.HasLeaf)
         {
+            var prevCursorOnEmpty = state.State.DrainCursorKey;
+            var prevSweepOnEmpty = state.State.DrainSweepComplete;
+            state.State.DrainCursorKey = null;
             state.State.DrainSweepComplete = true;
-            await PersistDrainProgressAsync();
+            try
+            {
+                await PersistDrainProgressAsync();
+            }
+            catch
+            {
+                state.State.DrainCursorKey = prevCursorOnEmpty;
+                state.State.DrainSweepComplete = prevSweepOnEmpty;
+                state.State.DrainCursorLeafId = prevLegacyCursor;
+                throw;
+            }
             return true;
         }
 
@@ -687,13 +724,11 @@ internal sealed class TreeShardConsolidationGrain(
         var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
         var sinceVersion = new VersionVector();
 
-        var leavesVisited = 0;
         var entriesForwarded = 0L;
-        var sweepComplete = false;
 
-        while (leafId is not null && leavesVisited < maxLeaves)
+        while (walk.HasLeaf)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+            var leaf = walk.CurrentLeaf;
 
             // Slot filtering is pushed into the leaf so only folding-slot
             // entries are serialised onto the response - the donor's other
@@ -710,31 +745,71 @@ internal sealed class TreeShardConsolidationGrain(
                 }
             }
 
-            leavesVisited++;
-
-            var next = await leaf.GetNextSiblingAsync();
-            if (next is null)
-            {
-                sweepComplete = true;
-                leafId = null;
-                break;
-            }
-            leafId = next;
+            if (!await walk.MoveNextAsync()) break;
         }
 
+        // Flush before the cursor is persisted, so the recorded position is
+        // never ahead of the entries the survivor has accepted. A cursor past
+        // an unflushed batch would drop those entries permanently: the next
+        // pass resumes beyond them and no later sweep re-reads them.
         if (batch.Count > 0)
         {
             entriesForwarded += batch.Count;
             await survivor.MergeManyAsync(batch, isCrossShardMigration: true);
         }
 
-        state.State.DrainCursorLeafId = leafId;
-        state.State.DrainSweepComplete = sweepComplete;
-        state.State.EntriesDrained += entriesForwarded;
-        state.State.LeavesScanned += leavesVisited;
-        await PersistDrainProgressAsync();
+        // Snapshot every progress field before mutating it, so a failing
+        // persist leaves the activation observably equal to disk. Without this
+        // the in-memory cursor would sit ahead of the persisted one: this
+        // activation would resume past leaves storage still owes, which is
+        // exactly the silent truncation a key cursor exists to prevent.
+        var prevCursorKey = state.State.DrainCursorKey;
+        var prevSweepComplete = state.State.DrainSweepComplete;
+        var prevEntriesDrained = state.State.EntriesDrained;
+        var prevLeavesScanned = state.State.LeavesScanned;
 
-        return sweepComplete;
+        state.State.DrainCursorKey = walk.ResumeFromInclusive;
+        state.State.DrainSweepComplete = walk.Completed;
+        state.State.EntriesDrained += entriesForwarded;
+        state.State.LeavesScanned += walk.LeavesVisited;
+        try
+        {
+            await PersistDrainProgressAsync();
+        }
+        catch
+        {
+            state.State.DrainCursorKey = prevCursorKey;
+            state.State.DrainSweepComplete = prevSweepComplete;
+            state.State.EntriesDrained = prevEntriesDrained;
+            state.State.LeavesScanned = prevLeavesScanned;
+            state.State.DrainCursorLeafId = prevLegacyCursor;
+            throw;
+        }
+
+        return walk.Completed;
+    }
+
+    /// <summary>
+    /// Sweeps the donor's whole leaf chain in one turn, for the two
+    /// authoritative drains that run once the donor can no longer accept a
+    /// folded-slot write.
+    /// <para>
+    /// <b>DELIBERATELY NOT WORK-BOUNDED</b> (issues 1956, 1973). Both callers
+    /// run inside the freeze window: the donor is sealed and rejecting, so
+    /// nothing this sweep reads can change, and the sweep is what turns
+    /// "eventually equal" into "equal now" immediately before routing flips
+    /// onto the survivor. Yielding mid-sweep would hold that freeze window open
+    /// across timer ticks - a real availability cost - for no correctness gain.
+    /// Made attributable through <see cref="AtomicLeafWalk"/> instead.
+    /// </para>
+    /// </summary>
+    private async Task DrainToEndAtomicallyAsync(string operation)
+    {
+        var atomicWalk = new AtomicLeafWalk(operation);
+        var leavesBefore = state.State.LeavesScanned;
+        await DrainPassAsync(LeafWalkBudget.Unbounded());
+        atomicWalk.RecordLeavesVisited((int)Math.Min(int.MaxValue, state.State.LeavesScanned - leavesBefore));
+        atomicWalk.ReportIfSlow(Logger, Context.GrainId);
     }
 
     /// <summary>
@@ -767,7 +842,7 @@ internal sealed class TreeShardConsolidationGrain(
     {
         var previousPhase = state.State.Phase;
         var previousUpdatedAt = state.State.UpdatedAtTicks;
-        var previousCursor = state.State.DrainCursorLeafId;
+        var previousCursor = state.State.DrainCursorKey;
         var previousSweep = state.State.DrainSweepComplete;
 
         state.State.Phase = next;
@@ -776,7 +851,7 @@ internal sealed class TreeShardConsolidationGrain(
         // Each phase gets a fresh sweep: the drain's completion flag is scoped
         // to the phase that set it, so the authoritative post-freeze sweep can
         // never be skipped because an earlier phase already finished one.
-        state.State.DrainCursorLeafId = null;
+        state.State.DrainCursorKey = null;
         state.State.DrainSweepComplete = false;
 
         try
@@ -787,7 +862,7 @@ internal sealed class TreeShardConsolidationGrain(
         {
             state.State.Phase = previousPhase;
             state.State.UpdatedAtTicks = previousUpdatedAt;
-            state.State.DrainCursorLeafId = previousCursor;
+            state.State.DrainCursorKey = previousCursor;
             state.State.DrainSweepComplete = previousSweep;
             throw;
         }
@@ -816,19 +891,19 @@ internal sealed class TreeShardConsolidationGrain(
     /// whose memory says "finished" while storage says "in flight" short-
     /// circuits every retry from the same activation.
     /// </summary>
-    private (bool InProgress, bool Complete, bool Cancelled, bool CancelRequested, ShardConsolidationPhase Phase, GrainId? Cursor, bool Sweep, long UpdatedAt) Snapshot()
+    private (bool InProgress, bool Complete, bool Cancelled, bool CancelRequested, ShardConsolidationPhase Phase, string? Cursor, bool Sweep, long UpdatedAt) Snapshot()
         => (state.State.InProgress, state.State.Complete, state.State.Cancelled, state.State.CancelRequested,
-            state.State.Phase, state.State.DrainCursorLeafId, state.State.DrainSweepComplete, state.State.UpdatedAtTicks);
+            state.State.Phase, state.State.DrainCursorKey, state.State.DrainSweepComplete, state.State.UpdatedAtTicks);
 
     private void Restore(
-        (bool InProgress, bool Complete, bool Cancelled, bool CancelRequested, ShardConsolidationPhase Phase, GrainId? Cursor, bool Sweep, long UpdatedAt) previous)
+        (bool InProgress, bool Complete, bool Cancelled, bool CancelRequested, ShardConsolidationPhase Phase, string? Cursor, bool Sweep, long UpdatedAt) previous)
     {
         state.State.InProgress = previous.InProgress;
         state.State.Complete = previous.Complete;
         state.State.Cancelled = previous.Cancelled;
         state.State.CancelRequested = previous.CancelRequested;
         state.State.Phase = previous.Phase;
-        state.State.DrainCursorLeafId = previous.Cursor;
+        state.State.DrainCursorKey = previous.Cursor;
         state.State.DrainSweepComplete = previous.Sweep;
         state.State.UpdatedAtTicks = previous.UpdatedAt;
     }

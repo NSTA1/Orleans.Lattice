@@ -64,6 +64,32 @@ internal sealed class TreeSnapshotState
     /// swap. Empty falls back to <c>SourceTreeId</c>.
     /// </summary>
     [Id(11)] public string LogicalTreeId { get; set; } = "";
+
+    /// <summary>
+    /// Resume position for the bounded online copy of the shard at
+    /// <see cref="NextShardIndex"/>: the key the next pass re-descends onto, or
+    /// <see langword="null"/> to start at that shard's leftmost leaf. Cleared
+    /// whenever the shard cursor advances, so each shard gets a fresh sweep.
+    /// <para>
+    /// Only the online mode's copy is resumable. The offline copy assembles the
+    /// destination shard bottom-up through
+    /// <c>IShardRootGrain.BulkLoadRawAsync</c>, which by contract requires the
+    /// complete sorted entry set and an empty destination, so it is a single
+    /// atomic build and has no intermediate position to resume from
+    /// (issue 1973).
+    /// </para>
+    /// <para>
+    /// A <b>key</b>, never a leaf grain id, for the same reason every other
+    /// resume cursor is: a virtual leaf id can activate empty across a pass
+    /// boundary and truncate the resumed walk, whereas a key re-descends onto
+    /// whichever leaf now owns it.
+    /// </para>
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(12)] public string? CopyCursorKey { get; set; }
 }
 
 /// <summary>

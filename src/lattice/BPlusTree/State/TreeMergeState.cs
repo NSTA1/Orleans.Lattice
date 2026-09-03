@@ -54,4 +54,23 @@ internal sealed class TreeMergeState
     /// with state persisted before this field existed).
     /// </summary>
     [Id(8)] public int[] SourcePhysicalShards { get; set; } = [];
+
+    /// <summary>
+    /// Resume position for the bounded drain of the shard at
+    /// <see cref="NextShardIndex"/>: the key the next pass re-descends onto, or
+    /// <see langword="null"/> to start at that shard's leftmost leaf. Cleared
+    /// whenever the shard cursor advances, so each shard gets a fresh sweep.
+    /// <para>
+    /// A <b>key</b>, never a leaf grain id. Orleans grains are virtual, so a
+    /// leaf id persisted across a pass boundary can activate an empty grain
+    /// whose sibling pointer is null and end the resumed walk early, silently
+    /// leaving the rest of the shard un-merged; a key always re-descends onto
+    /// whichever leaf now owns it (issue 1973).
+    /// </para>
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(9)] public string? DrainCursorKey { get; set; }
 }

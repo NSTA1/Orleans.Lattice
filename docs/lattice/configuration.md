@@ -102,6 +102,8 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`AtomicWriteRetention`](#atomicwriteretention) | `TimeSpan` | 48 hours | Yes |
 | [`AutoSplitEnabled`](#autosplitenabled) | `bool` | `true` | Yes |
 | [`AutoSplitMinTreeAge`](#autosplitmintreeage) | `TimeSpan` | 60 seconds | Yes |
+| [`BackgroundDrainLeavesPerPass`](#backgrounddrainleavesperpass) | `int` | 64 | Yes |
+| [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration) | `TimeSpan` | 10 seconds | Yes |
 | [`CacheTtl`](#cachettl) | `TimeSpan` | `TimeSpan.Zero` (refresh on every read) | Yes |
 | [`CompactionLeafBatchSize`](#compactionleafbatchsize) | `int` | 64 | Yes |
 | [`CompactionShardTickInterval`](#compactionshardtickinterval) | `TimeSpan` | 500 milliseconds | Yes |
@@ -282,6 +284,54 @@ siloBuilder.ConfigureLattice("realtime", o =>
 ```
 
 This option can be changed freely at any time. The new TTL takes effect on the next read. A value of `TimeSpan.Zero` preserves the original behaviour (refresh on every read).
+
+### `BackgroundDrainLeavesPerPass`
+
+Maximum number of source leaves a background coordinator - the split drain, the cross-tree merge drain, or the online snapshot copy - visits in a single pass before persisting its resume cursor and yielding (default: **64 leaves**).
+
+These walks do not hold a shard root, so unlike an unbounded read walk they cannot head-of-line-block user traffic. What they do hold is their own non-reentrant coordinator, so an unbounded pass over a thousand-leaf shard makes that coordinator unable to answer a progress query or honour a cancellation for the whole sweep, buffers the sweep's working set for its whole duration, and puts the entire sweep at risk from a single interruption. Bounding the pass turns all three into steady background work resumable from a persisted **key** cursor.
+
+Raising it drains faster at the cost of longer individual turns; setting it to `0` or less disables the bound and restores the unbounded walk. It does **not** govern the authoritative post-freeze sweeps in a split's `Swap` / `Complete` phases or a consolidation's `Swap` / `Complete` phases, which are deliberately unbounded - see [Bounded background leaf walks](#bounded-background-leaf-walks) below.
+
+The tombstone compactor and the shard consolidator keep their own long-standing per-pass leaf caps ([`CompactionLeafBatchSize`](#compactionleafbatchsize) and `ConsolidationDrainLeavesPerPass`) and inherit only the wall-clock net from [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration).
+
+```csharp verify
+// Yield more often on a tree whose coordinators must stay responsive to
+// progress queries and cancellation while a large shard drains.
+siloBuilder.ConfigureLattice("large-shard-tree", o => o.BackgroundDrainLeavesPerPass = 16);
+```
+
+This option can be changed freely at any time. It takes effect on the next pass.
+
+### `BackgroundDrainMaxDuration`
+
+Wall-clock safety net for a single background coordinator drain pass (default: **10 seconds**). When a pass has spent this long it persists its resume cursor and yields at the next leaf boundary that offers one.
+
+[`BackgroundDrainLeavesPerPass`](#backgrounddrainleavesperpass) is the primary, deterministic bound; this covers the case a leaf count cannot, where a small number of leaves are individually very slow - cold activations rehydrating large snapshots, or a fan-out merge into many target shards. Set to `TimeSpan.Zero` to disable it and rely on the leaf count alone.
+
+This option can be changed freely at any time.
+
+### Bounded background leaf walks
+
+Six background coordinator walks traverse a shard's leaf chain. Each is either **work-bounded and resumable** or **deliberately atomic**, and which one it is follows from what the surrounding protocol needs rather than from how long the walk happens to be:
+
+| Walk | Bounded? | Why |
+|---|---|---|
+| Split `Drain` phase | Yes | Routing still points every moved slot at the source, and the walk already flushed to the target in batches, so a pass boundary makes nothing newly observable. |
+| Split `Swap` / `Complete` final sweeps | No | Each makes the target provably equal to the source's final committed state immediately around the routing flip. The source is frozen for the moved slots, so extra time cannot change what the sweep reads - only how long routing is in flux. |
+| Split retroactive prepared-mutation sweep | No | The `Drain` phase that follows imports pre-saga values into the target; the destination-side shadow markers this sweep installs are what stop a reader surfacing one of them. A half-finished sweep would leave markers installed for some in-flight sagas and not others. Its recovery contract is also "re-run the whole sweep", which is what makes its per-snapshot status re-check sound for every leaf. |
+| Cross-tree merge drain | Yes | The merge has never been atomic - it merges each leaf's delta as it goes - and its contract is convergence, not a point-in-time image. |
+| Online snapshot copy | Yes | An online snapshot is a converging mirror, not a point-in-time image: shadow-forwarding mirrors concurrent writes onto the destination throughout, and shards are already copied one at a time across ticks. |
+| Offline snapshot copy | No | The destination shard is assembled bottom-up by a single bulk load, which by contract needs the complete sorted entry set and an empty destination, so there is no intermediate position to resume from. The source is quiesced for the copy's duration. |
+| Tombstone compaction | Yes | Per-leaf compaction is idempotent and independent. |
+| Consolidation `Drain` phase | Yes | The donor still serves traffic and still shadow-forwards; the survivor's copy only becomes authoritative in `Swap`. |
+| Consolidation `Swap` / `Complete` final sweeps | No | Both run inside the freeze window, where nothing they read can change and holding the window open across ticks is a real availability cost. |
+
+Every resumable walk persists its position as a **key**, never a leaf grain id. Orleans grains are virtual, so an id persisted across a pass boundary can activate a fresh, empty grain whose sibling pointer is null - a resumed walk would conclude it had reached the end of the chain and stop, silently leaving the rest of the shard unvisited with no exception, metric or log line to show for it. A key is always re-descended onto whichever leaf now owns it, so a leaf that has been split, or reclaimed, between two passes cannot truncate the sweep.
+
+A walk yields only where it can name that position - the visited leaf's exclusive high bound, which is exactly where the next leaf begins. A leaf that declares no usable high bound is not a stopping point: the walk keeps going rather than stop without a resume position, so a misconfigured bound degrades to the unbounded walk rather than to a truncated sweep.
+
+Each deliberately-atomic walk is instead made *attributable*: when it holds its coordinator for more than ten seconds it logs a warning naming the operation and the leaf count, so a stalled coordinator explains itself rather than surfacing only as a flood of Orleans long-request warnings.
 
 ### `CompactionLeafBatchSize`
 

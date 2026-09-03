@@ -104,6 +104,54 @@ internal sealed class TombstoneCompactionGrain(
     internal int CurrentLeafBatchSizeForTests => _currentLeafBatchSize;
 
     /// <summary>
+    /// Everything a leaf batch may mutate about its position within the current
+    /// shard, as one value. The chain walk resumes from a <b>key</b>, the
+    /// dirty-leaves fast path from an <b>index</b> into its persisted snapshot,
+    /// and the snapshot itself is pulled and cleared by the same batch - but
+    /// every caller that guards a state write has to save and restore all of it
+    /// as a unit, or a failing persist leaves the activation's position ahead of
+    /// disk (issue 1973). The superseded leaf-id cursor is carried too, so
+    /// discarding it is itself revertible.
+    /// </summary>
+    private readonly record struct ShardLeafCursor(
+        string? Key,
+        int DirtyIndex,
+        string? LegacyLeafId,
+        string[]? DirtyLeaves,
+        HybridLogicalClock DirtyAdvance);
+
+    /// <summary>Captures the current in-shard position.</summary>
+    private ShardLeafCursor CaptureShardCursor()
+        => new(state.State.NextLeafKeyInShard,
+               state.State.CurrentShardDirtyIndex,
+               state.State.NextLeafIdInShard,
+               state.State.CurrentShardDirtyLeaves,
+               state.State.CurrentShardDirtyAdvance);
+
+    /// <summary>Restores a previously captured in-shard position.</summary>
+    private void RestoreShardCursor(ShardLeafCursor cursor)
+    {
+        state.State.NextLeafKeyInShard = cursor.Key;
+        state.State.CurrentShardDirtyIndex = cursor.DirtyIndex;
+        state.State.NextLeafIdInShard = cursor.LegacyLeafId;
+        state.State.CurrentShardDirtyLeaves = cursor.DirtyLeaves;
+        state.State.CurrentShardDirtyAdvance = cursor.DirtyAdvance;
+    }
+
+    /// <summary>
+    /// Resets the in-shard resume position, so the next batch starts at the
+    /// beginning of whatever shard it enters. Also clears the superseded
+    /// leaf-id cursor, so state written by an older build cannot survive into a
+    /// pass that no longer reads it.
+    /// </summary>
+    private void ClearShardCursor()
+    {
+        state.State.NextLeafKeyInShard = null;
+        state.State.CurrentShardDirtyIndex = 0;
+        state.State.NextLeafIdInShard = null;
+    }
+
+    /// <summary>
     /// Test-only seam exposing the snapshot of
     /// <see cref="LatticeOptions.CompactionShardTickInterval"/> captured
     /// when the in-flight pass began. Returns the
@@ -179,11 +227,12 @@ internal sealed class TombstoneCompactionGrain(
             {
                 // Operator-driven full pass: drive CompactShardBatchAsync
                 // until it reports the shard is done. The in-shard cursor
-                // lives on state.State.NextLeafIdInShard and is reset
+                // lives on state.State.NextLeafKeyInShard (chain walk) /
+                // CurrentShardDirtyIndex (dirty-set fast path) and is reset
                 // between shards so each shard starts from its leftmost
                 // leaf. This path does not persist between batches; the
                 // operator is willing to block on the full pass.
-                state.State.NextLeafIdInShard = null;
+                ClearShardCursor();
                 bool shardDone;
                 do
                 {
@@ -193,7 +242,7 @@ internal sealed class TombstoneCompactionGrain(
             }
             // Clear the transient in-memory cursor on completion so the
             // next reminder-driven pass starts fresh.
-            state.State.NextLeafIdInShard = null;
+            ClearShardCursor();
         }
         finally
         {
@@ -305,7 +354,7 @@ internal sealed class TombstoneCompactionGrain(
         var prevShardRetries = state.State.ShardRetries;
         var prevPhysicalTreeId = state.State.PhysicalTreeId;
         var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
-        var prevNextLeafIdInShard = state.State.NextLeafIdInShard;
+        var prevShardCursorScoped = CaptureShardCursor();
 
         state.State.InProgress = true;
         state.State.NextShardIndex = 0;
@@ -314,7 +363,7 @@ internal sealed class TombstoneCompactionGrain(
         state.State.PhysicalShardIndices = shardIndices;
         // A scoped pass operates on a distinct shard list; any cursor
         // left over from a prior pass would apply to the wrong shard.
-        state.State.NextLeafIdInShard = null;
+        ClearShardCursor();
         try
         {
             await state.WriteStateAsync();
@@ -326,7 +375,7 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.PhysicalTreeId = prevPhysicalTreeId;
             state.State.PhysicalShardIndices = prevPhysicalShardIndices;
-            state.State.NextLeafIdInShard = prevNextLeafIdInShard;
+            RestoreShardCursor(prevShardCursorScoped);
             throw;
         }
 
@@ -444,7 +493,7 @@ internal sealed class TombstoneCompactionGrain(
         var prevShardRetries = state.State.ShardRetries;
         var prevPhysicalTreeId = state.State.PhysicalTreeId;
         var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
-        var prevNextLeafIdInShard = state.State.NextLeafIdInShard;
+        var prevShardCursorBegin = CaptureShardCursor();
 
         state.State.InProgress = true;
         state.State.NextShardIndex = startFromShard;
@@ -458,7 +507,7 @@ internal sealed class TombstoneCompactionGrain(
         // each shard's leaf walk from the leftmost leaf.
         if (startFromShard != prevNextShardIndex)
         {
-            state.State.NextLeafIdInShard = null;
+            ClearShardCursor();
         }
         try
         {
@@ -471,7 +520,7 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.PhysicalTreeId = prevPhysicalTreeId;
             state.State.PhysicalShardIndices = prevPhysicalShardIndices;
-            state.State.NextLeafIdInShard = prevNextLeafIdInShard;
+            RestoreShardCursor(prevShardCursorBegin);
             throw;
         }
 
@@ -526,7 +575,7 @@ internal sealed class TombstoneCompactionGrain(
         // Snapshot the cursor *before* the batch call so we can revert
         // any in-memory mutation made inside CompactShardBatchAsync if a
         // subsequent state write fails.
-        var prevCursorBeforeBatch = state.State.NextLeafIdInShard;
+        var prevCursorBeforeBatch = CaptureShardCursor();
         try
         {
             batchCompletedShard = await CompactShardBatchAsync(physicalTreeId, shardIndex, Options.TombstoneGracePeriod);
@@ -535,11 +584,11 @@ internal sealed class TombstoneCompactionGrain(
         catch (Exception ex)
         {
             // Restore the in-memory cursor; the batch method may have
-            // mutated state.State.NextLeafIdInShard before it threw, and
+            // mutated the in-shard cursor before it threw, and
             // we have not yet persisted that mutation. Reverting keeps
             // memory in sync with disk so the shard retry resumes from
             // the same cursor as before the failed attempt.
-            state.State.NextLeafIdInShard = prevCursorBeforeBatch;
+            RestoreShardCursor(prevCursorBeforeBatch);
             logger.LogWarning(ex, "Tombstone compaction failed for shard {ShardIndex} of tree {TreeId}", shardIndex, TreeId);
             if (state.State.ShardRetries < MaxRetriesPerShard)
             {
@@ -568,10 +617,9 @@ internal sealed class TombstoneCompactionGrain(
                 // from its leftmost leaf.
                 var prevNextShardIndex = state.State.NextShardIndex;
                 var prevShardRetries = state.State.ShardRetries;
-                var prevCursor = state.State.NextLeafIdInShard;
                 state.State.NextShardIndex++;
                 state.State.ShardRetries = 0;
-                state.State.NextLeafIdInShard = null;
+                ClearShardCursor();
                 try
                 {
                     await state.WriteStateAsync();
@@ -580,7 +628,7 @@ internal sealed class TombstoneCompactionGrain(
                 {
                     state.State.NextShardIndex = prevNextShardIndex;
                     state.State.ShardRetries = prevShardRetries;
-                    state.State.NextLeafIdInShard = prevCursor;
+                    RestoreShardCursor(prevCursorBeforeBatch);
                     throw;
                 }
             }
@@ -596,10 +644,9 @@ internal sealed class TombstoneCompactionGrain(
                 // tick to skip a shard or believe a retry budget has been spent.
                 var prevNextShardIndex = state.State.NextShardIndex;
                 var prevShardRetries = state.State.ShardRetries;
-                var prevCursor = state.State.NextLeafIdInShard; // already null from batch
                 state.State.NextShardIndex++;
                 state.State.ShardRetries = 0;
-                state.State.NextLeafIdInShard = null;
+                ClearShardCursor();
                 try
                 {
                     await state.WriteStateAsync();
@@ -608,15 +655,20 @@ internal sealed class TombstoneCompactionGrain(
                 {
                     state.State.NextShardIndex = prevNextShardIndex;
                     state.State.ShardRetries = prevShardRetries;
-                    state.State.NextLeafIdInShard = prevCursor;
+                    // Revert to the position as it was BEFORE the batch, not as
+                    // the batch left it: the batch cleared the cursor on
+                    // reaching the end of the shard, and reverting to that
+                    // cleared value would leave this activation believing the
+                    // shard was finished while storage still owes the walk.
+                    RestoreShardCursor(prevCursorBeforeBatch);
                     throw;
                 }
             }
             else
             {
                 // Mid-shard batch boundary: persist the in-shard cursor so
-                // the next timer tick resumes from the same leaf. The
-                // batch method has already mutated NextLeafIdInShard in
+                // the next timer tick resumes from the same position. The
+                // batch method has already mutated the cursor in
                 // memory; on persist failure restore the prior cursor so
                 // memory stays in sync with disk.
                 try
@@ -625,7 +677,7 @@ internal sealed class TombstoneCompactionGrain(
                 }
                 catch
                 {
-                    state.State.NextLeafIdInShard = prevCursorBeforeBatch;
+                    RestoreShardCursor(prevCursorBeforeBatch);
                     throw;
                 }
             }
@@ -649,14 +701,14 @@ internal sealed class TombstoneCompactionGrain(
         var prevShardRetries = state.State.ShardRetries;
         var prevPhysicalTreeId = state.State.PhysicalTreeId;
         var prevPhysicalShardIndices = state.State.PhysicalShardIndices;
-        var prevNextLeafIdInShard = state.State.NextLeafIdInShard;
+        var prevShardCursorComplete = CaptureShardCursor();
 
         state.State.InProgress = false;
         state.State.NextShardIndex = 0;
         state.State.ShardRetries = 0;
         state.State.PhysicalTreeId = null;
         state.State.PhysicalShardIndices = [];
-        state.State.NextLeafIdInShard = null;
+        ClearShardCursor();
         try
         {
             await state.WriteStateAsync();
@@ -668,7 +720,7 @@ internal sealed class TombstoneCompactionGrain(
             state.State.ShardRetries = prevShardRetries;
             state.State.PhysicalTreeId = prevPhysicalTreeId;
             state.State.PhysicalShardIndices = prevPhysicalShardIndices;
-            state.State.NextLeafIdInShard = prevNextLeafIdInShard;
+            RestoreShardCursor(prevShardCursorComplete);
             throw;
         }
 
@@ -766,13 +818,23 @@ internal sealed class TombstoneCompactionGrain(
             var shardRoot = grainFactory.GetGrain<IShardRootGrain>(shardKey);
 
             // Path selection. On the first batch entering this shard
-            // (CurrentShardDirtyLeaves==null AND NextLeafIdInShard==null),
+            // (CurrentShardDirtyLeaves==null AND no in-shard cursor),
             // pull the shard-root dirty-leaves snapshot. A non-empty
             // snapshot locks the shard into the fast path; an empty
             // snapshot falls back to the legacy chain walk so a tree
             // with no accumulated signal yet (fresh activation, upgraded
             // silo) still progresses.
-            var resumeFrom = state.State.NextLeafIdInShard;
+            //
+            // Discard a leaf-id cursor left by an older build and restart the
+            // shard. Per-leaf compaction is idempotent, so the cost is a
+            // re-walk; trusting the id would risk a resumed walk reporting the
+            // shard done against a leaf that activated empty (issue 1973).
+            if (!string.IsNullOrEmpty(state.State.NextLeafIdInShard))
+            {
+                ClearShardCursor();
+            }
+
+            var resumeFrom = state.State.NextLeafKeyInShard;
             string[]? dirtyLeaves = state.State.CurrentShardDirtyLeaves;
             if (dirtyLeaves is null && string.IsNullOrEmpty(resumeFrom))
             {
@@ -795,145 +857,54 @@ internal sealed class TombstoneCompactionGrain(
                 dirtyLeaves is not null ? LatticeMetrics.PathDirtySet : LatticeMetrics.PathWalk);
 
             var batchSize = _currentLeafBatchSize > 0 ? _currentLeafBatchSize : LatticeOptions.DefaultCompactionLeafBatchSize;
-            var visited = 0;
 
-            // Resolve the starting leaf depending on the active path.
-            GrainId? leafId;
-            int dirtyIndex = 0;
+            // Both paths spend the same shared budget, so the leaf cap and the
+            // wall-clock net are one implementation rather than a hand-rolled
+            // counter per path (issue 1973).
+            var budget = LeafWalkBudget.ForBackgroundDrain(batchSize, Options);
+
             if (dirtyLeaves is not null)
             {
-                if (!string.IsNullOrEmpty(resumeFrom))
-                {
-                    // Locate the cursor inside the persisted dirty-set
-                    // list so a silo restart resumes at the correct
-                    // position. If the cursor cannot be located (an
-                    // edge case: e.g. partial state corruption or a
-                    // mid-pass list re-snapshot), fall back to the
-                    // start of the list - the per-leaf compaction is
-                    // idempotent so re-visiting earlier entries only
-                    // pays a leaf-RPC cost.
-                    dirtyIndex = Array.IndexOf(dirtyLeaves, resumeFrom);
-                    if (dirtyIndex < 0) dirtyIndex = 0;
-                }
-                leafId = dirtyIndex < dirtyLeaves.Length ? GrainId.Parse(dirtyLeaves[dirtyIndex]) : null;
-            }
-            else if (!string.IsNullOrEmpty(resumeFrom))
-            {
-                // Validate the persisted cursor before trusting it. The cursor
-                // is a leaf GrainId, and Orleans grains are virtual: if the leaf
-                // it names no longer has live state, calling it activates a
-                // fresh EMPTY grain whose sibling pointer is null, so the walk
-                // below would exit immediately and this method would report
-                // done=true with the rest of the shard never visited - a silent
-                // truncation that looks exactly like a clean end-of-shard.
-                //
-                // No current code path reclaims a leaf (the sibling chain is
-                // grow-only: splits and bulk-load graft insert, nothing
-                // unlinks; leaf state is cleared only by ShardRootGrain.PurgeAsync,
-                // which by contract runs against an already-offline tree). So
-                // today this check never fires. It is here so that a future
-                // change which DOES reclaim leaves fails loudly and correctly
-                // rather than silently under-compacting (issue 1970).
-                //
-                // The dirty-set path above already makes exactly this trade -
-                // an unlocatable cursor falls back to the start of the list -
-                // because per-leaf compaction is idempotent, so a re-walk costs
-                // leaf RPCs and reaps nothing twice.
-                var cursorId = GrainId.Parse(resumeFrom);
-                leafId = await IsLiveShardLeafAsync(cursorId)
-                    ? cursorId
-                    : await shardRoot.GetLeftmostLeafIdAsync();
-            }
-            else
-            {
-                leafId = await shardRoot.GetLeftmostLeafIdAsync();
-            }
+                // Dirty-leaves fast path. This walk is over a persisted, finite
+                // list the shard root nominated, not over sibling pointers, so
+                // its resume position is an index into that list rather than a
+                // key: there is no chain to re-descend, and the list itself -
+                // not a chain of virtual grains - is what bounds the walk.
+                var dirtyIndex = state.State.CurrentShardDirtyIndex;
+                if (dirtyIndex < 0 || dirtyIndex > dirtyLeaves.Length) dirtyIndex = 0;
 
-            while (leafId is not null && visited < batchSize)
-            {
-                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                try
+                while (dirtyIndex < dirtyLeaves.Length)
                 {
-                    await leaf.CompactTombstonesAsync(gracePeriod);
-                }
-                catch
-                {
-                    // Per-leaf failure: tag the visited counter with
-                    // outcome=skipped so operators can distinguish a
-                    // leaf the coordinator gave up on from a leaf that
-                    // legitimately had nothing to reap (outcome=noop)
-                    // or actively reaped (outcome=reaped). The
-                    // exception is then re-thrown so the surrounding
-                    // shard-level retry/skip logic in
-                    // ProcessNextShardAsync still drives the
-                    // shard.retries / shard.skipped counters.
-                    var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId);
-        var tenantTag = LatticeTenantLabel.ForTree(physicalTreeId);
-                    if (triggerScope is not null)
+                    var dirtyLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(GrainId.Parse(dirtyLeaves[dirtyIndex]));
+                    try
                     {
-                        var trig = _currentTriggerKind switch
-                        {
-                            TriggerReminder => LatticeMetrics.TriggerReminderTag,
-                            TriggerRatio => LatticeMetrics.TriggerRatioTag,
-                            TriggerSize => LatticeMetrics.TriggerSizeTag,
-                            TriggerOperator => LatticeMetrics.TriggerOperatorTag,
-                            _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, _currentTriggerKind),
-                        };
-                        LatticeMetrics.CompactionLeavesVisited.Add(
-                            1,
-                            new System.Diagnostics.TagList
-                            {
-                                treeTag,
-                                LatticeMetrics.OutcomeSkipped,
-                                trig,
-                                pathTag,
-                                tenantTag,
-                            });
+                        await dirtyLeaf.CompactTombstonesAsync(gracePeriod);
                     }
-                    else
+                    catch
                     {
-                        LatticeMetrics.CompactionLeavesVisited.Add(
-                            1,
-                            new System.Diagnostics.TagList
-                            {
-                                treeTag,
-                                LatticeMetrics.OutcomeSkipped,
-                                pathTag,
-                                tenantTag,
-                            });
+                        RecordSkippedLeaf(physicalTreeId, pathTag, triggerScope is not null);
+                        throw;
                     }
-                    throw;
-                }
-                if (dirtyLeaves is not null)
-                {
+
                     dirtyIndex++;
-                    leafId = dirtyIndex < dirtyLeaves.Length ? GrainId.Parse(dirtyLeaves[dirtyIndex]) : null;
-                }
-                else
-                {
-                    leafId = await leaf.GetNextSiblingAsync();
-                }
-                visited++;
-            }
+                    budget.RecordLeafVisited();
 
-            // Cursor semantics:
-            //   leafId == null  -> end of shard reached, return done=true.
-            //   leafId != null  -> batch boundary, persist next leaf id.
-            // The persistence of the cursor itself is deferred to the
-            // caller (ProcessNextShardAsync) so the batch + cursor write
-            // is one atomic state transition rather than two.
-            if (leafId is null)
-            {
-                state.State.NextLeafIdInShard = null;
+                    // resultsCollected is 1 because the unit of progress here is
+                    // a leaf compacted and the index advanced, not a row
+                    // returned. Only stop where the next batch can resume: an
+                    // exhausted list falls through to the completion branch
+                    // rather than yielding a cursor pointing past its end.
+                    if (dirtyIndex < dirtyLeaves.Length && budget.ShouldYield(resultsCollected: 1)) break;
+                }
 
-                // Dirty-set path completion: drain the shard-root dirty
-                // set up to the watermark we observed at snapshot time.
-                // Best-effort - a transient failure here just leaves the
-                // entries in place for the next pass to re-walk; the
-                // legacy chain-walk fallback path skips this call.
-                if (dirtyLeaves is not null)
+                if (dirtyIndex >= dirtyLeaves.Length)
                 {
+                    // Dirty-set path completion: drain the shard-root dirty
+                    // set up to the watermark we observed at snapshot time.
+                    // Best-effort - a transient failure here just leaves the
+                    // entries in place for the next pass to re-walk.
                     var advance = state.State.CurrentShardDirtyAdvance;
+                    ClearShardCursor();
                     state.State.CurrentShardDirtyLeaves = null;
                     state.State.CurrentShardDirtyAdvance = default;
                     try
@@ -946,17 +917,50 @@ internal sealed class TombstoneCompactionGrain(
                             "Failed to clear shard-root dirty-leaves watermark for {ShardKey}",
                             shardKey);
                     }
+                    return true;
                 }
-                return true;
+
+                // Batch boundary on the fast path. The persistence of the
+                // cursor itself is deferred to the caller
+                // (ProcessNextShardAsync) so the batch + cursor write is one
+                // atomic state transition rather than two.
+                state.State.NextLeafKeyInShard = null;
+                state.State.CurrentShardDirtyIndex = dirtyIndex;
+                return false;
             }
 
-            // The cursor is a leaf GrainId rather than a key. That is safe only
-            // while the leaf chain is grow-only - see IsLiveShardLeafAsync and
-            // the resume path above, which validates it before use. A change
-            // that reclaims leaves must move this cursor to a key (which can
-            // always be re-descended) rather than rely on the id resolving.
-            state.State.NextLeafIdInShard = leafId.Value.ToString();
-            return false;
+            // Legacy chain walk, bounded by the same budget and resumed by KEY.
+            // A key is re-descended onto whichever leaf now owns it, so a leaf
+            // that no longer resolves cannot end the walk early and leave the
+            // rest of the shard silently uncompacted - the failure mode the old
+            // leaf-id cursor had to be defended against case by case
+            // (issues 1970, 1973).
+            var walk = await BoundedLeafWalk.StartAsync(grainFactory, shardRoot, resumeFrom, budget);
+            while (walk.HasLeaf)
+            {
+                var leaf = walk.CurrentLeaf;
+                try
+                {
+                    await leaf.CompactTombstonesAsync(gracePeriod);
+                }
+                catch
+                {
+                    RecordSkippedLeaf(physicalTreeId, pathTag, triggerScope is not null);
+                    throw;
+                }
+
+                if (!await walk.MoveNextAsync()) break;
+            }
+
+            // Cursor semantics:
+            //   walk.Completed -> end of shard reached, return done=true.
+            //   otherwise      -> batch boundary, persist the resume key.
+            // The persistence of the cursor itself is deferred to the
+            // caller (ProcessNextShardAsync) so the batch + cursor write
+            // is one atomic state transition rather than two.
+            state.State.CurrentShardDirtyIndex = 0;
+            state.State.NextLeafKeyInShard = walk.Completed ? null : walk.ResumeFromInclusive;
+            return walk.Completed;
         }
         finally
         {
@@ -965,36 +969,49 @@ internal sealed class TombstoneCompactionGrain(
     }
 
     /// <summary>
-    /// Reports whether <paramref name="leafId"/> still names a leaf with live
-    /// state in this tree, used to validate a persisted resume cursor before
-    /// the chain walk trusts it.
-    /// <para>
-    /// Orleans grains are virtual, so calling a leaf whose state has been
-    /// cleared silently yields a fresh, empty activation rather than failing.
-    /// Such a leaf reports a null tree id, which is the signal used here: a
-    /// leaf that has merely been deactivated rehydrates its persisted state
-    /// (including its tree id and sibling pointers) and is correctly treated
-    /// as live, while a reclaimed one is not.
-    /// </para>
-    /// <para>
-    /// A probe that <b>throws</b> is deliberately treated as live. An empty
-    /// virtual activation returns null cleanly; an exception instead means the
-    /// grain is reachable but faulting, and the existing per-leaf retry and
-    /// skip handling in the walk is the right place to deal with that. Treating
-    /// a transient fault as a dead cursor would restart the whole shard walk on
-    /// every such blip.
-    /// </para>
+    /// Tags the per-leaf visited counter with <c>outcome=skipped</c> for a leaf
+    /// the coordinator gave up on, so operators can distinguish it from a leaf
+    /// that legitimately had nothing to reap (<c>outcome=noop</c>) or actively
+    /// reaped (<c>outcome=reaped</c>). The caller re-throws afterwards, so the
+    /// surrounding shard-level retry/skip logic in <c>ProcessNextShardAsync</c>
+    /// still drives the shard.retries / shard.skipped counters.
     /// </summary>
-    private async Task<bool> IsLiveShardLeafAsync(GrainId leafId)
+    private void RecordSkippedLeaf(string physicalTreeId, KeyValuePair<string, object?> pathTag, bool tagTrigger)
     {
-        try
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, physicalTreeId);
+        var tenantTag = LatticeTenantLabel.ForTree(physicalTreeId);
+        if (tagTrigger)
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            return !string.IsNullOrEmpty(await leaf.GetTreeIdAsync());
+            var trig = _currentTriggerKind switch
+            {
+                TriggerReminder => LatticeMetrics.TriggerReminderTag,
+                TriggerRatio => LatticeMetrics.TriggerRatioTag,
+                TriggerSize => LatticeMetrics.TriggerSizeTag,
+                TriggerOperator => LatticeMetrics.TriggerOperatorTag,
+                _ => new KeyValuePair<string, object?>(LatticeMetrics.TagTrigger, _currentTriggerKind),
+            };
+            LatticeMetrics.CompactionLeavesVisited.Add(
+                1,
+                new System.Diagnostics.TagList
+                {
+                    treeTag,
+                    LatticeMetrics.OutcomeSkipped,
+                    trig,
+                    pathTag,
+                    tenantTag,
+                });
         }
-        catch
+        else
         {
-            return true;
+            LatticeMetrics.CompactionLeavesVisited.Add(
+                1,
+                new System.Diagnostics.TagList
+                {
+                    treeTag,
+                    LatticeMetrics.OutcomeSkipped,
+                    pathTag,
+                    tenantTag,
+                });
         }
     }
 

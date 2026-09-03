@@ -385,6 +385,31 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<GrainId?> GetLeftmostLeafIdAsync();
 
     /// <summary>
+    /// Returns the <see cref="GrainId"/> of the leaf a chain walk should start
+    /// at, honouring an optional resume key, or <c>null</c> if the shard's tree
+    /// has not been initialised yet.
+    /// <para>
+    /// This is the resume seam for the background coordinators' bounded leaf
+    /// walks (issue 1973). A resume position is always a <b>key</b>, never a
+    /// leaf grain id: Orleans grains are virtual, so a leaf reclaimed between
+    /// two passes would activate empty with null siblings and the resumed walk
+    /// would conclude it had reached the end of the chain, silently leaving the
+    /// rest of the shard unvisited. Re-descending by key lands on whichever
+    /// leaf now owns it, at the cost of one traversal.
+    /// </para>
+    /// <para>
+    /// Like <see cref="GetLeftmostLeafIdAsync"/> this deliberately bypasses the
+    /// shard's read gate, so a coordinator can keep draining a shard it has
+    /// already frozen for its own callers.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFromInclusive">
+    /// The key to resume at, inclusive, or <c>null</c> to start at the leftmost
+    /// leaf.
+    /// </param>
+    Task<GrainId?> GetLeafIdForKeyAsync(string? resumeFromInclusive);
+
+    /// <summary>
     /// Bulk-loads pre-sorted key-value pairs into this shard, building leaves and
     /// internal nodes bottom-up. The shard must be empty (no root node).
     /// Entries must already be sorted in ascending key order.

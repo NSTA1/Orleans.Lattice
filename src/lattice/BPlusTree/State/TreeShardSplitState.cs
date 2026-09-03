@@ -41,6 +41,34 @@ internal sealed class TreeShardSplitState
     /// the split is aborted before the swap.
     /// </summary>
     [Id(7)] public ShardMap? OriginalShardMap { get; set; }
+
+    /// <summary>
+    /// Resume position for the bounded background drain of the source shard's
+    /// moved-slot entries: the key the next pass re-descends onto, or
+    /// <see langword="null"/> to start at the source's leftmost leaf.
+    /// <para>
+    /// Only the <see cref="ShardSplitPhase.Drain"/> phase's sweep is resumable.
+    /// The authoritative sweeps that run inside
+    /// <see cref="ShardSplitPhase.Swap"/> and
+    /// <see cref="ShardSplitPhase.Complete"/> are deliberately unbounded: they
+    /// execute against a source whose moved slots can no longer change, and
+    /// each is the step that makes the target provably equal to the source's
+    /// final committed state immediately before routing flips onto it. Yielding
+    /// mid-sweep there would stretch that window across timer ticks for no
+    /// correctness gain (issue 1973).
+    /// </para>
+    /// <para>
+    /// A <b>key</b>, never a leaf grain id: a virtual leaf id can activate
+    /// empty across a pass boundary and end the resumed walk early, silently
+    /// leaving moved-slot entries un-drained, whereas a key always re-descends
+    /// onto whichever leaf now owns it.
+    /// </para>
+    /// <para>
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>,
+    /// which is the correct semantic default.
+    /// </para>
+    /// </summary>
+    [Id(8)] public string? DrainCursorKey { get; set; }
 }
 
 /// <summary>
