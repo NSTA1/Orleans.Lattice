@@ -76,11 +76,55 @@ if (-not (Test-Path $p.SshPublicKeyPath)) {
 	$keyDir = Split-Path -Parent $privPath
 	if (-not (Test-Path $keyDir)) { New-Item -ItemType Directory -Path $keyDir -Force | Out-Null }
 	Write-Host "SSH key not found; generating at $privPath" -ForegroundColor Yellow
-	& ssh-keygen -t ed25519 -f $privPath -N '""' -C "$($p.NamePrefix)-vm" -q
+	# -N "" (a genuinely empty argument), never -N '""'. The latter passes two
+	# literal quote characters as the passphrase, so the key is encrypted with a
+	# passphrase nobody knows - and every later ssh/scp then blocks forever on a
+	# passphrase prompt that has no TTY to read from.
+	& ssh-keygen -t ed25519 -f $privPath -N "" -C "$($p.NamePrefix)-vm" -q
 	if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen failed.' }
 }
 $sshKey = (Get-Content -Raw $p.SshPublicKeyPath).Trim()
 $privKeyPath = if ($p.SshPublicKeyPath.EndsWith('.pub')) { $p.SshPublicKeyPath.Substring(0, $p.SshPublicKeyPath.Length - 4) } else { $p.SshPublicKeyPath }
+
+# Fail fast on a passphrase-encrypted private key.
+#
+# Every ssh/scp in this rig runs non-interactively from a script, so an
+# encrypted key cannot be unlocked: ssh prompts for the passphrase, finds no
+# TTY, and the call blocks indefinitely. The symptom is a deploy or update that
+# "hangs" with no output at the SSH step - not an error, just silence - so it is
+# worth naming here rather than leaving to be diagnosed on the wire.
+#
+# An OpenSSH-format private key records its cipher in the header; an
+# unencrypted key names the cipher "none", an encrypted one names a real cipher
+# (aes256-ctr) and a KDF (bcrypt).
+if (Test-Path $privKeyPath) {
+	$keyText = Get-Content -Raw $privKeyPath
+	$keyBody = ($keyText -replace '-----[A-Z ]+-----', '') -replace '\s', ''
+	$isEncrypted = $false
+	try {
+		$keyBytes = [Convert]::FromBase64String($keyBody)
+		$header = [Text.Encoding]::ASCII.GetString($keyBytes[0..([Math]::Min(80, $keyBytes.Length - 1))])
+		$isEncrypted = $header -match 'aes|bcrypt'
+	} catch {
+		# Not an OpenSSH-format key (PEM/PKCS#8); fall back to the PEM marker.
+		$isEncrypted = $keyText -match 'ENCRYPTED'
+	}
+	if ($isEncrypted) {
+		throw @"
+The private key '$privKeyPath' is passphrase-encrypted, which this rig cannot use.
+
+Every ssh and scp call here runs non-interactively, so ssh would block forever
+waiting for a passphrase prompt it can never display - the deploy appears to
+hang at the SSH step with no error.
+
+Either:
+  * load the key into ssh-agent first (Start-Service ssh-agent; ssh-add '$privKeyPath'), or
+  * point SshPublicKeyPath at a dedicated passphrase-less key for the rig:
+      ssh-keygen -t ed25519 -f `$HOME/.ssh/id_$($p.NamePrefix) -N "" -C '$($p.NamePrefix)-bench'
+    and set SshPublicKeyPath = '~/.ssh/id_$($p.NamePrefix).pub' in your parameters file.
+"@
+	}
+}
 
 $allowed = $p.AllowedSshSourceAddress
 if ([string]::IsNullOrWhiteSpace($allowed)) {
@@ -195,31 +239,46 @@ if (Test-Path $kh) {
 
 $deadline = (Get-Date).AddMinutes(8)
 $sshReady = $false
+$probeErr = $null
 while ((Get-Date) -lt $deadline) {
-	$probe = & ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes $hostAlias 'echo ready' 2>$null
-	if ($LASTEXITCODE -eq 0 -and $probe.Trim() -eq 'ready') { $sshReady = $true; break }
+	$probe = & ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes $hostAlias 'echo ready' 2>&1
+	if ($LASTEXITCODE -eq 0 -and ($probe -join '').Trim() -eq 'ready') { $sshReady = $true; break }
+	$probeErr = ($probe -join ' ').Trim()
 	Start-Sleep -Seconds 5
 }
-if (-not $sshReady) { throw 'SSH did not come up within 8 minutes.' }
+if (-not $sshReady) {
+	# Surface the last probe error rather than only the timeout. The common
+	# causes are distinguishable and each has a different fix:
+	#   'Permission denied (publickey)' -> the VM has a different key than the
+	#     one this parameters file names, or the key is passphrase-encrypted and
+	#     BatchMode is (correctly) refusing to prompt.
+	#   connection refused / timed out -> NSG source-address drift (your public
+	#     IP changed since deploy) or the VM is still booting.
+	throw "SSH did not come up within 8 minutes. Last probe error: $probeErr"
+}
 Write-Host '  SSH up.' -ForegroundColor Green
 
+# Every ssh/scp below carries BatchMode=yes. Without it, any prompt (passphrase,
+# host-key confirmation, password fallback) blocks forever in a non-interactive
+# script instead of failing - which presents as a silent hang rather than an
+# error. BatchMode turns each of those into a prompt-free non-zero exit.
 Write-Host 'Waiting for cloud-init...' -ForegroundColor Cyan
-$ciState = & ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 $hostAlias 'cloud-init status --wait 2>&1; echo EXIT:$?'
+$ciState = & ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes $hostAlias 'cloud-init status --wait 2>&1; echo EXIT:$?'
 Write-Host ($ciState -join "`n")
 
 # Verify the silo's expected toolchain landed via cloud-init. If not, run
 # bootstrap.sh as a fallback so the VM is always usable post-deploy.
-$dotnetVer = (& ssh -o StrictHostKeyChecking=accept-new $hostAlias '/usr/bin/dotnet --version 2>/dev/null || true').Trim()
+$dotnetVer = (& ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes $hostAlias '/usr/bin/dotnet --version 2>/dev/null || true').Trim()
 if (-not $dotnetVer) {
 	Write-Host 'cloud-init did not install .NET; running bootstrap.sh fallback...' -ForegroundColor Yellow
 	$bs = Join-Path $infraDir 'bootstrap.sh'
 	$tmp = New-TemporaryFile
 	try {
 		[System.IO.File]::WriteAllText($tmp.FullName, ((Get-Content -Raw $bs) -replace "`r`n","`n"))
-		& scp $tmp.FullName "${hostAlias}:/tmp/bootstrap.sh" | Out-Null
+		& scp -o BatchMode=yes $tmp.FullName "${hostAlias}:/tmp/bootstrap.sh" | Out-Null
 	} finally { Remove-Item $tmp.FullName -Force -ErrorAction SilentlyContinue }
-	& ssh $hostAlias 'chmod +x /tmp/bootstrap.sh && /tmp/bootstrap.sh'
-	$dotnetVer = (& ssh $hostAlias '/usr/bin/dotnet --version').Trim()
+	& ssh -o BatchMode=yes $hostAlias 'chmod +x /tmp/bootstrap.sh && /tmp/bootstrap.sh'
+	$dotnetVer = (& ssh -o BatchMode=yes $hostAlias '/usr/bin/dotnet --version').Trim()
 }
 Write-Host "  dotnet $dotnetVer" -ForegroundColor Green
 
