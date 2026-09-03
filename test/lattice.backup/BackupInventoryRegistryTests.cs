@@ -2,7 +2,7 @@ namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="BackupInventoryRegistry"/> that exercise every
-/// uncovered path: the <see cref="BackupInventoryRegistry.BackupRecord"/> struct
+/// uncovered path: the <c>BackupRecord</c> struct
 /// creation (via RecordCaptureSuccess), the else branch of
 /// <see cref="BackupInventoryRegistry.RecordPruned"/> (backup never tracked via
 /// RecordCaptureSuccess), the chain-depth walk inside

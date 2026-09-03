@@ -447,7 +447,7 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
             lastException);
     }
 
-    /// <summary>Polls <paramref name="site"/>'s <paramref name="treeId"/>/<paramref name="key"/> until its value equals <paramref name="expected"/>.</summary>
+    /// <summary>Polls <paramref name="read"/> until the value it returns equals <paramref name="expected"/>.</summary>
     public static Task WaitForValueAsync(
         Func<Task<byte[]?>> read, byte[] expected, string description, TimeSpan? timeout = null) =>
         WaitForConvergenceAsync(

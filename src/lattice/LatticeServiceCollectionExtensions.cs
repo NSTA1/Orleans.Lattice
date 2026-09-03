@@ -597,11 +597,13 @@ public static class LatticeServiceCollectionExtensions
         // Per-silo background scheduler that drives the WAL GC for every
         // registered tree on the LatticeOptions.WalGcInterval cadence so
         // a durable-WAL host gets bounded retention out of the box,
-        // independent of the replication package. Default-off
-        // (WalGcInterval == TimeSpan.Zero): the scheduler short-circuits
-        // at start until a host opts in. TryAddEnumerable keeps a single
-        // registration even though both AddLatticeWalGc and the
-        // replication package call this method.
+        // independent of the replication package. Enabled by default
+        // (WalGcInterval defaults to 1 hour); the scheduler short-circuits
+        // at start only when a host sets WalGcInterval to TimeSpan.Zero or
+        // another non-positive value. TryAddEnumerable keeps a single
+        // registration even though AddLatticeWalGc, the WAL storage
+        // provider registrations, and the replication package all call
+        // this method.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, LatticeWalGcScheduler>());
         return builder;

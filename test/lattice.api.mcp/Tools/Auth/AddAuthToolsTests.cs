@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// opt-in registers exactly one <see cref="AuthToolGroup"/> serving the auth
 /// group, flips the <see cref="LatticeApiMcpOptions.EnableAuthTools"/> flag,
 /// gates the mutating administration verbs behind the
-/// <paramref name="enableAdministration"/> argument (defaulting to introspection
+/// <c>enableAdministration</c> argument (defaulting to introspection
 /// only), is idempotent, and validates its argument.
 /// </summary>
 [TestFixture]

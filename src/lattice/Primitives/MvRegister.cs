@@ -13,7 +13,7 @@ using System.Runtime.InteropServices;
 /// State shape: a dot-tagged set of live <c>Entries</c> plus a
 /// <see cref="Context"/> mapping each replica id to the highest
 /// counter ever observed for that replica. A write on
-/// <paramref name="replicaId"/> via <see cref="Set(string, byte[])"/>
+/// <c>replicaId</c> via <see cref="Set(string, byte[])"/>
 /// mints a fresh dot <c>(replicaId, Context[replicaId] + 1)</c>, drops
 /// every entry the writer has observed (every entry whose dot is
 /// dominated by the new <see cref="Context"/>), and records the new

@@ -16,6 +16,7 @@ Static extension methods on `ISiloBuilder`.
 | `ConfigureLatticeBackup` | `ISiloBuilder ConfigureLatticeBackup(this ISiloBuilder builder, Action<LatticeBackupOptions> configure)` | Layers an additional `LatticeBackupOptions` configuration delegate. |
 | `ConfigureLatticeBackupSchedule` | `ISiloBuilder ConfigureLatticeBackupSchedule(this ISiloBuilder builder, Action<LatticeBackupScheduleOptions> configure)` | Configures the global (default) `LatticeBackupScheduleOptions` applied to every scope without a per-scope override. |
 | `ConfigureLatticeBackupSchedule` | `ISiloBuilder ConfigureLatticeBackupSchedule(this ISiloBuilder builder, string scopeKey, Action<LatticeBackupScheduleOptions> configure)` | Configures `LatticeBackupScheduleOptions` for a specific scope keyed by `scopeKey` (the value from `BackupScopeKey.For`). Throws `ArgumentException` when `scopeKey` is null or empty. |
+| `ConfigureLatticeBackupHealth` | `ISiloBuilder ConfigureLatticeBackupHealth(this ISiloBuilder builder, Action<LatticeBackupHealthOptions> configure)` | Configures the cluster-wide `LatticeBackupHealthOptions` governing the periodic backup-health monitor: whether it runs and the default re-verification cadence. Health monitoring is auto-enrolled and on by default, so this is only needed to change the cadence or disable the monitor. The monitor stays inert against a non-durable sink regardless of these options. Throws `ArgumentNullException` when `builder` or `configure` is null. |
 
 ## Services
 
@@ -419,7 +420,7 @@ The per-backup health-monitoring override: whether the periodic monitor verifies
 
 ## Options
 
-`LatticeBackupOptions` and `LatticeBackupScheduleOptions` are documented in full in [Configuration](configuration.md). `LatticeBackupHealthOptions` configures the periodic health monitor cluster-wide: `bool Enabled` (default `true` - health monitoring is auto-enrolled) and `TimeSpan DefaultInterval` (default six hours), plus the static `MinimumInterval` (one minute) the sweep reminder clamps up to. The monitor stays inert against a non-durable sink regardless of these options.
+`LatticeBackupOptions`, `LatticeBackupScheduleOptions`, and `LatticeBackupHealthOptions` are documented in full in [Configuration](configuration.md). `LatticeBackupHealthOptions` configures the periodic health monitor cluster-wide: `bool Enabled` (default `true` - health monitoring is auto-enrolled) and `TimeSpan DefaultInterval` (default six hours), plus the static `MinimumInterval` (one minute) the sweep reminder clamps up to. The monitor stays inert against a non-durable sink regardless of these options.
 
 ## Reserved-namespace guard
 

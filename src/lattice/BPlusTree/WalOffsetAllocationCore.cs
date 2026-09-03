@@ -16,7 +16,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <c>[AlwaysInterleave]</c> append turns cannot observe the same counter
 /// value. The load-bearing property the model checks is exactly that the
 /// read and the advance are one indivisible step: if a schedule can slip
-/// between the read and the write of <paramref name="nextOffset"/>, two
+/// between the read and the write of <c>nextOffset</c>, two
 /// entries are handed the same offset and a batch's offsets stop being
 /// contiguous. See <see cref="WalMoveFenceCore"/>, which guards the same
 /// state-gate region against a shard-move quiesce racing the assignment.

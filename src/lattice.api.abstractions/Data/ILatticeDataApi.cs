@@ -297,11 +297,6 @@ public interface ILatticeDataApi
     /// the add is idempotent and needs no replica context, so concurrent adds
     /// from any number of writers all survive the merge. There is no remove
     /// operation by design - use an OR-Set when removal is required.
-    /// Adds <paramref name="element"/> to the remove-wins (RW) set at
-    /// <paramref name="key"/> on behalf of <paramref name="replicaId"/>. An
-    /// RW-Set converges remove-wins: a concurrent add and remove of the same
-    /// element keeps it out, so a revoke is never silently resurrected by a
-    /// concurrent re-add.
     /// </summary>
     /// <param name="treeId">Logical tree identifier.</param>
     /// <param name="key">The key the set is stored under.</param>
@@ -314,6 +309,17 @@ public interface ILatticeDataApi
     /// <param name="key">The key the set is stored under.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<IReadOnlyList<byte[]>> GSetGetAsync(string treeId, string key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Adds <paramref name="element"/> to the remove-wins (RW) set at
+    /// <paramref name="key"/> on behalf of <paramref name="replicaId"/>. An
+    /// RW-Set converges remove-wins: a concurrent add and remove of the same
+    /// element keeps it out, so a revoke is never silently resurrected by a
+    /// concurrent re-add.
+    /// </summary>
+    /// <param name="treeId">Logical tree identifier.</param>
+    /// <param name="key">The key the set is stored under.</param>
+    /// <param name="element">The opaque element bytes to add.</param>
     /// <param name="replicaId">Stable id of the writer performing the add.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task RwSetAddAsync(string treeId, string key, byte[] element, string replicaId, CancellationToken cancellationToken = default);

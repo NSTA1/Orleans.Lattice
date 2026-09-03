@@ -66,7 +66,7 @@ namespace Orleans.Lattice.Replication;
 /// kept in the pending set and retried on the next pass, with
 /// exponential backoff between passes (250ms initial, doubling, 30s
 /// cap, reset on any per-item success). The loop only exits when the
-/// pending set is empty or <paramref name="stoppingToken"/> is
+/// pending set is empty or <c>stoppingToken</c> is
 /// cancelled.
 /// </para>
 /// <para>

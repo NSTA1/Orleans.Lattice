@@ -1,6 +1,6 @@
 # Orleans.Lattice.Backup configuration
 
-The package has two public options types: `LatticeBackupOptions` (catalog history and cross-tree-set fence behaviour) and `LatticeBackupScheduleOptions` (per-scope scheduling and retention). Both are bound through the `AddLatticeBackup` / `ConfigureLatticeBackupSchedule` registration extensions and validated at silo start.
+The package has three public options types: `LatticeBackupOptions` (catalog history and cross-tree-set fence behaviour), `LatticeBackupScheduleOptions` (per-scope scheduling and retention), and `LatticeBackupHealthOptions` (cluster-wide periodic health monitoring). All three are bound through the `AddLatticeBackup` / `ConfigureLatticeBackupSchedule` / `ConfigureLatticeBackupHealth` registration extensions and validated at silo start.
 
 ## `LatticeBackupOptions`
 
@@ -47,6 +47,26 @@ The guard costs nothing when it cannot apply. A deployment with no replicated tr
 Two faults are distinguished. A replicated tree backed by the default in-cluster sink is rejected outright at start regardless of `SinkSharingEnforcement`, because an in-cluster sink dogfoods a per-cluster reserved tree and is provably invisible to a peer - that needs no probe. An external sink is what the probe tests.
 
 The verdict is refreshed once per backup-health sweep (`LatticeBackupHealthOptions.DefaultInterval`, six hours by default), which is what resolves the cold-start case where every cluster starts at once, nobody has written a marker yet, and the first verdict is necessarily `Unverified`. See [Observability](observability.md) for how the verdict reaches the health surface.
+
+## `LatticeBackupHealthOptions`
+
+Cluster-wide configuration for the periodic backup-health monitor. Unlike scheduling and retention, health monitoring is **on by default**: every catalogued backup is auto-enrolled and re-verified on the sweep cadence, so a silently corrupted or deleted sink payload is surfaced without any opt-in. Bind it through `ConfigureLatticeBackupHealth(configure)` on the silo builder. A per-backup `BackupHealthConfig` overrides the default enrolment and cadence for a single backup.
+
+The monitor is only meaningful against a durable, external sink. With the ephemeral in-cluster sink it stays inert regardless of these options, because verifying payload that lives in the same cluster the backup protects proves nothing about disaster recovery.
+
+### Constants
+
+| Constant | Type | Value | Meaning |
+|---|---|---|---|
+| `MinimumInterval` | `TimeSpan` | `1 minute` | The smallest sweep cadence the monitor reminder honours (the Orleans reminder minimum). A smaller configured interval is clamped up to it rather than rejected. |
+| `DefaultSweepInterval` | `TimeSpan` | `6 hours` | The default for `DefaultInterval`. |
+
+### Properties
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `Enabled` | `bool` | `true` | Whether the periodic monitor runs at all. Health monitoring is auto-enrolled; set to `false` to disable the sweep cluster-wide. Independent of the durable-sink gate - a non-durable sink keeps the monitor inert even when this is `true`. |
+| `DefaultInterval` | `TimeSpan` | `6 hours` | The default cadence at which the monitor sweeps the catalog and re-verifies each enrolled backup, and the default per-backup re-verification interval. A value smaller than `MinimumInterval` is clamped up when the sweep reminder is registered. |
 
 ## `LatticeBackupScheduleOptions`
 
