@@ -680,14 +680,18 @@ internal sealed partial class ShardRootGrain
             : (await GetLeftmostLeafIdAsync())!.Value;
 
         var leavesMarked = 0;
-        // DELIBERATELY NOT WORK-BOUNDED (issue 1956). Do not apply
-        // LeafWalkBudget here. The whole-walk atomicity is the mechanism that
-        // delivers the Swap-boundary invariant: TreeShardSplitGrain.SwapAsync
-        // calls this immediately before EnterRejectPhaseAsync precisely so that
-        // "no read crosses the Swap boundary observing an unmarked leaf".
-        // Releasing the non-reentrant shard between leaves would open exactly
-        // that window, letting a point read be served a stale orphan value from
-        // a not-yet-sealed leaf. Bounded instead by observability.
+        // NOT WORK-BOUNDED, and a budget is not the fix (issue 1956). The
+        // whole-walk atomicity delivers the Swap-boundary invariant:
+        // TreeShardSplitGrain.SwapAsync calls this immediately before
+        // EnterRejectPhaseAsync precisely so "no read crosses the Swap boundary
+        // observing an unmarked leaf". A half-installed seal is wrong in the
+        // dangerous direction - an already-sealed leaf returns null for a key
+        // whose slot the source shard still owns, which is the U9h-C "key
+        // missing mid-chaos" failure.
+        //
+        // The real fix is to stop copying a shard-level fact into every leaf,
+        // so installing the seal is one O(1) write with no walk to bound:
+        // tracked as issue 1960. Until then this is instrumented, not fixed.
         var walk = new AtomicLeafWalk(nameof(MarkLeavesMovedAwayAsync));
         while (true)
         {

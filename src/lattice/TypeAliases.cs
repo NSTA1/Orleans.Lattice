@@ -219,6 +219,7 @@ internal static class TypeAliases
 
     // Range delete
     internal const string RangeDeleteResult = "ol.rdr";
+    internal const string ShardRangeDeletePage = "ol.srd";
 
     // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
     internal const string LeafKeyRange = "ol.lkr";

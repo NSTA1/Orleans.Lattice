@@ -255,16 +255,26 @@ window each one exists to close:
 | Unmarking them during a consolidation | The mirror image: the donor's leaves are unsealed only after it is frozen and drained, so no read crosses the freeze observing an unsealed leaf. |
 | Capturing a snapshot-cursor baseline | The captured WAL head is read only after every leaf has frozen, which is what makes the baseline a single instant. A write landing between two freezes would break the cursor's zero-observable-writes guarantee. |
 | Purging a shard on tree deletion | The tree is already offline, so nothing is waiting on it; the walk is also destructive and cannot be resumed once a leaf's sibling pointer is cleared. |
-| One-shot `DeleteRangeAsync` | Today a write issued into the range during the delete is queued behind it and deterministically survives. Bounding the walk would make its fate depend on where the walk had reached. |
 
-The cost is that a shard holding one of these for a long time is unavailable
-to every other caller meanwhile. Each of them logs a warning naming the
-operation and the number of leaves visited when it exceeds a short internal
+`DeleteRangeAsync` used to be on this list and is not any more: its per-shard
+walk is now work-bounded, driven to completion by the tree-level call. That
+weakens nothing, because the fan-out across physical shards was already
+parallel with no cross-shard atomicity and the documented visibility is per-key
+only, so the whole-shard atomicity of the old walk was an implementation
+artifact rather than a guarantee.
+
+The cost of the ones that remain is that a shard holding one of them for a long
+time is unavailable to every other caller meanwhile. Each logs a warning naming
+the operation and the number of leaves visited when it exceeds a short internal
 threshold, so a burst of Orleans long-request warnings on a shard can be
 attributed to the walk causing it rather than only to the requests it blocked.
+For the two where the stall is worth removing rather than merely explaining, the
+real fix is a redesign rather than a budget, tracked separately: storing the
+moved-away seal once per shard instead of copying it into every leaf, and
+capturing the snapshot baseline's WAL head before freezing rather than after.
 
-For a range delete that must be **bounded, resumable, or crash-safe**, use
-`OpenDeleteRangeCursorAsync` instead of the one-shot `DeleteRangeAsync`; see
+For a range delete that must be **resumable or crash-safe across a process
+restart**, use `OpenDeleteRangeCursorAsync`; see
 [Durable Cursors](durable-cursors.md).
 
 ### TTL expiry
