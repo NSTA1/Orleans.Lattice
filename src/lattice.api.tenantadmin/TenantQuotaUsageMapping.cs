@@ -129,12 +129,26 @@ internal static class TenantQuotaUsageMapping
 
     /// <summary>
     /// The burst-adjusted ceiling admission control engages at, computed exactly
-    /// as the tenancy engine's quota evaluator computes it (divide before multiply
-    /// so a large ceiling cannot overflow). An unbounded dimension has no burst
-    /// ceiling either, so it stays <c>null</c> rather than becoming <c>0</c>.
+    /// as the tenancy engine's quota evaluator computes it: multiply through a
+    /// 128-bit intermediate (so a large ceiling cannot overflow) and clamp to
+    /// <see cref="long.MaxValue"/>. Dividing first would floor any ceiling below
+    /// 100 to a zero burst, understating the ceiling the evaluator actually
+    /// admits at. An unbounded dimension has no burst ceiling either, so it stays
+    /// <c>null</c> rather than becoming <c>0</c>.
     /// </summary>
-    private static long? BurstCeiling(long? limit, int burstPercent) =>
-        limit is not { } ceiling
-            ? null
-            : burstPercent > 0 ? ceiling + ceiling / 100L * burstPercent : ceiling;
+    private static long? BurstCeiling(long? limit, int burstPercent)
+    {
+        if (limit is not { } ceiling)
+        {
+            return null;
+        }
+
+        if (burstPercent <= 0 || ceiling <= 0)
+        {
+            return ceiling;
+        }
+
+        var burstAdjusted = (UInt128)ceiling + ((UInt128)ceiling * (uint)burstPercent / 100);
+        return burstAdjusted > (UInt128)long.MaxValue ? long.MaxValue : (long)burstAdjusted;
+    }
 }

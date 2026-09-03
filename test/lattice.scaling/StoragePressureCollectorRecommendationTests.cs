@@ -343,4 +343,37 @@ public sealed class StoragePressureCollectorRecommendationTests
             pressure.Accounts.Single().ProviderKey,
             Is.EqualTo(IWalStorageProviderCatalog.DefaultProviderKey));
     }
+
+    [Test]
+    public async Task The_recommendation_names_the_real_hot_partition_when_its_provider_key_is_the_null_default()
+    {
+        // The hottest partition is backed by the default account: its raw provider
+        // key is null, which the reduce loop normalises to the default catalogue
+        // key when it attributes bytes. The hot account the recommendation carries
+        // is therefore the default key, so the partition search must apply the same
+        // normalisation - otherwise it never matches the null-keyed partition and
+        // collapses the advice to the empty-tree, partition-zero fallback.
+        var sample = Sample(
+            new[] { IWalStorageProviderCatalog.DefaultProviderKey, AcctB },
+            Tree("orders", 4_000L, partitions: (7, null!)));
+
+        var pressure = await Collector(sample, walMaxRetainedBytes: 1_000L)
+            .CollectAsync(CancellationToken.None);
+
+        Assert.That(pressure.Recommendation, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                pressure.Recommendation!.Value.CurrentProviderKey,
+                Is.EqualTo(IWalStorageProviderCatalog.DefaultProviderKey));
+            Assert.That(
+                pressure.Recommendation.Value.Tree,
+                Is.EqualTo("orders"),
+                "the advice must name the real hot tree, not the empty-tree fallback");
+            Assert.That(
+                pressure.Recommendation.Value.Partition,
+                Is.EqualTo(7),
+                "the advice must name the real hot partition, not partition zero");
+        });
+    }
 }

@@ -295,6 +295,48 @@ public sealed class LatticeValueTransformTranslatorTests
     }
 
     [Test]
+    public void Translate_captures_a_wide_ulong_above_long_max_as_double_not_corrupted_integer()
+    {
+        // Regression: the translator stored a ulong via Integer(unchecked((long)ul)),
+        // so any value above long.MaxValue wrapped to a negative integer
+        // (ulong.MaxValue became -1), lowering to a constant that no longer matches
+        // the intended value. Values above long.MaxValue must be captured as a
+        // Double - the same contract the sibling predicate translator already
+        // enforces - while values within range stay exact integers.
+        var max = ulong.MaxValue;
+        var constMax = WideUnsignedConstant(max);
+
+        var justAbove = (ulong)long.MaxValue + 1UL;
+        var constAbove = WideUnsignedConstant(justAbove);
+
+        var atBoundary = (ulong)long.MaxValue;
+        var constBoundary = WideUnsignedConstant(atBoundary);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(constMax.Kind, Is.EqualTo(LatticeConstantKind.Double));
+            Assert.That(constMax.DoubleValue, Is.EqualTo((double)ulong.MaxValue));
+            Assert.That(constMax.Int64Value, Is.Not.EqualTo(-1L), "ulong.MaxValue must not wrap to -1");
+
+            Assert.That(constAbove.Kind, Is.EqualTo(LatticeConstantKind.Double));
+            Assert.That(constAbove.DoubleValue, Is.EqualTo((double)((ulong)long.MaxValue + 1UL)));
+
+            Assert.That(
+                constBoundary.Kind,
+                Is.EqualTo(LatticeConstantKind.Int64),
+                "long.MaxValue still fits an exact integer");
+            Assert.That(constBoundary.Int64Value, Is.EqualTo(long.MaxValue));
+        });
+    }
+
+    private static LatticeConstant WideUnsignedConstant(ulong value)
+    {
+        var ir = LatticeValueTransformTranslator.Translate<OldModel, ConstantModel>(
+            _ => new ConstantModel { WideUnsigned = value });
+        return ir.Children!.Single(o => o.MemberPath == "WideUnsigned").Children![0].Constant;
+    }
+
+    [Test]
     public void Translate_captures_null_literal_as_null_constant()
     {
         var ir = LatticeValueTransformTranslator.Translate<OldModel, NewModel>(
