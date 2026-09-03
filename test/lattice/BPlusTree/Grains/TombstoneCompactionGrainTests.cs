@@ -88,6 +88,12 @@ public partial class TombstoneCompactionGrainTests
             grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[i]).Returns(leafMock);
             leafMock.CompactTombstonesAsync(Arg.Any<TimeSpan>()).Returns(Task.FromResult(0));
 
+            // A leaf with live state reports its tree id. The resume path uses
+            // this to tell a live leaf from a reclaimed one, which Orleans would
+            // otherwise virtual-activate as an empty grain (issue 1970), so the
+            // rig has to model it or every resumed walk looks reclaimed.
+            leafMock.GetTreeIdAsync().Returns(Task.FromResult<string?>(TreeId));
+
             var nextId = i + 1 < leafIds.Length ? (GrainId?)leafIds[i + 1] : null;
             leafMock.GetNextSiblingAsync().Returns(Task.FromResult(nextId));
         }

@@ -819,7 +819,30 @@ internal sealed class TombstoneCompactionGrain(
             }
             else if (!string.IsNullOrEmpty(resumeFrom))
             {
-                leafId = GrainId.Parse(resumeFrom);
+                // Validate the persisted cursor before trusting it. The cursor
+                // is a leaf GrainId, and Orleans grains are virtual: if the leaf
+                // it names no longer has live state, calling it activates a
+                // fresh EMPTY grain whose sibling pointer is null, so the walk
+                // below would exit immediately and this method would report
+                // done=true with the rest of the shard never visited - a silent
+                // truncation that looks exactly like a clean end-of-shard.
+                //
+                // No current code path reclaims a leaf (the sibling chain is
+                // grow-only: splits and bulk-load graft insert, nothing
+                // unlinks; leaf state is cleared only by ShardRootGrain.PurgeAsync,
+                // which by contract runs against an already-offline tree). So
+                // today this check never fires. It is here so that a future
+                // change which DOES reclaim leaves fails loudly and correctly
+                // rather than silently under-compacting (issue 1970).
+                //
+                // The dirty-set path above already makes exactly this trade -
+                // an unlocatable cursor falls back to the start of the list -
+                // because per-leaf compaction is idempotent, so a re-walk costs
+                // leaf RPCs and reaps nothing twice.
+                var cursorId = GrainId.Parse(resumeFrom);
+                leafId = await IsLiveShardLeafAsync(cursorId)
+                    ? cursorId
+                    : await shardRoot.GetLeftmostLeafIdAsync();
             }
             else
             {
@@ -927,12 +950,51 @@ internal sealed class TombstoneCompactionGrain(
                 return true;
             }
 
+            // The cursor is a leaf GrainId rather than a key. That is safe only
+            // while the leaf chain is grow-only - see IsLiveShardLeafAsync and
+            // the resume path above, which validates it before use. A change
+            // that reclaims leaves must move this cursor to a key (which can
+            // always be re-descended) rather than rely on the id resolving.
             state.State.NextLeafIdInShard = leafId.Value.ToString();
             return false;
         }
         finally
         {
             triggerScope?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Reports whether <paramref name="leafId"/> still names a leaf with live
+    /// state in this tree, used to validate a persisted resume cursor before
+    /// the chain walk trusts it.
+    /// <para>
+    /// Orleans grains are virtual, so calling a leaf whose state has been
+    /// cleared silently yields a fresh, empty activation rather than failing.
+    /// Such a leaf reports a null tree id, which is the signal used here: a
+    /// leaf that has merely been deactivated rehydrates its persisted state
+    /// (including its tree id and sibling pointers) and is correctly treated
+    /// as live, while a reclaimed one is not.
+    /// </para>
+    /// <para>
+    /// A probe that <b>throws</b> is deliberately treated as live. An empty
+    /// virtual activation returns null cleanly; an exception instead means the
+    /// grain is reachable but faulting, and the existing per-leaf retry and
+    /// skip handling in the walk is the right place to deal with that. Treating
+    /// a transient fault as a dead cursor would restart the whole shard walk on
+    /// every such blip.
+    /// </para>
+    /// </summary>
+    private async Task<bool> IsLiveShardLeafAsync(GrainId leafId)
+    {
+        try
+        {
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            return !string.IsNullOrEmpty(await leaf.GetTreeIdAsync());
+        }
+        catch
+        {
+            return true;
         }
     }
 
