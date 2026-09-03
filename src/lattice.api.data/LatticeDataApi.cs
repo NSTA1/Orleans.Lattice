@@ -387,6 +387,10 @@ internal sealed partial class LatticeDataApi(
     private int ClampPageSize(int requested)
     {
         var size = requested > 0 ? requested : _apiOptions.DefaultRangePageSize;
-        return Math.Min(size, _apiOptions.MaxRangePageSize);
+        // Floor at one so a non-positive MaxRangePageSize/DefaultRangePageSize
+        // (nothing validates the options) cannot collapse the page size to zero,
+        // which the cursor grain rejects with ArgumentOutOfRangeException. Mirrors
+        // the range-delete step floor above.
+        return Math.Max(1, Math.Min(size, _apiOptions.MaxRangePageSize));
     }
 }

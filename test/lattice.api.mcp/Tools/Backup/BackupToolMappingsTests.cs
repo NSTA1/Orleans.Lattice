@@ -16,6 +16,14 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// guard an out-of-range ordinal slipped past validation and reached the facade as
 /// a garbage mode/scope. These tests pin the guard: a defined name still parses, an
 /// unknown name is rejected, and an out-of-range numeric ordinal is rejected too.
+/// The <see cref="Enum.IsDefined{TEnum}(TEnum)"/> guard alone was insufficient,
+/// because it rejects only an <em>out-of-range</em> ordinal: an <em>in-range</em>
+/// numeric string (<c>"1"</c> binds to the defined <c>ShadowCutover</c>/<c>Prefix</c>)
+/// and a comma-combined name that <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
+/// treats as a bitwise OR (<c>"InPlace,ShadowCutover"</c> folds onto <c>ShadowCutover</c>)
+/// both still slipped past it. The ordinal round-trip name-equality check the sibling
+/// <c>ReplicationToolMappings.ToMergeMode</c> uses now rejects both, and these tests
+/// pin that too.
 /// </remarks>
 [TestFixture]
 public sealed class BackupToolMappingsTests
@@ -48,6 +56,22 @@ public sealed class BackupToolMappingsTests
             () => BackupToolMappings.ToRestoreMode(mode),
             Throws.ArgumentException,
             "A numeric string that is not a defined LatticeRestoreMode must be rejected, not bound to (LatticeRestoreMode)n.");
+
+    [TestCase("0")]
+    [TestCase("1")]
+    public void ToRestoreMode_rejects_an_in_range_numeric_ordinal(string mode)
+        => Assert.That(
+            () => BackupToolMappings.ToRestoreMode(mode),
+            Throws.ArgumentException,
+            "An in-range numeric string names no mode; Enum.IsDefined accepts (LatticeRestoreMode)1, so a round-trip name check must reject it.");
+
+    [TestCase("InPlace,ShadowCutover")]
+    [TestCase("inplace,shadowcutover")]
+    public void ToRestoreMode_rejects_a_comma_combined_name(string mode)
+        => Assert.That(
+            () => BackupToolMappings.ToRestoreMode(mode),
+            Throws.ArgumentException,
+            "Enum.TryParse folds a comma-combined name as a bitwise OR onto a defined member; a round-trip name check must reject it.");
 
     // ---- scope kind --------------------------------------------------------
 
@@ -86,4 +110,21 @@ public sealed class BackupToolMappingsTests
             () => BackupToolMappings.ToScope("orders", kind, keyOrPrefix: null),
             Throws.ArgumentException,
             "A numeric string that is not a defined BackupScopeKind must be rejected, not silently treated as WholeTree.");
+
+    [TestCase("0")]
+    [TestCase("1")]
+    [TestCase("2")]
+    public void ToScope_rejects_an_in_range_numeric_ordinal(string kind)
+        => Assert.That(
+            () => BackupToolMappings.ToScope("orders", kind, keyOrPrefix: null),
+            Throws.ArgumentException,
+            "An in-range numeric string names no kind; Enum.IsDefined accepts (BackupScopeKind)1, so a round-trip name check must reject it.");
+
+    [TestCase("WholeTree,Prefix")]
+    [TestCase("wholetree,prefix")]
+    public void ToScope_rejects_a_comma_combined_name(string kind)
+        => Assert.That(
+            () => BackupToolMappings.ToScope("orders", kind, keyOrPrefix: null),
+            Throws.ArgumentException,
+            "Enum.TryParse folds a comma-combined name as a bitwise OR onto a defined member; a round-trip name check must reject it.");
 }
