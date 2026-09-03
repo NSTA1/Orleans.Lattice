@@ -1,8 +1,8 @@
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Deterministic 64-bit FNV-1a hash over the ordered, NUL-separated
-/// concatenation of a secret set's UTF-8 bytes. The output is stable
+/// Deterministic 64-bit FNV-1a hash over the ordered, length-prefixed
+/// concatenation of a secret set's UTF-16 code units. The output is stable
 /// across processes and runtime restarts, unlike
 /// <see cref="string.GetHashCode()"/> which is randomised per process.
 /// </summary>
@@ -28,10 +28,10 @@ internal static class StableSecretSetHash
 
     /// <summary>
     /// Hashes the supplied ordered sequence of strings. Each string is
-    /// fed through the running FNV-1a state followed by a single NUL
-    /// byte so distinct partitions cannot alias (e.g.
-    /// <c>{"ab", "c"}</c> and <c>{"a", "bc"}</c> hash differently).
-    /// Null entries are treated as empty.
+    /// length-prefixed and then fed through the running FNV-1a state so
+    /// distinct partitions cannot alias (e.g. <c>{"ab", "c"}</c> and
+    /// <c>{"a", "bc"}</c> hash differently). Null entries are treated as
+    /// empty.
     /// </summary>
     public static string Compute(IReadOnlyList<string?> entries)
     {
@@ -41,23 +41,44 @@ internal static class StableSecretSetHash
         for (var i = 0; i < entries.Count; i++)
         {
             var s = entries[i];
-            if (!string.IsNullOrEmpty(s))
+            var length = s?.Length ?? 0;
+
+            // Length-prefix the entry so its extent frames its content in the
+            // digest before its bytes. A fixed NUL separator byte cannot
+            // delimit entries reliably because it is indistinguishable from a
+            // NUL that occurs inside an entry - both an embedded '\0' and the
+            // high byte of any ASCII code unit hash as 0x00 - so e.g.
+            // {"a\0\0c"} and {"a", "\0", "c"} (and {"\0"} and {null, null,
+            // null}) produced an identical separator-delimited byte stream and
+            // collided, violating the "distinct partitions cannot alias"
+            // contract. Framing each entry by its length instead makes the
+            // partition unambiguous, matching the sibling
+            // ReplicationContentHash.
+            state = HashLength(state, length);
+
+            // Avoid Encoding.UTF8.GetBytes allocation by hashing the UTF-16
+            // code units directly. Determinism only requires a stable
+            // byte-stream view; UTF-16 little-endian as exposed by string
+            // indexing is stable across runtimes.
+            for (var j = 0; j < length; j++)
             {
-                // Avoid Encoding.UTF8.GetBytes allocation by hashing
-                // the UTF-16 code units directly. Determinism only
-                // requires a stable byte-stream view; UTF-16 little-
-                // endian as exposed by string indexing is stable
-                // across runtimes.
-                for (var j = 0; j < s.Length; j++)
-                {
-                    var ch = s[j];
-                    state = (state ^ (byte)(ch & 0xFF)) * FnvPrime;
-                    state = (state ^ (byte)((ch >> 8) & 0xFF)) * FnvPrime;
-                }
+                var ch = s![j];
+                state = (state ^ (byte)(ch & 0xFF)) * FnvPrime;
+                state = (state ^ (byte)((ch >> 8) & 0xFF)) * FnvPrime;
             }
-            // Field separator so set partitions cannot alias.
-            state = (state ^ 0x00) * FnvPrime;
         }
         return state.ToString("x16");
+    }
+
+    private static ulong HashLength(ulong state, int length)
+    {
+        // Fold the 32-bit entry length low byte first so an entry's extent
+        // frames its content in the digest.
+        var bits = (uint)length;
+        for (var shift = 0; shift < 32; shift += 8)
+        {
+            state = (state ^ (byte)((bits >> shift) & 0xFF)) * FnvPrime;
+        }
+        return state;
     }
 }
