@@ -135,7 +135,7 @@ The adaptation never reorders work, never crosses an atomic-batch boundary, and 
 
 Controller state is in-memory and activation-scoped (per `(tree, peer)` shipper activation). A grain re-activation resets the effective size to `ShipBatchSize` and the controller re-learns from the live link; nothing about the adaptive size is persisted.
 
-Two observability histograms emit once per acknowledged batch regardless of the flag (they are useful even with static sizing): `orleans.lattice.replication.ship.effective_batch_size` and `orleans.lattice.replication.ship.ack_latency`. See [Observability](observability.md#sender-side-adaptive-batch-sizing-ship-effective_batch_size--ship-ack_latency).
+Two observability histograms emit once per acknowledged batch regardless of the flag (they are useful even with static sizing): `orleans.lattice.replication.ship.effective_batch_size` and `orleans.lattice.replication.ship.ack_latency`. See [Observability](observability.md#sender-side-adaptive-batch-sizing-shipeffective_batch_size--shipack_latency).
 
 ## Failure mode
 

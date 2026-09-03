@@ -166,7 +166,7 @@ See [Wire Format](wire-format.md).
 | `WireVersionDownEncoder` | static class | Down-stamps frames for older receivers. | Public down-encoding helpers |
 | ReplicationTypeAliases | static class | Stable Orleans serialization alias constants for public replication wire types. | Public alias constants |
 
-Use this surface when writing a transport or compatibility shim. Most application hosts only configure the related options in [Configuration](configuration.md#wire-version).
+Use this surface when writing a transport or compatibility shim. Most application hosts only configure the related options in [Configuration](configuration.md#wire-version-and-adaptive-batch-sizing).
 
 ## Metrics types
 

@@ -241,8 +241,17 @@ siloBuilder.AddLattice((silo, storageName) =>
 
 // AddLattice registers the in-memory WAL by default - swap for a durable backend in production.
 
-// elsewhere - on the client or inside a grain - resolve a tree by name and write a key:
+// elsewhere - on the client or inside a grain - resolve a tree by name:
 var lattice = grainFactory.GetGrain<ILattice>("my-tree");
+
+// Values are byte[] at the core, but the typed extensions serialize for you, so
+// application code rarely touches a byte[]. These overloads default to JSON:
+await lattice.SetAsync("user/42", new User("Ada", 36));
+var user = await lattice.GetAsync<User>("user/42");
+Console.WriteLine(user?.Name);
+
+// Pass an ILatticeSerializer<T> to choose your own format, or use the raw
+// byte[] surface directly when you want to own the encoding:
 await lattice.SetAsync("hello", "world"u8.ToArray());
 ```
 

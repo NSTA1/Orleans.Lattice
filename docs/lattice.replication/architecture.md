@@ -72,7 +72,7 @@ flowchart LR
    per-key versions are coalesced off the wire before shipping, and the framing
    tail is compressed; both are convergent transforms over what the ship loop
    reads, never a mutation of the durable WAL. The efficiency posture is
-   described in [`../lattice.replication/README.md`](README.md#default-efficiency-posture)
+   described in [`../lattice.replication/README.md`](README.md#default-efficiency-posture-versions-greater-than-v710)
    and the cursor/cadence knobs in [`configuration.md`](configuration.md).
 
 5. **Transport (`IReplicationTransport`).** The public transport seam carries

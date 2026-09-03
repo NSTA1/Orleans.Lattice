@@ -1,0 +1,16 @@
+/* Orleans.Lattice documentation site overrides. */
+
+/*
+ * The navbar template applies no size constraint to the brand logo and relies
+ * entirely on the asset's intrinsic width/height (DocFX's own stock logo is
+ * authored at 38pt). An icon-resolution asset therefore renders at full size and
+ * overflows the header, so the size is bounded here as well as on the asset.
+ */
+#logo {
+  height: 2rem;
+  width: auto;
+  max-height: 2rem;
+  margin-right: 0.6rem;
+  margin-left: 0.2rem;
+  vertical-align: middle;
+}

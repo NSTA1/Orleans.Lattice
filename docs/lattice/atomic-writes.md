@@ -948,7 +948,7 @@ batch that is.
 
 The cross-tree workload is exercised under concurrent shard splits in
 the chaos suite - see
-[Chaos Tests: Test 11](chaos-tests.md#test-11---cross-tree-atomic-write-under-shard-churn).
+[Chaos Tests: Test 11](chaos-tests.md#test-11---cross-tree-atomic-write-under-shard-churn-chaoscrosstreeatomicwriteintegrationtests).
 
 ## Related
 
