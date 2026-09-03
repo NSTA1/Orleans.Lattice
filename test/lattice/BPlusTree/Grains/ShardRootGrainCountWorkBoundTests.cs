@@ -44,7 +44,7 @@ public class ShardRootGrainCountWorkBoundTests
     /// one-leaf shard but would make a multi-leaf resume test meaningless.
     /// </para>
     /// </summary>
-    private static Harness CreateChain(int leafCount, int keysPerLeaf, int maxLeavesPerBatch)
+    private static Harness CreateChain(int leafCount, int keysPerLeaf, int maxLeavesPerBatch, bool emptyLeaves = false)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
@@ -90,11 +90,28 @@ public class ShardRootGrainCountWorkBoundTests
                 .Returns(call =>
                 {
                     Interlocked.Increment(ref countCalls);
+                    if (emptyLeaves) return Task.FromResult(0);
                     var lo = call.ArgAt<string?>(0);
                     var hi = call.ArgAt<string?>(1);
                     return Task.FromResult(keys.Count(k =>
                         (lo is null || string.CompareOrdinal(k, lo) >= 0)
                         && (hi is null || string.CompareOrdinal(k, hi) < 0)));
+                });
+            leaf.CountAsync().Returns(_ =>
+            {
+                Interlocked.Increment(ref countCalls);
+                return Task.FromResult(emptyLeaves ? 0 : keys.Count);
+            });
+            leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>())
+                .Returns(call =>
+                {
+                    var lo = call.ArgAt<string?>(0);
+                    var hi = call.ArgAt<string?>(1);
+                    return Task.FromResult(emptyLeaves
+                        ? new List<string>()
+                        : keys.Where(k =>
+                            (lo is null || string.CompareOrdinal(k, lo) >= 0)
+                            && (hi is null || string.CompareOrdinal(k, hi) < 0)).ToList());
                 });
 
             var high = index + 1 < leafCount ? $"k{index + 1:D3}-000" : null;
@@ -231,6 +248,93 @@ public class ShardRootGrainCountWorkBoundTests
             Assert.That(h.LeafCountCalls(), Is.LessThan(10),
                 "a narrow range must not cost a walk to the end of a 40-leaf "
                 + "chain; before the past-range exit this visited all 40");
+        });
+    }
+
+    // --- AnyAsync (issue 1971) ---
+
+    /// <summary>
+    /// The bound only engages on an empty or fully-tombstoned shard, which is
+    /// exactly the case that used to walk the whole chain in one call.
+    /// </summary>
+    [Test]
+    public async Task An_empty_shard_probe_stops_within_its_budget_and_reports_a_resume_key()
+    {
+        var h = CreateChain(leafCount: 40, keysPerLeaf: 2, maxLeavesPerBatch: 4, emptyLeaves: true);
+
+        var page = await h.Grain.AnyBoundedAsync(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Found, Is.False);
+            Assert.That(page.ResumeFromInclusive, Is.Not.Null,
+                "a bounded batch that found nothing must be distinguishable from "
+                + "a genuinely empty shard, otherwise a populated shard reads as empty");
+            Assert.That(h.LeafCountCalls(), Is.LessThanOrEqualTo(5));
+        });
+    }
+
+    [Test]
+    public async Task Driving_the_bounded_probe_over_an_empty_shard_reports_empty()
+    {
+        var h = CreateChain(leafCount: 40, keysPerLeaf: 2, maxLeavesPerBatch: 4, emptyLeaves: true);
+
+        Assert.That(await h.Grain.AnyAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task A_populated_shard_short_circuits_without_a_resume_key()
+    {
+        var h = CreateChain(leafCount: 40, keysPerLeaf: 2, maxLeavesPerBatch: 4);
+
+        var page = await h.Grain.AnyBoundedAsync(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Found, Is.True);
+            Assert.That(page.ResumeFromInclusive, Is.Null, "the walk is over once a key is found");
+            Assert.That(h.LeafCountCalls(), Is.EqualTo(1), "a populated shard must cost one leaf call");
+        });
+    }
+
+    // --- CountWithMovedAwayAsync / CountForSlotsAsync (issue 1971) ---
+
+    [Test]
+    public async Task Driving_the_bounded_moved_away_count_matches_the_whole_chain()
+    {
+        var h = CreateChain(leafCount: 40, keysPerLeaf: 2, maxLeavesPerBatch: 4);
+
+        var result = await h.Grain.CountWithMovedAwayAsync();
+
+        Assert.That(result.Count, Is.EqualTo(h.TotalKeys),
+            "summing the bounded batches must equal the unbounded walk exactly");
+    }
+
+    [Test]
+    public async Task Driving_the_bounded_per_slot_count_matches_the_whole_chain()
+    {
+        var h = CreateChain(leafCount: 40, keysPerLeaf: 2, maxLeavesPerBatch: 4);
+
+        // Every slot owned, so the per-slot filter keeps every key and the
+        // total must match the plain count.
+        var allSlots = Enumerable.Range(0, 1024).ToArray();
+        var count = await h.Grain.CountForSlotsAsync(allSlots, 1024, null, null);
+
+        Assert.That(count, Is.EqualTo(h.TotalKeys));
+    }
+
+    [Test]
+    public async Task A_bounded_per_slot_batch_stops_within_its_budget()
+    {
+        var h = CreateChain(leafCount: 40, keysPerLeaf: 2, maxLeavesPerBatch: 4);
+        var allSlots = Enumerable.Range(0, 1024).ToArray();
+
+        var page = await h.Grain.CountForSlotsBoundedAsync(allSlots, 1024, null, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.ResumeFromInclusive, Is.Not.Null);
+            Assert.That(page.Count, Is.LessThan(h.TotalKeys));
         });
     }
 }

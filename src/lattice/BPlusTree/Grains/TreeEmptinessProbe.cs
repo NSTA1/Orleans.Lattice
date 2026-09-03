@@ -76,14 +76,13 @@ internal static class TreeEmptinessProbe
         string physicalTreeId,
         IReadOnlyList<int> physicalShards,
         TimeSpan budget)
-    {
-        try
+    {        try
         {
             var probes = new Task<bool>[physicalShards.Count];
             for (int i = 0; i < physicalShards.Count; i++)
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{physicalShards[i]}");
-                probes[i] = ShardActivationRetry.RunAsync(shard.AnyAsync);
+                probes[i] = DriveShardAnyAsync(shard);
             }
 
             var all = Task.WhenAll(probes);
@@ -129,4 +128,28 @@ internal static class TreeEmptinessProbe
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted,
             TaskScheduler.Default);
+
+    /// <summary>
+    /// Drives one shard's work-bounded emptiness probe to completion.
+    /// <para>
+    /// The bound only engages on an empty or fully-tombstoned shard, since a
+    /// populated one short-circuits at its first non-empty leaf - which is
+    /// exactly the case this probe exists for, and exactly the case that used
+    /// to walk the whole chain in one non-reentrant call (issue 1971). A
+    /// <see langword="false"/> is only believed once the shard reports no
+    /// resume position, so a bounded batch can never be mistaken for a
+    /// genuinely empty shard.
+    /// </para>
+    /// </summary>
+    private static async Task<bool> DriveShardAnyAsync(IShardRootGrain shard)
+    {
+        string? cursor = null;
+        while (true)
+        {
+            var page = await ShardActivationRetry.RunAsync(() => shard.AnyBoundedAsync(cursor));
+            if (page.Found) return true;
+            if (page.ResumeFromInclusive is not { } next) return false;
+            cursor = next;
+        }
+    }
 }
