@@ -1,0 +1,29 @@
+{
+  "build": {
+    "content": [
+      {
+        "files": [ "**/*.md", "**/toc.yml" ],
+        "src": "src"
+      }
+    ],
+    "resource": [
+      {
+        "files": [ "lattice-logo.svg" ],
+        "src": "src"
+      }
+    ],
+    "output": "_site",
+    "template": [ "default", "modern", "template" ],
+    "globalMetadata": {
+      "_appName": "Orleans.Lattice",
+      "_appTitle": "Orleans.Lattice",
+      "_appLogoPath": "lattice-logo.svg",
+      "_appFaviconPath": "lattice-logo.svg",
+      "_enableSearch": true,
+      "_disableContribution": true,
+      "_gitContribute": {
+        "repo": "https://github.com/NSTA1/Orleans.Lattice"
+      }
+    }
+  }
+}
