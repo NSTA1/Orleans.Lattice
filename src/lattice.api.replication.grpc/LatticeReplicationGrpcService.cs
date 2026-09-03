@@ -31,7 +31,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
     /// <summary>Disables replication for a tree. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
     public abstract Task<ReplicationDisableResponse> DisableReplication(ReplicationDisableRequestMessage request, ServerCallContext context);
 
-    /// <summary>Reports the runtime replicated-tree set. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
+    /// <summary>Reports the effective replicated-tree set. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
     public abstract Task<ReplicationConfigResponse> GetReplicationConfig(ReplicationGetConfigRequest request, ServerCallContext context);
 
     /// <summary>
@@ -195,6 +195,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     HasMode = entry.Mode.HasValue,
                     Mode = entry.Mode ?? default,
                     Ambiguous = entry.Ambiguous,
+                    Source = entry.Source,
                 });
             }
 

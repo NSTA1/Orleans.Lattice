@@ -27,6 +27,7 @@ For the engine-side mechanics - the static anchor, the compiled snapshot, and th
 - **Mode fixed at enable time.** The merge mode is chosen when a tree is first enabled and cannot be changed in place; enabling an already-enabled tree under a different mode is rejected. The sanctioned way to change a mode is to disable then re-enable, which re-bootstraps the tree cleanly.
 - **Disable never purges.** Disabling pauses shipping new mutations; it never deletes data already replicated to peers.
 - **Permission-scoped discovery.** `GetReplicationConfigAsync` reports only the trees the caller is authorized to manage, so it never reveals the existence of a tree outside the caller's grant.
+- **Both enrollment sources are reconciled.** A replication-enabled host resolves a tree's merge mode from the runtime config tree *and* the static deployment-time replicated-tree map, which acts as a fallback floor. `GetReplicationConfigAsync` reports the union under the same precedence the commit path applies, so an estate enrolled purely through deployment configuration is reported as replicating rather than as empty. Each entry's `Source` names which one is in force.
 
 ## Ordering
 
@@ -40,7 +41,7 @@ The facade operations (each reached over the gRPC binding as one RPC, and over M
 |---|---|
 | Enable replication | Enable a tree under a fixed merge mode, optionally bootstrapping a non-empty tree from a named source cluster. |
 | Disable replication | Pause shipping a tree without purging already-replicated peer data. Idempotent. |
-| Get replication config | Report each authorized tree's enabled state, fixed merge mode, and ambiguity status. |
+| Get replication config | Report each authorized tree's enrolled state, the merge mode in force, its ambiguity status, and which enrollment source put it in force. |
 
 ## Reference
 

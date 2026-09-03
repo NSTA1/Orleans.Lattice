@@ -109,6 +109,38 @@ public sealed class LatticeReplicationApiGrpcClientRoundTripTests
     }
 
     [Test]
+    public async Task GetReplicationConfigAsync_round_trips_the_enrollment_source()
+    {
+        var (client, control) = CreateClient();
+        control.GetReplicationConfigAsync(Arg.Any<CancellationToken>())
+            .Returns(new ReplicationConfigReport(new[]
+            {
+                new ReplicationTreeConfigEntry("orders", enabled: true, LatticeMergeMode.RwFlag, ambiguous: false)
+                {
+                    Source = ReplicationEnrollmentSource.Static,
+                },
+                new ReplicationTreeConfigEntry(
+                    "customers", enabled: true, LatticeMergeMode.OrSet, ambiguous: false)
+                {
+                    Source = ReplicationEnrollmentSource.RuntimeAndStatic,
+                },
+                new ReplicationTreeConfigEntry("audit", enabled: true, LatticeMergeMode.OrMap, ambiguous: false),
+            }));
+
+        var report = await client.GetReplicationConfigAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Trees[0].Source, Is.EqualTo(ReplicationEnrollmentSource.Static));
+            Assert.That(report.Trees[1].Source, Is.EqualTo(ReplicationEnrollmentSource.RuntimeAndStatic));
+            Assert.That(
+                report.Trees[2].Source,
+                Is.EqualTo(ReplicationEnrollmentSource.Runtime),
+                "an unset source round-trips as the runtime default");
+        });
+    }
+
+    [Test]
     public async Task EnableReplicationAsync_rejects_empty_tree_id()
     {
         var (client, _) = CreateClient();

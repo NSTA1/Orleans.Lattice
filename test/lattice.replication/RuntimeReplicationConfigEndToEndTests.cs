@@ -273,7 +273,8 @@ public sealed class RuntimeReplicationConfigEndToEndTests
         ConvergingConfigStore store,
         string localReplicaId = SiteA,
         ILatticeReplicationAdmin? admin = null,
-        ILatticeTreeContentProbe? probe = null)
+        ILatticeTreeContentProbe? probe = null,
+        IReadOnlyDictionary<string, LatticeMergeMode>? staticSeed = null)
     {
         var context = Substitute.For<ILatticeReplicationContext>();
         context.LocalReplicaId.Returns(localReplicaId);
@@ -283,7 +284,8 @@ public sealed class RuntimeReplicationConfigEndToEndTests
         admin ??= Substitute.For<ILatticeReplicationAdmin>();
         probe ??= FixedProbe(hasContent: false);
 
-        return new LatticeReplicationConfigAuthority(store, preconditions, context, admin, probe);
+        return new LatticeReplicationConfigAuthority(
+            store, preconditions, context, admin, probe, BuildMonitor(staticSeed));
     }
 
     private static ILatticeTreeContentProbe FixedProbe(bool hasContent)

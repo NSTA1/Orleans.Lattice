@@ -73,12 +73,17 @@ public interface ILatticeReplicationControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reports the runtime replicated-tree set - each tree's enabled state,
-    /// fixed merge mode, and ambiguity / convergence status. The report is
-    /// permission-scoped: it includes only the trees the caller is authorized to
-    /// manage (fail-closed discovery), so a caller without a grant for a tree is
-    /// not told the tree exists. Never throws on a per-tree permission denial; a
-    /// denied tree is silently omitted.
+    /// Reports the effective replicated-tree set - each tree's enrolled state,
+    /// the merge mode in force, its ambiguity / convergence status, and which
+    /// enrollment source put it in force. Both sources a replication-enabled
+    /// host resolves against are reconciled: trees enabled through
+    /// <see cref="EnableReplicationAsync"/> at runtime <b>and</b> trees declared
+    /// in the static deployment-time replicated-tree map, which acts as a
+    /// fallback floor on the commit path. The report is permission-scoped: it
+    /// includes only the trees the caller is authorized to manage (fail-closed
+    /// discovery), so a caller without a grant for a tree is not told the tree
+    /// exists. Never throws on a per-tree permission denial; a denied tree is
+    /// silently omitted.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The permission-scoped per-tree replication config report.</returns>

@@ -166,6 +166,87 @@ public sealed class LatticeReplicationControlTests
     }
 
     [Test]
+    public async Task GetReplicationConfigAsync_maps_the_enrollment_source_of_every_tree()
+    {
+        var authority = Substitute.For<ILatticeReplicationConfigAuthority>();
+        authority
+            .GetAllTreeStatusesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<string, LatticeReplicationTreeStatus>>(
+                new Dictionary<string, LatticeReplicationTreeStatus>
+                {
+                    ["runtime"] = new("runtime", true, LatticeMergeMode.OrSet, false)
+                    {
+                        Source = LatticeReplicationEnrollmentSource.Runtime,
+                    },
+                    ["declared"] = new("declared", true, LatticeMergeMode.LwwRegister, false)
+                    {
+                        Source = LatticeReplicationEnrollmentSource.Static,
+                    },
+                    ["both"] = new("both", true, LatticeMergeMode.OrMap, false)
+                    {
+                        Source = LatticeReplicationEnrollmentSource.RuntimeAndStatic,
+                    },
+                }));
+        var control = CreateControl(authority, new AllowingAccessGate());
+
+        var report = await control.GetReplicationConfigAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                report.Trees.Single(t => t.TreeId == "runtime").Source,
+                Is.EqualTo(ReplicationEnrollmentSource.Runtime));
+            Assert.That(
+                report.Trees.Single(t => t.TreeId == "declared").Source,
+                Is.EqualTo(ReplicationEnrollmentSource.Static));
+            Assert.That(
+                report.Trees.Single(t => t.TreeId == "both").Source,
+                Is.EqualTo(ReplicationEnrollmentSource.RuntimeAndStatic));
+        });
+    }
+
+    [Test]
+    public async Task GetReplicationConfigAsync_reports_a_statically_declared_tree_the_caller_may_manage()
+    {
+        // Regression: an estate enrolled purely through deployment configuration
+        // must not report an empty tree set through the control facade.
+        var authority = Substitute.For<ILatticeReplicationConfigAuthority>();
+        authority
+            .GetAllTreeStatusesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<string, LatticeReplicationTreeStatus>>(
+                new Dictionary<string, LatticeReplicationTreeStatus>
+                {
+                    [Tree] = new(Tree, true, LatticeMergeMode.LwwRegister, false)
+                    {
+                        Source = LatticeReplicationEnrollmentSource.Static,
+                    },
+                }));
+        var control = CreateControl(authority, new TreeScopedAccessGate(Tree));
+
+        var report = await control.GetReplicationConfigAsync();
+
+        var entry = report.Trees.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(entry.TreeId, Is.EqualTo(Tree));
+            Assert.That(entry.Enabled, Is.True);
+            Assert.That(entry.Mode, Is.EqualTo(LatticeMergeMode.LwwRegister));
+            Assert.That(entry.Source, Is.EqualTo(ReplicationEnrollmentSource.Static));
+        });
+    }
+
+    [Test]
+    public void ReplicationTreeConfigEntry_defaults_its_source_to_runtime()
+    {
+        // The default keeps an entry built without an explicit source - including
+        // one deserialized from a peer predating the field - reading as the
+        // runtime enrollment the report has always described.
+        var entry = new ReplicationTreeConfigEntry(Tree, enabled: true, LatticeMergeMode.OrSet, ambiguous: false);
+
+        Assert.That(entry.Source, Is.EqualTo(ReplicationEnrollmentSource.Runtime));
+    }
+
+    [Test]
     public void EnableReplicationAsync_surfaces_precondition_exception()
     {
         var authority = Substitute.For<ILatticeReplicationConfigAuthority>();

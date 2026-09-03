@@ -119,24 +119,36 @@ public interface ILatticeReplicationConfigAuthority
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads the current runtime replication status for <paramref name="treeId"/>
-    /// from the config OR-Map, or <see langword="null"/> when the tree has no
-    /// config entry. Sourced from the same OR-Map the compiled snapshot is built
-    /// from, so it reflects converged state (subject to replication propagation
-    /// delay).
+    /// Reads the current effective replication status for <paramref name="treeId"/>,
+    /// or <see langword="null"/> when neither enrollment source declares it.
+    /// <para>
+    /// The status reconciles <b>both</b> sources a replication-enabled host
+    /// resolves against: the runtime config OR-Map (the same one the compiled
+    /// snapshot is built from, so it reflects converged state subject to
+    /// replication propagation delay) and the static
+    /// <see cref="LatticeReplicationOptions.ReplicatedTrees"/> deployment map.
+    /// Precedence mirrors the commit-path merge-mode resolver exactly - an
+    /// ambiguous runtime mode fails closed and never falls back, an enabled
+    /// unambiguous runtime mode wins, and otherwise the static declaration is the
+    /// floor that keeps the tree shipping - and
+    /// <see cref="LatticeReplicationTreeStatus.Source"/> names which source is in
+    /// force.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The target tree id. Must be non-empty.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
-    /// <returns>The tree's status, or <see langword="null"/> when it is not configured.</returns>
+    /// <returns>The tree's status, or <see langword="null"/> when neither source declares it.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <see langword="null"/> or empty.</exception>
     Task<LatticeReplicationTreeStatus?> GetTreeStatusAsync(
         string treeId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads the current runtime replication status for every configured tree
-    /// from the config OR-Map, keyed by target tree id. Returns an empty map when
-    /// no tree is configured.
+    /// Reads the current effective replication status for every enrolled tree,
+    /// keyed by target tree id: the union of the runtime config OR-Map and the
+    /// static <see cref="LatticeReplicationOptions.ReplicatedTrees"/> deployment
+    /// map, each reconciled as <see cref="GetTreeStatusAsync"/> describes.
+    /// Returns an empty map only when neither source declares any tree.
     /// </summary>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>Per-tree status, keyed by target tree id.</returns>

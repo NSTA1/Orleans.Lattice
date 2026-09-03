@@ -115,7 +115,8 @@ public sealed class LatticeReplicationApiGrpcClient
     }
 
     /// <summary>
-    /// Reports the runtime replicated-tree set visible to the calling credential.
+    /// Reports the effective replicated-tree set visible to the calling
+    /// credential, reconciling runtime and static enrollment.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The permission-scoped replication configuration report.</returns>
@@ -134,7 +135,10 @@ public sealed class LatticeReplicationApiGrpcClient
                 tree.TreeId,
                 tree.Enabled,
                 tree.HasMode ? tree.Mode : null,
-                tree.Ambiguous));
+                tree.Ambiguous)
+            {
+                Source = tree.Source,
+            });
         }
 
         return new ReplicationConfigReport(entries);

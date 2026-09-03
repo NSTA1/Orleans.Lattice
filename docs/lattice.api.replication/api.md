@@ -49,10 +49,19 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 
 | Member | Type | Meaning |
 |---|---|---|
-| `TreeId` | `string` | The configured tree. |
-| `Enabled` | `bool` | Whether replication is currently enabled for the tree. |
-| `Mode` | `LatticeMergeMode?` | The fixed merge mode, or `null` when the mode is ambiguous (see `Ambiguous`). |
-| `Ambiguous` | `bool` | `true` when concurrent divergent mode writes have not yet been resolved; while ambiguous the engine pauses shipping the tree rather than picking a mode. |
+| `TreeId` | `string` | The enrolled tree. |
+| `Enabled` | `bool` | Whether the tree is effectively enrolled, i.e. the host admits its mutations for shipping. Always `true` for a statically declared tree - the static map is a floor, so a runtime disable does not stop it. |
+| `Mode` | `LatticeMergeMode?` | The merge mode in force, or `null` when the mode is ambiguous (see `Ambiguous`). |
+| `Ambiguous` | `bool` | `true` when concurrent divergent mode writes have not yet been resolved; while ambiguous the engine pauses shipping the tree rather than picking a mode. Ambiguity wins over a static declaration. |
+| `Source` | `ReplicationEnrollmentSource` | Which enrollment source put the entry in force. Defaults to `Runtime`. |
+
+### `ReplicationEnrollmentSource`
+
+| Value | Meaning |
+|---|---|
+| `Runtime` | Only the runtime config tree declares the tree, and its entry is in force. The default, so an entry received from a peer predating this member reads as the runtime enrollment the report has always described. |
+| `Static` | The static deployment-time replicated-tree map puts the tree in force: either the runtime config tree has no entry for it, or its entry yields no enabled unambiguous mode and the resolver falls back to the static declaration. Such a tree keeps shipping after a disable and is turned off in deployment configuration instead. |
+| `RuntimeAndStatic` | Both sources declare the tree and the runtime entry is in force, so the reported mode is the runtime-fixed mode. |
 
 ## Exceptions
 

@@ -17,7 +17,8 @@ namespace Orleans.Lattice.Api.Mcp;
 internal static class ReplicationToolInvocations
 {
     /// <summary>
-    /// Reports the runtime replicated-tree set the caller is authorized to see.
+    /// Reports the effective replicated-tree set the caller is authorized to
+    /// see, reconciling runtime and static enrollment as the facade does.
     /// </summary>
     public static async Task<McpReplicationConfig> GetReplicationConfigAsync(
         ILatticeReplicationControl control,

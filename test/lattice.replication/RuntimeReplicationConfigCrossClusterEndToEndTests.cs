@@ -108,7 +108,8 @@ public sealed class RuntimeReplicationConfigCrossClusterEndToEndTests
         var probe = Substitute.For<ILatticeTreeContentProbe>();
         probe.HasContentAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
 
-        return new LatticeReplicationConfigAuthority(store, preconditions, context, admin, probe);
+        return new LatticeReplicationConfigAuthority(
+            store, preconditions, context, admin, probe, EmptyMonitor());
     }
 
     private static async Task<CompiledReplicationConfigSnapshotMaintainer> WarmMaintainerAsync(

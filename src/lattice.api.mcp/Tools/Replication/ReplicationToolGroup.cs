@@ -89,9 +89,13 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 SerializerOptions = LatticeApiMcpToolSerialization.Options,
                 Title = "Get replication config",
                 Description =
-                    "Reports the runtime replicated-tree set the caller may manage: each tree's enabled state, "
-                    + "fixed merge mode, and whether its mode is ambiguous (shipping paused fail-closed). "
-                    + "Permission-scoped: a tree the caller cannot manage is omitted. Read-only.",
+                    "Reports the effective replicated-tree set the caller may manage: each tree's enrolled "
+                    + "state, the merge mode in force, whether its mode is ambiguous (shipping paused "
+                    + "fail-closed), and which enrollment source put it in force - Runtime (enabled through "
+                    + "this surface), Static (declared in deployment configuration, so change it there, not "
+                    + "at runtime), or RuntimeAndStatic. Both sources are reconciled, so a statically "
+                    + "configured estate is reported as replicating. Permission-scoped: a tree the caller "
+                    + "cannot manage is omitted. Read-only.",
                 ReadOnly = true,
                 Destructive = false,
                 UseStructuredContent = true,

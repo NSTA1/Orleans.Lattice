@@ -45,6 +45,40 @@ public sealed class ReplicationToolInvocationsTests
     }
 
     [Test]
+    public async Task Get_config_projects_the_enrollment_source_as_its_name()
+    {
+        var control = Substitute.For<ILatticeReplicationControl>();
+        control.GetReplicationConfigAsync(Arg.Any<CancellationToken>())
+            .Returns(new ReplicationConfigReport(new[]
+            {
+                new ReplicationTreeConfigEntry("orders", enabled: true, LatticeMergeMode.OrSet, ambiguous: false)
+                {
+                    Source = ReplicationEnrollmentSource.Runtime,
+                },
+                new ReplicationTreeConfigEntry(
+                    "inventory", enabled: true, LatticeMergeMode.LwwRegister, ambiguous: false)
+                {
+                    Source = ReplicationEnrollmentSource.Static,
+                },
+                new ReplicationTreeConfigEntry("audit", enabled: true, LatticeMergeMode.OrMap, ambiguous: false)
+                {
+                    Source = ReplicationEnrollmentSource.RuntimeAndStatic,
+                },
+            }));
+
+        var config = await ReplicationToolInvocations.GetReplicationConfigAsync(control, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(config.Trees[0].Source, Is.EqualTo(nameof(ReplicationEnrollmentSource.Runtime)));
+            Assert.That(config.Trees[1].Source, Is.EqualTo(nameof(ReplicationEnrollmentSource.Static)));
+            Assert.That(
+                config.Trees[2].Source,
+                Is.EqualTo(nameof(ReplicationEnrollmentSource.RuntimeAndStatic)));
+        });
+    }
+
+    [Test]
     public async Task Get_config_of_an_empty_estate_projects_no_trees()
     {
         var control = Substitute.For<ILatticeReplicationControl>();
