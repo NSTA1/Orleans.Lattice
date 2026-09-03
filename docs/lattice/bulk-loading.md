@@ -104,6 +104,36 @@ retry on failure. The streaming extension appends each chunk to the right
 edge of the tree, so entries must arrive in ascending key order (as the
 example's comment notes).
 
+## Resumable chunked bulk load (`BulkAppendChunkAsync`)
+
+`BulkLoadAsync` drives the whole stream in one call, so a dropped connection
+loses the in-flight position. When an import must survive that - a multi-hour
+load, or one driven from an external orchestrator that owns its own
+checkpointing - drive the chunks yourself through `ILattice.BulkAppendChunkAsync`,
+which is the idempotent, resumable primitive the streaming extension is built on.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `BulkAppendChunkAsync` | `Task<int> BulkAppendChunkAsync(string operationId, IReadOnlyList<KeyValuePair<string, byte[]>> sortedEntries, CancellationToken cancellationToken = default)` | Appends one chunk of a bulk load, returning the number of entries appended after any write interception. Enforces the whole-tree `LatticeOperation.BulkLoad` gate. |
+
+Two caller obligations make it safe to re-drive:
+
+- **`operationId` must be stable per chunk.** The implementation derives a
+  per-shard operation id of the form `"{operationId}-{shardIndex}"`, and each
+  shard records the last completed id, so re-driving the *same* chunk after a
+  dropped connection reapplies nothing. Because a shard remembers only its
+  single most-recently-completed id, resume from the last un-acknowledged chunk
+  and never re-drive a chunk that a later chunk has already superseded on the
+  same shard.
+- **Keys must ascend**, both within a chunk and across the whole stream.
+  Hash-partitioning a globally sorted stream preserves relative order within
+  each partition, which is what keeps the per-shard appends on the right edge
+  of the tree.
+
+Throws `ArgumentException` when `operationId` is null or empty, and
+`ArgumentNullException` when `sortedEntries` is null. An empty chunk is a
+no-op that returns `0`.
+
 ## Efficiency compared with `SetManyAsync`
 
 The dataset is the same in both cases, but the work done to land it differs.
