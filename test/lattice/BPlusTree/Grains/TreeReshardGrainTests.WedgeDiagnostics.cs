@@ -94,7 +94,8 @@ public partial class TreeReshardGrainTests
         // branch which counts as both initiated and completed.
         var (grain, _, grainFactory, _) = CreateGrain();
         var emptyShard = Substitute.For<IShardRootGrain>();
-        emptyShard.AnyAsync().Returns(Task.FromResult(false));
+        emptyShard.AnyBoundedAsync(Arg.Any<string?>())
+            .Returns(Task.FromResult(new ShardAnyPage { Found = false }));
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(emptyShard);
 
         await grain.ReshardAsync(4);

@@ -58,7 +58,7 @@ public partial class TreeReshardGrainTests
         // whose stability-retry loop is what could outlast the caller's budget.
         var (grain, _, grainFactory, _) = CreateGrain(physicalShardCount: 2);
         var lattice = grainFactory.GetGrain<ILattice>(TreeId);
-        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(Task.FromResult(false)));
+        StubEveryShard(grainFactory, s => s.AnyBoundedAsync(Arg.Any<string?>()).Returns(Task.FromResult(new ShardAnyPage { Found = false })));
 
         await grain.ReshardAsync(4);
 
@@ -74,7 +74,7 @@ public partial class TreeReshardGrainTests
             physicalShardCount: 2,
             emptyTreeProbeBudget: TimeSpan.FromMilliseconds(50));
 
-        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(new TaskCompletionSource<bool>().Task));
+        StubEveryShard(grainFactory, s => s.AnyBoundedAsync(Arg.Any<string?>()).Returns(new TaskCompletionSource<ShardAnyPage>().Task));
 
         await grain.ReshardAsync(4);
 
@@ -87,8 +87,8 @@ public partial class TreeReshardGrainTests
         // An inconclusive probe must never fail initiation outright.
         var (grain, state, grainFactory, _) = CreateGrain(physicalShardCount: 2);
 
-        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(
-            Task.FromException<bool>(new InvalidOperationException("shard unavailable"))));
+        StubEveryShard(grainFactory, s => s.AnyBoundedAsync(Arg.Any<string?>()).Returns(
+            Task.FromException<ShardAnyPage>(new InvalidOperationException("shard unavailable"))));
 
         await grain.ReshardAsync(4);
 
@@ -104,8 +104,8 @@ public partial class TreeReshardGrainTests
         var (grain, state, grainFactory, _) = CreateGrain(physicalShardCount: 2);
 
         var probes = 0;
-        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(
-            _ => Task.FromResult(Interlocked.Increment(ref probes) > 1)));
+        StubEveryShard(grainFactory, s => s.AnyBoundedAsync(Arg.Any<string?>()).Returns(
+            _ => Task.FromResult(new ShardAnyPage { Found = Interlocked.Increment(ref probes) > 1 })));
 
         await grain.ReshardAsync(4);
 
@@ -121,7 +121,7 @@ public partial class TreeReshardGrainTests
             physicalShardCount: 2,
             emptyTreeProbeBudget: TimeSpan.FromMilliseconds(50));
 
-        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(Task.FromResult(false)));
+        StubEveryShard(grainFactory, s => s.AnyBoundedAsync(Arg.Any<string?>()).Returns(Task.FromResult(new ShardAnyPage { Found = false })));
 
         await grain.ReshardAsync(4);
 
@@ -138,7 +138,7 @@ public partial class TreeReshardGrainTests
             physicalShardCount: 2,
             emptyTreeProbeBudget: Timeout.InfiniteTimeSpan);
 
-        StubEveryShard(grainFactory, s => s.AnyAsync().Returns(Task.FromResult(false)));
+        StubEveryShard(grainFactory, s => s.AnyBoundedAsync(Arg.Any<string?>()).Returns(Task.FromResult(new ShardAnyPage { Found = false })));
 
         await grain.ReshardAsync(4);
 

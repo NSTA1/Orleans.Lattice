@@ -90,6 +90,7 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.BPlusTree.Grains.WalShardShippingPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.RoutingTableSnapshot"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.ShardCountResult"] = ReadModel,
+            ["Orleans.Lattice.BPlusTree.ShardCountWithMovedAwayPage"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.ShardTopologyNode"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.SnapshotBaselineCaptureResult"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.TerminalTallyResult"] = ReadModel,
