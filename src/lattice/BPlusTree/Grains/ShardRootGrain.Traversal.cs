@@ -309,14 +309,24 @@ internal sealed partial class ShardRootGrain
         // a ChildrenAreLeaves flag that fired one level too early.
         if (!state.State.RootIsLeaf)
         {
-            while (true)
+            var descended = false;
+            for (var level = 0; level < MaxTreeDescentLevels; level++)
             {
                 var snapshot = await GetRoutingTableSnapshotAsync(currentId);
                 var (childId, childrenAreLeaves) = snapshot.Route(key);
                 path.Push(currentId);
                 currentId = childId;
                 if (childrenAreLeaves)
+                {
+                    descended = true;
                     break;
+                }
+            }
+
+            if (!descended)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} descent for key '{key}' exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
             }
         }
 
@@ -843,7 +853,7 @@ internal sealed partial class ShardRootGrain
         // sync-complete (cache hit on the next level) or suspend again;
         // the slow tail handles either uniformly.
         var currentId = state.State.RootNodeId!.Value;
-        while (true)
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
         {
             var snapshotTask = GetRoutingTableSnapshotAsync(currentId);
             if (!snapshotTask.IsCompletedSuccessfully)
@@ -858,6 +868,9 @@ internal sealed partial class ShardRootGrain
             }
             currentId = childId;
         }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} read descent for key '{key}' exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
     }
 
     private async ValueTask<GrainId> TraverseToLeafSlowAsync(
@@ -880,7 +893,7 @@ internal sealed partial class ShardRootGrain
         // suspension for any ValueTask whose IsCompletedSuccessfully is
         // already true, so the slow tail pays at most one suspension
         // per cache miss for the rest of the walk.
-        while (true)
+        for (var level = 0; level < MaxTreeDescentLevels; level++)
         {
             snapshot = await GetRoutingTableSnapshotAsync(currentId);
             (childId, childrenAreLeaves) = snapshot.Route(key);
@@ -890,6 +903,9 @@ internal sealed partial class ShardRootGrain
             }
             currentId = childId;
         }
+
+        throw new InvalidOperationException(
+            $"ShardRootGrain {context.GrainId} read descent for key '{key}' exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
     }
 
     private async Task<GrainId> TraverseToLeftmostLeafAsync()
@@ -902,17 +918,21 @@ internal sealed partial class ShardRootGrain
         else
         {
             var currentId = state.State.RootNodeId!.Value;
-            while (true)
+            GrainId? found = null;
+            for (var level = 0; level < MaxTreeDescentLevels && found is null; level++)
             {
                 var snapshot = await GetRoutingTableSnapshotAsync(currentId);
                 var childId = snapshot.ChildIds[0];
                 if (snapshot.ChildrenAreLeaves)
                 {
-                    leafId = childId;
+                    found = childId;
                     break;
                 }
                 currentId = childId;
             }
+
+            leafId = found ?? throw new InvalidOperationException(
+                $"ShardRootGrain {context.GrainId} leftmost-leaf descent exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
         }
 
         return await DescendToEdgeLeafTypeGuardAsync(leafId, leftmost: true);
@@ -928,17 +948,21 @@ internal sealed partial class ShardRootGrain
         else
         {
             var currentId = state.State.RootNodeId!.Value;
-            while (true)
+            GrainId? found = null;
+            for (var level = 0; level < MaxTreeDescentLevels && found is null; level++)
             {
                 var snapshot = await GetRoutingTableSnapshotAsync(currentId);
                 var childId = snapshot.ChildIds[snapshot.ChildIds.Length - 1];
                 if (snapshot.ChildrenAreLeaves)
                 {
-                    leafId = childId;
+                    found = childId;
                     break;
                 }
                 currentId = childId;
             }
+
+            leafId = found ?? throw new InvalidOperationException(
+                $"ShardRootGrain {context.GrainId} rightmost-leaf descent exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
         }
 
         return await DescendToEdgeLeafTypeGuardAsync(leafId, leftmost: false);

@@ -147,8 +147,10 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxLeafEntriesBeforeForcedCompaction`](#maxleafentriesbeforeforcedcompaction) | `int` | 0 (disabled) | Yes |
 | [`MaxLeafReplayEntries`](#maxleafreplayentries) | `int` | 10 000 | Yes |
 | [`MaxLiveKeys`](#maxlivekeys) | `long?` | `null` (unbounded) | Yes |
+| [`MaxLeavesPerScanPage`](#maxleavesperscanpage) | `int` | 64 | Yes |
 | [`MaxPhysicalShardsPerTree`](#maxphysicalshardspertree) | `int` | 256 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
+| [`MaxScanPageDuration`](#maxscanpageduration) | `TimeSpan` | 5 seconds | Yes |
 | [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
 | [`MaxValueSizeBytes`](#maxvaluesizebytes) | `int?` | `null` (unbounded) | Yes |
@@ -782,6 +784,28 @@ This option can be changed freely at any time.
 ### `MaxScanRetries`
 
 Maximum bounded-retry passes for `CountAsync`, `ScanKeysAsync`, and `ScanEntriesAsync` when the shard topology changes mid-scan (default: 3). If the topology keeps mutating after every reconciliation step, the scan throws `InvalidOperationException` rather than returning a silently incomplete result. Under the default split rate-limits (`MaxConcurrentAutoSplits = 2`, `HotShardSplitCooldown = 2 minutes`), exhausting 3 retries is not a realistic operational concern. See [Scan reliability](api.md#scan-reliability).
+
+This option can be changed freely at any time.
+
+### `MaxLeavesPerScanPage`
+
+Maximum number of leaves one shard range-scan page fill may visit before returning a partial page with `HasMore` set (default: 64).
+
+A page fill used to be bounded only by its *output* - it walked the sibling chain until the page was full. A leaf can cost a grain call (plus a snapshot rehydration or WAL replay when cold) and still contribute nothing to the page, because its entries were filtered as moved-away by an adaptive split, tombstoned and still inside [`TombstoneGracePeriod`](tombstone-compaction.md), TTL-expired, or rejected by a pushed-down predicate. That made the worst case O(leaves in range) per call, and because shard reads are deliberately non-reentrant such a call head-of-line-blocks every other request to that shard - point reads, writes, splits and health probes alike - for its whole duration.
+
+Bounding the work turns one long call into several short ones, releasing the shard between them so other traffic interleaves. The bound is only applied once the page holds **at least one** result, so a caller can always derive its next continuation token and make forward progress; a page is therefore never empty while reporting more is available.
+
+Correctness is unaffected. Atomic visibility for a scan comes from the saga-decision snapshot pinned for the lifetime of the enumeration, not from the granularity of an individual shard call, so every page - including an extra boundary introduced by this bound - observes the identical view. See [Consistency](consistency.md#atomic-visibility).
+
+Raising it trades shard fairness for fewer round trips. Setting it to `0` or less disables the bound and restores the historical unbounded walk. The default is deliberately well above what a dense scan needs, so a healthy tree never reaches it.
+
+This option can be changed freely at any time.
+
+### `MaxScanPageDuration`
+
+Wall-clock safety net for a single shard range-scan page fill (default: 5 seconds). When a page fill has spent this long **and** holds at least one result, it returns a partial page rather than continuing to hold the non-reentrant shard.
+
+[`MaxLeavesPerScanPage`](#maxleavesperscanpage) is the primary, deterministic bound; this covers the case a leaf count cannot, where a small number of leaves are individually very slow - typically cold activations rehydrating large snapshots. Set to `TimeSpan.Zero` to disable it and rely on the leaf count alone.
 
 This option can be changed freely at any time.
 

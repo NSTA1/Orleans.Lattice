@@ -570,6 +570,8 @@ internal sealed class LatticeOptionsResolver(
             ShardHealingBackpressureOpsPerSecond = baseOptions.ShardHealingBackpressureOpsPerSecond,
             AutoSplitMinTreeAge = baseOptions.AutoSplitMinTreeAge,
             MaxScanRetries = baseOptions.MaxScanRetries,
+            MaxLeavesPerScanPage = baseOptions.MaxLeavesPerScanPage,
+            MaxScanPageDuration = baseOptions.MaxScanPageDuration,
             CursorIdleTtl = baseOptions.CursorIdleTtl,
             AtomicWriteRetention = baseOptions.AtomicWriteRetention,
             VersionVectorRetention = baseOptions.VersionVectorRetention,
