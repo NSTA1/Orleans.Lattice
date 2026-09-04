@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -3232,18 +3233,88 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     internal static Dictionary<int, int[]> BuildOwnedSlotMap(ShardMap map)
     {
-        // Single-pass build. Slots are iterated in ascending order, so each
-        // per-owner array is naturally sorted without a secondary Array.Sort.
-        // First pass: count slots per owner so we can allocate each int[]
-        // at its final size (no List<int> growth cycle, no copy). Second
-        // pass: fill via per-owner write cursors.
+        // Each per-owner array is emitted in ascending slot order, so no
+        // secondary Array.Sort is needed.
+        //
+        // The values in Slots are *physical* shard indices - small, dense and
+        // non-negative (typically 1..16) - while the slot array itself is
+        // sized to the *virtual* shard count (default 4096). Bucketing by
+        // owner into owner-indexed arrays therefore replaces five dictionary
+        // hash probes per virtual slot (the count read and write of the
+        // counting pass, then the cursor read, bucket read and cursor write
+        // of the fill pass) with plain array indexing, and drops both
+        // intermediate Dictionary<int, int> instances. This mirrors the
+        // bool-bitmap dedup ShardMap.GetPhysicalShardIndices already applies
+        // over the very same value domain.
         var slots = map.Slots;
-        var counts = new Dictionary<int, int>();
+        if (slots.Length == 0) return new Dictionary<int, int[]>();
+
+        var maxOwner = -1;
+        var dense = true;
         for (int s = 0; s < slots.Length; s++)
         {
             var owner = slots[s];
-            counts.TryGetValue(owner, out var c);
-            counts[owner] = c + 1;
+            if (owner < 0) { dense = false; break; }
+            if (owner > maxOwner) maxOwner = owner;
+        }
+
+        // A negative owner cannot index a bucket array, and a pathologically
+        // sparse one would make the dense buckets larger than the slot array
+        // itself. Neither is emitted by any production path (CreateDefault
+        // and the split logic both produce small non-negative indices), so
+        // this only guards a hand-seeded map; it falls back to the
+        // hash-probing form, which handles any int owner.
+        if (!dense || maxOwner >= slots.Length)
+            return BuildOwnedSlotMapSparse(slots);
+
+        var width = maxOwner + 1;
+        var counts = new int[width];
+        for (int s = 0; s < slots.Length; s++)
+            counts[slots[s]]++;
+
+        var distinct = 0;
+        for (int o = 0; o < width; o++)
+        {
+            if (counts[o] != 0) distinct++;
+        }
+
+        var result = new Dictionary<int, int[]>(distinct);
+        var buckets = new int[width][];
+        for (int o = 0; o < width; o++)
+        {
+            var n = counts[o];
+            if (n == 0) continue;
+            var bucket = new int[n];
+            buckets[o] = bucket;
+            result[o] = bucket;
+        }
+
+        // `counts` doubles as the per-owner write cursor: each entry is
+        // decremented from its total down to zero, so walking the slots from
+        // the top down lands the lowest slot at index 0 and leaves every
+        // bucket in ascending order - no second cursor array, no sort.
+        for (int s = slots.Length - 1; s >= 0; s--)
+        {
+            var owner = slots[s];
+            buckets[owner]![--counts[owner]] = s;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Owner-partitions <paramref name="slots"/> through hashed dictionaries.
+    /// Fallback for the (non-production) maps whose physical indices are
+    /// negative or too sparse for <see cref="BuildOwnedSlotMap"/>'s dense
+    /// buckets; produces an identical result for any input.
+    /// </summary>
+    private static Dictionary<int, int[]> BuildOwnedSlotMapSparse(int[] slots)
+    {
+        var counts = new Dictionary<int, int>();
+        for (int s = 0; s < slots.Length; s++)
+        {
+            ref var c = ref CollectionsMarshal.GetValueRefOrAddDefault(counts, slots[s], out _);
+            c++;
         }
 
         var result = new Dictionary<int, int[]>(counts.Count);

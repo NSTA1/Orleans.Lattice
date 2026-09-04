@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -803,9 +804,15 @@ public sealed class CrdtShape
         {
             foreach (var (key, value) in b)
             {
-                if (!result.TryGetValue(key, out var existing) || value > existing)
+                // Single-probe max-fold. The prior TryGetValue-then-indexer-set
+                // pair hashed the replica id twice for every entry that raised
+                // the running max (and for every entry absent from `a`), which
+                // on the delta-combine path is most of them.
+                ref var existing = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    result, key, out var existed);
+                if (!existed || value > existing)
                 {
-                    result[key] = value;
+                    existing = value;
                 }
             }
         }
@@ -823,9 +830,12 @@ public sealed class CrdtShape
         {
             foreach (var (key, value) in b)
             {
-                if (!result.TryGetValue(key, out var existing) || value.CompareTo(existing) > 0)
+                // Single-probe max-fold, as PointwiseMaxLong above.
+                ref var existing = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    result, key, out var existed);
+                if (!existed || value.CompareTo(existing) > 0)
                 {
-                    result[key] = value;
+                    existing = value;
                 }
             }
         }

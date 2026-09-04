@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Primitives;
 
@@ -273,10 +274,14 @@ internal sealed partial class ViewMaintainerGrain
             return;
         }
 
-        if (!_ordinaryHlcOverStagedKey.TryGetValue(mutation.Key, out var prev)
-            || mutation.Timestamp.CompareTo(prev) > 0)
+        // Single-probe max-fold: the prior TryGetValue-then-indexer-set pair
+        // hashed the source key twice for every ordinary write landing on a
+        // still-staged key.
+        ref var prev = ref CollectionsMarshal.GetValueRefOrAddDefault(
+            _ordinaryHlcOverStagedKey, mutation.Key, out var existed);
+        if (!existed || mutation.Timestamp.CompareTo(prev) > 0)
         {
-            _ordinaryHlcOverStagedKey[mutation.Key] = mutation.Timestamp;
+            prev = mutation.Timestamp;
         }
     }
 
@@ -617,9 +622,13 @@ internal sealed partial class ViewMaintainerGrain
 
         public void NoteOffset(int partition, long offset)
         {
-            if (!MinOffsetByPartition.TryGetValue(partition, out var cur) || offset < cur)
+            // Single-probe min-fold: the prior TryGetValue-then-indexer-set
+            // pair hashed `partition` twice on every staged entry.
+            ref var cur = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                MinOffsetByPartition, partition, out var existed);
+            if (!existed || offset < cur)
             {
-                MinOffsetByPartition[partition] = offset;
+                cur = offset;
             }
         }
 
@@ -631,12 +640,19 @@ internal sealed partial class ViewMaintainerGrain
             }
 
             var bytes = (long)(mutation.Key?.Length ?? 0) + (mutation.Value?.Length ?? 0);
-            if (PreparesByIndex.TryGetValue(mutation.AtomicBatchIndex, out var prev))
+
+            // Single-probe replace: the prior read (to discount the superseded
+            // entry's bytes) and the write hashed the batch index twice per
+            // staged prepare. Nothing mutates PreparesByIndex between the ref
+            // being taken and its last use, so the ref stays valid.
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                PreparesByIndex, mutation.AtomicBatchIndex, out var existed);
+            if (existed)
             {
-                StagedBytes -= (long)(prev.Key?.Length ?? 0) + (prev.Value?.Length ?? 0);
+                StagedBytes -= (long)(slot.Key?.Length ?? 0) + (slot.Value?.Length ?? 0);
             }
 
-            PreparesByIndex[mutation.AtomicBatchIndex] = mutation;
+            slot = mutation;
             StagedBytes += bytes;
 
             if (!HasOldestPreparedHlc || mutation.Timestamp < OldestPreparedHlc)
