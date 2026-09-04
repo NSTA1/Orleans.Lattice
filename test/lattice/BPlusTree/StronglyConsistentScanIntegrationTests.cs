@@ -112,7 +112,7 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var scansCompleted = 0;
+        var progress = new ConcurrentScanProgress(3);
         using var cts = new CancellationTokenSource();
 
         var scanWorkers = new[]
@@ -126,7 +126,7 @@ public class StronglyConsistentScanIntegrationTests
                         var c = await tree.CountAsync();
                         if (c != expected.Count)
                             failures.Add($"CountAsync returned {c}, expected {expected.Count}");
-                        Interlocked.Increment(ref scansCompleted);
+                        progress.RecordPass(0);
                     }
                     catch (Exception) when (cts.IsCancellationRequested) { }
                     catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { /* transient stream cursor deactivation; retry */ }
@@ -156,7 +156,7 @@ public class StronglyConsistentScanIntegrationTests
                         {
                             if (seen.Count != expected.Count)
                                 failures.Add($"KeysAsync yielded {seen.Count} keys, expected {expected.Count}");
-                            Interlocked.Increment(ref scansCompleted);
+                            progress.RecordPass(1);
                         }
                     }
                     catch (Exception) when (cts.IsCancellationRequested) { }
@@ -188,7 +188,7 @@ public class StronglyConsistentScanIntegrationTests
                         {
                             if (seen.Count != expected.Count)
                                 failures.Add($"EntriesAsync yielded {seen.Count} entries, expected {expected.Count}");
-                            Interlocked.Increment(ref scansCompleted);
+                            progress.RecordPass(2);
                         }
                     }
                     catch (Exception) when (cts.IsCancellationRequested) { }
@@ -201,27 +201,26 @@ public class StronglyConsistentScanIntegrationTests
             }),
         };
 
-        // Let scanners warm up so a scan is in-flight when the split begins.
-        await Task.Delay(150);
+        // Every scanner must have completed a pass (and therefore started
+        // another) before the split begins, so the split provably overlaps
+        // in-flight scans rather than merely following a fixed sleep.
+        await progress.WaitForOnePassEachAsync("before starting the split");
 
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
 
-        // Allow scanners to also exercise the post-swap path.
-        await Task.Delay(300);
+        // Every scanner must then complete a further full pass, so the
+        // post-swap path is provably exercised by each scan shape.
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await Task.WhenAll(scanWorkers);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Strongly-consistent scans observed {failures.Count} failures during split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(scansCompleted, Is.GreaterThan(0),
-                "At least one scan must have completed during the test window.");
-        });
+        Assert.That(failures, Is.Empty,
+            $"Strongly-consistent scans observed {failures.Count} failures during split:\n {string.Join("\n ", failures.Take(20))}");
     }
 
     /// <summary>
@@ -237,10 +236,10 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var scansCompleted = 0;
+        var progress = new ConcurrentScanProgress(3);
         using var cts = new CancellationTokenSource();
 
-        var scanWorkers = Enumerable.Range(0, 3).Select(_ => Task.Run(async () =>
+        var scanWorkers = Enumerable.Range(0, 3).Select(worker => Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
             {
@@ -257,7 +256,7 @@ public class StronglyConsistentScanIntegrationTests
                     {
                         if (seen.Count != expected.Count)
                             failures.Add($"under/over-count: got {seen.Count}, want {expected.Count}");
-                        Interlocked.Increment(ref scansCompleted);
+                        progress.RecordPass(worker);
                     }
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
@@ -269,27 +268,24 @@ public class StronglyConsistentScanIntegrationTests
             }
         })).ToArray();
 
-        await Task.Delay(150);
+        await progress.WaitForOnePassEachAsync("before starting the parallel splits");
 
         // Drive splits of shards 0 and 1 in parallel.
         var split0 = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
         var split1 = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/1");
+        var beforeSwap = progress.Snapshot();
         await Task.WhenAll(split0.SplitAsync(0), split1.SplitAsync(1));
         await Task.WhenAll(split0.RunSplitPassAsync(), split1.RunSplitPassAsync());
         Assert.That(await split0.IsIdleAsync(), Is.True);
         Assert.That(await split1.IsIdleAsync(), Is.True);
 
-        await Task.Delay(300);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after both splits committed");
 
         cts.Cancel();
         await Task.WhenAll(scanWorkers);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Strongly-consistent scans observed {failures.Count} failures during parallel splits:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(scansCompleted, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty,
+            $"Strongly-consistent scans observed {failures.Count} failures during parallel splits:\n {string.Join("\n ", failures.Take(20))}");
     }
 
     [Test]
@@ -300,7 +296,7 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var iterations = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var counter = Task.Run(async () =>
@@ -312,7 +308,7 @@ public class StronglyConsistentScanIntegrationTests
                     var c = await tree.CountAsync();
                     if (c != expected.Count)
                         failures.Add($"CountAsync={c}, expected {expected.Count}");
-                    Interlocked.Increment(ref iterations);
+                    progress.RecordPass();
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
                 catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { /* transient stream cursor deactivation; retry */ }
@@ -323,19 +319,16 @@ public class StronglyConsistentScanIntegrationTests
             }
         });
 
-        await Task.Delay(100);
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        await Task.Delay(150);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
         cts.Cancel();
         await counter;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty, $"Mid-split count failures:\n {string.Join("\n ", failures.Take(10))}");
-            Assert.That(iterations, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty, $"Mid-split count failures:\n {string.Join("\n ", failures.Take(10))}");
     }
 
     [Test]
@@ -394,7 +387,7 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var scanner = Task.Run(async () =>
@@ -423,7 +416,7 @@ public class StronglyConsistentScanIntegrationTests
                     {
                         if (observed.Count != expected.Count)
                             failures.Add($"observed {observed.Count} keys, expected {expected.Count}");
-                        Interlocked.Increment(ref completedScans);
+                        progress.RecordPass();
                     }
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
@@ -432,22 +425,19 @@ public class StronglyConsistentScanIntegrationTests
             }
         });
 
-        await Task.Delay(150);
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
-        await Task.Delay(300);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await scanner;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty,
+            $"Ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
     }
 
     [Test]
@@ -458,7 +448,7 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var scanner = Task.Run(async () =>
@@ -481,7 +471,7 @@ public class StronglyConsistentScanIntegrationTests
                     {
                         if (count != expected.Count)
                             failures.Add($"observed {count} keys, expected {expected.Count}");
-                        Interlocked.Increment(ref completedScans);
+                        progress.RecordPass();
                     }
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
@@ -490,22 +480,19 @@ public class StronglyConsistentScanIntegrationTests
             }
         });
 
-        await Task.Delay(150);
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
-        await Task.Delay(300);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await scanner;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Reverse ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty,
+            $"Reverse ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
     }
 
     [Test]
@@ -516,7 +503,7 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var scanner = Task.Run(async () =>
@@ -541,7 +528,7 @@ public class StronglyConsistentScanIntegrationTests
                     {
                         if (count != expected.Count)
                             failures.Add($"observed {count} entries, expected {expected.Count}");
-                        Interlocked.Increment(ref completedScans);
+                        progress.RecordPass();
                     }
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
@@ -550,22 +537,19 @@ public class StronglyConsistentScanIntegrationTests
             }
         });
 
-        await Task.Delay(150);
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
-        await Task.Delay(300);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await scanner;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Entry ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty,
+            $"Entry ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
     }
 
     [Test]
@@ -576,7 +560,7 @@ public class StronglyConsistentScanIntegrationTests
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
 
         var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var scanner = Task.Run(async () =>
@@ -599,7 +583,7 @@ public class StronglyConsistentScanIntegrationTests
                     {
                         if (count != expected.Count)
                             failures.Add($"observed {count} entries, expected {expected.Count}");
-                        Interlocked.Increment(ref completedScans);
+                        progress.RecordPass();
                     }
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
@@ -608,22 +592,19 @@ public class StronglyConsistentScanIntegrationTests
             }
         });
 
-        await Task.Delay(150);
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
-        await Task.Delay(300);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await scanner;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Reverse entry ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty,
+            $"Reverse entry ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
     }
 
     [Test]

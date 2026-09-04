@@ -55,12 +55,14 @@ public class MultiPageScanOrderingIntegrationTests
         int keyCount,
         Func<ILattice, IAsyncEnumerable<string>> scan,
         Func<string?, string, bool> orderViolation,
-        int? expectedCount = null)
+        int? expectedCount = null,
+        Func<string, string?>? keyViolation = null,
+        string failureHeading = "Ordering failures during concurrent split")
     {
-        var expected = await SeedAsync(treeId, keyCount);
+        await SeedAsync(treeId, keyCount);
         var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
         var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var scanner = Task.Run(async () =>
@@ -74,6 +76,8 @@ public class MultiPageScanOrderingIntegrationTests
                     await foreach (var k in scan(tree))
                     {
                         if (cts.IsCancellationRequested) break;
+                        if (keyViolation?.Invoke(k) is { } violation)
+                            failures.Add(violation);
                         if (prev is not null && orderViolation(prev, k))
                             failures.Add($"ordering break at idx {count}: '{prev}' -> '{k}'");
                         prev = k;
@@ -83,7 +87,7 @@ public class MultiPageScanOrderingIntegrationTests
                     {
                         if (expectedCount is int ec && count != ec)
                             failures.Add($"yielded {count}, expected {ec}");
-                        Interlocked.Increment(ref completedScans);
+                        progress.RecordPass();
                     }
                 }
                 catch (Exception ex) when (cts.IsCancellationRequested) { _ = ex; }
@@ -92,28 +96,37 @@ public class MultiPageScanOrderingIntegrationTests
                 {
                     // MaxScanRetries exhaustion is a valid outcome under
                     // tight retry caps - count as completed for liveness.
-                    Interlocked.Increment(ref completedScans);
+                    progress.RecordPass();
                 }
                 catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
             }
         });
 
-        await Task.Delay(150);
+        // The scanner must be provably mid-flight before the split starts, and
+        // must complete a further pass after the swap commits, so the split is
+        // genuinely overlapped rather than merely preceded by a fixed sleep.
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True);
-        await Task.Delay(300);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await scanner;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Ordering failures during concurrent split:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        Assert.That(failures, Is.Empty,
+            $"{failureHeading}:\n {string.Join("\n ", failures.Take(20))}");
+    }
+
+    /// <summary>
+    /// Projects <see cref="ILattice.EntriesAsync"/> onto its keys so entry
+    /// scans can reuse the shared key-ordering scan driver.
+    /// </summary>
+    private static async IAsyncEnumerable<string> EntryKeysAsync(ILattice tree)
+    {
+        await foreach (var kv in tree.EntriesAsync()) yield return kv.Key;
     }
 
     [Test]
@@ -142,125 +155,30 @@ public class MultiPageScanOrderingIntegrationTests
     public async Task EntriesAsync_multipage_during_concurrent_split_yields_strictly_ascending_key_order()
     {
         var treeId = $"mp-ent-{Guid.NewGuid():N}";
-        var expected = await SeedAsync(treeId, 400);
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
-        var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
-        using var cts = new CancellationTokenSource();
-
-        var scanner = Task.Run(async () =>
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                try
-                {
-                    string? prev = null;
-                    var count = 0;
-                    await foreach (var kv in tree.EntriesAsync())
-                    {
-                        if (cts.IsCancellationRequested) break;
-                        if (prev is not null && string.CompareOrdinal(prev, kv.Key) >= 0)
-                            failures.Add($"ordering break: '{prev}' -> '{kv.Key}'");
-                        prev = kv.Key;
-                        count++;
-                    }
-                    if (!cts.IsCancellationRequested)
-                    {
-                        if (count != 400) failures.Add($"yielded {count}, expected 400");
-                        Interlocked.Increment(ref completedScans);
-                    }
-                }
-                catch (Exception ex) when (cts.IsCancellationRequested) { _ = ex; }
-                catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("retries while topology kept changing"))
-                {
-                    Interlocked.Increment(ref completedScans);
-                }
-                catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
-            }
-        });
-
-        await Task.Delay(150);
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
-        await split.SplitAsync(0);
-        await split.RunSplitPassAsync();
-        await Task.Delay(300);
-
-        cts.Cancel();
-        await scanner;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Ordering failures:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        await RunConcurrentSplitScanAsync(
+            treeId, keyCount: 400,
+            scan: EntryKeysAsync,
+            orderViolation: (prev, k) => string.CompareOrdinal(prev, k) >= 0,
+            expectedCount: 400,
+            failureHeading: "Ordering failures");
     }
 
     [Test]
     public async Task KeysAsync_range_bounded_during_concurrent_split_yields_strictly_ascending_in_range()
     {
         var treeId = $"mp-range-{Guid.NewGuid():N}";
-        const int keyCount = 400;
         var start = $"mp-{100:D5}";
         var end = $"mp-{300:D5}";
-        const int expectedInRange = 200;
 
-        var expected = await SeedAsync(treeId, keyCount);
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
-        var failures = new ConcurrentBag<string>();
-        var completedScans = 0;
-        using var cts = new CancellationTokenSource();
-
-        var scanner = Task.Run(async () =>
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                try
-                {
-                    string? prev = null;
-                    var count = 0;
-                    await foreach (var k in tree.KeysAsync(start, end))
-                    {
-                        if (cts.IsCancellationRequested) break;
-                        if (string.CompareOrdinal(k, start) < 0 || string.CompareOrdinal(k, end) >= 0)
-                            failures.Add($"out-of-range '{k}'");
-                        if (prev is not null && string.CompareOrdinal(prev, k) >= 0)
-                            failures.Add($"ordering break: '{prev}' -> '{k}'");
-                        prev = k;
-                        count++;
-                    }
-                    if (!cts.IsCancellationRequested)
-                    {
-                        if (count != expectedInRange) failures.Add($"yielded {count}, expected {expectedInRange}");
-                        Interlocked.Increment(ref completedScans);
-                    }
-                }
-                catch (Exception ex) when (cts.IsCancellationRequested) { _ = ex; }
-                catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("retries while topology kept changing"))
-                {
-                    Interlocked.Increment(ref completedScans);
-                }
-                catch (Exception ex) { failures.Add($"threw {ex.GetType().Name}: {ex.Message}"); }
-            }
-        });
-
-        await Task.Delay(150);
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
-        await split.SplitAsync(0);
-        await split.RunSplitPassAsync();
-        await Task.Delay(300);
-
-        cts.Cancel();
-        await scanner;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                $"Range-scan ordering failures:\n {string.Join("\n ", failures.Take(20))}");
-            Assert.That(completedScans, Is.GreaterThan(0));
-        });
+        await RunConcurrentSplitScanAsync(
+            treeId, keyCount: 400,
+            scan: t => t.KeysAsync(start, end),
+            orderViolation: (prev, k) => string.CompareOrdinal(prev, k) >= 0,
+            expectedCount: 200,
+            keyViolation: k => string.CompareOrdinal(k, start) < 0 || string.CompareOrdinal(k, end) >= 0
+                ? $"out-of-range '{k}'"
+                : null,
+            failureHeading: "Range-scan ordering failures");
     }
 
     [Test]

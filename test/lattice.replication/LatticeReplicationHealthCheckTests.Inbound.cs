@@ -59,8 +59,10 @@ public class LatticeReplicationHealthCheckInboundTests
         var check = Create(stats, options);
         var result = await check.CheckHealthAsync(Context(), CancellationToken.None);
 
-        Assert.That(result.Status, Is.EqualTo(HealthStatus.Unhealthy).Or.EqualTo(HealthStatus.Degraded));
-        // With UnhealthyAfter=Zero a degraded sample escalates on the very next probe.
+        Assert.That(result.Status, Is.EqualTo(HealthStatus.Degraded));
+        // UnhealthyAfter=Zero disables the sustained-degraded escalation (the check
+        // only escalates when UnhealthyAfter > Zero), so the inbound-silence signal
+        // stands on its own verdict here.
     }
 
     [Test]

@@ -272,6 +272,15 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
         // the first-cycle timeout and entered the second-tick body, lines 100-105).
         await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.Calls, Is.GreaterThanOrEqualTo(2),
+                "the loop must have survived the first-cycle deadline and started a second cycle");
+            Assert.That(service.Loop!.IsCompleted, Is.True, "the loop must exit on stop");
+            Assert.That(service.Loop!.IsFaulted, Is.False,
+                "the per-cycle deadline must be absorbed, not surfaced on the loop task");
+        });
     }
 
     [Test]
@@ -280,7 +289,6 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
         // Covers lines 197-202: the cycle throws a non-OCE exception; RunCycleSafelyAsync
         // catches it, logs a warning, and returns false so the loop can continue.
         var secondEntry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var calls = 0;
         var provider = new FaultyOnFirstCallProvider(secondEntry);
         var limiter = new SiloLocalTenantRateLimiter(TimeProvider.System);
         var opts = Options(new LatticeTenantRateLimiterOptions
@@ -289,7 +297,6 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
             LeaseCycleTimeout = TimeSpan.FromSeconds(30),
             MaxLeaseBackoff = TimeSpan.FromMilliseconds(200),
         });
-        _ = calls;
         var coordinator = new TenantRateBudgetCoordinator(
             provider,
             new FakeSiloCountProvider(1),
@@ -303,6 +310,15 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
         await service.StartAsync(CancellationToken.None);
         await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.Calls, Is.GreaterThanOrEqualTo(2),
+                "the loop must have continued to a second cycle after the first one threw");
+            Assert.That(service.Loop!.IsCompleted, Is.True, "the loop must exit on stop");
+            Assert.That(service.Loop!.IsFaulted, Is.False,
+                "the non-cancellation exception must be swallowed, not surfaced on the loop task");
+        });
     }
 
     /// <summary>
@@ -313,6 +329,9 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
     private sealed class CountingRateProvider(TaskCompletionSource secondEntry) : ITenantRateProvider
     {
         private int _calls;
+
+        /// <summary>Number of cycles that reached this provider.</summary>
+        public int Calls => Volatile.Read(ref _calls);
 
         public async IAsyncEnumerable<TenantRateSpec> GetConfiguredRatesAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -339,6 +358,9 @@ public sealed class TenantRateBudgetCoordinatorHostedServiceTests
     private sealed class FaultyOnFirstCallProvider(TaskCompletionSource secondEntry) : ITenantRateProvider
     {
         private int _calls;
+
+        /// <summary>Number of cycles that reached this provider.</summary>
+        public int Calls => Volatile.Read(ref _calls);
 
         public async IAsyncEnumerable<TenantRateSpec> GetConfiguredRatesAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)

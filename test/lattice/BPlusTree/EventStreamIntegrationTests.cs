@@ -92,7 +92,14 @@ public sealed class EventStreamIntegrationTests
             // Deleting a non-existent key should not produce another Delete event.
             var before = sink.Count(e => e.Kind == LatticeTreeEventKind.Delete);
             await tree.DeleteAsync("never-existed");
-            await Task.Delay(300);
+
+            // Sentinel barrier instead of a fixed sleep: the sentinel Set is published
+            // after the no-op delete and events for a tree arrive in publication order,
+            // so a spurious Delete event would already have landed by the time the
+            // sentinel does.
+            await tree.SetAsync("kdel-sentinel", new byte[] { 7 });
+            await WaitForEventAsync(sink, e => e.Kind == LatticeTreeEventKind.Set && e.Key == "kdel-sentinel");
+
             var after = sink.Count(e => e.Kind == LatticeTreeEventKind.Delete);
             Assert.That(after, Is.EqualTo(before));
         }
@@ -165,7 +172,17 @@ public sealed class EventStreamIntegrationTests
             // Fresh version should.
             var applied = await tree.SetIfVersionAsync("cas", new byte[] { 2 }, versioned.Version);
             Assert.That(applied, Is.True);
-            await Task.Delay(300);
+
+            // Wait for the applied write's event rather than sleeping for a fixed
+            // window: the count must reach exactly one more than before (and the
+            // equality below still catches a stale-CAS event that should never fire).
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline
+                && sink.Count(e => e.Kind == LatticeTreeEventKind.Set && e.Key == "cas") < setCountBefore + 1)
+            {
+                await Task.Delay(25);
+            }
+
             var setCountAfter = sink.Count(e => e.Kind == LatticeTreeEventKind.Set && e.Key == "cas");
             Assert.That(setCountAfter, Is.EqualTo(setCountBefore + 1));
         }

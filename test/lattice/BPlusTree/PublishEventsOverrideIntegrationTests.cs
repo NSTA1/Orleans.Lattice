@@ -38,6 +38,35 @@ public sealed class PublishEventsOverrideIntegrationTests
         return (sink, handle);
     }
 
+    /// <summary>
+    /// Closes a negative window with proof rather than a sleep: re-enables publication,
+    /// writes a sentinel key, and waits for the sentinel's event to arrive. Events for a
+    /// tree are delivered in publication order, so the sentinel - written after the keys
+    /// under test - is a deterministic barrier: any event that was supposed to be
+    /// suppressed would already have landed by the time the sentinel does. It also fails
+    /// loudly when the subscription is not delivering at all, which would otherwise make
+    /// every "no events" assertion pass vacuously.
+    /// </summary>
+    /// <returns>The sentinel key, so callers can exclude it from their assertions.</returns>
+    private static async Task<string> PublishSentinelAsync(
+        ILattice tree,
+        ConcurrentQueue<LatticeTreeEvent> sink)
+    {
+        var sentinel = $"__sentinel-{Guid.NewGuid():N}";
+        await tree.SetPublishEventsEnabledAsync(true);
+        await tree.SetAsync(sentinel, new byte[] { 0xFF });
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (DateTime.UtcNow < deadline && !sink.Any(e => e.Key == sentinel))
+            await Task.Delay(25);
+
+        Assert.That(sink.Any(e => e.Key == sentinel), Is.True,
+            "the sentinel event never arrived, so the subscription is not delivering and the " +
+            "surrounding no-event assertions would pass vacuously");
+
+        return sentinel;
+    }
+
     [Test]
     public async Task Override_enabled_on_tree_with_silo_default_disabled_emits_events()
     {
@@ -71,9 +100,9 @@ public sealed class PublishEventsOverrideIntegrationTests
         {
             await tree.SetAsync("k1", new byte[] { 1 });
             await tree.DeleteAsync("k1");
-            await Task.Delay(500);
+            var sentinel = await PublishSentinelAsync(tree, sink);
 
-            Assert.That(sink, Is.Empty,
+            Assert.That(sink.Where(e => e.Key != sentinel), Is.Empty,
                 "Inherited silo default is false, so no events should be published.");
         }
         finally { await handle.UnsubscribeAsync(); }
@@ -101,12 +130,12 @@ public sealed class PublishEventsOverrideIntegrationTests
 
             var eventsBefore = sink.Count;
             await tree.SetAsync("after", new byte[] { 2 });
-            await Task.Delay(500);
+            var sentinel = await PublishSentinelAsync(tree, sink);
 
             // No new events for "after" on the handling activation.
             Assert.That(sink.Any(e => e.Key == "after"), Is.False,
                 "Override=false should suppress subsequent events on the handling activation.");
-            Assert.That(sink.Count, Is.EqualTo(eventsBefore),
+            Assert.That(sink.Count(e => e.Key != sentinel), Is.EqualTo(eventsBefore),
                 "Sink count should not grow after override is flipped off.");
         }
         finally { await handle.UnsubscribeAsync(); }
@@ -132,11 +161,11 @@ public sealed class PublishEventsOverrideIntegrationTests
 
             var eventsBefore = sink.Count;
             await tree.SetAsync("post-clear", new byte[] { 2 });
-            await Task.Delay(500);
+            var sentinel = await PublishSentinelAsync(tree, sink);
 
             Assert.That(sink.Any(e => e.Key == "post-clear"), Is.False,
                 "After clearing the override the tree should inherit the silo default (false) and suppress events.");
-            Assert.That(sink.Count, Is.EqualTo(eventsBefore));
+            Assert.That(sink.Count(e => e.Key != sentinel), Is.EqualTo(eventsBefore));
         }
         finally { await handle.UnsubscribeAsync(); }
     }
