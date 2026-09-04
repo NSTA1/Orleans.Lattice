@@ -44,4 +44,39 @@ public sealed record DataEntry
     /// the write (upsert) path (defaults to <see langword="false"/>).
     /// </summary>
     [Id(3)] public bool Raw { get; init; }
+
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> compared by
+    /// content. The compiler-generated record equality compares the
+    /// <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical entries - and, in
+    /// particular, an entry and its post-serialization self - would otherwise
+    /// never compare equal.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(DataEntry? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && MergeMode == other.MergeMode
+        && Raw == other.Raw
+        && BytesEqual(Value, other.Value);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        hash.Add(MergeMode);
+        hash.Add(Raw);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

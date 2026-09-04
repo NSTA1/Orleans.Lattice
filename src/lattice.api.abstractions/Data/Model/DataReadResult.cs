@@ -52,4 +52,43 @@ public sealed record DataReadResult
     /// <see langword="null"/>) are the application's own value and safe to use.
     /// </summary>
     [Id(5)] public bool Raw { get; init; }
+
+    /// <summary>
+    /// Compares two results by value, with <see cref="Value"/> compared by
+    /// content. The compiler-generated record equality compares the
+    /// <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical results - and, in
+    /// particular, a result and its post-serialization self - would otherwise
+    /// never compare equal.
+    /// </summary>
+    /// <param name="other">The result to compare against.</param>
+    public bool Equals(DataReadResult? other) =>
+        other is not null
+        && string.Equals(TreeId, other.TreeId, StringComparison.Ordinal)
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && Found == other.Found
+        && MergeMode == other.MergeMode
+        && Raw == other.Raw
+        && BytesEqual(Value, other.Value);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(TreeId, StringComparer.Ordinal);
+        hash.Add(Key, StringComparer.Ordinal);
+        hash.Add(Found);
+        hash.Add(MergeMode);
+        hash.Add(Raw);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
