@@ -105,6 +105,22 @@ internal struct LeafWalkBudget
     }
 
     /// <summary>
+    /// Builds the same page-fill budget from bounds already resolved
+    /// synchronously by
+    /// <see cref="LatticeOptionsResolver.GetScanPageBounds(string)"/>.
+    /// <para>
+    /// This is the overload the shard root's page fills use. The other one
+    /// takes the tree's fully resolved options, which a shard root can only
+    /// obtain by awaiting - and that await would then sit outside the very
+    /// deadline it is constructing, which is precisely the residual hole issue
+    /// 2002 reports. Taking pre-resolved bounds lets the budget be built as the
+    /// literal first statement of the grain call.
+    /// </para>
+    /// </summary>
+    internal static LeafWalkBudget ForScanPage(in ScanPageBounds bounds, long startTimestamp = 0L)
+        => new(bounds.MaxLeaves, bounds.MaxDuration, startTimestamp);
+
+    /// <summary>
     /// Builds the budget a background coordinator's drain pass runs under - the
     /// split drain, the cross-tree merge drain, and the online snapshot copy.
     /// <para>

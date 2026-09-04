@@ -826,12 +826,15 @@ public class LatticeOptions
     /// duration (issue 1955).
     /// </para>
     /// <para>
-    /// The bound is only applied once the page holds at least one result, so a
-    /// caller can always derive its next continuation token and make forward
-    /// progress. Raising it trades shard fairness for fewer round trips;
-    /// setting it to <c>0</c> or less disables it and restores the unbounded
-    /// walk. The default is deliberately well above a dense scan's needs, so a
-    /// healthy tree never reaches it.
+    /// The bound is a pure work bound: it applies whether or not the page has
+    /// collected anything, because the run of leaves it exists to bound is
+    /// exactly the run that yields nothing. A page fill stops on it only where
+    /// it can name a resume position for the caller to continue from, so
+    /// forward progress is preserved without disarming the bound (issue 1992).
+    /// Raising it trades shard fairness for fewer round trips; setting it to
+    /// <c>0</c> or less disables it and restores the unbounded walk. The
+    /// default is deliberately well above a dense scan's needs, so a healthy
+    /// tree never reaches it.
     /// </para>
     /// </summary>
     public int MaxLeavesPerScanPage { get; set; } = DefaultMaxLeavesPerScanPage;
@@ -840,9 +843,11 @@ public class LatticeOptions
     public const int DefaultMaxLeavesPerScanPage = 64;
 
     /// <summary>
-    /// Wall-clock safety net for a single shard range-scan page fill. When a
-    /// page fill has spent this long and holds at least one result, it returns
-    /// a partial page rather than continuing to hold the non-reentrant shard.
+    /// Wall-clock safety net for a single shard range-scan page fill. Measured
+    /// from the first statement of the grain call, so it covers the descent to
+    /// the start leaf as well as the leaf walk itself. When a page fill has
+    /// spent this long it returns a partial page rather than continuing to hold
+    /// the non-reentrant shard.
     /// <para>
     /// <see cref="MaxLeavesPerScanPage"/> is the primary, deterministic bound;
     /// this exists for the case where a small number of leaves are individually
@@ -850,11 +855,78 @@ public class LatticeOptions
     /// a leaf count alone cannot bound. Set to <see cref="TimeSpan.Zero"/> to
     /// disable it and rely on the leaf count alone.
     /// </para>
+    /// <para>
+    /// This is a <em>graceful</em> bound: it is sampled between leaf reads, so
+    /// it can only stop the walk at a point it can resume from, and it cannot
+    /// interrupt a single leaf read that never returns. Use
+    /// <see cref="MaxScanPageStallDuration"/> for the hard ceiling that can.
+    /// </para>
     /// </summary>
     public TimeSpan MaxScanPageDuration { get; set; } = DefaultMaxScanPageDuration;
 
     /// <summary>Default value for <see cref="MaxScanPageDuration"/> (5 seconds).</summary>
     public static readonly TimeSpan DefaultMaxScanPageDuration = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Hard ceiling on how long a single shard range-scan page fill may hold
+    /// its non-reentrant shard root, measured end to end from the first
+    /// statement of the grain call.
+    /// <para>
+    /// <see cref="MaxScanPageDuration"/> is a cooperative bound: it is sampled
+    /// between leaf reads, so it cannot bound a single leaf read that is slow
+    /// or never returns. When that happens the page fill holds the shard for
+    /// as long as that one await takes - 576 seconds against a 5 second budget
+    /// in the incident behind issue 2002 - and every other request to the shard
+    /// queues behind it. This ceiling closes that gap: when it elapses the call
+    /// stops waiting and fails with <see cref="ScanPageStalledException"/>,
+    /// releasing the shard so queued work can drain. The caller retries and
+    /// resumes from its last continuation token, so the worst-case hold on a
+    /// shard becomes this single number.
+    /// </para>
+    /// <para>
+    /// It should sit comfortably above <see cref="MaxScanPageDuration"/> so the
+    /// graceful partial-page path is always preferred and this only fires when
+    /// that path could not run, and it must sit <em>below</em> the Orleans
+    /// response timeout that governs the call. Above that timeout the ceiling
+    /// is dead configuration: the caller's own RPC deadline expires first, so
+    /// the caller sees a generic Orleans timeout instead of the typed,
+    /// retriable <see cref="ScanPageStalledException"/>, and - worse - nothing
+    /// releases the shard, which is the very failure this exists to stop.
+    /// </para>
+    /// <para>
+    /// Because that is a <em>relative</em> constraint, this option defaults to
+    /// <c>null</c>, meaning "derive it": the effective ceiling becomes the
+    /// silo's configured
+    /// <c>SiloMessagingOptions.ResponseTimeout</c> minus
+    /// <see cref="DefaultMaxScanPageStallHeadroom"/>, floored so it never drops
+    /// below <see cref="MaxScanPageDuration"/>. A deployment that tightens or
+    /// relaxes its response timeout therefore keeps a correct ceiling with no
+    /// second knob to remember. Set an explicit value to override the
+    /// derivation, or <see cref="Timeout.InfiniteTimeSpan"/> to disable the
+    /// ceiling and restore the unbounded wait.
+    /// </para>
+    /// <para>
+    /// The derivation reads the <em>local silo's</em> response timeout, which
+    /// is the deadline that applies to a silo-to-silo page fill. An external
+    /// client with a different <c>ClientMessagingOptions.ResponseTimeout</c> is
+    /// not visible from here; a cluster that configures the two differently
+    /// should set this option explicitly.
+    /// </para>
+    /// </summary>
+    public TimeSpan? MaxScanPageStallDuration { get; set; }
+
+    /// <summary>
+    /// Margin subtracted from the silo's configured response timeout when
+    /// <see cref="MaxScanPageStallDuration"/> is left to derive (5 seconds).
+    /// <para>
+    /// The ceiling has to fire far enough ahead of the caller's RPC deadline
+    /// that the fault is built and marshalled back while the caller is still
+    /// listening, so the operator sees a typed
+    /// <see cref="ScanPageStalledException"/> naming the stalled phase rather
+    /// than an anonymous Orleans timeout.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultMaxScanPageStallHeadroom = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum number of source leaves a background coordinator - the split

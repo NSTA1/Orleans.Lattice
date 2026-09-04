@@ -1874,6 +1874,29 @@ public static class LatticeMetrics
             description: "Count of shard-root activation-readiness seeds abandoned after exceeding ActivationReadyTimeout.");
 
     /// <summary>
+    /// Count of <c>ShardRootGrain</c> range-scan page fills abandoned because
+    /// they exceeded
+    /// <see cref="Orleans.Lattice.LatticeOptions.MaxScanPageStallDuration"/>.
+    /// Tagged with <see cref="TagTree"/>, <see cref="TagShard"/> and
+    /// <see cref="TagPhase"/>, the last naming how far the page fill had got -
+    /// <c>prologue</c>, <c>descent</c>, or <c>leaf-walk</c> - which is what
+    /// distinguishes a slow shard prepare from a single leaf read that never
+    /// returned.
+    /// <para>
+    /// Expected to be flat zero: the cooperative
+    /// <see cref="Orleans.Lattice.LatticeOptions.MaxScanPageDuration"/> budget
+    /// returns a partial page long before this ceiling, so a non-zero rate
+    /// means a page fill was stuck inside a single await and was holding its
+    /// deliberately non-reentrant shard root against every other request to
+    /// that shard (issue 2002). Treat sustained non-zero as a wedge, and read
+    /// the phase tag to place it.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> ScanPageStalls =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.scan_page.stalls", unit: "{stall}",
+            description: "Count of shard-root range-scan page fills abandoned after exceeding MaxScanPageStallDuration.");
+
+    /// <summary>
     /// Count of internal-node digest publishes (the upward
     /// <c>ChildDigestSnapshot</c> propagation from a <c>BPlusInternalGrain</c>
     /// to its parent) that were abandoned because they exceeded
@@ -2746,6 +2769,24 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagPhase"/> = <c>phase2</c>.</summary>
     public static readonly KeyValuePair<string, object?> PhasePhase2Tag = new(TagPhase, "phase2");
+
+    /// <summary>
+    /// <see cref="TagPhase"/> = <c>prologue</c> (a range-scan page fill was
+    /// still preparing its shard for the operation).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PhaseScanPagePrologueTag = new(TagPhase, "prologue");
+
+    /// <summary>
+    /// <see cref="TagPhase"/> = <c>descent</c> (a range-scan page fill was
+    /// still traversing down to its start leaf).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PhaseScanPageDescentTag = new(TagPhase, "descent");
+
+    /// <summary>
+    /// <see cref="TagPhase"/> = <c>leaf-walk</c> (a range-scan page fill was
+    /// reading the leaf chain).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PhaseScanPageLeafWalkTag = new(TagPhase, "leaf-walk");
 
     /// <summary><see cref="TagStage"/> = <c>resolve</c> (step 1 affected-leaves resolution).</summary>
     public static readonly KeyValuePair<string, object?> StageResolveTag = new(TagStage, "resolve");
