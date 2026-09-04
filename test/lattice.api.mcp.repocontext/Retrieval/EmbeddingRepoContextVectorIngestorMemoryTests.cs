@@ -376,7 +376,7 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
         await Ingestor(harness, new FakeEmbeddingProvider())
             .IngestMemoryAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
 
-        var count = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var count = await writer.ScanEmbeddedAsync(RepoId, Ct);
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
 
         Assert.Multiple(() =>
@@ -533,17 +533,18 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
 
     /// <summary>
     /// <c>CountEmbeddedAsync</c> feeds <c>embeddedVectorCount</c> on every
-    /// <c>repocontext_list_repos</c> call and computes it by walking the whole
-    /// membership prefix and decoding every row, which on a real repository is over
-    /// 81,000 records on the slowest tree in the store - the direct cause of the
-    /// "list_repos times out after a restart" symptom in issue #1819. The result is
-    /// memoized against the vector cache's generation, which membership writes
-    /// already advance.
+    /// <c>repocontext_list_repos</c> call, and computing it exactly means walking the
+    /// whole membership prefix and decoding every row - on a real repository over
+    /// 81,000 records on the slowest tree in the store, the direct cause of the
+    /// "list_repos times out" symptom in issues #1819 and #1992. So the read never
+    /// performs that walk: it serves the memo when the vector cache's generation still
+    /// matches, and otherwise reports what it has and schedules the walk out of band.
     /// <para>
-    /// Both halves are asserted: a repeat with no intervening write returns the same
-    /// count (the memo is live), and a count taken after a write reflects it (the
-    /// memo is invalidated). Asserting only the first would pass on a memo that never
-    /// refreshes, which is far worse than no memo at all.
+    /// Both halves are asserted: a repeat with no intervening write is exact (the memo
+    /// is live), and a count taken after a write is flagged pending rather than
+    /// silently stale, then settles on the new figure once the refresh lands. Asserting
+    /// only the first would pass on a memo that never refreshes, which is far worse
+    /// than no memo at all.
     /// </para>
     /// </summary>
     [Test]
@@ -554,20 +555,59 @@ public sealed class EmbeddingRepoContextVectorIngestorMemoryTests
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
 
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/A.cs") }, Ct);
+
+        // Prime the memo through the exact scan, so the "repeat" below is a memo hit
+        // rather than a second not-yet-measured answer.
+        await writer.ScanEmbeddedAsync(RepoId, Ct);
         var first = await writer.CountEmbeddedAsync(RepoId, Ct);
         var repeat = await writer.CountEmbeddedAsync(RepoId, Ct);
 
         await writer.AddMembersAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/B.cs") }, Ct);
         var afterWrite = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var settled = await SettleEmbeddedCountAsync(writer, RepoId, Ct);
 
         Assert.Multiple(() =>
         {
-            Assert.That(first, Is.EqualTo(1), "One member is counted,");
-            Assert.That(repeat, Is.EqualTo(1), "a repeat with no write agrees,");
-            Assert.That(afterWrite, Is.EqualTo(2),
-                "and a write advances the cache generation, so the next count re-scans "
-                + "rather than serving a stale memo.");
+            Assert.That(first.Count, Is.EqualTo(1), "One member is counted,");
+            Assert.That(first.Pending, Is.False, "exactly, because the generation still matches,");
+            Assert.That(repeat.Count, Is.EqualTo(1), "a repeat with no write agrees,");
+            Assert.That(repeat.Pending, Is.False, "and is still exact.");
+            Assert.That(afterWrite.Count, Is.EqualTo(1),
+                "A write advances the cache generation, so the next read still serves the "
+                + "last completed figure rather than blocking on a fresh walk,");
+            Assert.That(afterWrite.Pending, Is.True,
+                "but flags it as stale rather than passing it off as current,");
+            Assert.That(settled.Count, Is.EqualTo(2),
+                "and the out-of-band refresh brings it up to date,");
+            Assert.That(settled.Pending, Is.False, "at which point it is exact again.");
         });
+    }
+
+    /// <summary>
+    /// Drains any outstanding out-of-band embedded-count refresh and re-reads, so a
+    /// test can assert the eventual exact figure without racing the background walk.
+    /// Bounded, so a stuck refresh fails the test rather than hanging it.
+    /// </summary>
+    private static async Task<RepoContextEmbeddedCount> SettleEmbeddedCountAsync(
+        RepoContextVectorWriter writer, string repoId, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var count = await writer.CountEmbeddedAsync(repoId, ct);
+            if (!count.Pending)
+            {
+                return count;
+            }
+
+            var pending = writer.PendingEmbeddedCountRefresh(repoId);
+            if (pending is not null)
+            {
+                await pending.WaitAsync(ct);
+            }
+        }
+
+        Assert.Fail($"The embedded count for '{repoId}' never settled.");
+        return default;
     }
 
     [Test]

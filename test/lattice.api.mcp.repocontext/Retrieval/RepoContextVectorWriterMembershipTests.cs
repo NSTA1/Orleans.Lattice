@@ -446,7 +446,7 @@ public sealed class RepoContextVectorWriterMembershipTests
     }
 
     [Test]
-    public async Task CountEmbeddedAsync_counts_every_member_across_multiple_pages()
+    public async Task ScanEmbeddedAsync_counts_every_member_across_multiple_pages()
     {
         await using var harness = await RepoContextMcpHarness.StartAsync(
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
@@ -466,7 +466,7 @@ public sealed class RepoContextVectorWriterMembershipTests
         // A contentless marker shares the tree but must not be counted as embedded.
         await writer.MarkContentlessAsync(RepoId, new[] { RepoContextKeys.File(RepoId, "src/empty.cs") }, Ct);
 
-        var embeddedCount = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var embeddedCount = await writer.ScanEmbeddedAsync(RepoId, Ct);
 
         Assert.That(embeddedCount, Is.EqualTo(count),
             "The paged count spans multiple pages and excludes the contentless marker.");

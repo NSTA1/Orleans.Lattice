@@ -330,52 +330,80 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
     /// to resume pagination; keys &gt; the token are returned.
+    /// <para>
+    /// Pass <paramref name="resumeFromKey"/> (the previous page's
+    /// <see cref="KeysPage.ResumeFromKey"/>) whenever the previous page carried
+    /// one: it is a leaf boundary, so a page the work bound stopped can be
+    /// resumed even when it came back empty. Prefer it over the continuation
+    /// token when both are available - it is strictly further along, so it also
+    /// skips the sterile leaves the bounded call already walked (issue 1992).
+    /// </para>
     /// </summary>
     Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        Orleans.Lattice.LatticePredicateNode? predicate = null);
+        Orleans.Lattice.LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null);
 
     /// <summary>
     /// Returns a page of live keys in <em>reverse</em> sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
     /// to resume pagination; keys &lt; the token are returned.
+    /// <para>
+    /// Pass <paramref name="resumeFromKey"/> (the previous page's
+    /// <see cref="KeysPage.ResumeFromKey"/>) whenever the previous page carried
+    /// one. On a reverse walk it is the last visited leaf's inclusive low bound,
+    /// so keys &lt; it are returned (issue 1992).
+    /// </para>
     /// </summary>
     Task<KeysPage> GetSortedKeysBatchReverseAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        Orleans.Lattice.LatticePredicateNode? predicate = null);
+        Orleans.Lattice.LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in this shard's B+ tree in sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
     /// to resume pagination; entries with keys &gt; the token are returned.
+    /// <para>
+    /// Pass <paramref name="resumeFromKey"/> (the previous page's
+    /// <see cref="EntriesPage.ResumeFromKey"/>) whenever the previous page
+    /// carried one; see <see cref="GetSortedKeysBatchAsync"/> (issue 1992).
+    /// </para>
     /// </summary>
     Task<EntriesPage> GetSortedEntriesBatchAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        Orleans.Lattice.LatticePredicateNode? predicate = null);
+        Orleans.Lattice.LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in <em>reverse</em> sorted order,
     /// filtered to the [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) range.
     /// Pass <paramref name="continuationToken"/> (the last key from the previous page)
     /// to resume pagination; entries with keys &lt; the token are returned.
+    /// <para>
+    /// Pass <paramref name="resumeFromKey"/> (the previous page's
+    /// <see cref="EntriesPage.ResumeFromKey"/>) whenever the previous page
+    /// carried one; see <see cref="GetSortedKeysBatchReverseAsync"/> (issue 1992).
+    /// </para>
     /// </summary>
     Task<EntriesPage> GetSortedEntriesBatchReverseAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        Orleans.Lattice.LatticePredicateNode? predicate = null);
+        Orleans.Lattice.LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null);
 
     /// <summary>
     /// Returns the <see cref="GrainId"/> of the leftmost leaf in this shard's B+ tree,
@@ -1124,7 +1152,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? continuationToken,
         int[] sortedSlots,
         int virtualShardCount,
-        Orleans.Lattice.LatticePredicateNode? predicate = null);
+        Orleans.Lattice.LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null);
 
     /// <summary>
     /// Returns a page of live key-value entries in this shard whose virtual slot
@@ -1148,7 +1177,8 @@ internal interface IShardRootGrain : IGrainWithStringKey
         string? continuationToken,
         int[] sortedSlots,
         int virtualShardCount,
-        Orleans.Lattice.LatticePredicateNode? predicate = null);
+        Orleans.Lattice.LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null);
 
     // ==========================================================================
     //  Online shadow-forwarding primitive

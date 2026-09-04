@@ -115,11 +115,12 @@ internal sealed class BoundedLeafWalk
     /// routing the shard's own bounded walks through this type rather than
     /// hand-rolling the loop per call site: the budget, the key cursor, the
     /// sibling-before-yield ordering, and the "only stop where you can resume"
-    /// rule are defined once (issues 1973, 1972). In particular the yield test
-    /// is <c>ShouldYield(resultsCollected: 1)</c> - a leaf processed is the unit
-    /// of progress - so a bound applied through this type still fires on a run
-    /// of leaves that yields no rows, which a per-site loop passing an aggregate
-    /// result count would silently disarm (issue 1992).
+    /// rule are defined once (issues 1973, 1972). In particular the yield test is
+    /// the pure work bound <c>ShouldYield()</c>, gated on this walk's own
+    /// "am I strictly ahead of where I started?" check rather than on a row
+    /// count, so a bound applied through this type still fires on a run of
+    /// leaves that yields no rows - which is exactly the gap that made the
+    /// budget inert on the shard page fills before issue 1992.
     /// </para>
     /// </summary>
     internal static BoundedLeafWalk FromResolvedStart(
@@ -199,7 +200,7 @@ internal sealed class BoundedLeafWalk
         // no page for a caller to derive a continuation from, so the
         // forward-progress rule the page fills need does not apply; the resume
         // key below is what guarantees progress instead.
-        if (_budget.ShouldYield(resultsCollected: 1))
+        if (_budget.ShouldYield())
         {
             // The visited leaf's exclusive high bound is exactly where the next
             // leaf begins, so re-descending onto it lands on the leaf that owns

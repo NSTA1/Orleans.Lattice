@@ -96,11 +96,15 @@ internal sealed class RepoContextAnnIndexSweepService(
     {
         try
         {
-            var repos = await store.ListReposAsync(stoppingToken).ConfigureAwait(false);
-            foreach (var repo in repos.Repos)
+            // Only the ids are needed to arm a coordinator, so this deliberately
+            // avoids ListReposAsync: a full summary reads a root marker per repository
+            // and can schedule an out-of-band membership walk, none of which a sweep
+            // uses.
+            var repoIds = await store.ListRepoIdsAsync(stoppingToken).ConfigureAwait(false);
+            foreach (var repoId in repoIds)
             {
                 stoppingToken.ThrowIfCancellationRequested();
-                await scheduler.TryArmAsync(repo.RepoId, stoppingToken).ConfigureAwait(false);
+                await scheduler.TryArmAsync(repoId, stoppingToken).ConfigureAwait(false);
             }
 
             return true;

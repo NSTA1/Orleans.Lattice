@@ -85,7 +85,7 @@ internal sealed partial class ShardRootGrain
             // therefore excludes the current leaf's rebuild, which costs at
             // most one extra leaf per batch.
             string? resumeFrom = null;
-            if (next is not null && budget.ShouldYield(resultsCollected: 1))
+            if (next is not null && budget.ShouldYield())
             {
                 resumeFrom = await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null);
             }

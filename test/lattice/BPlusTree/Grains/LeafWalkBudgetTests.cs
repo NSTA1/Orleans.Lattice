@@ -19,7 +19,7 @@ public class LeafWalkBudgetTests
         budget.RecordLeafVisited();
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 10), Is.False);
+        Assert.That(budget.ShouldYield(), Is.False);
     }
 
     [Test]
@@ -30,34 +30,37 @@ public class LeafWalkBudgetTests
         for (var i = 0; i < 3; i++)
             budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     /// <summary>
-    /// The forward-progress invariant. A caller derives its next continuation
-    /// token from the last result in the page, so a page that is empty but
-    /// claims more is available would leave it re-issuing an identical request
-    /// forever. The budget must therefore never authorise yielding an empty
-    /// page, no matter how far over budget the walk has run.
+    /// The regression this budget exists for. An earlier revision gated
+    /// <see cref="LeafWalkBudget.ShouldYield"/> behind a positive result count,
+    /// which disarmed both the leaf cap and the deadline for precisely the run
+    /// of leaves they are there to bound - a sterile run whose rows are all
+    /// tombstoned, TTL-expired, moved away, or predicate-rejected. One page fill
+    /// could then hold a non-reentrant shard for minutes (issue 1992). The
+    /// budget is now a pure work question; naming a resume position is the call
+    /// site's job.
     /// </summary>
     [Test]
-    public void ShouldYield_is_never_true_with_no_results_collected()
+    public void ShouldYield_is_true_on_a_sterile_run_that_collected_nothing()
     {
         var budget = new LeafWalkBudget(maxLeaves: 1, maxDuration: null);
 
-        for (var i = 0; i < 500; i++)
-            budget.RecordLeafVisited();
+        budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 0), Is.False);
+        Assert.That(budget.ShouldYield(), Is.True,
+            "the leaf cap must fire on a run of leaves that yields no rows at all");
     }
 
     [Test]
-    public void ShouldYield_treats_a_negative_result_count_as_no_results()
+    public void An_elapsed_deadline_yields_even_with_nothing_collected()
     {
-        var budget = new LeafWalkBudget(maxLeaves: 1, maxDuration: null);
+        var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.FromTicks(1));
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: -1), Is.False);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -68,23 +71,9 @@ public class LeafWalkBudgetTests
         for (var i = 0; i < 10_000; i++)
             budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False,
+        Assert.That(budget.ShouldYield(), Is.False,
             "a misconfigured budget must degrade to the historical unbounded walk, " +
             "never to a silently truncated one");
-    }
-
-    [Test]
-    public void An_elapsed_deadline_yields_once_a_result_has_been_collected()
-    {
-        var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.FromTicks(1));
-        budget.RecordLeafVisited();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
-            Assert.That(budget.ShouldYield(resultsCollected: 0), Is.False,
-                "the deadline must not override the forward-progress invariant");
-        });
     }
 
     [Test]
@@ -93,7 +82,7 @@ public class LeafWalkBudgetTests
         var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.Zero);
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False);
+        Assert.That(budget.ShouldYield(), Is.False);
     }
 
     [Test]
@@ -120,7 +109,7 @@ public class LeafWalkBudgetTests
         budget.RecordLeafVisited();
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -148,10 +137,10 @@ public class LeafWalkBudgetTests
 
         var budget = LeafWalkBudget.ForBackgroundDrain(options);
         budget.RecordLeafVisited();
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False);
+        Assert.That(budget.ShouldYield(), Is.False);
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -178,7 +167,7 @@ public class LeafWalkBudgetTests
         var budget = LeafWalkBudget.ForBackgroundDrain(maxLeaves: 1, options);
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -202,7 +191,7 @@ public class LeafWalkBudgetTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False);
+            Assert.That(budget.ShouldYield(), Is.False);
             Assert.That(budget.LeavesVisited, Is.EqualTo(10_000));
         });
     }
@@ -220,7 +209,7 @@ public class LeafWalkBudgetTests
         for (var i = 0; i < 1_000; i++)
             budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False,
+        Assert.That(budget.ShouldYield(), Is.False,
             "a misconfigured bound must degrade to the unbounded walk, never to a truncated one");
     }
 
@@ -232,5 +221,73 @@ public class LeafWalkBudgetTests
             Assert.That(LatticeOptions.DefaultBackgroundDrainLeavesPerPass, Is.EqualTo(64));
             Assert.That(LatticeOptions.DefaultBackgroundDrainMaxDuration, Is.EqualTo(TimeSpan.FromSeconds(10)));
         });
+    }
+
+    [Test]
+    public void ForScanPage_measures_the_deadline_from_the_supplied_start_clock()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = int.MaxValue,
+            MaxScanPageDuration = TimeSpan.FromMilliseconds(50),
+        };
+
+        // The shape of a page fill whose prologue - preparing the grain and
+        // traversing down to the start leaf - already held the shard for longer
+        // than the whole page budget before the loop was ever reached.
+        var startedHalfASecondAgo =
+            LeafWalkBudget.StartClock() - (long)(0.5 * System.Diagnostics.Stopwatch.Frequency);
+
+        var budget = LeafWalkBudget.ForScanPage(options, startedHalfASecondAgo);
+
+        Assert.That(budget.ShouldYield(), Is.True,
+            "time already spent holding the shard must count against the page budget");
+    }
+
+    [Test]
+    public void ForScanPage_without_a_start_clock_measures_from_construction()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = int.MaxValue,
+            MaxScanPageDuration = TimeSpan.FromSeconds(30),
+        };
+
+        var budget = LeafWalkBudget.ForScanPage(options);
+
+        Assert.That(budget.ShouldYield(), Is.False);
+    }
+
+    [Test]
+    public void A_zero_start_clock_is_treated_as_now_so_an_unstamped_caller_is_unchanged()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = int.MaxValue,
+            MaxScanPageDuration = TimeSpan.FromSeconds(30),
+        };
+
+        var explicitlyUnstamped = LeafWalkBudget.ForScanPage(options, startTimestamp: 0L);
+
+        Assert.That(explicitlyUnstamped.ShouldYield(), Is.False,
+            "0 means 'measure from now', not 'the epoch', which would expire every budget");
+    }
+
+    [Test]
+    public void A_start_clock_does_not_disturb_the_leaf_bound()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = 2,
+            MaxScanPageDuration = TimeSpan.FromHours(1),
+        };
+
+        var budget = LeafWalkBudget.ForScanPage(options, LeafWalkBudget.StartClock());
+
+        budget.RecordLeafVisited();
+        Assert.That(budget.ShouldYield(), Is.False);
+
+        budget.RecordLeafVisited();
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 }

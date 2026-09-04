@@ -853,9 +853,9 @@ This option can be changed freely at any time.
 
 ### `MaxScanPageDuration`
 
-Wall-clock safety net for a single shard range-scan page fill (default: 5 seconds). When a page fill has spent this long **and** holds at least one result, it returns a partial page rather than continuing to hold the non-reentrant shard.
+Wall-clock safety net for a single shard range-scan page fill (default: 5 seconds). The clock starts when the grain call begins, so it measures the whole time the shard is held - preparing the grain and traversing down to the start leaf included - rather than only the leaf loop. Once it expires the page fill stops at the first leaf boundary it can name a resume position for, returning a partial page rather than continuing to hold the non-reentrant shard.
 
-[`MaxLeavesPerScanPage`](#maxleavesperscanpage) is the primary, deterministic bound; this covers the case a leaf count cannot, where a small number of leaves are individually very slow - typically cold activations rehydrating large snapshots. Set to `TimeSpan.Zero` to disable it and rely on the leaf count alone.
+[`MaxLeavesPerScanPage`](#maxleavesperscanpage) is the primary, deterministic bound; this covers the case a leaf count cannot, where a small number of leaves are individually very slow - typically cold activations rehydrating a large snapshot or replaying a WAL projection. It is sampled between leaf reads, so it bounds how many slow leaves one page fill chains together; it cannot preempt a leaf read already in flight. Set to `TimeSpan.Zero` to disable it and rely on the leaf count alone.
 
 This option can be changed freely at any time.
 

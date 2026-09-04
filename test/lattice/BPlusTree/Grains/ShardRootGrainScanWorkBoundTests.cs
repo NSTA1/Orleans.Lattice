@@ -15,10 +15,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// non-reentrant that call head-of-line-blocks every other request to the
 /// shard for its whole duration.
 /// <para>
-/// These tests pin the two properties that matter: the walk stops after a
-/// bounded number of leaf visits, and it never returns an empty page claiming
-/// more is available (which would strand a caller that derives its
-/// continuation token from the last returned result).
+/// The leaves this fixture builds declare <em>no</em> key bounds, so the walk
+/// has no leaf boundary to resume from. That is the case in which the page
+/// fill must still never return an empty page claiming more is available -
+/// a caller with neither a resume boundary nor a returned key has nothing to
+/// advance its next request with, and would be stranded. Where leaves do
+/// declare bounds, an empty page is resumable and is the correct answer; see
+/// <see cref="ShardRootGrainSterileScanTests"/> (issue 1992).
 /// </para>
 /// </summary>
 [TestFixture]
@@ -171,9 +174,11 @@ public class ShardRootGrainScanWorkBoundTests
     }
 
     /// <summary>
-    /// The forward-progress invariant at the grain seam. A caller resumes from
-    /// the last key in the page, so a work-bounded page must never come back
-    /// empty while claiming more is available.
+    /// The forward-progress invariant at the grain seam, in the case where the
+    /// walk cannot name a resume position. These leaves declare no bounds, so
+    /// the only thing a caller could resume from is the last key in the page -
+    /// which means a work-bounded page must never come back empty while
+    /// claiming more is available.
     /// </summary>
     [Test]
     public async Task A_work_bounded_page_is_never_empty_while_claiming_more()

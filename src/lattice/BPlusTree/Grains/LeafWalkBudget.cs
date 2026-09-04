@@ -19,18 +19,27 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// duration (issue 1955).
 /// </para>
 /// <para>
-/// <b>Forward progress is the load-bearing invariant.</b>
-/// <see cref="ShouldYield"/> only ever returns <see langword="true"/> once at
-/// least one result has been collected. A caller derives its next continuation
-/// token from the last result in the page, so a page that is empty but claims
-/// <c>HasMore = true</c> would leave it re-issuing an identical request
-/// forever. Guaranteeing at least one result keeps every existing caller
-/// correct with no wire-format change: a short page is already a representable
-/// state, whereas an empty one carrying more is not. The residual cost is that
-/// a genuinely sterile run of leaves (a wide range whose entries are all
-/// tombstoned or moved away) still walks unbounded; closing that needs an
-/// additive resume-key on the page records, which is deliberately out of scope
-/// here.
+/// <b>This type answers "is the work budget spent?" and nothing else.</b>
+/// Whether the walk may actually stop here is the call site's business, because
+/// only the call site knows whether it can name a position to resume from.
+/// <see cref="ShouldYield"/> deliberately takes no result count: an earlier
+/// revision gated it behind <c>resultsCollected &gt; 0</c> so that a page could
+/// never come back empty while claiming more, and that gate silently disarmed
+/// both the leaf cap and the deadline for exactly the run of leaves they exist
+/// to bound - a wide range whose rows are all tombstoned, TTL-expired,
+/// moved away by an adaptive split, or rejected by a pushed-down predicate
+/// (issue 1992).
+/// </para>
+/// <para>
+/// <b>Forward progress remains load-bearing, one level up.</b> A bounded walk
+/// may only stop where it can hand back a resume position strictly beyond the
+/// leaf it stopped on - the visited leaf's exclusive high bound for a forward
+/// walk, its inclusive low bound for a reverse one - which the page records
+/// carry as <c>ResumeFromKey</c>. A site that cannot name such a position keeps
+/// walking rather than emitting a page a caller could not advance past. See
+/// <see cref="BoundedLeafWalk"/>, which implements that rule for the background
+/// coordinators, and the <c>ShardRootGrain</c> page fills, which implement it
+/// for the shard read paths.
 /// </para>
 /// </summary>
 internal struct LeafWalkBudget
@@ -44,24 +53,55 @@ internal struct LeafWalkBudget
     /// the leaf bound, and a null or non-positive <paramref name="maxDuration"/>
     /// disables the deadline, so a misconfigured option degrades to today's
     /// unbounded behaviour rather than to a silently truncated walk.
+    /// <para>
+    /// <paramref name="startTimestamp"/> is the <see cref="Stopwatch"/> stamp the
+    /// deadline is measured from, so a caller can start the clock when it began
+    /// holding the shard rather than when it reached its walk loop. Pass
+    /// <c>0</c> to measure from now. See <see cref="StartClock"/>.
+    /// </para>
     /// </summary>
-    internal LeafWalkBudget(int maxLeaves, TimeSpan? maxDuration)
+    internal LeafWalkBudget(int maxLeaves, TimeSpan? maxDuration, long startTimestamp = 0L)
     {
         _maxLeaves = maxLeaves > 0 ? maxLeaves : int.MaxValue;
+        var start = startTimestamp != 0L ? startTimestamp : Stopwatch.GetTimestamp();
         _deadlineTimestamp = maxDuration is { } duration && duration > TimeSpan.Zero
-            ? Stopwatch.GetTimestamp() + (long)(duration.TotalSeconds * Stopwatch.Frequency)
+            ? start + (long)(duration.TotalSeconds * Stopwatch.Frequency)
             : 0L;
         _leavesVisited = 0;
     }
 
     /// <summary>
+    /// Takes the timestamp a budget's deadline should be measured from, at the
+    /// point the caller starts holding the resource the budget protects.
+    /// <para>
+    /// A page fill reaches its leaf loop only after preparing the grain and
+    /// traversing down to the start leaf, and on a cold activation that prologue
+    /// is itself a run of grain calls that can block for a long time - a leaf or
+    /// internal node replaying its WAL projection, in particular. Constructing
+    /// the budget at the loop excluded that prologue from the deadline, so a
+    /// request that had already held the non-reentrant shard for minutes was then
+    /// granted a further full <see cref="LatticeOptions.MaxScanPageDuration"/> of
+    /// leaf walking. Starting the clock here makes the deadline measure the whole
+    /// hold, which is the quantity that actually head-of-line-blocks the shard
+    /// (issue 1992).
+    /// </para>
+    /// </summary>
+    internal static long StartClock() => Stopwatch.GetTimestamp();
+
+    /// <summary>
     /// Builds the budget a shard range-scan page fill runs under, from the
     /// tree's resolved options.
+    /// <para>
+    /// Pass the stamp from <see cref="StartClock"/> taken at the top of the
+    /// grain call so the deadline covers the whole time the shard is held -
+    /// preparing the grain and traversing to the start leaf included - rather
+    /// than only the leaf loop. Omit it to measure from now.
+    /// </para>
     /// </summary>
-    internal static LeafWalkBudget ForScanPage(LatticeOptions options)
+    internal static LeafWalkBudget ForScanPage(LatticeOptions options, long startTimestamp = 0L)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return new LeafWalkBudget(options.MaxLeavesPerScanPage, options.MaxScanPageDuration);
+        return new LeafWalkBudget(options.MaxLeavesPerScanPage, options.MaxScanPageDuration, startTimestamp);
     }
 
     /// <summary>
@@ -117,22 +157,18 @@ internal struct LeafWalkBudget
     internal void RecordLeafVisited() => _leavesVisited++;
 
     /// <summary>
-    /// Whether the walk should stop here and return a partial page.
+    /// Whether this turn's work budget is spent - the leaf cap has been reached
+    /// or the wall-clock deadline has passed.
     /// <para>
-    /// Returns <see langword="false"/> whenever
-    /// <paramref name="resultsCollected"/> is zero, regardless of how much
-    /// budget has been spent: yielding an empty page that claims more is
-    /// available would strand a caller that derives its continuation from the
-    /// last returned result. See the type remarks.
+    /// It is a pure work question, independent of how many results the caller
+    /// has collected, so it fires just as reliably on a sterile run of leaves
+    /// that yields nothing as on a productive one (issue 1992). Acting on it is
+    /// the caller's decision: stop only where a resume position can be named.
+    /// See the type remarks.
     /// </para>
     /// </summary>
-    internal readonly bool ShouldYield(int resultsCollected)
+    internal readonly bool ShouldYield()
     {
-        if (resultsCollected <= 0)
-        {
-            return false;
-        }
-
         if (_leavesVisited >= _maxLeaves)
         {
             return true;

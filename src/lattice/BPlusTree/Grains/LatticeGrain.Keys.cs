@@ -387,11 +387,12 @@ internal sealed partial class LatticeGrain
             var sortedSlots = ToSortedArray(slotList);
             var shard = GetShardGrainByIndex(physicalTreeId, owner);
             string? continuation = null;
+            string? resumeFrom = null;
             while (true)
             {
                 var page = await shard.GetSortedKeysBatchForSlotsAsync(
                     startInclusive, endExclusive, pageSize, continuation,
-                    sortedSlots, virtualShardCount, predicate);
+                    sortedSlots, virtualShardCount, predicate, resumeFrom);
 
                 foreach (var k in page.Keys)
                 {
@@ -404,8 +405,19 @@ internal sealed partial class LatticeGrain
                 }
 
                 if (!page.HasMore) break;
-                if (page.Keys.Count == 0) break;
-                continuation = page.Keys[^1];
+
+                // Prefer the shard's resume boundary over the last drained key:
+                // a work-bounded page can be empty while still reporting more
+                // (every leaf it walked held only tombstoned, expired,
+                // moved-away, or slot-rejected rows), and the boundary is also
+                // strictly further along than the last row, so the leaves this
+                // call already walked are not walked again (issue 1992).
+                if (page.ResumeFromKey is not null)
+                    resumeFrom = page.ResumeFromKey;
+                else if (page.Keys.Count > 0)
+                    continuation = page.Keys[^1];
+                else
+                    break;
             }
         }
         return buffer;
@@ -458,6 +470,7 @@ internal sealed partial class LatticeGrain
         private int _index;
         private bool _hasMore = true;
         private string? _continuation;
+        private string? _resumeFrom;
         private Task<KeysPage>? _prefetchTask;
 
         public bool HasCurrent => _page is not null && _index < _page.Count;
@@ -470,7 +483,12 @@ internal sealed partial class LatticeGrain
                 _index++;
             }
 
-            if (_page is null || (_index >= _page.Count && _hasMore))
+            // Loop rather than fetch once: a work-bounded shard page can come
+            // back empty while still reporting more, when every leaf it walked
+            // held only tombstoned, expired, moved-away, or predicate-rejected
+            // rows. Ending the cursor on that first empty page would silently
+            // truncate the scan (issue 1992).
+            while (_page is null || (_index >= _page.Count && _hasMore))
             {
                 KeysPage result;
                 if (_prefetchTask is not null)
@@ -480,14 +498,24 @@ internal sealed partial class LatticeGrain
                 }
                 else
                 {
-                    result = await FetchPageAsync(_continuation);
+                    result = await FetchPageAsync(_continuation, _resumeFrom);
                 }
 
                 _page = result.Keys;
                 _index = 0;
                 _hasMore = result.HasMore;
-                if (_page.Count > 0)
+
+                // Prefer the shard's resume boundary over the page's last key:
+                // it is strictly further along, so the leaves the bounded call
+                // already walked are not walked again, and an empty page stays
+                // resumable. A page that advances neither cannot be resumed at
+                // all, so treat it as the end rather than re-issuing it.
+                if (result.ResumeFromKey is not null)
+                    _resumeFrom = result.ResumeFromKey;
+                else if (_page.Count > 0)
                     _continuation = _page[^1];
+                else
+                    _hasMore = false;
 
                 if (movedSlotSink is not null && result.MovedAwaySlots is { Length: > 0 } moved)
                 {
@@ -496,17 +524,17 @@ internal sealed partial class LatticeGrain
 
                 // Kick off background fetch for the next page.
                 if (prefetch && _hasMore)
-                    _prefetchTask = FetchPageAsync(_continuation);
+                    _prefetchTask = FetchPageAsync(_continuation, _resumeFrom);
             }
         }
 
-        private Task<KeysPage> FetchPageAsync(string? continuation)
+        private Task<KeysPage> FetchPageAsync(string? continuation, string? resumeFrom)
         {
             return reverse
                 ? shard.GetSortedKeysBatchReverseAsync(
-                    startInclusive, endExclusive, pageSize, continuation, predicate)
+                    startInclusive, endExclusive, pageSize, continuation, predicate, resumeFrom)
                 : shard.GetSortedKeysBatchAsync(
-                    startInclusive, endExclusive, pageSize, continuation, predicate);
+                    startInclusive, endExclusive, pageSize, continuation, predicate, resumeFrom);
         }
     }
 }
