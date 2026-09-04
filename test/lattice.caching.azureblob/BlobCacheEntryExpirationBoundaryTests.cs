@@ -21,16 +21,16 @@ public sealed class BlobCacheEntryExpirationBoundaryTests
 {
     private static readonly DateTimeOffset Now = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
 
-    // ---- Sliding-window guard -------------------------------------------
+    // ---- Sliding-window upstream validation ------------------------------
 
     [Test]
     public void DistributedCacheEntryOptions_itself_rejects_a_non_positive_sliding_window()
     {
-        // Pins why Compute's own non-positive-window guard is belt-and-braces rather
-        // than a live path: the options type validates in its setter, so a caller
+        // Pins the upstream invariant that lets Compute omit a non-positive-window
+        // guard entirely: the options type validates in its setter, so a caller
         // cannot hand Compute a zero or negative window through the public API. If a
-        // future Microsoft.Extensions.Caching.Abstractions relaxes this, the guard
-        // becomes reachable and this test is the signal to cover it directly.
+        // future Microsoft.Extensions.Caching.Abstractions relaxes this, that
+        // assumption is void and this test is the signal to reinstate the guard.
         Assert.Multiple(() =>
         {
             Assert.That(

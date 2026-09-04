@@ -43,8 +43,18 @@ internal static class BlobCacheEntryExpiration
     /// <param name="now">The write instant from the cache's clock.</param>
     /// <returns>The absolute cap, sliding window, and initial effective expiry.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// The absolute expiration is already in the past, or the sliding expiration is not positive.
+    /// The absolute expiration is already in the past.
     /// </exception>
+    /// <remarks>
+    /// A non-positive sliding window needs no guard here:
+    /// <see cref="DistributedCacheEntryOptions.SlidingExpiration"/> validates in its
+    /// own setter, so a caller cannot construct options carrying a zero or negative
+    /// window and hand them to this method. The companion
+    /// <c>DistributedCacheEntryOptions_itself_rejects_a_non_positive_sliding_window</c>
+    /// test pins that upstream behaviour, so a future
+    /// <c>Microsoft.Extensions.Caching.Abstractions</c> that relaxed the setter would
+    /// fail CI here rather than silently writing an already-expired entry.
+    /// </remarks>
     public static Values Compute(DistributedCacheEntryOptions options, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -72,13 +82,6 @@ internal static class BlobCacheEntryExpiration
         }
 
         var sliding = options.SlidingExpiration;
-        if (sliding.HasValue && sliding.Value <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(options),
-                sliding.Value,
-                "The sliding expiration value must be positive.");
-        }
 
         DateTimeOffset? effective;
         if (sliding.HasValue)

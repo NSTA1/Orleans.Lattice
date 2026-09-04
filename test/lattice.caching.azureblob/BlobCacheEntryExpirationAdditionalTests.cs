@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Caching.AzureBlob.Tests;
 /// <summary>
 /// Additional unit tests for <see cref="BlobCacheEntryExpiration"/> covering the
 /// absolute-instant (non-relative) branch of <see cref="BlobCacheEntryExpiration.Compute"/>
-/// and the non-positive sliding-window guard, complementing
+/// and its already-in-the-past guard, complementing
 /// <see cref="BlobCacheEntryExpirationTests"/>.
 /// </summary>
 [TestFixture]
