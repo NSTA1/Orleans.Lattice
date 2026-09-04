@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Storage.File</PackageId>
-    <Version>8.0.0</Version>
+    <Version>9.6.0</Version>
     <Description>Local disk-backed IWalStorageProvider for Orleans.Lattice. Provides a durable, cloud-free per-shard write-ahead log backed by a segmented append-only log, matching the observable durability guarantees of the Azure Table Storage provider.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

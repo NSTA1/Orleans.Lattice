@@ -152,7 +152,7 @@ Durability backends behind the storage seams. The core ships an in-memory write-
 | Package | Description | Docs |
 |---|---|---|
 | `Orleans.Lattice.Storage.AzureTable` | The durable Azure Table Storage write-ahead-log backend. | [README](docs/lattice.storage.azuretable/README.md) |
-| `Orleans.Lattice.Storage.File` | A durable local-disk write-ahead-log backend: an append-and-fsync log per shard with crash-safe reconciliation and background compaction that rewrites the log to reclaim trimmed space, using the same per-entry record payload encoding as the Azure Table backend. Intended for single-node and containerized deployments. **Not yet published to NuGet** - build from source today. | [README](docs/lattice.storage.file/README.md) |
+| `Orleans.Lattice.Storage.File` | A durable local-disk write-ahead-log backend: an append-and-fsync log per shard with crash-safe reconciliation and background compaction that rewrites the log to reclaim trimmed space, using the same per-entry record payload encoding as the Azure Table backend. Intended for single-node and containerized deployments. | [README](docs/lattice.storage.file/README.md) |
 | `Orleans.Lattice.Backup.AzureBlob` | The durable Azure Blob Storage sink backend for backup artifacts and manifests. | [README](docs/lattice.backup.azureblob/README.md) |
 | `Orleans.Lattice.Caching.AzureBlob` | A durable Azure Blob Storage `IDistributedCache` for the family, backing the hosted-web Explorer's distributed token cache on a multi-replica host. | [README](docs/lattice.caching.azureblob/README.md) |
 
