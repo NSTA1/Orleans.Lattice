@@ -60,7 +60,15 @@ public class TreeAliasObserverDispatcherTests
     public async Task PublishAsync_is_noop_when_no_observers_registered()
     {
         var dispatcher = new TreeAliasObserverDispatcher([], NullLogger<TreeAliasObserverDispatcher>.Instance);
-        await dispatcher.PublishAsync(SampleChange());
+
+        // "No-op" is an assertable claim, not just an absence of throws:
+        // the empty fan-out must short-circuit before the first await, so
+        // the returned task is already completed when it is handed back.
+        var publish = dispatcher.PublishAsync(SampleChange());
+
+        Assert.That(publish.IsCompletedSuccessfully, Is.True,
+            "with no observers registered PublishAsync must complete synchronously and without faulting.");
+        await publish;
     }
 
     [Test]

@@ -106,11 +106,26 @@ public partial class PublicReplicationApiContractTests
 
         // Triggered may be true or false depending on the
         // rate-limiter state across tests; the contract claim is
-        // that the struct shape is populated correctly.
-        Assert.That(decision, Is.Not.EqualTo(default(OperatorReseedDecision)).Or.EqualTo(default(OperatorReseedDecision)));
-        if (!decision.Triggered)
+        // that the struct shape is populated correctly. That claim is
+        // asserted as the documented relationship between the members,
+        // which holds on BOTH outcomes, rather than on the outcome
+        // itself: an honoured request stamps the honoured time and
+        // carries no retry window, and a rate-limited one reports the
+        // strictly-positive remainder of the window it was limited
+        // against.
+        Assert.That(decision.LastRequestedAt, Is.Not.Null,
+            "every decision names the honoured request the rate-limit window is measured from");
+        if (decision.Triggered)
         {
-            Assert.That(decision.RetryAfter, Is.Not.Null);
+            Assert.That(decision.RetryAfter, Is.Null,
+                "an honoured request is not rate-limited, so it carries no retry-after window");
+        }
+        else
+        {
+            Assert.That(decision.RetryAfter, Is.Not.Null,
+                "a rate-limited request must report the remaining window");
+            Assert.That(decision.RetryAfter!.Value, Is.GreaterThan(TimeSpan.Zero),
+                "a request is only denied while the window has time left to run");
         }
     }
 

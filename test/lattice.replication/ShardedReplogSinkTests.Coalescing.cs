@@ -26,8 +26,13 @@ public partial class ShardedReplogSinkTests
 
         // Gate the in-flight ring so every burst write lands while the
         // first ring is still running and must coalesce into pending.
+        var rings = new CallCounter();
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ => gate.Task);
+        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return gate.Task;
+        });
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipper);
 
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
@@ -52,7 +57,16 @@ public partial class ShardedReplogSinkTests
         // Release the in-flight ring; the loop then fires exactly one
         // trailing ring for the coalesced pending request and settles.
         gate.SetResult();
-        await Task.Delay(50);
+
+        // Wait for the trailing ring to be dispatched, then prove the loop
+        // really settled by watching for a third ring that must never come.
+        // Both are observations of the ring loop itself rather than a fixed
+        // sleep that assumed the loop had finished.
+        await WaitUntilAsync(() => rings.Count >= 2, 5000);
+        Assert.That(
+            await WaitUntilAsync(() => rings.Count > 2, NoDispatchWindowMs),
+            Is.False,
+            "the coalesced burst must settle after the single trailing ring");
 
         var totalRung = rung.Measurements.Sum(m => m.Value);
         var totalCoalesced = coalesced.Measurements.Sum(m => m.Value);
@@ -77,10 +91,16 @@ public partial class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_records_dispatched_rings_on_the_rung_counter()
     {
+        var rings = new CallCounter();
         var monitor = MonitorWithDoorbell();
         var topology = new FakeReplicationTopology(new[] { "site-b" });
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
+        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipper);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
@@ -89,7 +109,11 @@ public partial class ShardedReplogSinkTests
             LatticeReplicationMetrics.DoorbellRungName);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
+        // The counter is incremented immediately before the grain call, so
+        // observing the call is a sound happens-after signal for the
+        // measurement - unlike a fixed sleep.
+        Assert.That(await WaitUntilAsync(() => rings.Count > 0), Is.True,
+            "the fire-and-forget ring must reach the shipper");
 
         Assert.That(rung.Measurements.Sum(m => m.Value), Is.GreaterThanOrEqualTo(1),
             "a settled single write dispatches exactly one ring");
@@ -105,17 +129,29 @@ public partial class ShardedReplogSinkTests
     {
         // A doorbell rung after the loop has already settled must start a
         // fresh ring loop rather than being silently dropped.
+        var rings = new CallCounter();
         var monitor = MonitorWithDoorbell();
         var topology = new FakeReplicationTopology(new[] { "site-b" });
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
+        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipper);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
+        // Wait for the first ring to have been dispatched before the second
+        // write, so the second write is genuinely a later burst rather than
+        // one that happened to land inside an unfinished sleep window.
+        Assert.That(await WaitUntilAsync(() => rings.Count >= 1), Is.True,
+            "the first write must dispatch its ring");
+
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
+        Assert.That(await WaitUntilAsync(() => rings.Count >= 2), Is.True,
+            "a write after the ring loop settled must dispatch a fresh ring");
 
         await shipper.Received(2).OnDoorbellAsync(Arg.Any<CancellationToken>());
     }

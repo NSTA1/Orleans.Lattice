@@ -45,6 +45,57 @@ public sealed class LatticeStorageUsagePollerTests
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeStorageUsagePoller>>());
     }
 
+    /// <summary>
+    /// Thread-safe tally of admin calls made from the poller's background
+    /// loops. The loops run on the thread pool, so the assertions need a
+    /// happens-after signal they can poll rather than a fixed sleep that
+    /// merely hopes the loop got there first.
+    /// </summary>
+    private sealed class CallCounter
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Increment() => Interlocked.Increment(ref _count);
+    }
+
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds or the timeout
+    /// expires, returning whether it was ever observed to hold. Positive
+    /// assertions wait only as long as they must (and get a generous
+    /// ceiling, so a slow CI agent cannot fail them); negative assertions
+    /// are expressed as "the earliest observable evidence never appeared
+    /// within a window far longer than the configured cadence".
+    /// </summary>
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return condition();
+    }
+
+    /// <summary>
+    /// Awaits <paramref name="task"/> under a bounded deadline, failing the
+    /// test with <paramref name="because"/> rather than hanging the run if
+    /// the task never settles.
+    /// </summary>
+    private static async Task AwaitCompletionAsync(Task task, string because, int timeoutMs = 10000)
+    {
+        var settled = await Task.WhenAny(task, Task.Delay(timeoutMs));
+        Assert.That(settled, Is.SameAs(task), because);
+        await task;
+    }
+
     [Test]
     public async Task ExecuteAsync_disabled_interval_never_calls_admin()
     {
@@ -55,7 +106,15 @@ public sealed class LatticeStorageUsagePollerTests
         var poller = CreatePoller(factory, new LatticeOptions { StorageUsagePollInterval = TimeSpan.Zero }, out _);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
+
+        // With both cadences disabled the service body returns immediately,
+        // so its completion is a real happens-after barrier: once
+        // ExecuteTask has settled the poller provably had its one and only
+        // chance to reach the admin grain. That is strictly stronger than
+        // sleeping for a fixed window and hoping it would have polled.
+        await AwaitCompletionAsync(
+            poller.ExecuteTask!,
+            "a fully disabled poller must return from its service body instead of spinning a loop");
         await poller.StopAsync(CancellationToken.None);
 
         await admin.DidNotReceive().PollWalUsageAsync(Arg.Any<CancellationToken>());
@@ -65,17 +124,25 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_enabled_polls_the_admin_grain()
     {
+        var walPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            walPolls.Increment();
+            return Task.CompletedTask;
+        });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
         var poller = CreatePoller(factory, new LatticeOptions { StorageUsagePollInterval = TimeSpan.FromMilliseconds(25) }, out _);
 
         await poller.StartAsync(CancellationToken.None);
-        // Allow a few ticks; the first poll runs immediately then the timer
-        // drives subsequent ones.
-        await Task.Delay(200);
+        // Wait for the poll to actually be observed; the first poll runs
+        // immediately then the timer drives subsequent ones. Polling for
+        // the evidence keeps the test fast when the loop is prompt and
+        // patient when a loaded CI agent delays the thread pool.
+        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+            "an enabled poller must reach the admin grain's WAL poll");
         await poller.StopAsync(CancellationToken.None);
 
         await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
@@ -92,8 +159,13 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_enabled_sets_sink_staleness_horizon()
     {
+        var walPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            walPolls.Increment();
+            return Task.CompletedTask;
+        });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -102,7 +174,12 @@ public sealed class LatticeStorageUsagePollerTests
         var poller = CreatePoller(factory, new LatticeOptions { StorageUsagePollInterval = TimeSpan.FromSeconds(30) }, out var metrics);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
+        // The horizon is sized before the poll loops are started, so the
+        // first observed poll is a sound happens-after signal for it -
+        // unlike a fixed sleep, which asserts on whatever the loop
+        // happened to have reached.
+        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+            "the poller must start its WAL loop, which happens only after the horizon is sized");
         await poller.StopAsync(CancellationToken.None);
 
         Assert.That(metrics.StalenessHorizon, Is.EqualTo(TimeSpan.FromSeconds(120)),
@@ -112,8 +189,13 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_short_interval_floors_horizon_at_the_default()
     {
+        var walPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            walPolls.Increment();
+            return Task.CompletedTask;
+        });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -123,7 +205,8 @@ public sealed class LatticeStorageUsagePollerTests
         var poller = CreatePoller(factory, new LatticeOptions { StorageUsagePollInterval = TimeSpan.FromSeconds(5) }, out var metrics);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
+        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+            "the poller must start its WAL loop, which happens only after the horizon is sized");
         await poller.StopAsync(CancellationToken.None);
 
         Assert.That(metrics.StalenessHorizon, Is.EqualTo(LatticeStorageUsageMetrics.DefaultStalenessHorizon),
@@ -133,29 +216,50 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_admin_failure_does_not_crash_the_poller()
     {
+        var walPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
         admin.PollWalUsageAsync(Arg.Any<CancellationToken>())
-            .Returns<Task>(_ => throw new InvalidOperationException("registry not ready"));
+            .Returns<Task>(_ =>
+            {
+                walPolls.Increment();
+                throw new InvalidOperationException("registry not ready");
+            });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
         var poller = CreatePoller(factory, new LatticeOptions { StorageUsagePollInterval = TimeSpan.FromMilliseconds(25) }, out _);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(150);
+        // "Swallows the fault and keeps ticking" is only demonstrated by a
+        // second tick arriving after the first one threw, so wait for that
+        // rather than for an arbitrary number of milliseconds.
+        Assert.That(await WaitUntilAsync(() => walPolls.Count >= 2), Is.True,
+            "the poller must swallow a failing poll and tick again");
         // The poller swallows the fault and keeps ticking; stopping is clean.
         Assert.That(async () => await poller.StopAsync(CancellationToken.None), Throws.Nothing);
 
         await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
+        Assert.That(poller.ExecuteTask!.IsFaulted, Is.False,
+            "a failing admin call must not fault the background service");
     }
 
     [Test]
     public async Task ExecuteAsync_deep_interval_enabled_drives_the_non_force_deep_aggregator()
     {
+        var walPolls = new CallCounter();
+        var deepPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            walPolls.Increment();
+            return Task.CompletedTask;
+        });
         admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
-            .Returns(new ClusterStorageUsageReport());
+            .Returns(_ =>
+            {
+                deepPolls.Increment();
+                return new ClusterStorageUsageReport();
+            });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -169,7 +273,8 @@ public sealed class LatticeStorageUsagePollerTests
             out _);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0 && deepPolls.Count > 0), Is.True,
+            "both the WAL loop and the deep loop must reach the admin grain");
         await poller.StopAsync(CancellationToken.None);
 
         await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
@@ -182,9 +287,14 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_deep_only_polls_the_deep_path_without_the_wal_poll()
     {
+        var deepPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
         admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
-            .Returns(new ClusterStorageUsageReport());
+            .Returns(_ =>
+            {
+                deepPolls.Increment();
+                return new ClusterStorageUsageReport();
+            });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -198,7 +308,11 @@ public sealed class LatticeStorageUsagePollerTests
             out _);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        // Waiting on several deep ticks gives the (incorrectly-started) WAL
+        // loop far more opportunity to fire than a fixed sleep did, so the
+        // negative assertion below is stronger, not weaker.
+        Assert.That(await WaitUntilAsync(() => deepPolls.Count >= 3), Is.True,
+            "the deep loop must reach the admin grain repeatedly on its own cadence");
         await poller.StopAsync(CancellationToken.None);
 
         await admin.ReceivedWithAnyArgs().GetTotalStorageUsageAsync(default);
@@ -208,8 +322,13 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_sizes_horizon_off_the_slower_deep_cadence()
     {
+        var walPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            walPolls.Increment();
+            return Task.CompletedTask;
+        });
         admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
             .Returns(new ClusterStorageUsageReport());
         var factory = Substitute.For<IGrainFactory>();
@@ -228,7 +347,8 @@ public sealed class LatticeStorageUsagePollerTests
             out var metrics);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
+        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+            "the poller must start its poll loops, which happens only after the horizon is sized");
         await poller.StopAsync(CancellationToken.None);
 
         Assert.That(metrics.StalenessHorizon, Is.EqualTo(TimeSpan.FromSeconds(120)),
@@ -240,8 +360,13 @@ public sealed class LatticeStorageUsagePollerTests
     [Test]
     public async Task ExecuteAsync_out_of_range_poll_interval_does_not_fault_the_background_service()
     {
+        var walPolls = new CallCounter();
         var admin = Substitute.For<ILatticeAdmin>();
-        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        admin.PollWalUsageAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            walPolls.Increment();
+            return Task.CompletedTask;
+        });
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey).Returns(admin);
 
@@ -255,13 +380,14 @@ public sealed class LatticeStorageUsagePollerTests
             out _);
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
+        // The immediate first poll still runs; only the wait cadence is clamped.
+        Assert.That(await WaitUntilAsync(() => walPolls.Count > 0), Is.True,
+            "the clamped interval must still let the immediate first poll run");
         await poller.StopAsync(CancellationToken.None);
 
         Assert.That(poller.ExecuteTask, Is.Not.Null);
         Assert.That(poller.ExecuteTask!.IsFaulted, Is.False,
             "an out-of-range poll interval must degrade the poller, not fault the background service");
-        // The immediate first poll still runs; only the wait cadence is clamped.
         await admin.ReceivedWithAnyArgs().PollWalUsageAsync(default);
     }
 
@@ -284,7 +410,14 @@ public sealed class LatticeStorageUsagePollerTests
             Substitute.For<Microsoft.Extensions.Logging.ILogger<LatticeStorageUsagePoller>>());
 
         await poller.StartAsync(CancellationToken.None);
-        await Task.Delay(100);
+
+        // The options read is the first thing the service body does, so the
+        // body settles as soon as the throw is swallowed. Awaiting that
+        // settle proves the failure was actually reached and handled -
+        // a fixed sleep proved neither.
+        await AwaitCompletionAsync(
+            poller.ExecuteTask!,
+            "an unusable options value must be swallowed and end the service body, not hang it");
         await poller.StopAsync(CancellationToken.None);
 
         Assert.That(poller.ExecuteTask, Is.Not.Null);

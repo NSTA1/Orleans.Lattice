@@ -187,8 +187,20 @@ public class LivenessProbeAndInboundStatsChaosTests
                 && s.Tree == TreeName && s.Peer == siteAId);
         Assert.That(inboundRow, Is.Not.EqualTo(default(ReplicationPeerSnapshot)),
             "Site B did not record any inbound row for site A.");
-        Assert.That(inboundRow.ConsecutiveErrors + (inboundRow.LastContactSeconds is double.NaN ? 0 : 0), Is.GreaterThanOrEqualTo(0),
-            "Sanity placeholder for the snapshot shape.");
+
+        // Backlog and pipelining depth are outbound-only by design - the
+        // receiver tracks no per-peer backlog into itself and does not
+        // pipeline into itself - so an inbound row must leave all three
+        // at zero however much traffic (or however many faults) it saw.
+        Assert.Multiple(() =>
+        {
+            Assert.That(inboundRow.EntriesBehind, Is.Zero,
+                "Backlog is outbound-only; an inbound row must never carry an entries-behind count.");
+            Assert.That(inboundRow.BytesBehind, Is.Zero,
+                "Backlog is outbound-only; an inbound row must never carry a bytes-behind count.");
+            Assert.That(inboundRow.InFlight, Is.Zero,
+                "Pipelining depth is outbound-only; an inbound row must never carry an in-flight count.");
+        });
 
         // The real invariant: a non-zero injected-failure count under
         // a draining workload means the receiver-side inbound recording
