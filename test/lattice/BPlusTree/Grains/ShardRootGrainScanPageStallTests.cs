@@ -140,18 +140,27 @@ public class ShardRootGrainScanPageStallTests
     }
 
     [Test]
-    public async Task The_ceiling_releases_the_shard_so_a_later_call_still_works()
+    public async Task The_ceiling_abandons_a_read_that_is_still_in_flight()
     {
-        // The whole point of the fault: the stalled call stops holding the
-        // non-reentrant shard, so its queue drains rather than wedging behind
-        // an await nobody can interrupt.
+        // Positive evidence that the ceiling did what it claims: the parked
+        // read must still be pending at the moment the fault surfaces. Without
+        // this the test would also pass if the read had quietly completed and
+        // the fault had come from somewhere else entirely - and the grain
+        // staying usable afterwards proves nothing on its own, because these
+        // are substituted leaves with no real activation to wedge.
         var harness = CreateParkedChain(TimeSpan.FromMilliseconds(250), parkAtLeaf: 0);
 
         Assert.ThrowsAsync<ScanPageStalledException>(async () =>
             await harness.Grain.GetSortedEntriesBatchAsync(
                 startInclusive: null, endExclusive: null, pageSize: 10, continuationToken: null));
 
-        // A keys page reads through GetKeysAsync, which is not parked.
+        Assert.That(harness.Parked.Task.IsCompleted, Is.False,
+            "the ceiling must have abandoned a genuinely in-flight leaf read - the shape the "
+            + "cooperative budget is structurally unable to interrupt");
+
+        // And the activation is left in a state that still serves work: the
+        // guard released its pooled probe rather than wedging on the abandoned
+        // walk. A keys page reads through GetKeysAsync, which is not parked.
         var page = await harness.Grain.GetSortedKeysBatchAsync(
             startInclusive: null, endExclusive: null, pageSize: 10, continuationToken: null);
 
@@ -172,6 +181,14 @@ public class ShardRootGrainScanPageStallTests
         Assert.That(page.Entries, Is.Not.Empty);
     }
 
+    /// <summary>
+    /// An infinite ceiling is the documented "off" switch, so it must not turn
+    /// into a fault path. Note this asserts only that the disabled guard stays
+    /// out of the way: the zero-state-machine fast path is deliberately not
+    /// asserted here, because an async method awaiting an already-completed
+    /// task also returns a completed task, so the wrapped and unwrapped paths
+    /// are externally indistinguishable.
+    /// </summary>
     [Test]
     public async Task A_disabled_ceiling_does_not_fault_a_healthy_page_fill()
     {
