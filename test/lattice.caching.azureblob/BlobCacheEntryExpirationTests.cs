@@ -202,4 +202,23 @@ public sealed class BlobCacheEntryExpirationTests
 
         Assert.That(BlobCacheEntryExpiration.Slide(values, readAt), Is.Null);
     }
+
+    [Test]
+    public void Slide_returns_null_for_a_sliding_entry_that_never_expires()
+    {
+        // A sliding window with no stored effective instant never expires on its
+        // own: IsExpired treats a null effective instant as not-expired, and
+        // FromMetadata degrades a partial or corrupt blob (a sliding window
+        // present, the effective instant missing or unparsable) to exactly this
+        // shape. A read must therefore not rewrite it to a finite expiry, which
+        // would silently shorten a never-expiring entry - the same
+        // null-effective-first guard IsExpired already applies.
+        var values = new BlobCacheEntryExpiration.Values(null, TimeSpan.FromMinutes(10), null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(BlobCacheEntryExpiration.IsExpired(values, Now.AddYears(1)), Is.False);
+            Assert.That(BlobCacheEntryExpiration.Slide(values, Now.AddMinutes(1)), Is.Null);
+        });
+    }
 }

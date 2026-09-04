@@ -49,6 +49,25 @@ public sealed class TenantQuotaRowTests
     }
 
     [Test]
+    public void BarPercent_rounds_an_exact_midpoint_away_from_zero_like_the_self_service_gauge()
+    {
+        // 125 / 1000 is exactly 0.125, so the bar is exactly 12.5 percent - a
+        // midpoint whose floor (12) is even. That is the one case that
+        // distinguishes the rounding mode: banker's (to-even) rounding lands on
+        // 12, while the documented, sibling TenantQuotaGauge.BarPercent semantics
+        // round a midpoint away from zero to 13. The admin row must agree with the
+        // self-service gauge rather than silently under-report a half-percent.
+        var row = Row(usage: 125, limit: 1_000);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.State, Is.EqualTo(TenantQuotaReadingState.Bounded));
+            Assert.That(row.Utilization, Is.EqualTo(0.125d));
+            Assert.That(row.BarPercent, Is.EqualTo(13));
+        });
+    }
+
+    [Test]
     public void An_unbounded_dimension_says_unlimited_and_draws_no_bar()
     {
         var row = Row(usage: 3, limit: null);

@@ -97,6 +97,33 @@ public partial class SharedMetricsSamplerTests
             "with visibility disabled the signature is identity-free, so different credentials still coalesce");
     }
 
+    [Test]
+    public async Task Subscribe_does_not_coalesce_distinct_identities_that_alias_under_a_bare_delimiter_join()
+    {
+        // Two genuinely distinct subjects share a subject id but differ in group
+        // membership: one belongs to a single group literally named "a,b", the
+        // other to two groups "a" and "b". They must never share a sampling loop.
+        // Before the signature was made injective, joining group ids with a bare
+        // ',' rendered both closures as "a,b", collapsing the two identities onto
+        // one loop so the first subscriber's identity-filtered map leaked to the
+        // other - the exact cross-visibility coalescing the #971 contract forbids.
+        // A length-prefixed signature keeps them on separate loops.
+        var query = new IdentityScopedStateQuery();
+        var sampler = CreateVisibilitySampler(query, new AliasingSubjectMembershipContext());
+        var request = MetricsRequest();
+
+        await using var single = new SubscriptionProbe(sampler, request, token: "single-group");
+        await single.FirstAsync();
+
+        await using var split = new SubscriptionProbe(sampler, request, token: "split-groups");
+        await split.FirstAsync();
+
+        Assert.That(
+            sampler.ActiveSamplerCount,
+            Is.EqualTo(2),
+            "distinct identities that alias under a bare-delimiter group join must run on separate sampling loops");
+    }
+
     private static SharedMetricsSampler CreateVisibilitySampler(
         ILatticeStateQuery query,
         ILatticeMembershipContext membership)
@@ -261,6 +288,32 @@ public partial class SharedMetricsSamplerTests
 
         public Task<DeadLetterQueuePage> ListDeadLettersAsync(DeadLetterQueueRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// Resolves two ambient tokens into two genuinely distinct subjects that a
+    /// bare-delimiter group join would alias to one signature: they share the
+    /// subject id <c>s</c> but one belongs to a single group literally named
+    /// <c>a,b</c> while the other belongs to two groups <c>a</c> and <c>b</c>.
+    /// </summary>
+    private sealed class AliasingSubjectMembershipContext : ILatticeMembershipContext
+    {
+        public ValueTask<LatticeSubject> ResolveCurrentAsync(CancellationToken cancellationToken = default)
+            => new(Resolve());
+
+        public bool TryResolveCurrent(out LatticeSubject subject)
+        {
+            subject = Resolve();
+            return true;
+        }
+
+        private static LatticeSubject Resolve()
+            => LatticeCredentialContext.Current?.Token switch
+            {
+                "single-group" => new LatticeSubject("s", new[] { "a,b" }),
+                "split-groups" => new LatticeSubject("s", new[] { "a", "b" }),
+                _ => LatticeSubject.Anonymous,
+            };
     }
 
     /// <summary>
