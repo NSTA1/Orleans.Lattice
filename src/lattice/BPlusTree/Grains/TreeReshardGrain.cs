@@ -219,14 +219,11 @@ internal sealed class TreeReshardGrain(
     /// tree has nothing to churn, answers well inside the budget, and still
     /// takes the fast path.
     /// </para>
-    /// </summary>
-    /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
-    /// <returns><see langword="true"/> only when the tree was positively observed to be empty.</returns>
-    /// <summary>
-    /// Bounded, one-sided emptiness probe for the empty-tree fast path. See
-    /// <see cref="TreeEmptinessProbe"/> for why this deliberately does not go
-    /// through <see cref="ILattice.CountAsync(CancellationToken)"/>, and why an
-    /// existence question needs no reconciliation against a moving shard map.
+    /// <para>
+    /// See <see cref="TreeEmptinessProbe"/> for why this deliberately does not
+    /// go through <see cref="ILattice.CountAsync(CancellationToken)"/>, and why
+    /// an existence question needs no reconciliation against a moving shard map.
+    /// </para>
     /// </summary>
     /// <param name="resolved">The resolved per-tree options supplying the budget.</param>
     /// <param name="currentMap">The shard map observed by the caller, used to enumerate physical shards.</param>

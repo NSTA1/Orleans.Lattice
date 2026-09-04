@@ -88,6 +88,9 @@ internal static class RepoContextToolHandlers
     /// <param name="respectGitignore">When <see langword="true"/> (the default), the
     /// tree's <c>.gitignore</c> files are honoured so ignored files and directories
     /// are not ingested.</param>
+    /// <param name="excludeBinary">When <see langword="true"/> (the default), files
+    /// that look binary (a NUL byte in their leading bytes) are dropped so compiled
+    /// artefacts, images, and other blobs are not ingested.</param>
     /// <returns>The progress snapshot at acceptance, with the job running.</returns>
     /// <exception cref="McpException">A required argument is missing, the repository
     /// root resolves outside the workspace, or it does not exist (caller errors).</exception>
@@ -654,6 +657,9 @@ internal static class RepoContextToolHandlers
     /// <param name="respectGitignore">When <see langword="true"/> (the default), the
     /// tree's <c>.gitignore</c> files are honoured so ignored files and directories
     /// are not ingested.</param>
+    /// <param name="excludeBinary">When <see langword="true"/> (the default), files
+    /// that look binary (a NUL byte in their leading bytes) are dropped so compiled
+    /// artefacts, images, and other blobs are not ingested.</param>
     /// <returns>The progress snapshot at acceptance, with the job running.</returns>
     /// <exception cref="McpException">The path is missing, resolves outside the
     /// workspace, does not exist, or yields no repository id (caller errors).</exception>

@@ -1,14 +1,14 @@
 # Orleans.Lattice.Api.Abstractions
 
-The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the seven API facades (state, data, auth, backup, schema, replication, tree administration) and their request / response models, and nothing else.
+The shared **API contract** package for [Orleans.Lattice](../../README.md) - the transport-agnostic service interfaces of the API facades (state, data, auth, backup, schema, replication, telemetry, tree administration, and tenant administration) and their request / response models, and nothing else.
 
 ## What is it?
 
-The Orleans.Lattice API surface is built in layers. Each **facade** package (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`, `.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.TreeAdmin`) exposes a single transport-agnostic service interface over plain request / response records; each **binding** (`...Grpc`) and the `Orleans.Lattice.Api.Mcp` server projects that same surface onto a wire protocol or tool set.
+The Orleans.Lattice API surface is built in layers. Each **facade** package (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`, `.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.Telemetry`, `.Api.TreeAdmin`, `.Api.TenantAdmin`) exposes a transport-agnostic service interface over plain request / response records; each **binding** (`...Grpc`) and the `Orleans.Lattice.Api.Mcp` server projects that same surface onto a wire protocol or tool set.
 
 `Orleans.Lattice.Api.Abstractions` is the seam between the facades and their consumers. It carries only the contract:
 
-- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` (replication); `ILatticeTreeAdmin` (tree administration); and `ILatticeRegionCatalog` (region discovery).
+- **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` (state); `ILatticeDataApi` (data); `ILatticeAuthAdmin` (auth); `ILatticeBackupControl` (backup); `ILatticeSchemaControl` (schema); `ILatticeReplicationControl` (replication); `ILatticeTelemetry` (telemetry); `ILatticeTreeAdmin` (tree administration); `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`, `ILatticeTenantRegionAdmin`, and `ILatticeTenantSelfService` (tenant administration); and `ILatticeRegionCatalog` (region discovery).
 - **Their request / response models** - the results, pages, records, and requests those interfaces exchange, each with its stable Orleans serialization alias.
 
 ### Region contract
@@ -63,5 +63,7 @@ For a remote surface, add the matching binding (which consumes the same contract
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) / [`.Grpc`](../lattice.api.backup.grpc/README.md)
 - [`Orleans.Lattice.Api.Schema`](../lattice.api.schema/README.md) / [`.Grpc`](../lattice.api.schema.grpc/README.md)
 - [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/README.md) / [`.Grpc`](../lattice.api.replication.grpc/README.md)
+- [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README.md) / [`.Grpc`](../lattice.api.telemetry.grpc/README.md)
 - [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/README.md) / [`.Grpc`](../lattice.api.treeadmin.grpc/README.md)
+- [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md) / [`.Grpc`](../lattice.api.tenantadmin.grpc/README.md)
 - [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)

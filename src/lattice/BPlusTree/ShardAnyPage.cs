@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// One bounded batch of a shard-level emptiness probe (see
-/// <see cref="Grains.IShardRootGrain.AnyBoundedAsync"/>).
+/// <see cref="IShardRootGrain.AnyBoundedAsync"/>).
 /// <para>
 /// <see cref="Found"/> is a positive answer and terminates the walk
 /// immediately: once one live key has been seen the shard is non-empty and no

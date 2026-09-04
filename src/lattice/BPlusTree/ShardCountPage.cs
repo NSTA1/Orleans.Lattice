@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// One bounded batch of a shard-level count (see
-/// <see cref="Grains.IShardRootGrain.CountBoundedAsync"/>).
+/// <see cref="IShardRootGrain.CountBoundedAsync"/>).
 /// <para>
 /// The shard counts matching entries across a bounded number of leaves and then
 /// returns, releasing the non-reentrant shard so other traffic can interleave.

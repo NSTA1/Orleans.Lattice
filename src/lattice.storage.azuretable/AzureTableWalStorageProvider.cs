@@ -1249,6 +1249,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             }
         }
     }
+    /// <summary>
+    /// Writes one trim-candidate manifest row. The write is made idempotent
     /// via <see cref="TableUpdateMode.Replace"/> on the upsert so a
     /// retry inside the SDK does not surface as <c>EntityAlreadyExists</c>
     /// to the caller; the row's identity is fully determined by

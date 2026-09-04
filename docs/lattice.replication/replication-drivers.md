@@ -745,7 +745,7 @@ condition clears.
 | `MaintenanceGcInterval` | 5 s | `> TimeSpan.Zero` | Cadence between WAL GC passes. |
 | `MaintenanceFallOffCheckInterval` | 30 s | `> TimeSpan.Zero` | Cadence between per-peer fall-off-the-log probes. |
 | `ShipDoorbellEnabled` | `true` | - | Master switch for the writer-side doorbell. |
-| `PreShipCoalescingEnabled` | `false` | - | Opt-in per tree. Collapse a drained batch's redundant per-key versions before they ship: latest-wins elision on LWW trees, delta-merge folding on recognised CRDT trees (OR-Map / opaque deltas ship individually). |
+| `PreShipCoalescingEnabled` | `true` | - | On by default; set to `false` per tree to opt out. Collapse a drained batch's redundant per-key versions before they ship: latest-wins elision on LWW trees, delta-merge folding on recognised CRDT trees (OR-Map / opaque deltas ship individually). |
 
 All options resolve via `IOptionsMonitor<LatticeReplicationOptions>.Get(treeName)`,
 so per-tree overrides are honoured.
