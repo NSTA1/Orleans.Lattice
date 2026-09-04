@@ -437,7 +437,14 @@ internal sealed class LeafCursorReporter(
     /// retention flush). Either way a rejection caused by a stopping silo falls
     /// back to the direct durable write below.
     /// </summary>
-    private async Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket, bool writeThrough, bool sheddable = false)
+    /// <returns>
+    /// <see langword="true"/> when the write was attempted (whether or not it
+    /// then faulted), <see langword="false"/> when it was shed by the
+    /// caller-side pressure gate. A shed report has <b>not</b> landed, so a
+    /// caller holding debounce state must roll it back rather than record it as
+    /// written - shedding is deferral, never loss.
+    /// </returns>
+    private async Task<bool> SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket, bool writeThrough, bool sheddable = false)
     {
         // Caller-side shed (issue #2014). A steady-state per-checkpoint retention
         // report routed to a shard whose last durable write demonstrated it is
@@ -460,7 +467,7 @@ internal sealed class LeafCursorReporter(
                 bucket.Count,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
                 LatticeTenantLabel.ForTree(shedTreeId));
-            return;
+            return false;
         }
 
         var latencyThresholdMs = ResolvePinLatencyThresholdMs();
@@ -504,6 +511,8 @@ internal sealed class LeafCursorReporter(
                 faulted,
                 latencyThresholdMs);
         }
+
+        return true;
     }
 
     /// <summary>
@@ -735,12 +744,25 @@ internal sealed class LeafCursorReporter(
             // ends up making is the same ReportManyAsync as before.
             var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
             var grainKey = WalMaterialiserPinRouting.ShardKey(treeName, consumerId, shardCount);
-            await SeedShardAsync(
+            var written = await SeedShardAsync(
                     grainKey,
                     new[] { new MaterialiserPinReport(consumerId, frontier, checkpointOffset) },
                     writeThrough: false,
                     sheddable: true)
                 .ConfigureAwait(false);
+
+            if (!written)
+            {
+                // Shed, not written. Roll the debounce back for the same reason a
+                // fault does: this frontier has not reached the durable store, so
+                // recording it as landed would let the next report be coalesced
+                // away and leave the pin behind until some later advance happens
+                // to clear the spacing debounce. Rolling back makes shedding a
+                // pure deferral - each checkpoint re-attempts at the cost of one
+                // dictionary lookup, and the first checkpoint after the window
+                // closes lands the pin.
+                _durableDebounce.TryRemove((treeName, consumerId), out _);
+            }
         }
         catch (Exception ex)
         {

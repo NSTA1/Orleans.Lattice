@@ -113,6 +113,32 @@ public sealed class WalMaterialiserPinPressureTests
     }
 
     [Test]
+    public void ShouldShed_is_false_after_a_cheap_fault()
+    {
+        // A pin write can fail cheaply - a synchronous rejection, a missing
+        // activation - in a millisecond or two. LeafCursorReporter rolls the
+        // debounce back on exactly that failure so the next checkpoint retries,
+        // so a window opened by a cheap fault would shed the retry the rollback
+        // exists to guarantee. Only demonstrated cost opens the gate.
+        WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 3, faulted: true, latencyThresholdMs: 1_000);
+
+        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.False,
+            "a fault that cost nothing to attempt must not suppress its own retry");
+    }
+
+    [Test]
+    public void ShouldShed_is_true_after_an_expensive_fault()
+    {
+        // The issue #2012 condition: attempts that cost seconds apiece. Here the
+        // fault IS the evidence of pressure, and piling on more attempts only
+        // lengthens the queue every other reporting leaf waits behind.
+        WalMaterialiserPinPressure.RecordWrite(_shardKey, elapsedMs: 30_000, faulted: true, latencyThresholdMs: 1_000);
+
+        Assert.That(WalMaterialiserPinPressure.ShouldShed(_shardKey), Is.True,
+            "a fault that took seconds must open a shed window even though nothing landed");
+    }
+
+    [Test]
     public void ShouldShed_window_is_scoped_to_the_shard_that_was_slow()
     {
         var otherShardKey = _tree + WalMaterialiserPinRouting.ShardSeparator + "5";

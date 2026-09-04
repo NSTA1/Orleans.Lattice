@@ -113,6 +113,11 @@ public static class RepoContextHostBuilder
             // Reap re-embed / prune tombstones on the churn trees in every profile.
             silo.ConfigureRepoContextCompaction();
 
+            // Split the WAL materialiser pin state across buckets so an advancing
+            // retention floor rewrites a fraction of the pin blob instead of all of
+            // it. Global (not per-tree) by design - see RepoContextPinBucketing.
+            silo.ConfigureRepoContextPinBucketing(builder.Configuration);
+
             // Membership resolves the ambient credential into a subject; Auth
             // installs the default-deny gate with the bootstrap administrator that
             // seeds the local agent's grant.

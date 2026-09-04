@@ -125,6 +125,31 @@ public sealed class LeafCursorReporterShedTests
     }
 
     [Test]
+    public async Task A_shed_report_is_not_recorded_as_landed_so_it_is_retried()
+    {
+        var (reporter, pin) = Create();
+
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero, -1);
+        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+
+        // Shed the first real frontier. The debounce was optimistically advanced
+        // before the fire-and-forget write, so unless shedding rolls it back the
+        // reporter now believes this frontier is durable.
+        WalMaterialiserPinPressure.ForceShedForTests(ShardKey(), durationMs: 200);
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
+        await Task.Delay(400);
+
+        // Re-report the IDENTICAL frontier once the window has lapsed. It is an
+        // advance over nothing, so a reporter that recorded the shed report as
+        // landed coalesces it away and the pin never reaches this frontier at all.
+        reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
+        await WaitUntilAsync(() => pin.Reports.Any(r => r.Frontier == Hlc(100)));
+
+        Assert.That(pin.Reports.Any(r => r.Frontier == Hlc(100)), Is.True,
+            "shedding is deferral, not loss: a shed report must roll the debounce back so the next checkpoint retries it");
+    }
+
+    [Test]
     public void A_shard_with_no_recorded_pressure_is_never_shed()
     {
         Assert.That(WalMaterialiserPinPressure.ShouldShed(ShardKey()), Is.False,

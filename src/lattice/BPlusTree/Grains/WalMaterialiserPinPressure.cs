@@ -62,6 +62,27 @@ internal static class WalMaterialiserPinPressure
     private const long ShedAmortisationFactor = 4;
 
     /// <summary>
+    /// Minimum measured duration, in milliseconds, that a durable pin write must
+    /// take before it opens a shed window at all. Below this floor the write has
+    /// demonstrated no pressure worth shedding for, so the gate stays inert.
+    /// <para>
+    /// The floor is load-bearing, not a tuning nicety. A pin write can fail
+    /// <i>cheaply</i> - a synchronous rejection, a missing activation, a
+    /// serialization fault - in a millisecond or two, and
+    /// <see cref="LeafCursorReporter.NoteDurableMaterialiserFrontier"/> rolls the
+    /// debounce back on exactly that failure so the next checkpoint retries. A
+    /// window opened by a cheap fault would shed that retry, silently defeating
+    /// the rollback contract for a write that cost nothing to attempt. Gating on
+    /// demonstrated cost keeps the two mechanisms from fighting: cheap failures
+    /// retry immediately, and only a write that genuinely ran long - the issue
+    /// #2012 condition, where attempts cost seconds apiece and piling on more
+    /// lengthens the queue everyone else waits behind - suppresses its
+    /// successors.
+    /// </para>
+    /// </summary>
+    private const long ShedTriggerFloorMs = 100;
+
+    /// <summary>
     /// Cumulative count, per <c>(treeId, shard)</c>, of durable pin writes that
     /// either faulted or exceeded
     /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>.
@@ -97,10 +118,11 @@ internal static class WalMaterialiserPinPressure
     {
         // Self-tuning shed window: hold off coalescible reports to this shard
         // for a multiple of the duration the write just demonstrated it costs.
-        // A fast write (a small tree, a healthy store) yields a window of a few
-        // milliseconds and is effectively inert; a multi-second write suppresses
-        // the pile-up that would otherwise form behind it.
-        if (elapsedMs > 0)
+        // Only a write that cleared ShedTriggerFloorMs counts as evidence of
+        // pressure; a fast write - healthy store, small tree, or a cheap
+        // synchronous failure - leaves the gate inert so the caller's own
+        // debounce rollback can retry it on the very next checkpoint.
+        if (elapsedMs >= ShedTriggerFloorMs)
         {
             var until = Environment.TickCount64 + (elapsedMs * ShedAmortisationFactor);
             _shedUntilTickMs.AddOrUpdate(shardKey, until, (_, existing) => Math.Max(existing, until));
