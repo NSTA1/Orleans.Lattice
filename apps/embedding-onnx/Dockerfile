@@ -97,9 +97,15 @@ RUN dotnet publish Orleans.Lattice.Embedding.Onnx.Host.csproj \
     /p:UseAppHost=false
 
 # --- Runtime stage ---------------------------------------------------------
-# Distroless, shell-less, non-root. InvariantGlobalization is set in the csproj
-# (tokenization is ordinal), so the ICU-less chiseled image is safe and smaller.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS runtime
+# Distroless, shell-less, non-root.
+#
+# The `-extra` chiseled variant is REQUIRED, not a convenience: it is the one
+# that carries ICU. The WordPiece pipeline strips accents via Unicode NFD
+# normalization, which is unavailable without ICU, and on an ICU-less runtime
+# every word containing a non-ASCII letter silently tokenizes to a single [UNK].
+# See the InvariantGlobalization comment in the csproj; GlobalizationGuard fails
+# the container at startup if this base image is ever swapped for an ICU-less one.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra AS runtime
 WORKDIR /app
 
 COPY --from=build /app/publish ./
