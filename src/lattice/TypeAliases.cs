@@ -228,6 +228,13 @@ internal static class TypeAliases
     internal const string ShardAnyPage = "ol.sap";
     internal const string ShardCountWithMovedAwayPage = "ol.smw";
 
+    // Work-bounded batches for the shard admin and diagnostics chain walks
+    // (issue 1972).
+    internal const string ShardDiagnosticsPage = "ol.sdp";
+    internal const string ShardMaterialiserLagPage = "ol.slp";
+    internal const string ShardStorageUsagePage = "ol.sup";
+    internal const string ShardProjectionRebuildPage = "ol.spr";
+
     // Leaf owned-key-range bounds (used to terminate paged range-scan sibling walks)
     internal const string LeafKeyRange = "ol.lkr";
 

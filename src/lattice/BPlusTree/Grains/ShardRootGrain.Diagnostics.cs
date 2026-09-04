@@ -24,11 +24,58 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep)
     {
+        // Retained for wire compatibility with a caller from an older build
+        // that has not adopted the bounded protocol. Drives the bounded walk to
+        // completion inside this one call, so an old caller sees exactly the
+        // old behaviour - including the old whole-chain hold.
+        var page = await GetDiagnosticsBoundedAsync(deep, null);
+        var report = page.Report;
+        var liveKeys = report.LiveKeys;
+        var tombstones = report.Tombstones;
+
+        var cursor = page.ResumeFromInclusive;
+        while (cursor is not null)
+        {
+            page = await GetDiagnosticsBoundedAsync(deep, cursor);
+            liveKeys += page.Report.LiveKeys;
+            tombstones += page.Report.Tombstones;
+            cursor = page.ResumeFromInclusive;
+        }
+
+        return WithTotals(report, liveKeys, tombstones);
+    }
+
+    /// <summary>
+    /// Substitutes accumulated key counts into a first-batch report and
+    /// recomputes the derived tombstone ratio from them, so the ratio always
+    /// describes the totals it is published beside.
+    /// </summary>
+    private static ShardDiagnosticReport WithTotals(
+        ShardDiagnosticReport report, long liveKeys, long tombstones)
+    {
+        var total = liveKeys + tombstones;
+        return report with
+        {
+            LiveKeys = liveKeys,
+            Tombstones = tombstones,
+            TombstoneRatio = total > 0 ? (double)tombstones / total : 0.0,
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardDiagnosticsPage> GetDiagnosticsBoundedAsync(bool deep, string? resumeFromInclusive)
+    {
         // Ensure persistent state is loaded before inspection.
         if (state.RecordExists == false)
         {
             // Nothing persisted yet - treat as empty leaf-only shard.
         }
+
+        // A resumed batch reports only the counts it gathered. Depth, hotness
+        // and the lifecycle flags are shard-level facts the first batch already
+        // established; recomputing depth in particular would re-descend the
+        // internal levels once per batch for an identical answer.
+        var resuming = resumeFromInclusive is not null;
 
         var rootIsLeaf = state.State.RootIsLeaf;
         var rootNodeId = state.State.RootNodeId;
@@ -38,6 +85,7 @@ internal sealed partial class ShardRootGrain
         var depth = 1;
         long liveKeys = 0;
         long tombstones = 0;
+        string? resumeFrom = null;
 
         if (rootNodeId is null)
         {
@@ -46,38 +94,74 @@ internal sealed partial class ShardRootGrain
         }
         else if (RootIsLeafTyped)
         {
-            if (deep)
+            // A leaf root is the shard's only leaf: there is no chain to bound
+            // and no resume position, so a resumed batch has nothing to add.
+            if (!resuming)
             {
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(rootNodeId.Value.GetGuidKey());
-                var stats = await leaf.GetStatsAsync();
-                liveKeys = stats.LiveKeys;
-                tombstones = stats.Tombstones;
-            }
-            else
-            {
-                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(rootNodeId.Value.GetGuidKey());
-                liveKeys = await leaf.CountAsync();
+                if (deep)
+                {
+                    var stats = await leaf.GetStatsAsync();
+                    liveKeys = stats.LiveKeys;
+                    tombstones = stats.Tombstones;
+                }
+                else
+                {
+                    liveKeys = await leaf.CountAsync();
+                }
             }
         }
         else
         {
-            // Walk leftmost path to compute depth.
-            var currentId = rootNodeId.Value;
-            var childrenAreLeaves = false;
-            while (!childrenAreLeaves)
+            GrainId? startLeafId;
+            if (resuming)
             {
-                depth++;
-                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId.GetGuidKey());
-                var next = await internalGrain.GetLeftmostChildWithMetadataAsync();
-                currentId = next.ChildId;
-                childrenAreLeaves = next.ChildrenAreLeaves;
+                startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
+            }
+            else
+            {
+                // Walk leftmost path to compute depth. Capped at
+                // MaxTreeDescentLevels (issue 1972) so a corrupt or cyclic
+                // leftmost-child pointer surfaces as a typed exception instead
+                // of spinning this non-reentrant grain forever. #1957 applied
+                // the cap to the bare `while (true)` descents in Traversal.cs;
+                // this one is spelled `while (!childrenAreLeaves)` and lives in
+                // Diagnostics.cs, so it fell outside that sweep.
+                var currentId = rootNodeId.Value;
+                var childrenAreLeaves = false;
+                for (var level = 0; level < MaxTreeDescentLevels && !childrenAreLeaves; level++)
+                {
+                    depth++;
+                    var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId.GetGuidKey());
+                    var next = await internalGrain.GetLeftmostChildWithMetadataAsync();
+                    currentId = next.ChildId;
+                    childrenAreLeaves = next.ChildrenAreLeaves;
+                }
+
+                if (!childrenAreLeaves)
+                {
+                    throw new InvalidOperationException(
+                        $"ShardRootGrain {context.GrainId} diagnostics depth descent exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
+                }
+
+                // The descent lands on the leftmost leaf, so it doubles as the
+                // walk's start position and saves a second descent.
+                startLeafId = currentId;
             }
 
-            // Walk the leaf chain (via existing sibling pointers) to aggregate counts.
-            var leafId = currentId;
-            while (true)
+            // Walk the leaf chain through the shared bounded walk, so this
+            // aggregation obeys the same budget, key cursor and
+            // "only stop where you can resume" rule as every other bounded
+            // chain walk (issues 1973, 1972).
+            var walk = BoundedLeafWalk.FromResolvedStart(
+                grainFactory,
+                startLeafId,
+                resumeFromInclusive,
+                LeafWalkBudget.ForScanPage(await GetOptionsAsync()));
+
+            while (walk.HasLeaf)
             {
-                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
+                var leaf = walk.CurrentLeaf;
                 if (deep)
                 {
                     var stats = await leaf.GetStatsAsync();
@@ -89,10 +173,25 @@ internal sealed partial class ShardRootGrain
                     liveKeys += await leaf.CountAsync();
                 }
 
-                var next = await leaf.GetNextSiblingAsync();
-                if (next is null) break;
-                leafId = next.Value;
+                if (!await walk.MoveNextAsync()) break;
             }
+
+            resumeFrom = walk.ResumeFromInclusive;
+        }
+
+        if (resuming)
+        {
+            // Only the counts are meaningful on a resumed batch; see
+            // ShardDiagnosticsPage.
+            return new ShardDiagnosticsPage
+            {
+                Report = new ShardDiagnosticReport
+                {
+                    LiveKeys = liveKeys,
+                    Tombstones = tombstones,
+                },
+                ResumeFromInclusive = resumeFrom,
+            };
         }
 
         var hotness = await GetHotnessAsync();
@@ -103,20 +202,24 @@ internal sealed partial class ShardRootGrain
             ? (double)tombstones / (liveKeys + tombstones)
             : 0.0;
 
-        return new ShardDiagnosticReport
+        return new ShardDiagnosticsPage
         {
-            // ShardIndex stamped by caller.
-            Depth = depth,
-            RootIsLeaf = rootIsLeaf,
-            LiveKeys = liveKeys,
-            Tombstones = tombstones,
-            TombstoneRatio = ratio,
-            OpsPerSecond = opsPerSec,
-            Reads = hotness.Reads,
-            Writes = hotness.Writes,
-            HotnessWindow = hotness.Window,
-            SplitInProgress = splitInProgress,
-            BulkOperationPending = bulkPending,
+            Report = new ShardDiagnosticReport
+            {
+                // ShardIndex stamped by caller.
+                Depth = depth,
+                RootIsLeaf = rootIsLeaf,
+                LiveKeys = liveKeys,
+                Tombstones = tombstones,
+                TombstoneRatio = ratio,
+                OpsPerSecond = opsPerSec,
+                Reads = hotness.Reads,
+                Writes = hotness.Writes,
+                HotnessWindow = hotness.Window,
+                SplitInProgress = splitInProgress,
+                BulkOperationPending = bulkPending,
+            },
+            ResumeFromInclusive = resumeFrom,
         };
     }
 
@@ -182,20 +285,61 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task<ShardStorageUsage> RefreshLeafByteFootprintsAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var rollup = await DeepWalkLeafFootprintsAsync(cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Re-anchor the cached totals to the freshly-walked values so any
-        // drift accumulated since the last activation self-heals.
-        _leafStateBytesTotal = rollup.LeafStateBytes;
-        _snapshotBytesTotal = rollup.SnapshotBytes;
-        _liveKeyCountTotal = rollup.LiveKeys;
-        return rollup;
+        // Retained for wire compatibility with a caller from an older build
+        // that has not adopted the bounded protocol. Drives the bounded walk to
+        // completion inside this one call.
+        var total = default(ShardStorageUsage);
+        string? cursor = null;
+        while (true)
+        {
+            var page = await RefreshLeafByteFootprintsBoundedAsync(cursor, total, cancellationToken);
+            total = Add(total, page.Usage);
+            if (page.ResumeFromInclusive is not { } next) return total;
+            cursor = next;
+        }
     }
 
-    private async Task<ShardStorageUsage> DeepWalkLeafFootprintsAsync(CancellationToken cancellationToken)
+    /// <summary>Sums two byte-footprint rollups field by field.</summary>
+    private static ShardStorageUsage Add(ShardStorageUsage a, ShardStorageUsage b) => new()
+    {
+        LeafStateBytes = a.LeafStateBytes + b.LeafStateBytes,
+        SnapshotBytes = a.SnapshotBytes + b.SnapshotBytes,
+        LiveKeys = a.LiveKeys + b.LiveKeys,
+    };
+
+    /// <inheritdoc />
+    public async Task<ShardStorageUsagePage> RefreshLeafByteFootprintsBoundedAsync(
+        string? resumeFromInclusive,
+        ShardStorageUsage accumulatedSoFar,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var page = await DeepWalkLeafFootprintsBoundedAsync(resumeFromInclusive, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (page.ResumeFromInclusive is null)
+        {
+            // Final batch: re-anchor the cached totals to the freshly-walked
+            // whole-chain figure so any drift accumulated since the last
+            // activation self-heals. Deliberately NOT done per batch - the
+            // totals are what every concurrent GetStorageUsageAsync reads, and
+            // anchoring them to a partial sum would make the shard under-report
+            // its own footprint for the rest of the walk. A mid-walk
+            // deactivation therefore leaves the totals untouched rather than
+            // wrong, which is the same state a freshly-reactivated shard is
+            // already documented to be in (issue 1972).
+            var rollup = Add(accumulatedSoFar, page.Usage);
+            _leafStateBytesTotal = rollup.LeafStateBytes;
+            _snapshotBytesTotal = rollup.SnapshotBytes;
+            _liveKeyCountTotal = rollup.LiveKeys;
+        }
+
+        return page;
+    }
+
+    private async Task<ShardStorageUsagePage> DeepWalkLeafFootprintsBoundedAsync(
+        string? resumeFromInclusive, CancellationToken cancellationToken)
     {
         var rootNodeId = state.State.RootNodeId;
         if (rootNodeId is null)
@@ -205,43 +349,64 @@ internal sealed partial class ShardRootGrain
 
         if (RootIsLeafTyped)
         {
-            return await AccumulateLeafUsageAsync(rootNodeId.Value.GetGuidKey(), cancellationToken);
+            // A leaf root is the shard's only leaf: no chain, no resume
+            // position, and nothing for a resumed batch to add.
+            if (resumeFromInclusive is not null) return default;
+            return new ShardStorageUsagePage
+            {
+                Usage = await AccumulateLeafUsageAsync(rootNodeId.Value.GetGuidKey(), cancellationToken),
+            };
         }
 
-        var currentId = rootNodeId.Value;
-        var childrenAreLeaves = false;
-        while (!childrenAreLeaves)
+        GrainId? startLeafId;
+        if (resumeFromInclusive is not null)
+        {
+            startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
+        }
+        else
+        {
+            // Capped at MaxTreeDescentLevels for the same reason as the
+            // diagnostics depth descent above (issue 1972).
+            var currentId = rootNodeId.Value;
+            var childrenAreLeaves = false;
+            for (var level = 0; level < MaxTreeDescentLevels && !childrenAreLeaves; level++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId.GetGuidKey());
+                var next = await internalGrain.GetLeftmostChildWithMetadataAsync();
+                currentId = next.ChildId;
+                childrenAreLeaves = next.ChildrenAreLeaves;
+            }
+
+            if (!childrenAreLeaves)
+            {
+                throw new InvalidOperationException(
+                    $"ShardRootGrain {context.GrainId} leaf-footprint descent exceeded {MaxTreeDescentLevels} levels without reaching a leaf level; tree topology may be corrupt.");
+            }
+
+            startLeafId = currentId;
+        }
+
+        var walk = BoundedLeafWalk.FromResolvedStart(
+            grainFactory,
+            startLeafId,
+            resumeFromInclusive,
+            LeafWalkBudget.ForScanPage(await GetOptionsAsync()));
+
+        var usage = default(ShardStorageUsage);
+        while (walk.HasLeaf)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var internalGrain = grainFactory.GetGrain<IBPlusInternalGrain>(currentId.GetGuidKey());
-            var next = await internalGrain.GetLeftmostChildWithMetadataAsync();
-            currentId = next.ChildId;
-            childrenAreLeaves = next.ChildrenAreLeaves;
+            usage = Add(usage, await AccumulateLeafUsageAsync(
+                walk.CurrentLeafId!.Value.GetGuidKey(), cancellationToken));
+
+            if (!await walk.MoveNextAsync()) break;
         }
 
-        long leafStateBytes = 0;
-        long snapshotBytes = 0;
-        long liveKeys = 0;
-        var leafId = currentId;
-        while (true)
+        return new ShardStorageUsagePage
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var usage = await AccumulateLeafUsageAsync(leafId.GetGuidKey(), cancellationToken);
-            leafStateBytes += usage.LeafStateBytes;
-            snapshotBytes += usage.SnapshotBytes;
-            liveKeys += usage.LiveKeys;
-
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
-            var next = await leaf.GetNextSiblingAsync();
-            if (next is null) break;
-            leafId = next.Value;
-        }
-
-        return new ShardStorageUsage
-        {
-            LeafStateBytes = leafStateBytes,
-            SnapshotBytes = snapshotBytes,
-            LiveKeys = liveKeys,
+            Usage = usage,
+            ResumeFromInclusive = walk.ResumeFromInclusive,
         };
     }
 

@@ -14,20 +14,52 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task RebuildShardProjectionAsync(CancellationToken cancellationToken)
     {
+        // Retained for wire compatibility with a caller from an older build
+        // that has not adopted the bounded protocol. Drives the bounded walk to
+        // completion inside this one call.
+        string? cursor = null;
+        while (true)
+        {
+            var page = await RebuildShardProjectionBoundedAsync(cursor, cancellationToken);
+            if (page.ResumeFromInclusive is not { } next) return;
+            cursor = next;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardProjectionRebuildPage> RebuildShardProjectionBoundedAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         await PrepareForOperationAsync();
         cancellationToken.ThrowIfCancellationRequested();
 
-        var leftmostId = await GetLeftmostLeafIdAsync();
-        if (leftmostId is null)
+        var startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
+        if (startLeafId is null)
         {
             // Empty shard - no leaves to rebuild. Returning here matches
             // the diagnostics-walk semantics for a shard whose root has
             // never been assigned.
-            return;
+            return default;
         }
 
-        var leafId = leftmostId.Value;
+        // Hand-rolled rather than routed through BoundedLeafWalk, which is the
+        // shared implementation every other bounded chain walk uses. The reason
+        // is ordering: BoundedLeafWalk reads the sibling pointer, and the key
+        // range it resumes from, AFTER the caller's per-leaf work. That is
+        // right for a read walk and wrong here, because
+        // RebuildProjectionFromWalAsync deactivates the leaf - so both reads
+        // would land on a deactivated grain and force an immediate WAL replay
+        // purely to obtain a cursor, turning the deliberately lazy rebuild into
+        // an inline one. Both reads therefore happen BEFORE the rebuild. The
+        // rules are otherwise the shared ones: the same LeafWalkBudget, a key
+        // cursor rather than a leaf id, and no stopping anywhere the walk
+        // cannot name a resume position (issues 1955, 1972, 1973).
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var leafId = startLeafId.Value;
+        var rebuilt = 0;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -42,16 +74,103 @@ internal sealed partial class ShardRootGrain
             // state to continue the chain walk.
             var next = await leaf.GetNextSiblingAsync();
 
+            budget.RecordLeafVisited();
+
+            // Decide whether this is a yield point while the leaf is still
+            // activated, so the resume key can be read before the rebuild for
+            // the same reason the sibling pointer is. resultsCollected is 1
+            // because the unit of progress here is a leaf rebuilt: passing an
+            // aggregate count would disarm the bound on any run of leaves that
+            // reported nothing (issue 1992). The budget's duration component
+            // therefore excludes the current leaf's rebuild, which costs at
+            // most one extra leaf per batch.
+            string? resumeFrom = null;
+            if (next is not null && budget.ShouldYield(resultsCollected: 1))
+            {
+                resumeFrom = await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null);
+            }
+
             await leaf.RebuildProjectionFromWalAsync();
+            rebuilt++;
 
             if (next is null)
-                break;
+            {
+                // Chain complete: no resume position, because there is nothing
+                // left to resume.
+                return new ShardProjectionRebuildPage { LeavesRebuilt = rebuilt };
+            }
+
+            if (resumeFrom is not null)
+            {
+                return new ShardProjectionRebuildPage
+                {
+                    LeavesRebuilt = rebuilt,
+                    ResumeFromInclusive = resumeFrom,
+                };
+            }
+
+            // Either the budget is unspent, or it is spent at a leaf that
+            // declares no usable high bound - in which case the walk keeps
+            // going rather than stop somewhere it cannot resume from, which
+            // would silently leave the rest of the shard unrebuilt.
             leafId = next.Value;
         }
     }
 
     /// <inheritdoc />
     public async Task<long> GetShardMaterialiserLagAsync(CancellationToken cancellationToken)
+    {
+        // Retained for wire compatibility with a caller from an older build
+        // that has not adopted the bounded protocol. Drives the bounded walk to
+        // completion inside this one call.
+        var page = await GetShardMaterialiserLagBoundedAsync(null, cancellationToken);
+        var heads = page.WalHeadOffsets;
+        var minCheckpoint = page.MinCheckpointOffset;
+
+        var cursor = page.ResumeFromInclusive;
+        while (cursor is not null)
+        {
+            page = await GetShardMaterialiserLagBoundedAsync(cursor, cancellationToken);
+            if (page.MinCheckpointOffset < minCheckpoint)
+                minCheckpoint = page.MinCheckpointOffset;
+            cursor = page.ResumeFromInclusive;
+        }
+
+        return ReduceMaterialiserLag(heads, minCheckpoint);
+    }
+
+    /// <summary>
+    /// Reduces captured per-partition WAL heads and the chain-wide minimum
+    /// projection checkpoint to a single shard lag figure.
+    /// <para>
+    /// A <paramref name="minCheckpoint"/> still at <see cref="long.MaxValue"/>
+    /// means the walk visited no leaf at all, so no projection state exists and
+    /// the heads themselves are the lag - the empty-shard answer.
+    /// </para>
+    /// </summary>
+    internal static long ReduceMaterialiserLag(long[] walHeadOffsets, long minCheckpoint)
+    {
+        if (walHeadOffsets is null || walHeadOffsets.Length == 0) return 0;
+
+        long total = 0;
+        if (minCheckpoint == long.MaxValue)
+        {
+            foreach (var head in walHeadOffsets) total += head;
+            return total;
+        }
+
+        foreach (var head in walHeadOffsets)
+        {
+            var lag = head - minCheckpoint;
+            if (lag > 0) total += lag;
+        }
+        return total;
+    }
+
+    /// <inheritdoc />
+    public async Task<ShardMaterialiserLagPage> GetShardMaterialiserLagBoundedAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await PrepareForOperationAsync();
@@ -67,38 +186,52 @@ internal sealed partial class ShardRootGrain
         // outstanding across every partition (not just the deepest
         // one). Under the default single-partition shape the sum
         // collapses to the legacy scalar lag.
-        var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var partitionCount = Math.Max(1, resolved.WalPartitions);
-        var perPartitionHeads = new long[partitionCount];
-        for (var p = 0; p < partitionCount; p++)
+        //
+        // Captured on the first batch only. Lag is head - checkpoint, so
+        // re-reading a fresher head on a later batch would measure it against
+        // checkpoints gathered earlier and inflate the figure by whatever the
+        // tree committed mid-walk (issue 1972).
+        long[] perPartitionHeads = [];
+        if (resumeFromInclusive is null)
         {
-            var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
-                $"{TreeId}/{p}");
-            perPartitionHeads[p] = await coordinator.GetHeadOffsetAsync(cancellationToken);
+            var resolved = await optionsResolver.ResolveAsync(TreeId);
+            var partitionCount = Math.Max(1, resolved.WalPartitions);
+            perPartitionHeads = new long[partitionCount];
+            for (var p = 0; p < partitionCount; p++)
+            {
+                var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
+                    $"{TreeId}/{p}");
+                perPartitionHeads[p] = await coordinator.GetHeadOffsetAsync(cancellationToken);
+            }
         }
 
-        var leftmostId = await GetLeftmostLeafIdAsync();
-        if (leftmostId is null)
+        var startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
+        if (startLeafId is null)
         {
             // Empty shard - no projection state exists, so the sum of
-            // WAL heads IS the lag.
-            long emptyShardLag = 0;
-            for (var p = 0; p < partitionCount; p++) emptyShardLag += perPartitionHeads[p];
-            return emptyShardLag;
+            // WAL heads IS the lag. Reported by leaving the minimum at
+            // long.MaxValue, which the reducer reads as "no leaves".
+            return new ShardMaterialiserLagPage
+            {
+                WalHeadOffsets = perPartitionHeads,
+                MinCheckpointOffset = long.MaxValue,
+            };
         }
 
-        // For each partition independently, find the chain-walk
-        // minimum checkpoint; the partition's lag is head - min. Sum
-        // across partitions to surface the shard-total lag.
-        var perPartitionMinCheckpoint = new long[partitionCount];
-        for (var p = 0; p < partitionCount; p++) perPartitionMinCheckpoint[p] = long.MaxValue;
+        // Find the chain-walk minimum checkpoint across this batch's leaves;
+        // the driver reduces the per-batch minima and subtracts from the heads.
+        var minCheckpoint = long.MaxValue;
 
-        var leafId = leftmostId.Value;
-        while (true)
+        var walk = BoundedLeafWalk.FromResolvedStart(
+            grainFactory,
+            startLeafId,
+            resumeFromInclusive,
+            LeafWalkBudget.ForScanPage(await GetOptionsAsync()));
+
+        while (walk.HasLeaf)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.GetGuidKey());
             // GetProjectionCheckpointOffsetAsync returns the legacy
             // scalar (partition 0) projection checkpoint; under multi-
             // partition the per-partition state lives on
@@ -111,26 +244,19 @@ internal sealed partial class ShardRootGrain
             // partition's min, yielding a slightly-overcounted lag
             // figure - which is the right direction for an operator
             // alarm signal (better to over-report lag than miss it).
-            var legacyCheckpoint = await leaf.GetProjectionCheckpointOffsetAsync();
-            for (var p = 0; p < partitionCount; p++)
-            {
-                if (legacyCheckpoint < perPartitionMinCheckpoint[p])
-                    perPartitionMinCheckpoint[p] = legacyCheckpoint;
-            }
+            var legacyCheckpoint = await walk.CurrentLeaf.GetProjectionCheckpointOffsetAsync();
+            if (legacyCheckpoint < minCheckpoint)
+                minCheckpoint = legacyCheckpoint;
 
-            var next = await leaf.GetNextSiblingAsync();
-            if (next is null)
-                break;
-            leafId = next.Value;
+            if (!await walk.MoveNextAsync()) break;
         }
 
-        long totalLag = 0;
-        for (var p = 0; p < partitionCount; p++)
+        return new ShardMaterialiserLagPage
         {
-            var lag = perPartitionHeads[p] - perPartitionMinCheckpoint[p];
-            if (lag > 0) totalLag += lag;
-        }
-        return totalLag;
+            WalHeadOffsets = perPartitionHeads,
+            MinCheckpointOffset = minCheckpoint,
+            ResumeFromInclusive = walk.ResumeFromInclusive,
+        };
     }
 
     /// <inheritdoc />

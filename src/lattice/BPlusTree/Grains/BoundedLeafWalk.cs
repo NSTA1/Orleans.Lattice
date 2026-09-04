@@ -100,6 +100,39 @@ internal sealed class BoundedLeafWalk
     }
 
     /// <summary>
+    /// Opens a bounded pass whose start leaf the caller has already resolved.
+    /// <para>
+    /// This is the <b>in-shard</b> entry point. <see cref="StartAsync"/> resolves
+    /// the start leaf by calling the shard through
+    /// <see cref="IShardRootGrain"/>, which is correct for the background
+    /// coordinators that drive a shard from outside but is not open to
+    /// <c>ShardRootGrain</c> itself: a non-reentrant grain calling its own
+    /// interface deadlocks on its own message. The shard therefore resolves its
+    /// start leaf through its private descent helpers and hands the result here.
+    /// </para>
+    /// <para>
+    /// Everything after the start position is identical, which is the point of
+    /// routing the shard's own bounded walks through this type rather than
+    /// hand-rolling the loop per call site: the budget, the key cursor, the
+    /// sibling-before-yield ordering, and the "only stop where you can resume"
+    /// rule are defined once (issues 1973, 1972). In particular the yield test
+    /// is <c>ShouldYield(resultsCollected: 1)</c> - a leaf processed is the unit
+    /// of progress - so a bound applied through this type still fires on a run
+    /// of leaves that yields no rows, which a per-site loop passing an aggregate
+    /// result count would silently disarm (issue 1992).
+    /// </para>
+    /// </summary>
+    internal static BoundedLeafWalk FromResolvedStart(
+        IGrainFactory grainFactory,
+        GrainId? startLeafId,
+        string? resumeFromInclusive,
+        LeafWalkBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        return new BoundedLeafWalk(grainFactory, startLeafId, resumeFromInclusive, budget);
+    }
+
+    /// <summary>
     /// The leaf the caller should process now, or <see langword="null"/> when
     /// the pass has no further leaf to visit.
     /// </summary>
@@ -174,8 +207,6 @@ internal sealed class BoundedLeafWalk
             // meantime, because a split only narrows a leaf's range and the
             // descent follows whichever leaf now covers the key.
             //
-            // Read only when the budget wants to yield, so the common case pays
-            // no extra round trip per leaf.
             // Read only when the budget wants to yield, so the common case pays
             // no extra round trip per leaf.
             var bounds = await leaf.GetKeyRangeAsync();

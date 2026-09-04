@@ -39,9 +39,29 @@ internal sealed partial class LatticeGrain
         }
 
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-        await ShardActivationRetry.RunAsync(
-            () => shard.RebuildShardProjectionAsync(cancellationToken),
-            cancellationToken);
+
+        // Drive the shard's work-bounded batches to completion. Each batch
+        // rebuilds a bounded number of leaves and then releases the shard, so
+        // an operator rebuild no longer holds it for the length of the whole
+        // leaf chain (issue 1972). Each batch keeps its own ShardActivationRetry
+        // envelope, so a seed timeout retries just that batch.
+        //
+        // A batch boundary is observationally the same as the partial state
+        // this verb already documents: the rebuild applies leaf by leaf, each
+        // leaf's rebuild is independently idempotent, and cancelling already
+        // stops the fan-out before the next leaf.
+        string? cursor = null;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var currentCursor = cursor;
+            var page = await ShardActivationRetry.RunAsync(
+                () => shard.RebuildShardProjectionBoundedAsync(currentCursor, cancellationToken),
+                cancellationToken);
+
+            if (page.ResumeFromInclusive is not { } next) return;
+            cursor = next;
+        }
     }
 
     /// <inheritdoc />
@@ -111,9 +131,7 @@ internal sealed partial class LatticeGrain
         {
             var shardIndex = physicalShards[i];
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
-            tasks[i] = ShardActivationRetry.RunAsync(
-                () => shard.GetShardMaterialiserLagAsync(cancellationToken),
-                cancellationToken);
+            tasks[i] = GetShardLagAsync(shard, cancellationToken);
         }
 
         var perShardLags = await Task.WhenAll(tasks);
@@ -126,5 +144,44 @@ internal sealed partial class LatticeGrain
                 maxLag = lag;
         }
         return maxLag;
+    }
+
+    /// <summary>
+    /// Drives one shard's work-bounded materialiser-lag batches to completion.
+    /// <para>
+    /// Each batch reduces the projection checkpoint across a bounded number of
+    /// leaves and then releases the shard, so a lag query no longer holds it
+    /// for the length of the whole leaf chain (issue 1972). The WAL heads come
+    /// from the first batch only and the per-batch minima are reduced with
+    /// <c>min</c>, which is the same reduction the single-call walk performed -
+    /// and keeps the heads pinned to one instant, so a tree committing during
+    /// the walk cannot inflate the reported lag.
+    /// </para>
+    /// </summary>
+    private static async Task<long> GetShardLagAsync(
+        IShardRootGrain shard, CancellationToken cancellationToken)
+    {
+        var page = await ShardActivationRetry.RunAsync(
+            () => shard.GetShardMaterialiserLagBoundedAsync(null, cancellationToken),
+            cancellationToken);
+
+        var heads = page.WalHeadOffsets;
+        var minCheckpoint = page.MinCheckpointOffset;
+
+        var cursor = page.ResumeFromInclusive;
+        while (cursor is not null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var currentCursor = cursor;
+            page = await ShardActivationRetry.RunAsync(
+                () => shard.GetShardMaterialiserLagBoundedAsync(currentCursor, cancellationToken),
+                cancellationToken);
+
+            if (page.MinCheckpointOffset < minCheckpoint)
+                minCheckpoint = page.MinCheckpointOffset;
+            cursor = page.ResumeFromInclusive;
+        }
+
+        return ShardRootGrain.ReduceMaterialiserLag(heads, minCheckpoint);
     }
 }

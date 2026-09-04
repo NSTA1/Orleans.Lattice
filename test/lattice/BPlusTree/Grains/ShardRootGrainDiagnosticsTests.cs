@@ -118,6 +118,11 @@ public sealed class ShardRootGrainDiagnosticsTests
         // silently reports zeroes, so an unregistered lookup fails loudly instead.
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call =>
             Resolve(leaves, call.ArgAt<Guid>(0), "leaf"));
+        // The shared BoundedLeafWalk these walks now route through (issue 1972)
+        // resolves the chain by GrainId, so the same table answers both
+        // overloads: a leaf node id's key round-trips through GetGuidKey().
+        factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(call =>
+            Resolve(leaves, call.ArgAt<GrainId>(0).GetGuidKey(), "leaf"));
         factory.GetGrain<IBPlusInternalGrain>(Arg.Any<Guid>()).Returns(call =>
             Resolve(internals, call.ArgAt<Guid>(0), "internal node"));
         factory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(call =>

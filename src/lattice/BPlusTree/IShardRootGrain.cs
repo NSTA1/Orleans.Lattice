@@ -619,6 +619,25 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardDiagnosticReport> GetDiagnosticsAsync(bool deep);
 
     /// <summary>
+    /// Work-bounded batch of <see cref="GetDiagnosticsAsync"/>: aggregates key
+    /// counts across a bounded number of leaves, then returns so the shard is
+    /// released to other callers.
+    /// <para>
+    /// The unbounded walk held this non-reentrant shard for the length of its
+    /// whole leaf chain, head-of-line-blocking every other request to the shard
+    /// - point reads, writes, splits and health probes alike - for a report
+    /// nobody was waiting on (issue 1972).
+    /// </para>
+    /// </summary>
+    /// <param name="deep">Whether to read full per-leaf stats (including tombstones).</param>
+    /// <param name="resumeFromInclusive">
+    /// The resume position from the previous batch's
+    /// <see cref="ShardDiagnosticsPage.ResumeFromInclusive"/>, or
+    /// <see langword="null"/> to start at the leftmost leaf.
+    /// </param>
+    Task<ShardDiagnosticsPage> GetDiagnosticsBoundedAsync(bool deep, string? resumeFromInclusive);
+
+    /// <summary>
     /// Returns this shard's byte-accurate storage-usage rollup - the summed
     /// serialized leaf-state byte footprint and the summed persisted-snapshot
     /// byte footprint across every leaf in the shard's chain - used by the
@@ -665,6 +684,34 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
     Task<ShardStorageUsage> RefreshLeafByteFootprintsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Work-bounded batch of <see cref="RefreshLeafByteFootprintsAsync"/>: sums
+    /// per-leaf byte footprints across a bounded number of leaves, then returns
+    /// so the shard is released to other callers (issue 1972).
+    /// <para>
+    /// The activation-scoped totals are re-anchored only on the batch that
+    /// completes the walk, and only from <paramref name="accumulatedSoFar"/>
+    /// plus that batch's own leaves. Re-anchoring per batch would leave the
+    /// shard advertising a fraction of its own footprint to every concurrent
+    /// reader until the walk finished.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFromInclusive">
+    /// The resume position from the previous batch's
+    /// <see cref="ShardStorageUsagePage.ResumeFromInclusive"/>, or
+    /// <see langword="null"/> to start at the leftmost leaf.
+    /// </param>
+    /// <param name="accumulatedSoFar">
+    /// The total the driver has accumulated from previous batches, used to
+    /// re-anchor the running totals when this batch completes the walk. Ignored
+    /// on a batch that does not complete it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk between leaves.</param>
+    Task<ShardStorageUsagePage> RefreshLeafByteFootprintsBoundedAsync(
+        string? resumeFromInclusive,
+        ShardStorageUsage accumulatedSoFar,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
@@ -767,6 +814,28 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task RebuildShardProjectionAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Work-bounded batch of <see cref="RebuildShardProjectionAsync"/>:
+    /// rebuilds the projection of a bounded number of leaves, then returns so
+    /// the shard is released to other callers (issue 1972).
+    /// <para>
+    /// This weakens no guarantee, because the rebuild never offered a
+    /// tree-wide one: as documented above it applies leaf by leaf, each leaf's
+    /// rebuild is independently idempotent, and cancelling already leaves the
+    /// shard partially rebuilt. A batch boundary produces the same partial
+    /// state deliberately rather than by cancellation.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFromInclusive">
+    /// The resume position from the previous batch's
+    /// <see cref="ShardProjectionRebuildPage.ResumeFromInclusive"/>, or
+    /// <see langword="null"/> to start at the leftmost leaf.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk before the next leaf.</param>
+    Task<ShardProjectionRebuildPage> RebuildShardProjectionBoundedAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the materialiser-lag value for this shard - the gap
     /// between the per-shard write-ahead log head offset and the
     /// minimum projection-checkpoint offset across every leaf in this
@@ -777,6 +846,29 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancels the leaf-chain walk between leaves.</param>
     Task<long> GetShardMaterialiserLagAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Work-bounded batch of <see cref="GetShardMaterialiserLagAsync"/>:
+    /// reduces the projection checkpoint across a bounded number of leaves,
+    /// then returns so the shard is released to other callers (issue 1972).
+    /// <para>
+    /// The per-partition WAL heads are captured once, on the batch called with
+    /// a <see langword="null"/> resume position, and reported through
+    /// <see cref="ShardMaterialiserLagPage.WalHeadOffsets"/>. Re-reading them on
+    /// a later batch would measure a fresher head against checkpoints gathered
+    /// earlier and inflate the reported lag by whatever the tree committed
+    /// mid-walk.
+    /// </para>
+    /// </summary>
+    /// <param name="resumeFromInclusive">
+    /// The resume position from the previous batch's
+    /// <see cref="ShardMaterialiserLagPage.ResumeFromInclusive"/>, or
+    /// <see langword="null"/> to start at the leftmost leaf.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the walk between leaves.</param>
+    Task<ShardMaterialiserLagPage> GetShardMaterialiserLagBoundedAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Captures the shard's current write-ahead-log head offset (the
