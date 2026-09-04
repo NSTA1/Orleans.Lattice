@@ -315,9 +315,10 @@ public class LatticeReplicationHealthCheckTests
     }
 
     [Test]
-    public async Task CheckHealthAsync_with_zero_grace_window_escalates_immediately()
+    public async Task CheckHealthAsync_with_zero_grace_window_never_escalates_a_sustained_degraded_peer()
     {
-        var stats = new ReplicationPeerStats();
+        var clock = new FakeClock { Now = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) };
+        var stats = new TestableStats(clock);
         stats.RecordBacklog("tree", "peer", entriesBehind: 50, bytesBehind: 0);
         var options = new LatticeReplicationHealthCheckOptions
         {
@@ -326,15 +327,72 @@ public class LatticeReplicationHealthCheckTests
             ConsecutiveErrors = null,
             UnhealthyAfter = TimeSpan.Zero,
         };
+        var time = new FakeTimeProvider { UtcNow = clock.Now };
+        var check = CreateCheck(stats, options, time);
 
-        var check = CreateCheck(stats, options);
+        var first = await check.CheckHealthAsync(Context(), CancellationToken.None);
+        Assert.That(first.Status, Is.EqualTo(HealthStatus.Degraded));
 
-        var result = await check.CheckHealthAsync(Context(), CancellationToken.None);
+        // A non-positive UnhealthyAfter disables sustained-degraded escalation
+        // entirely - it does not mean "escalate immediately". An hour of
+        // unbroken degradation must still report Degraded; the only remaining
+        // path to Unhealthy is a hard bound on some signal.
+        time.UtcNow = clock.Now.AddHours(1);
+        var later = await check.CheckHealthAsync(Context(), CancellationToken.None);
+        Assert.That(later.Status, Is.EqualTo(HealthStatus.Degraded));
+    }
 
-        // UnhealthyAfter == Zero disables the grace window so degraded never
-        // promotes through the time gate (the only escalation path remaining
-        // is the hard bound).
-        Assert.That(result.Status, Is.EqualTo(HealthStatus.Degraded));
+    [Test]
+    public async Task CheckHealthAsync_with_infinite_grace_window_never_escalates_a_sustained_degraded_peer()
+    {
+        var clock = new FakeClock { Now = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) };
+        var stats = new TestableStats(clock);
+        stats.RecordBacklog("tree", "peer", entriesBehind: 50, bytesBehind: 0);
+        var options = new LatticeReplicationHealthCheckOptions
+        {
+            EntriesBehind = new LatticeReplicationHealthCheckOptions.LongTier(10, 100_000),
+            LastContactSeconds = null,
+            ConsecutiveErrors = null,
+            UnhealthyAfter = Timeout.InfiniteTimeSpan,
+        };
+        var time = new FakeTimeProvider { UtcNow = clock.Now };
+        var check = CreateCheck(stats, options, time);
+
+        _ = await check.CheckHealthAsync(Context(), CancellationToken.None);
+
+        // InfiniteTimeSpan is negative, so it lands in the same non-positive
+        // "escalation disabled" bucket as Zero rather than reading as an
+        // unreachable deadline that happens to behave the same way.
+        time.UtcNow = clock.Now.AddHours(1);
+        var later = await check.CheckHealthAsync(Context(), CancellationToken.None);
+        Assert.That(later.Status, Is.EqualTo(HealthStatus.Degraded));
+    }
+
+    [Test]
+    public async Task CheckHealthAsync_with_a_small_positive_grace_window_escalates_on_the_next_probe()
+    {
+        var clock = new FakeClock { Now = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero) };
+        var stats = new TestableStats(clock);
+        stats.RecordBacklog("tree", "peer", entriesBehind: 50, bytesBehind: 0);
+        var options = new LatticeReplicationHealthCheckOptions
+        {
+            EntriesBehind = new LatticeReplicationHealthCheckOptions.LongTier(10, 100_000),
+            LastContactSeconds = null,
+            ConsecutiveErrors = null,
+            UnhealthyAfter = TimeSpan.FromTicks(1),
+        };
+        var time = new FakeTimeProvider { UtcNow = clock.Now };
+        var check = CreateCheck(stats, options, time);
+
+        var first = await check.CheckHealthAsync(Context(), CancellationToken.None);
+        Assert.That(first.Status, Is.EqualTo(HealthStatus.Degraded), "the probe that enters the tier starts the timer");
+
+        // This is the documented recipe for the strictest gating: a small
+        // positive value escalates on the first probe after the one that
+        // entered the degraded tier.
+        time.UtcNow = clock.Now.AddSeconds(1);
+        var escalated = await check.CheckHealthAsync(Context(), CancellationToken.None);
+        Assert.That(escalated.Status, Is.EqualTo(HealthStatus.Unhealthy));
     }
 
     [Test]

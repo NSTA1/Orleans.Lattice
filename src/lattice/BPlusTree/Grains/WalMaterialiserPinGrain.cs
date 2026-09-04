@@ -706,6 +706,21 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             return;
         }
 
+        // Bucket zero carries the persisted width, and it is the only slot a
+        // later activation probes to learn it. Stamping the width on whichever
+        // buckets happen to be dirty is therefore not enough: if no consumer
+        // ever hashed into bucket zero, the width would never be recorded, and
+        // lowering the configured count would read only the narrow range and
+        // strand every pin outside it - invisible to the trim floor, the one
+        // genuinely unsafe direction. Force bucket zero into any batch that has
+        // not yet recorded the current width.
+        if (!_bucketStates.TryGetValue(0, out var widthSlot)
+            || widthSlot.State is null
+            || widthSlot.State.PersistedBucketCount != _persistedWidth)
+        {
+            _dirtyBuckets.Add(0);
+        }
+
         var buckets = _dirtyBuckets.ToArray();
         _dirtyBuckets.Clear();
         var writes = new Task[buckets.Length];

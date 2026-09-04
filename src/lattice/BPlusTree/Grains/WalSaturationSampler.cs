@@ -589,12 +589,37 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
 
         // Same stale-reset sweep for the durable pin-latency consecutive-window
         // counter.
+        //
+        // This input needs one thing the other inputs do not. Every other input
+        // is derived from WAL writer activity, so a tree under any of them
+        // necessarily has a tracker and therefore an accumulator on every tick,
+        // and the classify loop below always re-publishes its state. Durable pin
+        // pressure is not WAL writer activity: a tree can escalate purely on pin
+        // latency and then, once the trips stop, have no accumulator at all - in
+        // which case the classify loop would skip it and the tree would stay
+        // held at Throttled indefinitely, long after the pin store recovered.
+        // Renting an accumulator for exactly those trees keeps the back-off
+        // self-clearing, which is the property the whole signal rests on.
         if (pinLatencyEnabled && _consecutiveMaterialiserPinLatencyWindows.Count > 0)
         {
             var staleKeys = default(List<string>);
-            foreach (var treeId in _consecutiveMaterialiserPinLatencyWindows.Keys)
+            var orphanedKeys = default(List<string>);
+            foreach (var (treeId, windows) in _consecutiveMaterialiserPinLatencyWindows)
             {
-                if (!perTree.TryGetValue(treeId, out var acc) || acc.MaterialiserPinLatencyTripDeltaInWindow == 0)
+                if (!perTree.TryGetValue(treeId, out var acc))
+                {
+                    staleKeys ??= new List<string>();
+                    staleKeys.Add(treeId);
+                    if (windows > 0)
+                    {
+                        orphanedKeys ??= new List<string>();
+                        orphanedKeys.Add(treeId);
+                    }
+
+                    continue;
+                }
+
+                if (acc.MaterialiserPinLatencyTripDeltaInWindow == 0)
                 {
                     staleKeys ??= new List<string>();
                     staleKeys.Add(treeId);
@@ -605,6 +630,15 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 foreach (var treeId in staleKeys)
                 {
                     _consecutiveMaterialiserPinLatencyWindows[treeId] = 0;
+                }
+            }
+            if (orphanedKeys is not null)
+            {
+                foreach (var treeId in orphanedKeys)
+                {
+                    // Reset above, so the rented accumulator classifies Healthy
+                    // unless some other input independently says otherwise.
+                    RentAccumulator(treeId);
                 }
             }
         }

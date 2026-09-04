@@ -122,14 +122,16 @@ internal static class WalMaterialiserPinPressure
 
         LatticeMetrics.MaterialiserPinDurableWriteLatency.Record(
             elapsedMs,
-            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId));
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId),
+            LatticeTenantLabel.ForTree(treeId));
     }
 
     /// <summary>
-    /// True when coalescible reports routed to <paramref name="shardKey"/>
-    /// should be shed because a recent durable write to that shard demonstrated
-    /// the store is not keeping up. Never consulted for the birth block-pin seed
-    /// or the teardown flush, which are correctness-bearing.
+    /// True when steady-state per-checkpoint reports routed to
+    /// <paramref name="shardKey"/> should be shed because a recent durable write
+    /// to that shard demonstrated the store is not keeping up. Never consulted
+    /// for the birth block-pin seed or the deactivation flush, which are
+    /// last-chance writes and therefore correctness-bearing.
     /// </summary>
     internal static bool ShouldShed(string shardKey)
         => _shedUntilTickMs.TryGetValue(shardKey, out var until)

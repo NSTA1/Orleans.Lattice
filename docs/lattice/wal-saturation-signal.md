@@ -18,7 +18,7 @@ The saturation signal exposes the writer-side admission gate's pressure as a typ
 | State | Meaning | Caller action |
 |-------|---------|---------------|
 | `Healthy` | Admission depth well under cap, no recent dispatch-timeout trips, no recent provider-side commit failures. | Continue dispatching at full rate. |
-| `Throttled` | Admission depth at or above `WalSaturationThrottledRatio` (default 0.75) of the cap on at least one partition. | Slow down the offered rate. Continue dispatching - new appends will land, possibly after a brief admission wait. |
+| `Throttled` | Admission depth at or above `WalSaturationThrottledRatio` (default 0.75) of the cap on at least one partition, **or** (when enabled) a sustained materialiser drain-lag or durable pin-write-latency condition. | Slow down the offered rate. Continue dispatching - new appends will land, possibly after a brief admission wait. |
 | `Saturated` | Admission semaphore at cap with parked callers, **or** recent dispatch-timeout trip rate at or above `WalSaturationDispatchTimeoutThreshold` (default 1) in a single sample window, **or** recent provider-side commit failure rate at or above `WalSaturationProviderFailureRateThreshold` (default 1) in a single sample window, **or** (when enabled) the flush-latency classifier input has observed at least one provider-flush longer than `WalSaturationFlushLatencyThreshold` in each of the last `WalSaturationFlushLatencySampleWindows` sample windows in a row. | Pause new appends until the state returns to `Healthy`. Continuing to dispatch will fault parked callers with `TimeoutException` rather than improving throughput. |
 
 States are totally ordered (`Healthy < Throttled < Saturated`), and the tree's state is the worst case across every partition / shard for that tree. The state space is open for additive extension - future minor releases may introduce intermediate or recovery states (for example a `Recovering` state when pressure has just dropped) without breaking subscribers that switch on the three documented values.
@@ -52,6 +52,31 @@ Sizing guidance: the threshold should be 5-10x the steady-state p99 of `wal.appe
 
 The input is purely additive: leaving `WalSaturationFlushLatencyThreshold` at its default `null` means the writer skips the trip-counter increment entirely and the classifier behaves exactly as it shipped before the input was introduced.
 
+### Durable-floor classifier input (opt-in)
+
+The flush-latency input above closes the blind spot on the WAL *write* path. A second, structurally different blind spot sits on the WAL *retention* path, and issue #2012 is what exposed it.
+
+Every classifier input described so far is derived from in-memory state. That is also true of the materialiser drain-lag input, which compares the WAL head against the in-memory leaf cursor registry. But the floor the WAL garbage collector actually trims against is not the in-memory registry - it is the **durable** materialiser pin store. Those two can diverge completely: leaves keep reporting, the in-memory registry keeps advancing, drain lag reads zero, and every input reports `Healthy`, while the durable pin store is wedged and the trim floor has not moved in hours. The WAL grows without bound and nothing in the signal says so. That is precisely what happened in issue #2012, where a pin shard's non-reentrancy queue reached 165 deep and single writes ran for 43 seconds with the saturation signal reading `Healthy` throughout.
+
+`WalSaturationMaterialiserPinLatencyThreshold` (default `null`, meaning disabled) and `WalSaturationMaterialiserPinLatencySampleWindows` (default `3`) close that gap:
+
+- The reporting leaf measures each **durable** pin write at its own call site and counts a per-(tree, shard) trip when the write meets or exceeds the threshold, or faults. Measuring at the call site rather than inside the pin grain is deliberate: it captures the time a report spent queued ahead of the shard's non-reentrant activation, which is both what the reporting leaf actually experiences and the component of the delay that made #2012 pathological. It is also what makes the signal work at all - a pin activation lives on one silo while its reporting leaves are cluster-wide, so only the caller-side measurement is visible to the reporting silo's sampler.
+- On every sample tick the classifier reads the delta from the prior tick, incrementing a per-tree consecutive-window counter on a non-zero delta and resetting it on a zero delta - the same shape as the flush-latency input.
+- When the counter reaches `WalSaturationMaterialiserPinLatencySampleWindows`, the classifier holds the tree at `Throttled`.
+
+**This input holds at `Throttled` and never escalates to `Saturated`.** That bound is load-bearing, not conservatism. `Saturated` engages the writer-side admission gate, which fast-fails callers with `LatticeSaturatedException` once `WalAdmissionSaturationWaitBudget` expires. A stalled pin store is a retention-floor maintenance problem, not an inability to accept writes, so escalating would convert slow WAL trimming into user-visible write failures and make the very incident the input exists to detect strictly worse. Slowing producers is the correct response: it gives the pin store room to drain. The materialiser drain-lag input is bounded at `Throttled` for the same reason.
+
+Sizing guidance: set the threshold a few times the steady-state duration of `orleans.lattice.materialiser.pin.durable_write_latency` so healthy traffic stays quiet. If the input fires persistently, the corrective knob is [`WalMaterialiserPinBuckets`](configuration.md#walmaterialiserpinbuckets), which shrinks the durable blob each pin write rewrites; `orleans.lattice.materialiser.pin.reports_shed` reports how much steady-state pin traffic the reporters are already dropping to protect the store.
+
+The input is purely additive: left at its default `null`, the reporting leaf skips the increment entirely and the classifier behaves exactly as it did before the input was introduced.
+
+### Cause attribution
+
+Two inputs now classify to `Throttled` for reasons unrelated to admission depth, so `WalSaturationStateChange` carries a `Cause` discriminator (`WalSaturationCause`) naming which input drove the classification: `None`, `DispatchTimeouts`, `ProviderFailures`, `FlushLatency`, `AdmissionDepth`, `MaterialiserDrainLag`, or `MaterialiserPinLatency`. The same value is published as the `cause` tag on the saturation instruments, so a dashboard can distinguish "producers are outrunning the WAL" from "the WAL cannot retire what it already has" without correlating across panels.
+
+Attribution is evaluated in exactly the same order as the classification itself, so the two can never disagree. It is computed *before* the recovery-window upgrade described above, so a tree that reaches `Throttled` only by that upgrade correctly reports `None` rather than attributing itself to whichever input last fired.
+
+`Cause` is an additive field on an existing serialized type and the enum is open for extension: subscribers that do not read it are unaffected, and one that switches on it should treat an unrecognised value as `None`.
 ## Resolution and scope
 
 - **Per-tree.** A multi-tree silo does not lump every tree's pressure together. A `Saturated` tree A does not affect tree B's signal. `IWalSaturationSignal.GetAggregateState()` exists for callers that want a single global signal across every observed tree (a TCP listener that fronts every tree at once, for example) and returns the worst case across the per-tree views.

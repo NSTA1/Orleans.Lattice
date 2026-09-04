@@ -504,7 +504,7 @@ internal static class TypeAliases
     // see IWalSaturationSignal / IWalSaturationObserver).
     internal const string WalSaturationState = "ol.wss";
     internal const string WalSaturationStateChange = "ol.wsc";
-    internal const string WalSaturationCause = "ol.wsca";
+    internal const string WalSaturationCause = "ol.wsu";
 
     // Tree-alias control-plane surface: the change payload the registry
     // fires on an effective physical-identity swap (see ITreeAliasObserver),

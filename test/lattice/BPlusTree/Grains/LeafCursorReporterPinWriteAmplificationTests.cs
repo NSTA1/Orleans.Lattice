@@ -25,6 +25,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 [TestFixture]
 public sealed class LeafCursorReporterPinWriteAmplificationTests
 {
+    /// <summary>
+    /// Clears the process-wide durable-pin pressure state (issue #2014) between
+    /// tests. Without it a slow write measured by one test opens a shed window
+    /// that could silently drop a later test's coalescible report.
+    /// </summary>
+    [SetUp]
+    public void ResetPinPressure() => WalMaterialiserPinPressure.ResetForTests();
     private const string Tree = "tree-2012";
     private const string ConsumerA = "_lattice_materialiser_tree-2012_leaf-A";
     private const string ConsumerB = "_lattice_materialiser_tree-2012_leaf-B";
