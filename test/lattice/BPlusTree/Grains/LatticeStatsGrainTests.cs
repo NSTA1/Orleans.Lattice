@@ -33,16 +33,23 @@ public class LatticeStatsGrainTests
         {
             var idx = i;
             var shard = Substitute.For<IShardRootGrain>();
-            shard.GetDiagnosticsAsync(Arg.Any<bool>()).Returns(ci => new ShardDiagnosticReport
+            // A terminal single-batch page: the shard-side walk is bounded
+            // (issue 1972), so the stats grain drives GetDiagnosticsBoundedAsync
+            // and recomputes the totals across batches. One page with no resume
+            // position is the whole-chain answer.
+            shard.GetDiagnosticsBoundedAsync(Arg.Any<bool>(), Arg.Any<string?>()).Returns(ci => new ShardDiagnosticsPage
             {
-                Depth = 1,
-                RootIsLeaf = true,
-                LiveKeys = 10,
-                Tombstones = (bool)ci[0] ? 3 : 0,
-                TombstoneRatio = (bool)ci[0] ? 3.0 / 13 : 0,
-                Reads = 5,
-                Writes = 7,
-                HotnessWindow = TimeSpan.FromSeconds(30),
+                Report = new ShardDiagnosticReport
+                {
+                    Depth = 1,
+                    RootIsLeaf = true,
+                    LiveKeys = 10,
+                    Tombstones = (bool)ci[0] ? 3 : 0,
+                    TombstoneRatio = (bool)ci[0] ? 3.0 / 13 : 0,
+                    Reads = 5,
+                    Writes = 7,
+                    HotnessWindow = TimeSpan.FromSeconds(30),
+                },
             });
             shards[idx] = shard;
             factory.GetGrain<IShardRootGrain>($"{TreeId}/{idx}").Returns(shard);
@@ -91,7 +98,7 @@ public class LatticeStatsGrainTests
         var r2 = await grain.GetReportAsync(deep: false, CancellationToken.None);
 
         Assert.That(r2.SampledAt, Is.EqualTo(r1.SampledAt));
-        await shards[0].Received(1).GetDiagnosticsAsync(false);
+        await shards[0].Received(1).GetDiagnosticsBoundedAsync(false, null);
     }
 
     [Test]
@@ -102,7 +109,7 @@ public class LatticeStatsGrainTests
         await grain.GetReportAsync(deep: false, CancellationToken.None);
         await grain.GetReportAsync(deep: false, CancellationToken.None);
 
-        await shards[0].Received(2).GetDiagnosticsAsync(false);
+        await shards[0].Received(2).GetDiagnosticsBoundedAsync(false, null);
     }
 
     [Test]
@@ -113,8 +120,8 @@ public class LatticeStatsGrainTests
         await grain.GetReportAsync(deep: false, CancellationToken.None);
         await grain.GetReportAsync(deep: true, CancellationToken.None);
 
-        await shards[0].Received(1).GetDiagnosticsAsync(false);
-        await shards[0].Received(1).GetDiagnosticsAsync(true);
+        await shards[0].Received(1).GetDiagnosticsBoundedAsync(false, null);
+        await shards[0].Received(1).GetDiagnosticsBoundedAsync(true, null);
     }
 
     [Test]
@@ -155,7 +162,7 @@ public class LatticeStatsGrainTests
         await grain.RecordSplitAsync(1, DateTime.UtcNow);
         await grain.GetReportAsync(deep: false, CancellationToken.None);
 
-        await shards[0].Received(2).GetDiagnosticsAsync(false);
+        await shards[0].Received(2).GetDiagnosticsBoundedAsync(false, null);
     }
 
     [Test]

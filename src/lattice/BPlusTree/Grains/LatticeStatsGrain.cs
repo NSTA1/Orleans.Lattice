@@ -74,7 +74,7 @@ internal sealed class LatticeStatsGrain(
         {
             var shardIndex = physicalShardIndices[i];
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{routing.PhysicalTreeId}/{shardIndex}");
-            tasks[i] = GetShardDiagnosticsAsync(shard, shardIndex, deep);
+            tasks[i] = GetShardDiagnosticsAsync(shard, shardIndex, deep, cancellationToken);
         }
 
         var shardReports = await Task.WhenAll(tasks);
@@ -104,12 +104,46 @@ internal sealed class LatticeStatsGrain(
         };
     }
 
-    private async Task<ShardDiagnosticReport> GetShardDiagnosticsAsync(IShardRootGrain shard, int shardIndex, bool deep)
+    private async Task<ShardDiagnosticReport> GetShardDiagnosticsAsync(
+        IShardRootGrain shard, int shardIndex, bool deep, CancellationToken cancellationToken)
     {
         try
         {
-            var report = await shard.GetDiagnosticsAsync(deep);
-            return report with { ShardIndex = shardIndex };
+            // Drive the shard's work-bounded batches to completion. Each batch
+            // walks a bounded number of leaves and then releases the shard, so
+            // a deep report on a wide shard no longer head-of-line-blocks every
+            // other request to it for the length of the whole leaf chain
+            // (issue 1972). The counts are summed across batches, so the
+            // reported totals are unchanged.
+            var page = await shard.GetDiagnosticsBoundedAsync(deep, null);
+            var report = page.Report;
+            var liveKeys = report.LiveKeys;
+            var tombstones = report.Tombstones;
+
+            var cursor = page.ResumeFromInclusive;
+            while (cursor is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                page = await shard.GetDiagnosticsBoundedAsync(deep, cursor);
+                liveKeys += page.Report.LiveKeys;
+                tombstones += page.Report.Tombstones;
+                cursor = page.ResumeFromInclusive;
+            }
+
+            var total = liveKeys + tombstones;
+            return report with
+            {
+                ShardIndex = shardIndex,
+                LiveKeys = liveKeys,
+                Tombstones = tombstones,
+                TombstoneRatio = total > 0 ? (double)tombstones / total : 0.0,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is the caller's decision, not a shard failure: it
+            // must propagate rather than be reported as an empty shard report.
+            throw;
         }
         catch (Exception ex)
         {

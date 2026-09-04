@@ -387,4 +387,95 @@ public class BoundedLeafWalkTests
             Assert.That(completed, Is.True);
         });
     }
+
+    /// <summary>
+    /// A shard cannot use <see cref="BoundedLeafWalk.StartAsync"/> on itself:
+    /// resolving the start leaf calls back into <c>IShardRootGrain</c>, and a
+    /// non-reentrant grain self-calling deadlocks. <c>FromResolvedStart</c> is
+    /// the in-shard entry point that takes the already-resolved start leaf, so
+    /// the shard's own bounded walks share this implementation rather than
+    /// hand-rolling the same rules (issue 1972).
+    /// </summary>
+    [Test]
+    public async Task FromResolvedStart_walks_the_chain_without_calling_back_into_the_shard()
+    {
+        var (factory, shard, leafIds) = Chain(3);
+
+        var walk = BoundedLeafWalk.FromResolvedStart(
+            factory, leafIds[0], null, new LeafWalkBudget(0, null));
+
+        var visited = new List<GrainId>();
+        while (walk.HasLeaf)
+        {
+            visited.Add(walk.CurrentLeafId!.Value);
+            if (!await walk.MoveNextAsync()) break;
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(visited, Is.EqualTo(leafIds));
+            Assert.That(walk.Completed, Is.True);
+            Assert.That(walk.ResumeFromInclusive, Is.Null);
+            await shard.DidNotReceive().GetLeftmostLeafIdAsync();
+            await shard.DidNotReceive().GetLeafIdForKeyAsync(Arg.Any<string?>());
+        });
+    }
+
+    /// <summary>
+    /// The start leaf is already resolved, but the resume key the pass began
+    /// from is still needed: it is what the forward-progress guard compares a
+    /// candidate resume position against.
+    /// </summary>
+    [Test]
+    public async Task FromResolvedStart_still_refuses_a_resume_key_that_would_not_advance()
+    {
+        var (factory, shard, leafIds) = Chain(3);
+        _ = shard;
+
+        var drifted = factory.GetGrain<IBPlusLeafGrain>(leafIds[1]);
+        drifted.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
+        {
+            LowKeyInclusive = Key(1),
+            HighKeyExclusive = Key(1),
+        }));
+
+        var walk = BoundedLeafWalk.FromResolvedStart(
+            factory, leafIds[1], Key(1), new LeafWalkBudget(1, null));
+
+        var visited = new List<GrainId>();
+        while (walk.HasLeaf)
+        {
+            visited.Add(walk.CurrentLeafId!.Value);
+            if (!await walk.MoveNextAsync()) break;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(walk.ResumeFromInclusive, Is.Not.EqualTo(Key(1)),
+                "the walk must never hand back the position it started from");
+            Assert.That(visited, Is.EqualTo(new[] { leafIds[1], leafIds[2] }));
+            Assert.That(walk.Completed, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// A shard whose root has no leaves resolves a null start leaf. The walk
+    /// must report an immediately complete, leafless pass rather than fault.
+    /// </summary>
+    [Test]
+    public void FromResolvedStart_with_no_start_leaf_reports_complete_with_no_leaf()
+    {
+        var (factory, _, _) = Chain(0);
+
+        var walk = BoundedLeafWalk.FromResolvedStart(
+            factory, null, null, new LeafWalkBudget(4, null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(walk.HasLeaf, Is.False);
+            Assert.That(walk.Completed, Is.True);
+            Assert.That(walk.ResumeFromInclusive, Is.Null);
+            Assert.That(walk.LeavesVisited, Is.Zero);
+        });
+    }
 }

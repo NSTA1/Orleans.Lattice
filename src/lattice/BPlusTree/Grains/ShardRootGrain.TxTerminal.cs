@@ -400,7 +400,7 @@ internal sealed partial class ShardRootGrain
     /// Walks this shard's leaf chain and collects every leaf grain
     /// reference into a list. The chain walk itself is sequential
     /// (each step needs the previous leaf's next-sibling pointer), so
-    /// the wall-clock cost is <c>chain-length × next-sibling RPC</c>.
+    /// the wall-clock cost is <c>chain-length x next-sibling RPC</c>.
     /// Returns an empty list when the tree has no root or the
     /// leftmost-leaf lookup returns null.
     /// </summary>
@@ -414,6 +414,29 @@ internal sealed partial class ShardRootGrain
         if (leftmostId is null)
             return leaves;
 
+        // DELIBERATELY NOT WORK-BOUNDED (issues 1955, 1972). Do not apply
+        // LeafWalkBudget here; the whole-chain result is load-bearing at both
+        // call sites and a prefix is not a smaller correct answer, it is a
+        // wrong one:
+        //
+        // 1. ComputeTerminalHlcAsync takes the MAX clock across the collected
+        //    leaves and ticks once, which is what guarantees the terminal HLC
+        //    sorts strictly above every prepare this shard stamped during the
+        //    saga. A max over a prefix can sort BELOW a prepare on a leaf the
+        //    walk never reached, and a too-early terminal flushes an empty
+        //    pending bucket - the cross-cluster atomic-visibility failure the
+        //    notes above ApplyTxTerminalAsync describe.
+        // 2. The terminal broadcast fans ApplyTxTerminalAsync across the
+        //    collected chain. Splitting that across turns, with the shard
+        //    released in between, makes a saga terminally applied on some
+        //    leaves and still pending on others - a torn saga becomes
+        //    observable, which is exactly the atomicity the terminal exists
+        //    to deliver.
+        //
+        // This is a fallback path (both callers reach it only when
+        // TryConsumeAffectedLeaves returns empty), so it is rare by
+        // construction. Bounded by observability instead.
+        var walk = new AtomicLeafWalk(nameof(CollectChainLeavesAsync));
         var currentId = leftmostId.Value;
         while (true)
         {
@@ -421,12 +444,14 @@ internal sealed partial class ShardRootGrain
 
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             leaves.Add(leaf);
+            walk.RecordLeafVisited();
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
             currentId = next.Value;
         }
 
+        walk.ReportIfSlow(logger, context.GrainId);
         return leaves;
     }
 

@@ -233,7 +233,7 @@ internal sealed class LatticeStorageUsageGrain(
         try
         {
             return forceRefresh
-                ? await shard.RefreshLeafByteFootprintsAsync(cancellationToken)
+                ? await RefreshShardUsageAsync(shard, cancellationToken)
                 : await shard.GetStorageUsageAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -247,6 +247,38 @@ internal sealed class LatticeStorageUsageGrain(
         {
             logger.LogWarning(ex, "Storage-usage fan-out failed for shard {ShardIndex} in tree {TreeId}", shardIndex, TreeId);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Drives one shard's work-bounded re-anchor batches to completion.
+    /// <para>
+    /// Each batch sums a bounded number of leaves and then releases the shard,
+    /// so an operator-forced refresh no longer holds it for the length of the
+    /// whole leaf chain (issue 1972). The running total is threaded back into
+    /// each call so the shard can re-anchor its activation-scoped totals from
+    /// the whole-chain figure on the final batch - never from a partial sum,
+    /// which would leave it under-reporting its own footprint mid-walk.
+    /// </para>
+    /// </summary>
+    private static async Task<ShardStorageUsage> RefreshShardUsageAsync(
+        IShardRootGrain shard, CancellationToken cancellationToken)
+    {
+        var total = default(ShardStorageUsage);
+        string? cursor = null;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var page = await shard.RefreshLeafByteFootprintsBoundedAsync(cursor, total, cancellationToken);
+            total = new ShardStorageUsage
+            {
+                LeafStateBytes = total.LeafStateBytes + page.Usage.LeafStateBytes,
+                SnapshotBytes = total.SnapshotBytes + page.Usage.SnapshotBytes,
+                LiveKeys = total.LiveKeys + page.Usage.LiveKeys,
+            };
+
+            if (page.ResumeFromInclusive is not { } next) return total;
+            cursor = next;
         }
     }
 
