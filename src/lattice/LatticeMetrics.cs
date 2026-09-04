@@ -1045,18 +1045,36 @@ public static class LatticeMetrics
             description: "Durable writes to the leaf-materialiser pin store, tagged by birth/coalesced outcome.");
 
     /// <summary>
-    /// Histogram of leaf-materialiser drain lag, in milliseconds, sampled by the
-    /// per-tree WAL GC pass as <c>now - slowest durable materialiser checkpoint</c>.
-    /// A rising drain lag is the back-pressure signal (issue #1030): when it
-    /// exceeds <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
+    /// Histogram of leaf-materialiser drain lag, in milliseconds, recorded by the
+    /// WAL saturation sampler on every tick
+    /// (<see cref="LatticeOptions.WalSaturationSampleInterval"/>, default 200 ms)
+    /// while the drain-lag input is enabled. Measured live from in-memory state as
+    /// the WAL head wall-clock timestamp minus the slowest leaf-materialiser cursor
+    /// frontier (the cursor-registry minimum), clamped at zero, so a caught-up tree
+    /// reads zero rather than the full head age. Recorded for every checked tree,
+    /// not only the over-threshold ones, so the histogram carries the whole
+    /// distribution leading up to a trip; a tree with no materialiser frontier yet
+    /// records a zero rather than being skipped.
+    /// <para>
+    /// A rising drain lag is the back-pressure signal (issue #1030): when it stays
+    /// at or above <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
     /// for <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>
-    /// consecutive passes the tree escalates to Saturated. Tagged with
-    /// <see cref="TagTree"/>. Only emitted when a non-zero materialiser frontier
-    /// exists (a never-checkpointed tree produces no measurement).
+    /// consecutive sampler windows the tree is held at
+    /// <see cref="WalSaturationState.Throttled"/>. Unlike the dispatch-timeout,
+    /// provider-failure, and flush-latency inputs, this one never escalates to
+    /// <see cref="WalSaturationState.Saturated"/>: it paces callers without ever
+    /// tripping the writer admission gate's fast-fail path.
+    /// </para>
+    /// <para>
+    /// Measures the <b>in-memory</b> cursor, so it does not observe the durable
+    /// materialiser pin store that actually sets the WAL retention floor. A stalled
+    /// pin store therefore reads as healthy drain lag; see issue #2015.
+    /// </para>
+    /// Tagged with <see cref="TagTree"/>.
     /// </summary>
     public static readonly Histogram<double> MaterialiserDrainLag =
         Meter.CreateHistogram<double>("orleans.lattice.materialiser.drain_lag", unit: "ms",
-            description: "Leaf-materialiser drain lag sampled by the WAL GC pass, tagged by tree.");
+            description: "Leaf-materialiser drain lag sampled by the WAL saturation sampler, tagged by tree.");
 
     /// <summary>
     /// Counter of activation-time leaf materialiser replays started, emitted by
