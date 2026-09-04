@@ -335,4 +335,68 @@ public sealed class WalMaterialiserPinGrainTests
             async () => await grain.RemoveAsync("   "),
             Throws.InstanceOf<ArgumentException>());
     }
+
+    // Issue #2012: a pin write is O(consumers routed to the shard) because
+    // Orleans rewrites the whole state blob, so on a large tree a single write
+    // takes far longer than the coalescing window. Ticking on the fixed window
+    // regardless would leave this non-reentrant grain writing back-to-back and
+    // its non-reentrancy queue - which every reporting leaf joins - would grow
+    // without bound. The coalesced flush is therefore amortised against the
+    // previous write's own measured cost.
+
+    [Test]
+    public void ShouldDeferCoalescedFlush_does_not_defer_before_any_write_has_completed()
+    {
+        // No write has been timed yet, so there is nothing to amortise against
+        // and the first flush after a burst must start immediately.
+        Assert.That(
+            WalMaterialiserPinGrain.ShouldDeferCoalescedFlush(
+                nowTickMs: 5_000, lastWriteCompletedTickMs: 0, lastWriteDurationMs: 0),
+            Is.False);
+    }
+
+    [Test]
+    public void ShouldDeferCoalescedFlush_defers_while_the_previous_write_is_amortised()
+    {
+        // Only as long as the previous write itself has elapsed: the grain would
+        // still be spending half its time writing, which is what saturates the
+        // non-reentrancy queue.
+        Assert.That(
+            WalMaterialiserPinGrain.ShouldDeferCoalescedFlush(
+                nowTickMs: 1_200, lastWriteCompletedTickMs: 1_000, lastWriteDurationMs: 200),
+            Is.True,
+            "A flush starting one write-duration after the last write leaves a 50% write duty cycle.");
+    }
+
+    [Test]
+    public void ShouldDeferCoalescedFlush_allows_the_flush_once_the_write_is_paid_for()
+    {
+        Assert.That(
+            WalMaterialiserPinGrain.ShouldDeferCoalescedFlush(
+                nowTickMs: 21_000, lastWriteCompletedTickMs: 1_000, lastWriteDurationMs: 200),
+            Is.False,
+            "Once the grain has spent far longer draining its queue than writing, the next flush must proceed.");
+    }
+
+    [Test]
+    public void ShouldDeferCoalescedFlush_scales_the_deferral_with_the_write_cost()
+    {
+        // Self-tuning: the same elapsed gap is long enough after a cheap write
+        // on a small tree and far too short after an expensive one on a large
+        // tree. This is what makes the mechanism need no configuration.
+        const long elapsedMs = 1_000;
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                WalMaterialiserPinGrain.ShouldDeferCoalescedFlush(
+                    nowTickMs: elapsedMs, lastWriteCompletedTickMs: 0, lastWriteDurationMs: 1),
+                Is.False,
+                "A 1 ms write is fully amortised well inside a 1 s gap.");
+            Assert.That(
+                WalMaterialiserPinGrain.ShouldDeferCoalescedFlush(
+                    nowTickMs: elapsedMs, lastWriteCompletedTickMs: 0, lastWriteDurationMs: 5_000),
+                Is.True,
+                "A 5 s write (the observed large-tree shape) is nowhere near amortised in 1 s.");
+        });
+    }
 }

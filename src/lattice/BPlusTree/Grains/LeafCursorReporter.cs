@@ -315,17 +315,32 @@ internal sealed class LeafCursorReporter(
     }
 
     /// <summary>
-    /// Shared awaited-durable core for the birth block-pin seed
+    /// Shared core for the birth block-pin seed
     /// (<see cref="SeedDurableMaterialiserBlockManyAsync"/>) and the
     /// real-frontier retention flush
     /// (<see cref="FlushDurableMaterialiserFrontierAsync"/>). Groups the
     /// per-partition pins by their routed durable-pin shard so each distinct
-    /// shard takes a single batched, awaited <c>SeedManyAsync</c> (monotonic-max
-    /// merge + durable persist) and pre-seeds the debounce state so a subsequent
-    /// coalesced <see cref="NoteDurableMaterialiserFrontier"/> does not re-issue
-    /// the same value. Transient failures are swallowed-and-logged so neither the
-    /// birth path nor deactivation is ever blocked; <paramref name="seed"/> only
-    /// selects the log wording.
+    /// shard takes a single batched grain round-trip (monotonic-max merge) and
+    /// pre-seeds the debounce state so a subsequent coalesced
+    /// <see cref="NoteDurableMaterialiserFrontier"/> does not re-issue the same
+    /// value. Transient failures are swallowed-and-logged so neither the birth
+    /// path nor deactivation is ever blocked.
+    /// <para>
+    /// <paramref name="seed"/> selects the pin-store entry point, and that
+    /// choice is load-bearing (issue #2012). Only the <b>birth</b> seed needs
+    /// the write-through <c>SeedManyAsync</c>: a new leaf's Zero block pin must
+    /// be durable before its data becomes reachable in the WAL, so there the
+    /// awaited <c>WriteStateAsync</c> is the crash-safety barrier. The
+    /// real-frontier flush uses the coalesced <c>ReportManyAsync</c> instead,
+    /// because a pin write is <c>O(consumers routed to the shard)</c> - Orleans
+    /// rewrites the whole shard blob - and routing the flush through the
+    /// write-through path made every leaf activation and deactivation rewrite
+    /// all of its (thousands of) neighbours, awaited and serialized through one
+    /// non-reentrant grain. A frontier advance that the coalescing window drops
+    /// or that is lost to a crash only leaves the durable pin <i>lower</i> than
+    /// the leaf's true frontier, which retains more WAL and is always GC-safe,
+    /// so the flush never needed a synchronous write of its own.
+    /// </para>
     /// </summary>
     private async Task PersistPinBatchDurablyAsync(
         string treeName,
@@ -384,7 +399,7 @@ internal sealed class LeafCursorReporter(
         var writes = new List<Task>(byShard.Count);
         foreach (var (key, bucket) in byShard)
         {
-            writes.Add(SeedShardAsync(key, bucket));
+            writes.Add(SeedShardAsync(key, bucket, writeThrough: seed));
         }
 
         try
@@ -414,12 +429,20 @@ internal sealed class LeafCursorReporter(
         }
     }
 
-    private async Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket)
+    /// <summary>
+    /// Issues one shard's batched pin write. <paramref name="writeThrough"/>
+    /// selects <c>SeedManyAsync</c> (awaited durable persist, for the birth
+    /// block-pin barrier) or <c>ReportManyAsync</c> (merge now, durable write
+    /// coalesced into the pin store's flush window, for the real-frontier
+    /// retention flush). Either way a rejection caused by a stopping silo falls
+    /// back to the direct durable write below.
+    /// </summary>
+    private async Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket, bool writeThrough)
     {
         try
         {
-            await grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey)
-                .SeedManyAsync(bucket)
+            var pin = grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey);
+            await (writeThrough ? pin.SeedManyAsync(bucket) : pin.ReportManyAsync(bucket))
                 .ConfigureAwait(false);
         }
         catch (Exception ex) when (pinStorage is not null && IsActivationCollectionRejection(ex))

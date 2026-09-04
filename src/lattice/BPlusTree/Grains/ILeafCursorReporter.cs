@@ -178,27 +178,37 @@ internal interface ILeafCursorReporter
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Durably persists a leaf's <b>real</b> checkpoint frontier pins (one per
-    /// WAL partition) and <b>awaits</b> the writes, unlike the fire-and-forget,
-    /// coalesced <see cref="NoteDurableMaterialiserFrontier"/>. This is the
-    /// retention barrier that makes the durable pin store an authoritative WAL
-    /// trim floor rather than a best-effort mirror: the leaf calls it (1) the
-    /// first time it crosses from a <see cref="HybridLogicalClock.Zero"/> block
-    /// pin to a real checkpoint frontier, so a leaf that has checkpointed once
-    /// always has a durable floor even under an ungraceful crash before the
-    /// coalesced mirror would have landed, and (2) on graceful deactivation
-    /// after its final checkpoint flush, so a leaf can never go dormant (and
-    /// then have its shared WAL trimmed past its checkpoint across a restart)
-    /// without leaving a correct durable floor behind. Both call sites are cold
-    /// paths (first-checkpoint and deactivation), so the awaited durable write
-    /// adds no latency to the steady-state foreground/checkpoint path, which
-    /// keeps using the debounced <see cref="NoteDurableMaterialiserFrontier"/>.
+    /// Persists a leaf's <b>real</b> checkpoint frontier pins (one per WAL
+    /// partition) into the durable pin store as a single batched, awaited
+    /// round-trip per routed shard, unlike the fire-and-forget, per-consumer
+    /// debounced <see cref="NoteDurableMaterialiserFrontier"/>. The leaf calls
+    /// it (1) the first time it crosses from a
+    /// <see cref="HybridLogicalClock.Zero"/> block pin to a real checkpoint
+    /// frontier and (2) on graceful deactivation after its final checkpoint
+    /// flush, so a leaf that has checkpointed always publishes its frontier to
+    /// the durable trim floor rather than relying on the debounce window
+    /// happening to have fired.
+    /// <para>
+    /// The <em>merge</em> is immediate and awaited; the <em>durable write</em>
+    /// is coalesced into the pin store's flush window rather than written
+    /// through (issue #2012). Write-through here was O(consumers on the shard)
+    /// per call - Orleans rewrites the whole shard blob - so on a tree with
+    /// thousands of leaves every activation and deactivation rewrote megabytes,
+    /// awaited and serialized through one non-reentrant grain, until its queue
+    /// outran the response timeout. Coalescing is safe because the pin is a
+    /// retention <i>floor</i>: a durable pin that lags the leaf's true frontier
+    /// only retains more WAL, and the monotonic-max merge means it can never
+    /// exceed the leaf's real position. Only the birth block pin
+    /// (<see cref="SeedDurableMaterialiserBlockManyAsync"/>) needs a
+    /// write-through, because there the pin must be durable before the new
+    /// leaf's data becomes reachable in the WAL.
+    /// </para>
     /// The pin store's monotonic-max merge makes a stale or equal frontier a
     /// no-op, so the call is idempotent and safe to re-issue. Transient
-    /// durable-write failures are swallowed (logged) so deactivation and the
-    /// checkpoint path are never blocked; a missed flush only narrows the
-    /// protection window and the next flush catches up. Implementations with no
-    /// durable backing (no grain factory, pre-WAL hosts) treat this as a no-op.
+    /// failures are swallowed (logged) so deactivation and the checkpoint path
+    /// are never blocked; a missed flush only narrows the protection window and
+    /// the next flush catches up. Implementations with no durable backing (no
+    /// grain factory, pre-WAL hosts) treat this as a no-op.
     /// </summary>
     /// <param name="treeName">Logical tree id whose leaf is flushing its frontier.</param>
     /// <param name="reports">One real-frontier pin per WAL partition; each report's consumer id must not be <see langword="null"/> or whitespace.</param>
