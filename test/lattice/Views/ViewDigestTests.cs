@@ -1,3 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Serialization;
+
 namespace Orleans.Lattice.Tests.Views;
 
 /// <summary>
@@ -55,6 +58,52 @@ public class ViewDigestTests
         {
             Assert.That(a.ContentEquals(b), Is.False);
             Assert.That(b.ContentEquals(a), Is.False);
+        });
+    }
+
+    [Test]
+    public void Equals_and_operator_true_for_equal_content_across_distinct_arrays()
+    {
+        // Distinct Hash instances with equal content: reference equality (the
+        // pre-fix record-struct default) reports unequal, value equality equal.
+        var a = new ViewDigest { Hash = [1, 2, 3], EntryCount = 7 };
+        var b = new ViewDigest { Hash = [1, 2, 3], EntryCount = 7 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReferenceEquals(a.Hash, b.Hash), Is.False);
+            Assert.That(a.Equals(b), Is.True);
+            Assert.That(a == b, Is.True);
+            Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
+        });
+    }
+
+    [Test]
+    public void Equals_false_when_hash_bytes_differ()
+    {
+        var a = new ViewDigest { Hash = [1, 2, 3], EntryCount = 7 };
+        var b = new ViewDigest { Hash = [1, 2, 4], EntryCount = 7 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(a.Equals(b), Is.False);
+            Assert.That(a != b, Is.True);
+        });
+    }
+
+    [Test]
+    public void Serialization_round_trip_preserves_value_equality()
+    {
+        var digest = new ViewDigest { Hash = [4, 5, 6], EntryCount = 2 };
+
+        using var services = new ServiceCollection().AddSerializer().BuildServiceProvider();
+        var serializer = services.GetRequiredService<Serializer<ViewDigest>>();
+        var decoded = serializer.Deserialize(serializer.SerializeToArray(digest));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decoded.Equals(digest), Is.True);
+            Assert.That(decoded.GetHashCode(), Is.EqualTo(digest.GetHashCode()));
         });
     }
 }
