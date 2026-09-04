@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
@@ -439,9 +440,29 @@ internal sealed partial class ShardRootGrain
         // -but-unconsumed results are bounded too: a plain gate would let folds
         // run arbitrarily far ahead of a slow leaf at the head of the chain and
         // pile every folded row set up in memory alongside the union.
+        //
+        // The union itself is a flat hash map carrying the per-key merge mode
+        // alongside the value, and the ordinal ordering the baseline is
+        // materialised in is imposed by one final key sort. A SortedDictionary
+        // would instead allocate a red-black node per key and walk the tree
+        // twice per row (once to probe, once to store), on top of a second hash
+        // store into a parallel mode map and a third hash read to recover the
+        // mode at materialise time. Folding the three keyed operations into one
+        // single-probe write and sorting once at the end is output-identical:
+        // both orders are ascending under StringComparer.Ordinal over a
+        // distinct key set.
+        //
+        // Leaves own disjoint key ranges, so the union's final size is very
+        // close to (leaf count x rows per leaf). Sizing it from the first
+        // consumed leaf's row count therefore lands the backing store in one
+        // shot instead of walking a grow-and-rehash chain - which matters more
+        // here than for a typical map, because the value is a wide value tuple,
+        // so every rehash copies it again. A red-black tree pays no grow chain
+        // (each node is allocated once), so without this hint the flat map
+        // trades bytes for the time it saves; with it, it wins on both.
         scan.Phase = ScanPagePhase.BaselineFold;
-        var union = new SortedDictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
-        var unionModes = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal);
+        var union = new Dictionary<string, (LwwValue<byte[]> Value, LatticeMergeMode? Mode)>(
+            StringComparer.Ordinal);
         if (frozen.Count > 0)
         {
             var window = Math.Min(foldConcurrency, frozen.Count);
@@ -451,6 +472,7 @@ internal sealed partial class ShardRootGrain
 
             try
             {
+                var sized = false;
                 for (var i = 0; i < frozen.Count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -462,33 +484,18 @@ internal sealed partial class ShardRootGrain
                         ? FoldLeafTailAsync(dispatch)
                         : CompletedNoRows;
 
-                    foreach (var row in rows)
+                    if (!sized)
                     {
-                        if (union.TryGetValue(row.Key, out var existing))
-                        {
-                            var merged = LwwValue<byte[]>.Merge(existing, row.Value);
-                            union[row.Key] = merged;
-                            // On a donor-orphan collision the per-key merge mode
-                            // must follow whichever value the LWW merge kept. If
-                            // the incoming row won (its timestamp is the
-                            // survivor), adopt its mode; otherwise leave the
-                            // existing mode untouched.
-                            if (ReferenceEquals(merged.Value, row.Value.Value)
-                                || merged.Timestamp.Equals(row.Value.Timestamp))
-                            {
-                                if (row.MergeMode is { } wonMode)
-                                    unionModes[row.Key] = wonMode;
-                                else
-                                    unionModes.Remove(row.Key);
-                            }
-                        }
-                        else
-                        {
-                            union[row.Key] = row.Value;
-                            if (row.MergeMode is { } mode)
-                                unionModes[row.Key] = mode;
-                        }
+                        sized = true;
+                        // Bounded so a single oversized first leaf cannot
+                        // reserve an unreasonable amount on behalf of leaves
+                        // that turn out small.
+                        var estimate = Math.Min((long)rows.Count * frozen.Count, SnapshotUnionCapacityHintLimit);
+                        if (estimate > 0)
+                            union.EnsureCapacity((int)estimate);
                     }
+
+                    FoldRowsIntoUnion(rows, union);
                 }
             }
             catch
@@ -508,11 +515,15 @@ internal sealed partial class ShardRootGrain
         // this diagnostic exists to surface.
         walk.ReportIfSlow(logger, context.GrainId);
 
-        var materialised = new List<LeafSnapshotRow>(union.Count);
+        var orderedKeys = new string[union.Count];
+        union.Keys.CopyTo(orderedKeys, 0);
+        Array.Sort(orderedKeys, StringComparer.Ordinal);
+
+        var materialised = new List<LeafSnapshotRow>(orderedKeys.Length);
         long rowBytes = 0;
-        foreach (var (key, value) in union)
+        foreach (var key in orderedKeys)
         {
-            var mergeMode = unionModes.TryGetValue(key, out var m) ? m : (LatticeMergeMode?)null;
+            var (value, mergeMode) = union[key];
             materialised.Add(new LeafSnapshotRow(key, value, mergeMode));
             rowBytes += LeafEntryCache.EntryBytes(key, value.IsTombstone ? null : value.Value);
         }
@@ -576,6 +587,57 @@ internal sealed partial class ShardRootGrain
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>
+    /// Ceiling on the snapshot union's capacity hint, so an atypically large
+    /// first leaf cannot reserve an unreasonable backing store on behalf of the
+    /// rest. Above this the union simply grows as before.
+    /// </summary>
+    private const int SnapshotUnionCapacityHintLimit = 1 << 20;
+
+    /// <summary>
+    /// Folds one leaf's rows into the cross-leaf snapshot union with a single
+    /// hash probe per row.
+    /// </summary>
+    /// <remarks>
+    /// Synchronous by necessity: <c>ref</c> locals - and therefore
+    /// <see cref="CollectionsMarshal.GetValueRefOrAddDefault{TKey,TValue}"/> -
+    /// are not permitted inside an <c>async</c> method, so the row loop is
+    /// lifted out of <see cref="CaptureSnapshotBaselineAsync"/>. Nothing here
+    /// mutates <paramref name="union"/> other than through the returned slot,
+    /// so the reference stays valid for the whole of each iteration.
+    /// <para>
+    /// Internal rather than private so the microbenchmark suite can measure the
+    /// real production fold rather than a transcription of it.
+    /// </para>
+    /// </remarks>
+    internal static void FoldRowsIntoUnion(
+        IReadOnlyList<LeafSnapshotRow> rows,
+        Dictionary<string, (LwwValue<byte[]> Value, LatticeMergeMode? Mode)> union)
+    {
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, row.Key, out var existed);
+            if (!existed)
+            {
+                slot = (row.Value, row.MergeMode);
+                continue;
+            }
+
+            var merged = LwwValue<byte[]>.Merge(slot.Value, row.Value);
+            // On a donor-orphan collision the per-key merge mode must follow
+            // whichever value the LWW merge kept. If the incoming row won (its
+            // timestamp is the survivor), adopt its mode - including a null
+            // mode, which clears the stored one; otherwise leave the existing
+            // mode untouched.
+            var mode = ReferenceEquals(merged.Value, row.Value.Value)
+                || merged.Timestamp.Equals(row.Value.Timestamp)
+                ? row.MergeMode
+                : slot.Mode;
+            slot = (merged, mode);
         }
     }
 }

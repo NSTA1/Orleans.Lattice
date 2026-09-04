@@ -789,26 +789,56 @@ internal sealed class WalCommitLogWriter(
         // input order via per-entry reverse-indexes. Most batches
         // share a single treeId, but the grouping key includes it so
         // a hand-constructed cross-tree batch still routes correctly.
-        var partitionEntries = new Dictionary<string, List<WalRecord>>(StringComparer.Ordinal);
-        var partitionReverse = new Dictionary<string, List<int>>(StringComparer.Ordinal);
-        // Captured alongside partitionEntries so the per-partition
-        // dispatch histogram (A2) can tag the tree id / partition /
-        // WalPartitions / WalMaxPendingBatches without re-resolving
-        // the options on the metric path.
-        var partitionMeta = new Dictionary<string, (string TreeId, int Partition, int WalPartitions, LatticeOptions PerTree)>(StringComparer.Ordinal);
+        //
+        // One map, one bucket object: the entries, the reverse-index list
+        // and the dispatch-histogram metadata (A2 tags the tree id /
+        // partition / WalPartitions / WalMaxPendingBatches without
+        // re-resolving the options on the metric path) all hang off the same
+        // bucket, so a batch entry costs one hash probe rather than the two
+        // that three parallel maps keyed by the same string demanded. The
+        // last-routed partition is memoised as well, so the dominant
+        // single-partition batch formats and hashes its grain key exactly
+        // once instead of once per entry.
+        var partitions = new Dictionary<string, WalPartitionBatch>(StringComparer.Ordinal);
+        string? lastTreeId = null;
+        var lastPartition = -1;
+        WalPartitionBatch? lastBatch = null;
         for (var i = 0; i < count; i++)
         {
             var (stamped, partition, walPartitions, perTree) = await RouteAsync(entries[i]);
-            var grainKey = $"{stamped.TreeId}/{partition}";
-            if (!partitionEntries.TryGetValue(grainKey, out var list))
+            WalPartitionBatch batch;
+            if (lastBatch is not null
+                && lastPartition == partition
+                && string.Equals(lastTreeId, stamped.TreeId, StringComparison.Ordinal))
             {
-                list = new List<WalRecord>();
-                partitionEntries[grainKey] = list;
-                partitionReverse[grainKey] = new List<int>();
-                partitionMeta[grainKey] = (stamped.TreeId, partition, walPartitions, perTree);
+                batch = lastBatch;
             }
-            list.Add(stamped);
-            partitionReverse[grainKey].Add(i);
+            else
+            {
+                var grainKey = $"{stamped.TreeId}/{partition}";
+                if (!partitions.TryGetValue(grainKey, out var existing))
+                {
+                    // Shard-fair presize: a batch of `count` entries spread over
+                    // `walPartitions` partitions puts about count/walPartitions
+                    // in each, and the summed capacity stays bounded by the
+                    // batch size. The dominant single-partition batch therefore
+                    // sizes exactly once instead of walking the geometric
+                    // 0->4->8->...->count grow chain twice (entries and
+                    // reverse-indexes).
+                    var bucketCapacity = Math.Max(4, count / Math.Max(1, walPartitions));
+                    existing = new WalPartitionBatch(
+                        grainKey, stamped.TreeId, partition, walPartitions, perTree, bucketCapacity);
+                    partitions[grainKey] = existing;
+                }
+
+                batch = existing;
+                lastTreeId = stamped.TreeId;
+                lastPartition = partition;
+                lastBatch = existing;
+            }
+
+            batch.Records.Add(stamped);
+            batch.Reverse.Add(i);
         }
 
         var offsets = new long[count];
@@ -816,13 +846,12 @@ internal sealed class WalCommitLogWriter(
         // ordering inside each grain call is preserved by AppendBatchAsync's
         // contract. Using Task.WhenAll keeps the cross-partition fan-out
         // independent so a slow partition does not serialise the others.
-        var tasks = new Task<KeyValuePair<string, IReadOnlyList<long>>>[partitionEntries.Count];
+        var tasks = new Task<KeyValuePair<string, IReadOnlyList<long>>>[partitions.Count];
         var t = 0;
-        foreach (var (grainKey, list) in partitionEntries)
+        foreach (var batch in partitions.Values)
         {
-            var grain = grainFactory.GetGrain<IWalShardGrain>(grainKey);
-            var meta = partitionMeta[grainKey];
-            tasks[t++] = AppendForPartitionAsync(grainKey, grain, list, meta.TreeId, meta.Partition, meta.WalPartitions, meta.PerTree, cancellationToken);
+            var grain = grainFactory.GetGrain<IWalShardGrain>(batch.GrainKey);
+            tasks[t++] = AppendForPartitionAsync(batch.GrainKey, grain, batch.Records, batch.TreeId, batch.Partition, batch.WalPartitions, batch.PerTree, cancellationToken);
         }
         var partitionResults = await Task.WhenAll(tasks);
 
@@ -830,7 +859,7 @@ internal sealed class WalCommitLogWriter(
         // input order.
         foreach (var kv in partitionResults)
         {
-            var indexes = partitionReverse[kv.Key];
+            var indexes = partitions[kv.Key].Reverse;
             var partitionOffsets = kv.Value;
             for (var i = 0; i < indexes.Count; i++)
             {
@@ -838,6 +867,38 @@ internal sealed class WalCommitLogWriter(
             }
         }
         return offsets;
+    }
+
+    /// <summary>
+    /// One partition's slice of an <see cref="AppendManyAsync"/> batch: its
+    /// stamped records, the caller-order indexes those records came from, and
+    /// the routing metadata the dispatch histogram tags with.
+    /// </summary>
+    private sealed class WalPartitionBatch(
+        string grainKey,
+        string treeId,
+        int partition,
+        int walPartitions,
+        LatticeOptions perTree,
+        int capacity)
+    {
+        public string GrainKey { get; } = grainKey;
+
+        public string TreeId { get; } = treeId;
+
+        public int Partition { get; } = partition;
+
+        public int WalPartitions { get; } = walPartitions;
+
+        public LatticeOptions PerTree { get; } = perTree;
+
+        // Deliberately not named 'Entries': that identifier is a metric
+        // instrument name elsewhere in the tree, and the tenant-dimension
+        // hygiene scanner reads any `Entries.Add(` in a file that mentions
+        // Metrics as an untagged metric emission site.
+        public List<WalRecord> Records { get; } = new(capacity);
+
+        public List<int> Reverse { get; } = new(capacity);
     }
 
     private async Task<KeyValuePair<string, IReadOnlyList<long>>> AppendForPartitionAsync(
