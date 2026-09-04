@@ -43,6 +43,19 @@ public static class LatticeDashboards
     /// Thrown when <paramref name="kind"/> is not a defined value of
     /// <see cref="LatticeDashboardKind"/>.
     /// </exception>
+    /// <remarks>
+    /// The missing-resource arm below is a build-configuration backstop, not a
+    /// rejection a caller can trigger: <see cref="ResourceNameFor"/> only ever
+    /// returns names that are embedded in this assembly, which
+    /// <c>ResourceNameFor_resolves_to_a_resource_that_is_actually_embedded</c>
+    /// asserts by comparing the whole mapping against
+    /// <see cref="System.Reflection.Assembly.GetManifestResourceNames"/>. It is kept
+    /// so that a future dashboard added to <see cref="LatticeDashboardKind"/> and to
+    /// the switch, but not to the <c>.csproj</c> as an <c>EmbeddedResource</c>, fails
+    /// with a message naming the resource and assembly rather than with a null
+    /// dereference. Because the mapping test fails first, the arm is unreachable in a
+    /// correctly built package and is expected to show as uncovered.
+    /// </remarks>
     public static string GetGrafanaDashboardJson(LatticeDashboardKind kind)
     {
         var resourceName = ResourceNameFor(kind);

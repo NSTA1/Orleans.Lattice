@@ -78,7 +78,11 @@ internal static class BackupBlobNaming
     /// because <see cref="Uri"/> performs dot-segment removal after
     /// percent-decoding: <c>%2E%2E/secrets</c> resolves exactly as
     /// <c>../secrets</c> does. One decode matches the platform, which does not
-    /// decode a second time, so a double-encoded id is inert. A backslash is
+    /// decode a second time, so a double-encoded id is inert. A <em>malformed</em>
+    /// escape is not decoded at all - <see cref="Uri.UnescapeDataString"/> leaves it
+    /// verbatim rather than throwing - so such an id is validated on its literal
+    /// spelling and accepted when that spelling is a legal blob-name suffix, which
+    /// it is: a bare <c>%</c> cannot move the resolved address. A backslash is
     /// rejected in both forms because <see cref="Uri"/> normalises it to a
     /// separator, which would otherwise reintroduce the escape through a
     /// different spelling. Control characters are rejected because they are not
@@ -92,18 +96,7 @@ internal static class BackupBlobNaming
     {
         ValidateForm(id, paramName);
 
-        string decoded;
-        try
-        {
-            decoded = Uri.UnescapeDataString(id);
-        }
-        catch (UriFormatException)
-        {
-            throw new ArgumentException(
-                "A backup id must not contain a malformed percent-escape.",
-                paramName);
-        }
-
+        var decoded = Uri.UnescapeDataString(id);
         if (!string.Equals(decoded, id, StringComparison.Ordinal))
         {
             ValidateForm(decoded, paramName);
@@ -113,15 +106,23 @@ internal static class BackupBlobNaming
     /// <summary>
     /// Applies the segment and character rules to one spelling of an id.
     /// </summary>
+    /// <remarks>
+    /// There is no explicit empty-string test: both entry points run
+    /// <see cref="ArgumentException.ThrowIfNullOrEmpty(string?, string?)"/> before
+    /// this point, and <see cref="Uri.UnescapeDataString"/> never maps a non-empty
+    /// id to an empty one, so an empty spelling cannot arrive here. Were one to,
+    /// the segment rules below would still reject it, because splitting an empty
+    /// string yields a single empty segment.
+    /// </remarks>
     /// <param name="id">The id, either as written or percent-decoded.</param>
     /// <param name="paramName">The originating parameter name, for the thrown exception.</param>
     /// <exception cref="ArgumentException">The id would escape its prefix or is otherwise not a valid blob-name suffix.</exception>
     private static void ValidateForm(string id, string paramName)
     {
-        if (id.Length == 0 || id[0] == '/')
+        if (id.StartsWith('/'))
         {
             throw new ArgumentException(
-                "A backup id must be a non-empty relative blob-name suffix and must not start with '/'.",
+                "A backup id must be a relative blob-name suffix and must not start with '/'.",
                 paramName);
         }
 
