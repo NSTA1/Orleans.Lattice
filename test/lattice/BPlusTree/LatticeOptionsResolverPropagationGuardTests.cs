@@ -185,6 +185,20 @@ public class LatticeOptionsResolverPropagationGuardTests
             // the tree must agree on.
             "LeafCachePreWarmCount",
             "LeafAccessModelFlushIntervalMs",
+
+            // Snapshot baseline fold fan-out (issue #1961): ShardRootGrain
+            // resolves this through the dedicated synchronous
+            // LatticeOptionsResolver.GetSnapshotBaselineFoldConcurrency(treeId)
+            // seam, which reads IOptionsMonitor.Get(treeId) directly. It is
+            // deliberately kept off the ResolvedLatticeOptions path because the
+            // consumer is CaptureSnapshotBaselineAsync, a scan-page-bounded
+            // entry point that must not await before its stall budget is armed
+            // (issues #1992, #2002) - the registry round trip ResolveAsync
+            // performs is exactly the await that would leave the ceiling
+            // unarmed. It is also pure dispatch scheduling: the captured
+            // baseline is byte-identical under any value, so no replica of the
+            // tree has to agree on it.
+            "MaxConcurrentSnapshotBaselineFolds",
         };
 
     private sealed record TransformExpectation(Func<object?, object?> Expected);

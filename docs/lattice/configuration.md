@@ -140,6 +140,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxConcurrentDrains`](#maxconcurrentdrains) | `int` | 4 | Yes |
 | [`MaxConcurrentMigrations`](#maxconcurrentmigrations) | `int` | 4 | Yes |
 | [`MaxConcurrentShardConsolidations`](#maxconcurrentshardconsolidations) | `int` | 1 | Yes |
+| [`MaxConcurrentSnapshotBaselineFolds`](#maxconcurrentsnapshotbaselinefolds) | `int` | 4 | Yes |
 | [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
 | [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces) | `int` | 16 | Yes |
 | [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees) | `int` | 8 | No (cluster-wide) |
@@ -696,6 +697,34 @@ Automatic over-split healing admits at most one new fold per sweep and never mor
 **When off:** `0` is legal and admits nothing. It pauses **admission** while leaving the observer running, so the tree keeps publishing its healing backlog and an operator can watch the damage without acting on it. That is a different question from [`ShardHealingEnabled`](#shardhealingenabled), which stops the mechanism outright - no reminder, no timer, and no shard polling.
 
 **When an operator would change it:** raise it to drain a large backlog faster on a box with spare I/O; set it to `0` to freeze healing while keeping the backlog measurement.
+
+### `MaxConcurrentSnapshotBaselineFolds`
+
+Maximum number of per-leaf WAL tail folds that a **single** shard's baseline capture may have in flight at once (default: 4). Applies inside `IShardRootGrain.CaptureSnapshotBaselineAsync`, the per-shard step of a snapshot-isolated cursor open.
+
+The capture runs in two passes over the shard's leaf chain. The first freezes each leaf's committed projection and must stay sequential, because the chain is discovered one `GetNextSibling` hop at a time. The second folds each frozen leaf's `(leaf_frontier, capturedHead]` WAL tail, and is the dominant cost on a shard whose leaves carry a deep tail. That second pass is safe to overlap: point-in-time consistency comes from the uniform `capturedHead` dominating every leaf's frozen frontier, not from the order the folds run in, so folding several leaves at once cannot change what is captured.
+
+The captured baseline is **byte-identical under any value**, including `1`. Results are consumed in strict leaf-chain order regardless of the order the folds complete, so a key present on more than one leaf resolves exactly as it would under a serial fold. Only the dispatch schedule changes.
+
+The bound is a sliding window over *unconsumed* results, not merely over in-flight calls: a leaf's slot is re-dispatched only once its rows have been merged into the union, so a slow fold early in the chain cannot let every later fold complete and pile its rows in memory. Raising the value shortens the shard's non-reentrant hold on a deep chain at the cost of that much more concurrent fold memory and that many more simultaneous calls into the leaves; lowering it to `1` restores a strictly serial fold. Values below 1 are clamped to 1.
+
+This knob is a different dimension from [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures), which bounds how many *shards* capture at once. The two multiply into the peak concurrent leaf folds one snapshot open can dispatch (16 at both defaults), so consider them together when tuning an open on a wide tree.
+
+This option can be changed freely at any time; a new value applies to the next baseline capture.
+
+```csharp verify
+// A tree whose leaves carry deep WAL tails: widen the per-shard fold
+// window but narrow the shard fan-out, holding the peak at 4 x 4 = 16
+// concurrent folds while shortening each individual shard's hold.
+siloBuilder.ConfigureLattice("deep-tail", o =>
+{
+    o.MaxConcurrentSnapshotBaselineFolds = 8;
+    o.MaxConcurrentSnapshotCaptures = 2;
+});
+
+// Restore a strictly serial fold on a memory-constrained silo.
+siloBuilder.ConfigureLattice(o => o.MaxConcurrentSnapshotBaselineFolds = 1);
+```
 
 ### `MaxConcurrentSnapshotCaptures`
 
