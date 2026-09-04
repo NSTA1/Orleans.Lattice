@@ -66,17 +66,16 @@ internal sealed partial class BPlusLeafGrain
     private string? _cachedConsumerIdBase;
 
     /// <summary>
-    /// <see langword="true"/> once this activation has <b>awaited</b> a durable
-    /// write of its first real (non-Zero) checkpoint frontier through
+    /// <see langword="true"/> once this activation has published its first real
+    /// (non-Zero) checkpoint frontier through
     /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>.
     /// The first crossing from the seeded <see cref="HybridLogicalClock.Zero"/>
-    /// block pin to a real frontier is a hard durability barrier - awaited, not
-    /// fire-and-forget - so a leaf that has checkpointed at least once always
-    /// leaves a durable WAL retention floor at or above its checkpoint, even if
-    /// the process is killed ungracefully before the coalesced mirror would have
-    /// landed. Every subsequent checkpoint advance falls back to the cheap
-    /// debounced fire-and-forget mirror, so the steady-state checkpoint path
-    /// takes on no synchronous durable-write latency.
+    /// block pin to a real frontier goes through the batched flush - one
+    /// round-trip per routed pin shard - rather than the per-consumer debounced
+    /// mirror, so the durable retention floor leaves Zero promptly instead of
+    /// waiting on the debounce window. Every subsequent checkpoint advance falls
+    /// back to the cheap debounced fire-and-forget mirror, so the steady-state
+    /// checkpoint path stays allocation- and round-trip-light.
     /// </summary>
     private bool _durableFrontierBarriered;
 
@@ -135,12 +134,13 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // Durable pin mirror. The first time this activation crosses from the
-        // seeded Zero block pin to a real frontier we AWAIT the durable write
-        // (a retention barrier: a leaf that has checkpointed always has a
-        // durable trim floor, closing the crash-before-mirror-landed window);
-        // every subsequent advance uses the cheap debounced fire-and-forget
-        // mirror so the steady-state checkpoint path adds no durable-write
-        // latency. Never throws (the flush swallows transient failures).
+        // seeded Zero block pin to a real frontier we publish through the
+        // batched flush (one round-trip per routed pin shard) so the durable
+        // retention floor leaves Zero promptly; every subsequent advance uses
+        // the cheap per-consumer debounced mirror. The pin store coalesces the
+        // durable write itself in both cases - a pin that lags the leaf's true
+        // frontier only retains more WAL, which is always GC-safe. Never throws
+        // (the flush swallows transient failures).
         if (!_durableFrontierBarriered)
         {
             await FlushDurableMaterialiserFrontierAsync();
@@ -161,20 +161,24 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Durably persists this leaf's current real checkpoint frontier as an
-    /// awaited WAL retention pin (one per WAL partition) via
+    /// Publishes this leaf's current real checkpoint frontier as a WAL
+    /// retention pin (one per WAL partition) via
     /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>,
-    /// gated on <c>Clock &gt; Zero</c>. Unlike the fire-and-forget mirror on
-    /// <see cref="ReportCursorIfActiveAsync"/>, the write is awaited so the
-    /// durable pin store is guaranteed to floor the shared WAL's trim point at
-    /// or above this leaf's checkpoint before the caller proceeds. Called on the
-    /// first real-frontier checkpoint of an activation and again on graceful
-    /// deactivation (after the final checkpoint flush) so a leaf can never go
-    /// dormant, then have its shared WAL trimmed past its checkpoint across a
-    /// restart, without leaving a correct durable floor behind. Idempotent (the
-    /// pin store's monotonic-max merge no-ops a stale/equal frontier) and never
-    /// throws; a no-op when the host has no cursor reporter (pre-WAL), the tree
-    /// id is unset, or the leaf has not checkpointed yet.
+    /// gated on <c>Clock &gt; Zero</c>. Unlike the per-consumer debounced mirror
+    /// on <see cref="ReportCursorIfActiveAsync"/>, the whole partition set goes
+    /// in one batched round-trip per routed pin shard and is merged into the
+    /// durable store's monotonic-max state immediately, so the trim floor
+    /// reflects this leaf's checkpoint without waiting on a debounce window.
+    /// The store's own durable write is coalesced (see
+    /// <see cref="ILeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/>);
+    /// a pin that lags this leaf's true frontier only retains more WAL and is
+    /// always GC-safe. Called on the first real-frontier checkpoint of an
+    /// activation and again on graceful deactivation (after the final checkpoint
+    /// flush) so a leaf that goes dormant leaves its frontier behind for the
+    /// WAL GC. Idempotent (the pin store's monotonic-max merge no-ops a
+    /// stale/equal frontier) and never throws; a no-op when the host has no
+    /// cursor reporter (pre-WAL), the tree id is unset, or the leaf has not
+    /// checkpointed yet.
     /// </summary>
     /// <param name="cancellationToken">
     /// Deadline for the flush. This runs on the deactivation path, where

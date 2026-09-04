@@ -8,10 +8,12 @@ using Orleans.Storage;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Regression tests for issue #1464: the awaited durable retention-pin flush
-/// (both barriers) routes through
+/// Regression tests for issue #1464: the durable retention-pin flush (both
+/// barriers) routes through
 /// <see cref="LeafCursorReporter.FlushDurableMaterialiserFrontierAsync"/> ->
-/// the per-shard <see cref="IWalMaterialiserPinGrain.SeedManyAsync"/>. During a
+/// the per-shard <see cref="IWalMaterialiserPinGrain.ReportManyAsync"/>, and
+/// the birth seed through
+/// <see cref="IWalMaterialiserPinGrain.SeedManyAsync"/>. During a
 /// full-silo graceful shutdown the pin-store grain is itself deactivating and
 /// the stopping silo refuses to create its activation, so that grain call is
 /// rejected mid-teardown and (previously) swallowed - defeating the "fall off
@@ -165,32 +167,43 @@ public sealed class LeafCursorReporterTeardownFallbackTests
     }
 
     /// <summary>
-    /// Pin grain that rejects <see cref="SeedManyAsync"/> with an exception
+    /// Pin grain that rejects both pin-store entry points with an exception
     /// carrying the canonical Orleans activation-collection rejection message,
-    /// simulating a durable-pin grain call issued during full-silo shutdown.
+    /// simulating a durable-pin grain call issued during full-silo shutdown. A
+    /// stopping silo refuses to create the activation for <em>any</em> call, so
+    /// both the coalesced <see cref="ReportManyAsync"/> the retention flush uses
+    /// and the write-through <see cref="SeedManyAsync"/> the birth seed uses are
+    /// rejected.
     /// </summary>
     private sealed class RejectingPinGrain : PinGrainStub
     {
-        public override Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) =>
+        public override Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Reject();
+
+        public override Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Reject();
+
+        private static Task Reject() =>
             throw new InvalidOperationException(
                 "Unable to create local activation for grain wal-materialiser-pin. Rejecting now.");
     }
 
     /// <summary>
-    /// Pin grain that fails <see cref="SeedManyAsync"/> with a generic transient
+    /// Pin grain that fails both pin-store entry points with a generic transient
     /// fault (not a shutdown rejection), which must be swallowed rather than
     /// routed to the direct-store fallback.
     /// </summary>
     private sealed class TransientFaultPinGrain : PinGrainStub
     {
-        public override Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) =>
-            throw new TimeoutException("Durable pin store timed out.");
+        public override Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Fault();
+
+        public override Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Fault();
+
+        private static Task Fault() => throw new TimeoutException("Durable pin store timed out.");
     }
 
     private abstract class PinGrainStub : IWalMaterialiserPinGrain
     {
         public Task ReportAsync(string consumerId, HybridLogicalClock frontier) => Task.CompletedTask;
-        public Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Task.CompletedTask;
+        public virtual Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Task.CompletedTask;
         public virtual Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Task.CompletedTask;
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() =>
             Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
