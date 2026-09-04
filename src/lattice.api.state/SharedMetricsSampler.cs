@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -25,6 +26,11 @@ internal sealed class SharedMetricsSampler(
     IServiceProvider services)
 {
     private const int CatalogPageSize = 200;
+
+    // Above this many explicitly-requested tree ids the per-tick de-duplication
+    // switches from a linear ordinal scan to a hash set. A dashboard scope names
+    // a handful of trees, so the linear path is the common one.
+    private const int SmallTreeIdRequestThreshold = 16;
 
     private readonly ILatticeStateQuery _query = query
         ?? throw new ArgumentNullException(nameof(query));
@@ -224,8 +230,8 @@ internal sealed class SharedMetricsSampler(
         TreeMetricsRequest request,
         CancellationToken cancellationToken)
     {
-        var treeIds = request.TreeIds is { Count: > 0 }
-            ? request.TreeIds.Distinct(StringComparer.Ordinal).ToList()
+        var treeIds = request.TreeIds is { Count: > 0 } requested
+            ? DistinctOrdinal(requested)
             : await EnumerateTreeIdsAsync(request.IncludeSystemTrees, cancellationToken).ConfigureAwait(false);
 
         var viewLag = request.IncludeViewLag
@@ -285,6 +291,58 @@ internal sealed class SharedMetricsSampler(
         return result;
     }
 
+    /// <summary>
+    /// De-duplicates <paramref name="source"/> ordinally, preserving first-seen
+    /// order, exactly as <c>Distinct(StringComparer.Ordinal)</c> does - but as a
+    /// direct fold into a presized list rather than a deferred LINQ iterator, so
+    /// the per-tick sample no longer allocates the iterator, its internal set and
+    /// a list grown from empty. An explicit tree-id list is short in practice
+    /// (a dashboard watches a handful of trees), so below the threshold a linear
+    /// ordinal scan of the survivors is cheaper than hashing; the set is kept for
+    /// larger requests so a pathological list cannot go quadratic.
+    /// </summary>
+    private static List<string> DistinctOrdinal(IReadOnlyList<string> source)
+    {
+        // At most one survivor per input, so the capacity is a tight upper bound
+        // and a short request presizes short.
+        var distinct = new List<string>(source.Count);
+
+        if (source.Count <= SmallTreeIdRequestThreshold)
+        {
+            for (var i = 0; i < source.Count; i++)
+            {
+                var id = source[i];
+                var seen = false;
+                for (var j = 0; j < distinct.Count; j++)
+                {
+                    if (string.Equals(distinct[j], id, StringComparison.Ordinal))
+                    {
+                        seen = true;
+                        break;
+                    }
+                }
+
+                if (!seen)
+                {
+                    distinct.Add(id);
+                }
+            }
+
+            return distinct;
+        }
+
+        var seenIds = new HashSet<string>(source.Count, StringComparer.Ordinal);
+        for (var i = 0; i < source.Count; i++)
+        {
+            if (seenIds.Add(source[i]))
+            {
+                distinct.Add(source[i]);
+            }
+        }
+
+        return distinct;
+    }
+
     private static (int? ViewCount, long? ViewLagTotal) ResolveViewLag(
         Dictionary<string, ViewRollup>? viewLag,
         string treeId)
@@ -294,9 +352,12 @@ internal sealed class SharedMetricsSampler(
             return (null, null);
         }
 
-        var viewCount = viewLag.TryGetValue(treeId, out var rollup) ? rollup.Count : 0;
-        var viewLagTotal = viewLag.TryGetValue(treeId, out var lag) ? lag.LagTotal : null;
-        return (viewCount, viewLagTotal);
+        // One probe, not two: both halves of the answer come from the same
+        // rollup, and a missing tree yields the same (0, null) the two separate
+        // lookups produced from a defaulted ViewRollup.
+        return viewLag.TryGetValue(treeId, out var rollup)
+            ? (rollup.Count, rollup.LagTotal)
+            : (0, null);
     }
 
     private static TreeMetrics BuildTreeMetrics(
@@ -400,10 +461,15 @@ internal sealed class SharedMetricsSampler(
 
             foreach (var view in page.Entries)
             {
-                rollups.TryGetValue(view.SourceTreeId, out var current);
-                rollups[view.SourceTreeId] = new ViewRollup(
-                    current.Count + 1,
-                    view.Lag is { } lag ? (current.LagTotal ?? 0) + lag : current.LagTotal);
+                // Single probe per view rather than a TryGetValue followed by an
+                // indexer set. A key absent from the map lands on a defaulted
+                // ViewRollup - (0, null) - which is exactly what the failed
+                // TryGetValue used to hand back, so the fold is unchanged.
+                ref var rollup = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    rollups, view.SourceTreeId, out _);
+                rollup = new ViewRollup(
+                    rollup.Count + 1,
+                    view.Lag is { } lag ? (rollup.LagTotal ?? 0) + lag : rollup.LagTotal);
             }
 
             pageToken = page.NextPageToken;

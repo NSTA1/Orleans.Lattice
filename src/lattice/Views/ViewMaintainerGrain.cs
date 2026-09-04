@@ -469,8 +469,25 @@ internal sealed partial class ViewMaintainerGrain(
         }
 
         var viewTree = grainFactory.GetGrain<ILattice>(ViewTreeId);
-        DetectAndReportCollisions(collected);
-        var appliedCount = await ApplySurvivorsAsync(viewTree, collected, hasRangeDelete, cancellationToken);
+        int appliedCount;
+        if (hasRangeDelete)
+        {
+            // Range path: the batch cannot be coalesced by view key, so collision
+            // detection runs on its own over the whole batch.
+            ReportCollisions(ViewKeyCollisionDetector.Detect(collected));
+            appliedCount = await ApplyInSourceOrderAsync(viewTree, collected, cancellationToken);
+        }
+        else
+        {
+            // Point-write fast path: coalescing and collision detection group the
+            // same batch by the same view key under the same comparer, so one fold
+            // pass produces both instead of two passes each building their own
+            // per-key map. Collisions are still reported before anything is
+            // applied, exactly as when the two ran back to back.
+            var fold = ViewBatchFold.Fold(collected);
+            ReportCollisions(fold.Collisions);
+            appliedCount = await ApplySurvivorsAsync(viewTree, fold.Survivors, cancellationToken);
+        }
 
         // Flush every atomic batch that completed this pass through the view
         // tree's atomic primitive, after the ordinary survivors so a committed
@@ -1054,24 +1071,24 @@ internal sealed partial class ViewMaintainerGrain(
         return lag;
     }
 
-    private async Task<int> ApplySurvivorsAsync(ILattice viewTree, List<ViewWrite> collected, bool hasRangeDelete, CancellationToken cancellationToken)
+    private async Task<int> ApplySurvivorsAsync(ILattice viewTree, IReadOnlyList<ViewWrite> survivors, CancellationToken cancellationToken)
     {
-        if (!hasRangeDelete)
+        // Point writes only, already coalesced by view key (LWW on the source HLC)
+        // by the caller's fold. The caller classified the batch during the drain
+        // fold, so neither this method nor the fold re-scans the buffer for a
+        // range delete.
+        var applied = 0;
+        for (var i = 0; i < survivors.Count; i++)
         {
-            // Fast path: only point writes. Coalesce by view key (LWW on the
-            // source HLC) and apply each survivor. The caller classified the batch
-            // during the drain fold, so this no longer re-scans the buffer for a
-            // range delete.
-            var applied = 0;
-            foreach (var write in ViewWriteCoalescer.Coalesce(collected))
-            {
-                await ApplyAsync(viewTree, write, cancellationToken);
-                applied++;
-            }
-
-            return applied;
+            await ApplyAsync(viewTree, survivors[i], cancellationToken);
+            applied++;
         }
 
+        return applied;
+    }
+
+    private async Task<int> ApplyInSourceOrderAsync(ILattice viewTree, List<ViewWrite> collected, CancellationToken cancellationToken)
+    {
         // Range path: a range delete cannot be globally coalesced by view key
         // against point writes, and its outcome interleaves with point writes by
         // source HLC. Apply every collected write in ascending source-HLC order
@@ -1090,9 +1107,8 @@ internal sealed partial class ViewMaintainerGrain(
         return appliedOrdered;
     }
 
-    private void DetectAndReportCollisions(IEnumerable<ViewWrite> collected)
+    private void ReportCollisions(IReadOnlyList<string> collisions)
     {
-        var collisions = ViewKeyCollisionDetector.Detect(collected);
         if (collisions.Count == 0)
         {
             return;

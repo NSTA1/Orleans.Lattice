@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -260,6 +260,13 @@ if (string.Equals(suite, "draintrims", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> draintrims (DrainAllocationTrimBenchmarks)");
     var drainTrimsSummary = BenchmarkRunner.Run<DrainAllocationTrimBenchmarks>(config);
     return drainTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "fusiontrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> fusiontrims (ViewFoldAndMetricsTrimBenchmarks)");
+    var fusionTrimsSummary = BenchmarkRunner.Run<ViewFoldAndMetricsTrimBenchmarks>(config);
+    return fusionTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
