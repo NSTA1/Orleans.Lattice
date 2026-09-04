@@ -19,6 +19,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Orleans.Lattice.Tenancy.Tests" />
+    <!-- The microbench host drives TenantRecord's internal slot maps directly so
+         the "reshardfolds" suite can run the prior double-probe merge shape
+         side-by-side with the shipped single-probe MergeFrom. -->
+    <InternalsVisibleTo Include="Orleans.Lattice.Benchmark.Microbench" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>
 
