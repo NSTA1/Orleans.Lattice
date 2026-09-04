@@ -3,20 +3,21 @@
 An embedding-only companion image for the Orleans.Lattice repository-context MCP
 host, built on ONNX Runtime instead of Python and PyTorch.
 
-It is a **sibling** to [`apps/embedding`](../embedding/README.md), not a
-replacement. That image stays the default; this one is opt-in.
+It is the **default** embedding companion for the repository-context sample, and
+a drop-in replacement for [`apps/embedding`](../embedding/README.md), which
+remains available as an opt-in fallback.
 
 One job: `text -> vector`.
 
 ## Why it exists
 
-The Onyx-derived default image is CPU by default with NVIDIA as a config option,
-and that contract is preserved exactly here. What this image adds:
+The Onyx-derived image this replaced is CPU by default with NVIDIA as a config
+option, and that contract is preserved exactly here. What this image adds:
 
 | | `apps/embedding` (Onyx) | `apps/embedding-onnx` (this) |
 | --- | --- | --- |
 | Runtime | Python + PyTorch | .NET + ONNX Runtime |
-| Image size | roughly 13 GB on disk | roughly 0.8 GB (cpu flavour) |
+| Image size | roughly 13 GB on disk | roughly 1.3 GB (cpu flavour) |
 | CPU default | yes | yes |
 | NVIDIA | env + device reservation | env + device reservation (`cuda` flavour) |
 | Other GPUs | no | DirectML (Windows host only, not in-container) |
@@ -35,9 +36,10 @@ Three things make that true, and all three are load-bearing:
 
 1. **The same weights.** The Dockerfile pins the exact HuggingFace revision the
    Onyx image loads (`3ac47f12...`) and verifies the download by SHA-256.
-2. **The same pipeline.** WordPiece tokenize (lower-cased, truncated), forward
-   pass, mean-pool over the attention mask, L2-normalize - matching the model's
-   `modules.json` (`Transformer -> Pooling(mean) -> Normalize`).
+2. **The same pipeline.** WordPiece tokenize (lower-cased, accent-stripped,
+   truncated), forward pass, mean-pool over the attention mask, L2-normalize -
+   matching the model's `modules.json`
+   (`Transformer -> Pooling(mean) -> Normalize`).
 3. **The same tokens.** Tokenizer output is pinned against golden HuggingFace
    token ids by `WordPieceTokenizerGoldenTests`.
 
@@ -45,6 +47,31 @@ Three things make that true, and all three are load-bearing:
 > INT8 is roughly 2.4x faster on the CPU but measures at cosine **0.930** against
 > the reference, so it silently defines a *different* embedding space. It is only
 > viable if you re-embed everything.
+
+### The runtime must have ICU
+
+The reference pipeline strips accents, and accent-stripping is Unicode NFD
+normalization. A runtime without it - one built with `InvariantGlobalization`, or
+running on an ICU-less base image - cannot perform that step, and every word
+containing a non-ASCII letter then collapses to a single `[UNK]` token:
+
+```text
+with ICU:     "Bergstr(o-umlaut)m" -> 101,15214,15687,102   (identical to "Bergstrom")
+without ICU:  "Bergstr(o-umlaut)m" -> 101,100,102           ([CLS] [UNK] [SEP])
+```
+
+The vectors that come back are still correctly shaped and correctly normalized,
+so they pass every structural check while being entirely wrong - and silently
+incompatible with vectors already stored by the reference embedder. Measured
+end to end, cosine against the reference fell to **0.300** for a single accented
+name and **0.473** for ordinary French text.
+
+This is why the csproj sets `InvariantGlobalization` to `false` and the runtime
+stage uses the `-extra` chiseled base image, which is the variant that carries
+ICU. `GlobalizationGuard` re-checks the capability at startup and refuses to
+serve if it is missing, so neither setting can regress into silent corruption;
+`GlobalizationGuardTests` and
+`Encode_folds_accents_exactly_as_the_reference_tokenizer_does` pin it in CI.
 
 ### Known divergence
 
@@ -135,16 +162,22 @@ confirm the GPU was picked up without reading logs:
 
 ## Using it from the RepoContext sample
 
-The sample keeps the Onyx companion as its default. To run it against this image
-instead, add the override file next to the sample's compose file:
+This is the sample's default embedder, so there is nothing to do:
 
 ```bash
 cd samples/RepoContextContainer
-docker compose -f docker-compose.yml -f docker-compose.onnx.yml up -d
+docker compose up -d
 ```
 
-Nothing else changes: same service name, same port, so
-`LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000` is untouched.
+To fall back to the Onyx companion instead, layer its override file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
+```
+
+Nothing else changes either way: same service name, same port, so
+`LATTICE_EMBEDDING_ENDPOINT: http://embedder:9000` is untouched, and because the
+vectors are identical an existing `/data` volume stays valid across the switch.
 
 ## Offline cold start
 

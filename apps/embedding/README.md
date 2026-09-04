@@ -4,7 +4,18 @@ A produced, embedding-only companion image for the Orleans.Lattice
 repository-context MCP host. It turns text into vectors over HTTP so the MCP
 container never embeds in-process and keeps its single, MCP-only listener. The
 default `IEmbeddingProvider` in `Orleans.Lattice.Api.Mcp.RepoContext`
-(`OnyxEmbeddingProvider`) is a thin client for this image.
+(`OnyxEmbeddingProvider`) is a thin client for the HTTP contract this image
+defines.
+
+> **This is no longer the default companion image.** The repository-context
+> sample now brings up
+> [`apps/embedding-onnx`](../embedding-onnx/README.md), which serves this same
+> contract on the same port and emits numerically identical vectors from an image
+> roughly a tenth the size, with no model download on first run. This image
+> remains supported and is still the reference implementation the ONNX one is
+> pinned against; select it with the sample's
+> `docker-compose.onyx.yml` override. `OnyxEmbeddingProvider` keeps its name
+> because it is a client for the contract, not for this particular image.
 
 One job: `text -> vector`.
 

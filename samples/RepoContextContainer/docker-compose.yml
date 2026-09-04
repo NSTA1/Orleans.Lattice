@@ -1,25 +1,63 @@
 # RepoContext MCP container - "codebase memory in a box" (issue #1435).
 #
-# Brings up the restart-durable MCP host alongside its Onyx embedding companion.
-# The host runs the default `local` durability profile (SQLite grain storage +
-# reminders and the file WAL, all under the /data named volume), so ingested
-# context survives `docker compose restart` and `docker compose down` (without
-# `-v`). See README.md for the start -> bootstrap -> recall -> restart -> verify
-# walkthrough.
+# Brings up the restart-durable MCP host alongside its ONNX Runtime embedding
+# companion. The host runs the default `local` durability profile (SQLite grain
+# storage + reminders and the file WAL, all under the /data named volume), so
+# ingested context survives `docker compose restart` and `docker compose down`
+# (without `-v`). See README.md for the start -> bootstrap -> recall -> restart
+# -> verify walkthrough.
 #
-# Build context is the repository root for both images (the host image
-# ProjectReferences the just-built src/ bits). Run from this directory.
+# Build context is the repository root for the host image (it ProjectReferences
+# the just-built src/ bits); the embedder builds from its own app directory. Run
+# from this directory.
 
 services:
   # The embedding companion stays a SEPARATE container so the MCP host keeps its
   # single-listener surface. Its baked HEALTHCHECK gates the host's startup.
+  #
+  # This is the ONNX Runtime companion (apps/embedding-onnx). It serves the same
+  # HTTP contract on the same port as the Onyx companion it replaced, and emits
+  # numerically identical vectors, so it is a drop-in: no host configuration
+  # changes and no re-indexing of an existing volume. To go back to the Onyx
+  # companion, layer docker-compose.onyx.yml over this file.
+  #
+  # NVIDIA: the default `cpu` flavour has NO GPU support compiled in, so running
+  # it on a GPU host changes nothing. Enabling the GPU takes all three of the
+  # edits below - the build arg selects a different ONNX Runtime package, the env
+  # var selects the accelerator at runtime, and the reservation is what actually
+  # exposes the device to the container:
+  #
+  #   build:
+  #     args:
+  #       ONNX_FLAVOR: cuda          # (1) build the CUDA-capable image
+  #   environment:
+  #     EMBED_PROVIDER: cuda         # (2) bind the CUDA execution provider
+  #   deploy:                        # (3) hand the GPU to the container
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #
+  # Rebuild after changing the build arg (`docker compose build embedder`); a
+  # plain `up -d` reuses the cached cpu image. The cuda flavour still includes the
+  # CPU provider, so that one image also serves CPU hosts, and an unrecognised
+  # EMBED_PROVIDER falls back to the CPU instead of failing to boot. Confirm what
+  # actually bound with `curl localhost:9000/api/health` inside the network - it
+  # reports the live provider, so a silent CPU fallback is visible.
   embedder:
     build:
-      context: ../..
-      dockerfile: apps/embedding/Dockerfile
-    volumes:
-      # Persist the HuggingFace model cache so a restart needs no re-download.
-      - hf-cache:/app/.cache/huggingface
+      context: ../../apps/embedding-onnx
+      dockerfile: Dockerfile
+      args:
+        # cpu (default) or cuda. The cuda flavour also serves CPU hosts, so one
+        # image covers both and EMBED_PROVIDER alone selects the accelerator.
+        ONNX_FLAVOR: cpu
+    environment:
+      # cpu, or cuda on an NVIDIA host started with a device reservation.
+      # An unknown value falls back to the CPU rather than failing to boot.
+      EMBED_PROVIDER: cpu
     expose:
       - "9000"
     # Survive a daemon/host restart like the repocontext service does. Without
@@ -72,7 +110,19 @@ services:
       LATTICE_FULL_WALK_INTERVAL_SECONDS: "120"
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
-      - "8080:8080"
+      #
+      # The HOST side is overridable because 8080 is one of the most commonly
+      # occupied ports on a developer machine, and a collision surfaces only as
+      # an opaque bind failure at `up` time. Set REPOCONTEXT_PORT (in .env or the
+      # environment) to publish elsewhere:
+      #
+      #   REPOCONTEXT_PORT=18080 docker compose up -d
+      #
+      # The CONTAINER side stays 8080 and must keep matching LATTICE_MCP_PORT
+      # above - only the published port moves, so the health probes and the MCP
+      # endpoint are then at http://localhost:$REPOCONTEXT_PORT. The default is
+      # deliberately unchanged, so existing clients keep working untouched.
+      - "${REPOCONTEXT_PORT:-8080}:8080"
     volumes:
       # Durable state survives restart / recreation / image upgrade.
       - repocontext-data:/data
@@ -98,5 +148,3 @@ services:
 volumes:
   # Durable Lattice state (WAL + SQLite): the heart of "codebase memory in a box".
   repocontext-data:
-  # The embedder's HuggingFace model cache.
-  hf-cache:

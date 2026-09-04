@@ -96,6 +96,58 @@ public sealed class WordPieceTokenizerGoldenTests
     }
 
     [Test]
+    public void Encode_folds_accents_exactly_as_the_reference_tokenizer_does()
+    {
+        // The reference pipeline lower-cases AND strips accents, so an accented
+        // word must tokenize identically to its ASCII form. Verified against the
+        // reference embedder end to end: cos(accented, stripped) is 1.000000
+        // there, and was 0.300094 from this server before this was pinned.
+        //
+        // This is the case the golden fixture cannot cover - it contains no
+        // non-ASCII text at all - and it is the one that regresses the instant
+        // the runtime loses ICU or InvariantGlobalization is switched back on.
+        // Written as escapes because the repository's text-hygiene gates reject
+        // non-ASCII bytes in tracked files.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                _tokenizer.Encode("Bergstr\u00f6m", 512),
+                Is.EqualTo(_tokenizer.Encode("Bergstrom", 512)),
+                "o-umlaut must fold to 'o'");
+
+            Assert.That(
+                _tokenizer.Encode("caf\u00e9", 512),
+                Is.EqualTo(_tokenizer.Encode("cafe", 512)),
+                "e-acute must fold to 'e'");
+
+            Assert.That(
+                _tokenizer.Encode("\u00fcber", 512),
+                Is.EqualTo(_tokenizer.Encode("uber", 512)),
+                "u-umlaut must fold to 'u'");
+
+            // The failure mode this guards against is not a near-miss: an
+            // unnormalized runtime collapses the whole word to a single [UNK],
+            // so the sequence becomes [CLS] [UNK] [SEP].
+            Assert.That(
+                _tokenizer.Encode("Bergstr\u00f6m", 512),
+                Has.Length.GreaterThan(3),
+                "an accented word must not collapse to a single [UNK] token");
+        });
+    }
+
+    [Test]
+    public void Encode_does_not_fold_the_sharp_s_which_has_no_accent_decomposition()
+    {
+        // Guards the boundary of the rule above. The German sharp s is a distinct
+        // letter, not an accented one, so it has no NFD decomposition and the
+        // reference tokenizer does NOT fold it to "ss". A fold implemented as a
+        // hand-rolled character table would get this wrong.
+        Assert.That(
+            _tokenizer.Encode("gro\u00dfe", 512),
+            Is.Not.EqualTo(_tokenizer.Encode("grosse", 512)));
+    }
+
+    [Test]
     public void Encode_applies_a_smaller_ceiling_after_a_larger_one()
     {
         // Regression guard: the tokenizer library's convenience overload reuses an

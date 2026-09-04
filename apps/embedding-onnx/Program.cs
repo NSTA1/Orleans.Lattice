@@ -27,6 +27,12 @@ if (args.Contains("--healthcheck", StringComparer.Ordinal))
 
 var options = EmbedServerOptions.FromEnvironment(Environment.GetEnvironmentVariable);
 
+// Must run before the tokenizer is built. An ICU-less or invariant-globalization
+// runtime cannot strip accents, which would silently turn every word containing a
+// non-ASCII letter into a single [UNK] token and yield correctly shaped, entirely
+// wrong vectors. Fail loudly at startup rather than corrupt a corpus in silence.
+GlobalizationGuard.Verify();
+
 // Must run before any ONNX Runtime type is touched: the native load happens in
 // that assembly's static constructor, and a failed static constructor is cached
 // for the life of the process.

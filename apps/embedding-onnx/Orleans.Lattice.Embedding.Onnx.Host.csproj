@@ -11,10 +11,24 @@
          src/<pkg>+test/<pkg>+docs/<pkg> CI package-discovery globs, so it lives
          under apps/ and is explicitly non-packable. -->
     <IsPackable>false</IsPackable>
-    <!-- Tokenization is ordinal and the vocabulary is lower-cased with the
-         invariant culture, so no culture-sensitive collation is performed and
-         the ICU-less chiseled runtime image is safe (and smaller). -->
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- MUST stay false, and the runtime image MUST carry ICU.
+
+         This was previously true, on the reasoning that "tokenization is ordinal
+         so no culture-sensitive collation is performed". Collation is not the
+         issue. The reference WordPiece pipeline lower-cases AND strips accents,
+         and accent-stripping is Unicode NFD normalization, which invariant
+         globalization disables outright. With it on, every word containing a
+         non-ASCII letter collapses to a single [UNK] token:
+
+             invariant off:  "Bergstr{o-umlaut}m" -> 101,15214,15687,102  (== "Bergstrom")
+             invariant on :  "Bergstr{o-umlaut}m" -> 101,100,102          ([CLS] [UNK] [SEP])
+
+         The vectors that come back are still correctly shaped and correctly
+         normalized, and therefore pass every structural check while being
+         entirely wrong - and silently incompatible with vectors stored by the
+         reference embedder. GlobalizationGuard enforces this at startup so the
+         setting cannot be flipped back without an immediate, loud failure. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <!-- Which ONNX Runtime build to bind, selected at BUILD time because the CPU,
