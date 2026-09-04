@@ -62,8 +62,16 @@ public class WalSaturationObserverDispatcherTests
     public async Task PublishAsync_is_noop_when_no_observers_registered()
     {
         var dispatcher = new WalSaturationObserverDispatcher([], NullLogger<WalSaturationObserverDispatcher>.Instance);
-        // Should complete synchronously without throwing.
-        await dispatcher.PublishAsync(SampleTransition());
+
+        // "Should complete synchronously without throwing" is an
+        // assertable claim: the empty fan-out must short-circuit before
+        // the first await, so the returned ValueTask is already completed
+        // when it is handed back.
+        var publish = dispatcher.PublishAsync(SampleTransition());
+
+        Assert.That(publish.IsCompletedSuccessfully, Is.True,
+            "with no observers registered PublishAsync must complete synchronously and without faulting.");
+        await publish;
     }
 
     [Test]

@@ -23,6 +23,53 @@ public partial class ShardedReplogSinkTests
         return monitor;
     }
 
+    /// <summary>
+    /// Thread-safe tally of doorbell rings. The sink dispatches its rings
+    /// fire-and-forget from a ring loop, so assertions need a happens-after
+    /// signal they can poll rather than a fixed sleep that merely hopes the
+    /// loop got there first.
+    /// </summary>
+    private sealed class CallCounter
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Increment() => Interlocked.Increment(ref _count);
+    }
+
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds or the timeout
+    /// expires, returning whether it was ever observed to hold. Positive
+    /// assertions wait only as long as they must (with a ceiling generous
+    /// enough that a loaded CI agent cannot fail them); negative
+    /// assertions are expressed as "the earliest observable evidence never
+    /// appeared within a window far longer than the dispatch takes",
+    /// which is a stronger claim than a single fixed sleep.
+    /// </summary>
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 10000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(5);
+        }
+
+        return condition();
+    }
+
+    /// <summary>
+    /// Window a negative assertion waits before concluding that a
+    /// fire-and-forget dispatch never happened. An order of magnitude
+    /// more generous than the fixed sleeps it replaced.
+    /// </summary>
+    private const int NoDispatchWindowMs = 250;
+
     // ------------------------------------------------------------------
     // The commit-time sink is a nudge, not a WAL writer. The leaf
     // commit-log writer is the single WAL appender; the log-tailing
@@ -33,8 +80,14 @@ public partial class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_does_not_append_to_any_wal_shard_grain()
     {
+        var rings = new CallCounter();
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
+        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
         var sink = new ShardedReplogSink(
             factory,
@@ -43,7 +96,13 @@ public partial class ShardedReplogSinkTests
             NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
+
+        // The doorbell ring is the last thing the fire-and-forget path
+        // does, so observing it is a real happens-after barrier for the
+        // negative assertion below - a fixed sleep asserted against
+        // whatever the ring loop happened to have reached.
+        Assert.That(await WaitUntilAsync(() => rings.Count > 0), Is.True,
+            "the sink must complete its fire-and-forget doorbell dispatch");
 
         factory.DidNotReceive().GetGrain<IWalShardGrain>(Arg.Any<string>());
     }
@@ -88,19 +147,32 @@ public partial class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_rings_each_peer_doorbell_when_enabled()
     {
+        var ringsB = new CallCounter();
+        var ringsC = new CallCounter();
         var monitor = MonitorWithDoorbell();
         var topology = new FakeReplicationTopology(new[] { "site-b", "site-c" });
         var factory = Substitute.For<IGrainFactory>();
         var shipperB = Substitute.For<IReplicationShipperGrain>();
         var shipperC = Substitute.For<IReplicationShipperGrain>();
+        shipperB.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            ringsB.Increment();
+            return Task.CompletedTask;
+        });
+        shipperC.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            ringsC.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>("orders/site-b").Returns(shipperB);
         factory.GetGrain<IReplicationShipperGrain>("orders/site-c").Returns(shipperC);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        // Doorbell ring is fire-and-forget; let the continuations drain.
-        await Task.Yield();
-        await Task.Delay(20);
+        // Doorbell ring is fire-and-forget; wait for the continuations to
+        // drain rather than assuming a fixed delay was long enough.
+        Assert.That(await WaitUntilAsync(() => ringsB.Count > 0 && ringsC.Count > 0), Is.True,
+            "both peers must have their doorbell rung");
 
         await shipperB.Received(1).OnDoorbellAsync(Arg.Any<CancellationToken>());
         await shipperC.Received(1).OnDoorbellAsync(Arg.Any<CancellationToken>());
@@ -109,51 +181,78 @@ public partial class ShardedReplogSinkTests
     [Test]
     public async Task WriteAsync_skips_doorbell_when_disabled()
     {
+        var rings = new CallCounter();
         var monitor = MonitorWithDoorbell(doorbellEnabled: false);
         var topology = new FakeReplicationTopology(new[] { "site-b" });
         var factory = Substitute.For<IGrainFactory>();
         var shipperB = Substitute.For<IReplicationShipperGrain>();
+        shipperB.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipperB);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
 
+        Assert.That(
+            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            Is.False,
+            "no doorbell may be dispatched while the doorbell is disabled");
         await shipperB.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task WriteAsync_skips_doorbell_when_topology_peers_empty()
     {
+        var rings = new CallCounter();
         var monitor = MonitorWithDoorbell();
         var topology = new FakeReplicationTopology(peers: null);
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
+        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
 
+        Assert.That(
+            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            Is.False,
+            "a null peer set must dispatch no doorbell");
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
 
         // And again with an explicitly empty collection.
         var topology2 = new FakeReplicationTopology(Array.Empty<string>());
         var sink2 = new ShardedReplogSink(factory, monitor, topology2, NullLogger<ShardedReplogSink>.Instance);
         await sink2.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
+
+        Assert.That(
+            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            Is.False,
+            "an empty peer set must dispatch no doorbell");
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task WriteAsync_swallows_doorbell_failures()
     {
+        var rings = new CallCounter();
         var monitor = MonitorWithDoorbell();
         var topology = new FakeReplicationTopology(new[] { "site-b" });
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
         shipper.OnDoorbellAsync(Arg.Any<CancellationToken>())
-            .Returns<Task>(_ => Task.FromException(new InvalidOperationException("doorbell-failed")));
+            .Returns<Task>(_ =>
+            {
+                rings.Increment();
+                return Task.FromException(new InvalidOperationException("doorbell-failed"));
+            });
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
@@ -163,12 +262,18 @@ public partial class ShardedReplogSinkTests
         Assert.That(
             async () => await sink.WriteAsync("orders", CancellationToken.None),
             Throws.Nothing);
-        await Task.Delay(20);
+
+        // The swallow only means something once the failing ring has
+        // actually been dispatched - otherwise the test could pass with
+        // the fault path never entered at all.
+        Assert.That(await WaitUntilAsync(() => rings.Count > 0), Is.True,
+            "the failing doorbell ring must actually be dispatched, so the swallow path is exercised");
     }
 
     [Test]
     public async Task WriteAsync_skips_doorbell_for_null_or_empty_peer_entries()
     {
+        var rings = new CallCounter();
         var monitor = MonitorWithDoorbell();
         // FakeReplicationTopology's ctor filters out null/whitespace
         // peers, so to exercise the sink's own inner skip-empty-peer
@@ -177,12 +282,20 @@ public partial class ShardedReplogSinkTests
         topology.CurrentPeers.Returns(new[] { "", null!, "" });
         var factory = Substitute.For<IGrainFactory>();
         var shipper = Substitute.For<IReplicationShipperGrain>();
+        shipper.OnDoorbellAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            rings.Increment();
+            return Task.CompletedTask;
+        });
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
         var sink = new ShardedReplogSink(factory, monitor, topology, NullLogger<ShardedReplogSink>.Instance);
 
         await sink.WriteAsync("orders", CancellationToken.None);
-        await Task.Delay(20);
 
+        Assert.That(
+            await WaitUntilAsync(() => rings.Count > 0, NoDispatchWindowMs),
+            Is.False,
+            "malformed peer entries must be skipped rather than rung");
         await shipper.DidNotReceive().OnDoorbellAsync(Arg.Any<CancellationToken>());
     }
 }

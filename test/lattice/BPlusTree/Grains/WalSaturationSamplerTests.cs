@@ -588,9 +588,17 @@ public class WalSaturationSamplerTests
             out _);
 
         await sampler.StartAsync(CancellationToken.None);
-        // Give any (incorrectly-spawned) background loop a window to fire.
-        await Task.Delay(50);
 
+        // Give any (incorrectly-spawned) background loop a generous
+        // window to produce its earliest observable evidence - a
+        // classification landing on the signal - rather than sampling
+        // once after a fixed, arbitrary sleep.
+        var classified = await WaitUntilAsync(
+            () => signal.GetCurrentState(_treeId) != WalSaturationState.Healthy,
+            timeoutMs: 400);
+
+        Assert.That(classified, Is.False,
+            "disabled sampler must not classify any tree, regardless of underlying tracker depth");
         Assert.That(signal.GetCurrentState(_treeId), Is.EqualTo(WalSaturationState.Healthy),
             "disabled sampler must not classify any tree, regardless of underlying tracker depth");
 
@@ -601,32 +609,91 @@ public class WalSaturationSamplerTests
     public async Task StopAsync_is_safe_to_call_when_StartAsync_never_ran()
     {
         var sampler = CreateSampler(options: null, observers: null, out _, out _);
+
         // No StartAsync call - StopAsync must be a no-op rather than NRE on _loopCts.
-        await sampler.StopAsync(CancellationToken.None);
+        // "No-op" is assertable: with no loop to cancel or await there is
+        // nothing to suspend on, so the returned task is already completed.
+        var stop = sampler.StopAsync(CancellationToken.None);
+
+        Assert.That(stop.IsCompletedSuccessfully, Is.True,
+            "StopAsync must complete synchronously and without faulting when the loop was never started.");
+        await stop;
     }
 
     [Test]
     public async Task StartAsync_then_StopAsync_cleanly_terminates_the_loop()
     {
+        // Seed a saturated partition so every tick has an observable
+        // side effect (the classification landing on the signal); that
+        // gives the test real evidence to wait on instead of sleeping
+        // for a fixed window and hoping ticks happened.
+        SeedPartition(_treeId, partition: 0, depth: 16, cap: 16);
         var sampler = CreateSampler(
             options: new LatticeOptions { WalSaturationSampleInterval = TimeSpan.FromMilliseconds(20) },
             observers: null,
-            out _,
+            out var signal,
             out _);
 
         await sampler.StartAsync(CancellationToken.None);
-        await Task.Delay(60); // let several ticks happen
-        await sampler.StopAsync(CancellationToken.None);
-        // No assertion beyond "did not throw"; the contract under test
-        // is that StopAsync settles the background task without leaking
-        // a never-completing host-shutdown deadline.
+
+        Assert.That(
+            await WaitUntilAsync(() => signal.GetCurrentState(_treeId) == WalSaturationState.Saturated),
+            Is.True,
+            "the background loop must tick at least once after StartAsync, otherwise the shutdown path under test is never exercised");
+
+        // The contract under test is that StopAsync settles the
+        // background task without leaking a never-completing
+        // host-shutdown deadline - so the settle is bounded and
+        // asserted rather than left to hang the whole run.
+        var stop = sampler.StopAsync(CancellationToken.None);
+        var settled = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.That(settled, Is.SameAs(stop),
+            "StopAsync must settle the background loop rather than block on a never-completing shutdown deadline");
+        await stop;
+
+        // ...and the loop is genuinely gone: a tree that only becomes
+        // saturated after StopAsync returned must never be classified.
+        var afterStopTreeId = $"{_treeId}-after-stop";
+        SeedPartition(afterStopTreeId, partition: 1, depth: 16, cap: 16);
+        var classifiedAfterStop = await WaitUntilAsync(
+            () => signal.GetCurrentState(afterStopTreeId) != WalSaturationState.Healthy,
+            timeoutMs: 400);
+        Assert.That(classifiedAfterStop, Is.False,
+            "no further sampling ticks may run once StopAsync has returned");
     }
 
     [Test]
     public void Dispose_is_safe_when_loop_was_never_started()
     {
         var sampler = CreateSampler(options: null, observers: null, out _, out _);
-        sampler.Dispose();
+
+        Assert.That(() => sampler.Dispose(), Throws.Nothing,
+            "Dispose must tolerate a sampler whose loop CTS was never created.");
+        Assert.That(() => sampler.Dispose(), Throws.Nothing,
+            "Dispose must remain idempotent - the host may dispose a never-started sampler more than once.");
+    }
+
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds or the timeout
+    /// expires, returning whether it was ever observed to hold. Used in
+    /// place of a fixed sleep so a positive assertion waits only as long
+    /// as it must, and a negative assertion is expressed as "this
+    /// evidence never appeared within a generous window".
+    /// </summary>
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return condition();
     }
 
     // ---- Recovery-window classifier upgrades --------------------
