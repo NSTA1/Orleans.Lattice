@@ -180,10 +180,14 @@ internal static class BlobCacheEntryExpiration
             candidate = values.Absolute.Value;
         }
 
-        // Only rewrite when the window actually advances; a read that lands on
-        // the same tick (or a capped entry already at its absolute cap) must not
-        // churn blob metadata.
-        return values.Effective.HasValue && candidate <= values.Effective.Value ? null : candidate;
+        // Only rewrite when the entry has a stored expiry the slide would
+        // actually advance. A null effective instant means the entry never
+        // expires on its own (IsExpired agrees, and FromMetadata degrades a
+        // partial or corrupt blob to exactly this shape), so a read must never
+        // rewrite it to a finite expiry; and a read that lands on the same tick
+        // (or a capped entry already at its absolute cap) must not churn blob
+        // metadata either.
+        return values.Effective.HasValue && candidate > values.Effective.Value ? candidate : null;
     }
 
     private static string FormatTicks(long ticks) => ticks.ToString(CultureInfo.InvariantCulture);

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -521,30 +522,65 @@ internal sealed class SharedMetricsSampler(
             return string.Empty;
         }
 
-        var groupPart = string.Empty;
+        // Length-prefix every caller- and identity-provider-supplied field so the
+        // signature is injective: no subject id, group id, or claim key/value can
+        // contain a delimiter that shifts a field boundary or lets two distinct
+        // identities render the same string. Joining groups with a bare ',' would
+        // alias groups ["a,b"] with ["a","b"] (both "a,b"), and joining a claim as
+        // "key=value" would alias {"a=b":"c"} with {"a":"b=c"} (both "a=b=c"),
+        // wrongly coalescing distinct subjects onto one sampling loop and breaking
+        // the identical-signature-implies-identical-read-access guarantee (#971).
+        // This mirrors the length-prefix framing GrainIndexFingerprint.FeedString
+        // and AggregationLatticeViewProjection apply to the same aliasing class.
+        var builder = new StringBuilder();
+        AppendLengthPrefixed(builder, resolved.SubjectId);
+
+        builder.Append("|g=");
         if (resolved.GroupIds.Count > 0)
         {
             var groups = resolved.GroupIds.ToArray();
             Array.Sort(groups, StringComparer.Ordinal);
-            groupPart = string.Join(',', groups);
+            foreach (var group in groups)
+            {
+                AppendLengthPrefixed(builder, group);
+            }
         }
 
-        var claimPart = string.Empty;
+        builder.Append("|c=");
         if (resolved.Claims is { Count: > 0 } claims)
         {
-            var pairs = new string[claims.Count];
+            var pairs = new KeyValuePair<string, string>[claims.Count];
             var i = 0;
             foreach (var claim in claims)
             {
-                pairs[i++] = string.Concat(claim.Key, "=", claim.Value);
+                pairs[i++] = claim;
             }
 
-            Array.Sort(pairs, StringComparer.Ordinal);
-            claimPart = string.Join(',', pairs);
+            Array.Sort(pairs, static (left, right) =>
+            {
+                var keyOrder = string.CompareOrdinal(left.Key, right.Key);
+                return keyOrder != 0 ? keyOrder : string.CompareOrdinal(left.Value, right.Value);
+            });
+
+            foreach (var pair in pairs)
+            {
+                AppendLengthPrefixed(builder, pair.Key);
+                AppendLengthPrefixed(builder, pair.Value);
+            }
         }
 
-        return string.Concat(resolved.SubjectId, "|g=", groupPart, "|c=", claimPart);
+        return builder.ToString();
     }
+
+    /// <summary>
+    /// Appends <paramref name="value"/> to <paramref name="builder"/> as its
+    /// length in UTF-16 code units, a <c>:</c> separator, then the value itself,
+    /// so a concatenation of such segments is injective: the length frames each
+    /// field exactly, and no delimiter a value happens to contain can shift a
+    /// field boundary or alias two distinct field sequences to the same string.
+    /// </summary>
+    private static void AppendLengthPrefixed(StringBuilder builder, string value)
+        => builder.Append(value.Length).Append(':').Append(value);
 
     private static async Task DelayAsync(TimeSpan interval, CancellationToken cancellationToken)
     {

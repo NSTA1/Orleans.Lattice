@@ -24,7 +24,7 @@ public sealed partial class LatticeStateApiEdgeCaseTests
     {
         var rendered = InvokeSamplerStatic<string>("BuildIdentityComponent", new LatticeSubject("alice"));
 
-        Assert.That(rendered, Is.EqualTo("alice|g=|c="));
+        Assert.That(rendered, Is.EqualTo("5:alice|g=|c="));
     }
 
     [Test]
@@ -41,7 +41,7 @@ public sealed partial class LatticeStateApiEdgeCaseTests
 
         var rendered = InvokeSamplerStatic<string>("BuildIdentityComponent", subject);
 
-        Assert.That(rendered, Is.EqualTo("alice|g=team-a,team-z|c=region=west,role=reader"));
+        Assert.That(rendered, Is.EqualTo("5:alice|g=6:team-a6:team-z|c=6:region4:west4:role6:reader"));
     }
 
     [Test]

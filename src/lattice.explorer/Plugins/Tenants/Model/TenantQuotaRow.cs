@@ -93,7 +93,7 @@ public readonly record struct TenantQuotaRow
     /// <see cref="ShowsBar"/>; <c>0</c> otherwise.
     /// </summary>
     public int BarPercent => Utilization is { } fraction
-        ? (int)Math.Clamp(Math.Round(fraction * 100d), 0d, 100d)
+        ? (int)Math.Clamp(Math.Round(fraction * 100d, MidpointRounding.AwayFromZero), 0d, 100d)
         : 0;
 
     /// <summary>
