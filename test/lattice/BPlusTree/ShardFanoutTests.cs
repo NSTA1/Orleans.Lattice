@@ -124,6 +124,133 @@ public class ShardFanoutTests
         Assert.That(ShardFanout.TryGetDenseLength([-1, 0, 2], out _), Is.False);
     }
 
+    // --- The hashed (sparse) fallback path ---
+    //
+    // The dense array is only safe when the physical index domain is small and
+    // non-negative. When it is not, BucketKeys/BucketEntries must fall back to the
+    // hashed Dictionary they replaced and still produce byte-identical grouping,
+    // ordering, and enumeration - otherwise a pathological map would silently
+    // mis-route a batch instead of merely running slower.
+
+    [Test]
+    public void BucketKeys_falls_back_to_hashed_bucketing_for_a_negative_index_domain()
+    {
+        var map = ShardMap.CreateDefault(4096, 8);
+        var keys = SampleKeys(500);
+
+        // A negative entry forces TryGetDenseLength to refuse, so the hashed
+        // fallback runs while the map itself still resolves normally.
+        var expected = BucketKeysHashed(keys, map, bucketCapacity: 4);
+        var actual = ShardFanout.BucketKeys(keys, map, [-1, .. map.GetPhysicalShardIndices()], bucketCapacity: 4);
+
+        AssertSameGrouping(expected, actual);
+        Assert.That(actual.Count, Is.GreaterThan(1),
+            "The fixture must actually spread over several shards, or the fallback proves nothing.");
+    }
+
+    [Test]
+    public void BucketKeys_falls_back_to_hashed_bucketing_for_a_pathologically_large_index_domain()
+    {
+        var map = ShardMap.CreateDefault(4096, 4);
+        var keys = SampleKeys(300);
+
+        var expected = BucketKeysHashed(keys, map, bucketCapacity: 4);
+        var actual = ShardFanout.BucketKeys(
+            keys, map, [.. map.GetPhysicalShardIndices(), ShardFanout.DenseOwnerLimit], bucketCapacity: 4);
+
+        AssertSameGrouping(expected, actual);
+    }
+
+    [Test]
+    public void BucketEntries_falls_back_to_hashed_bucketing_for_an_unsuitable_index_domain()
+    {
+        var map = ShardMap.CreateDefault(4096, 8);
+        var entries = SampleKeys(400)
+            .Select(k => new KeyValuePair<string, byte[]>(k, [1, 2, 3]))
+            .ToArray();
+
+        var expected = BucketEntriesHashed(entries, map, bucketCapacity: 4);
+        var actual = ShardFanout.BucketEntries(
+            entries, map, [-1, .. map.GetPhysicalShardIndices()], bucketCapacity: 4);
+
+        Assert.That(actual.Count, Is.EqualTo(expected.Count));
+        var seen = new HashSet<int>();
+        foreach (var (shardIndex, bucket) in actual)
+        {
+            Assert.That(seen.Add(shardIndex), Is.True, $"shard {shardIndex} enumerated twice");
+            Assert.That(expected.ContainsKey(shardIndex), Is.True, $"unexpected shard {shardIndex}");
+
+            // Order within a bucket matters: the batch paths stitch per-shard
+            // results back by position.
+            Assert.That(bucket.Select(e => e.Key).ToArray(),
+                Is.EqualTo(expected[shardIndex].Select(e => e.Key).ToArray()));
+            Assert.That(bucket.Select(e => e.Value).ToArray(),
+                Is.EqualTo(expected[shardIndex].Select(e => e.Value).ToArray()));
+        }
+
+        Assert.That(seen, Is.EquivalentTo(expected.Keys));
+    }
+
+    [Test]
+    public void The_hashed_fallback_enumerates_every_bucket_exactly_once_and_then_stops()
+    {
+        // Pins the sparse enumerator itself: it must surface each (shardIndex,
+        // bucket) pair once, and MoveNext must stay false once drained rather
+        // than restarting or throwing.
+        var map = ShardMap.CreateDefault(4096, 3);
+        var keys = SampleKeys(60);
+        var buckets = ShardFanout.BucketKeys(keys, map, [-1, 0, 1, 2], bucketCapacity: 4);
+
+        var enumerator = buckets.GetEnumerator();
+        var observed = new List<int>();
+        var total = 0;
+        while (enumerator.MoveNext())
+        {
+            observed.Add(enumerator.Current.ShardIndex);
+            total += enumerator.Current.Bucket.Count;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observed, Is.Unique);
+            Assert.That(observed, Has.Count.EqualTo(buckets.Count));
+            Assert.That(total, Is.EqualTo(keys.Length),
+                "Every key must land in exactly one bucket on the fallback path too.");
+            Assert.That(enumerator.MoveNext(), Is.False,
+                "A drained sparse enumerator must stay drained.");
+        });
+    }
+
+    [Test]
+    public void The_hashed_fallback_over_an_empty_batch_yields_no_buckets()
+    {
+        var map = ShardMap.CreateDefault(4096, 8);
+        var buckets = ShardFanout.BucketKeys([], map, [-1, 0, 1], bucketCapacity: 4);
+
+        Assert.That(buckets.Count, Is.Zero);
+
+        var enumerated = 0;
+        foreach (var _ in buckets)
+            enumerated++;
+
+        Assert.That(enumerated, Is.Zero);
+    }
+
+    [Test]
+    public void The_hashed_fallback_over_an_empty_entry_batch_yields_no_buckets()
+    {
+        var map = ShardMap.CreateDefault(4096, 8);
+        var buckets = ShardFanout.BucketEntries([], map, [-1, 0, 1], bucketCapacity: 4);
+
+        Assert.That(buckets.Count, Is.Zero);
+
+        var enumerated = 0;
+        foreach (var _ in buckets)
+            enumerated++;
+
+        Assert.That(enumerated, Is.Zero);
+    }
+
     [Test]
     public void TryGetDenseLength_refuses_a_pathologically_large_index()
     {
