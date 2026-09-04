@@ -1715,6 +1715,49 @@ public class LatticeOptions
     public const int DefaultWalMaterialiserPinShards = 8;
 
     /// <summary>
+    /// Number of independently-persisted durable state slots ("buckets") each
+    /// leaf-materialiser pin shard splits its pin map across.
+    /// <para>
+    /// Orleans persists grain state as one whole blob, so a shard holding
+    /// <c>N</c> consumers rewrites all <c>N</c> pins to advance any single one.
+    /// On a large tree that is megabytes per write and is the write
+    /// amplification behind issue #2012: the write outruns the coalescing
+    /// window, the shard's non-reentrancy queue grows without bound, callers
+    /// time out, and the durable retention floor stops advancing so the WAL
+    /// cannot be trimmed. Splitting the map across buckets makes a write
+    /// <c>O(N / buckets)</c> instead of <c>O(N)</c>, because only the bucket
+    /// holding the advancing consumer is rewritten.
+    /// </para>
+    /// <para>
+    /// This is the write dimension, and it is deliberately orthogonal to
+    /// <see cref="WalMaterialiserPinShards"/>, which is the <i>read</i>
+    /// dimension: raising the shard count also shrinks each blob, but it widens
+    /// the WAL GC's per-pass grain fan-in by the same factor, because the GC
+    /// must read every shard to reconstruct the floor. Buckets shrink the blob
+    /// without touching that fan-in - one activation still answers for the whole
+    /// shard, unioning its buckets in memory - so the two can be tuned
+    /// independently.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultWalMaterialiserPinBuckets"/> (1), which
+    /// persists to byte-for-byte the same single
+    /// <c>wal-materialiser-pins</c> slot as every build before bucketing
+    /// existed, so an existing deployment is completely unaffected until an
+    /// operator opts in. Raising the count is self-healing and needs no
+    /// migration step: an activation reads the legacy slot alongside its
+    /// buckets and merges it, so pins written under the previous layout keep
+    /// counting toward the trim floor and are re-persisted into their bucket on
+    /// the next advance. Lowering it again is equally safe for the same reason.
+    /// Size it so <c>expected leaves per tree / (shards * buckets)</c> lands in
+    /// the low hundreds.
+    /// </para>
+    /// </summary>
+    public int WalMaterialiserPinBuckets { get; set; } = DefaultWalMaterialiserPinBuckets;
+
+    /// <summary>Default value for <see cref="WalMaterialiserPinBuckets"/> (1, the pre-bucketing layout).</summary>
+    public const int DefaultWalMaterialiserPinBuckets = 1;
+
+    /// <summary>
     /// Coalescing window, in milliseconds, for durable writes to the
     /// leaf-materialiser pin store. A non-birth pin report (the per-checkpoint
     /// frontier mirror) advances the in-memory pin immediately and schedules a
@@ -2856,6 +2899,61 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalSaturationMaterialiserLagSampleWindows"/> (3).</summary>
     public const int DefaultWalSaturationMaterialiserLagSampleWindows = 3;
+
+    /// <summary>
+    /// WAL saturation input that escalates a tree to
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/> when writes to
+    /// its <b>durable</b> leaf-materialiser pin store take longer than this, or
+    /// fault outright.
+    /// <para>
+    /// This is the only materialiser input measured against durable storage.
+    /// Every other one - including
+    /// <see cref="WalSaturationMaterialiserLagThreshold"/> - is derived from the
+    /// process-local in-memory cursor registry, which keeps advancing at full
+    /// fidelity even while the durable pin store has stopped accepting writes.
+    /// That gap is issue #2015, and it is why the signal read Healthy
+    /// throughout issue #2012: the retention floor had stalled, the WAL was
+    /// growing without bound, and nothing in the classifier was looking at the
+    /// store that had stalled. The measurement is taken caller-side, in the
+    /// reporting silo, because a pin activation lives on one silo while the
+    /// leaves reporting into it are spread across the cluster.
+    /// </para>
+    /// <para>
+    /// Like the drain-lag input this drives Throttled and never Saturated. A pin
+    /// store falling behind is a retention-floor maintenance problem: the
+    /// correct response is to slow producers so the store can catch up, not to
+    /// engage the writer admission gate's
+    /// <c>LatticeSaturatedException</c> fast-fail, which would convert a
+    /// background durability lag into user-visible write failures and make an
+    /// incident of the #2012 shape strictly worse.
+    /// </para>
+    /// <para>
+    /// Defaults to <c>null</c> (the input is disabled and no trips are
+    /// recorded), matching
+    /// <see cref="WalSaturationFlushLatencyThreshold"/>, so enabling it is an
+    /// explicit operator decision on an existing deployment. The registered
+    /// options validator rejects a non-positive value when the option is set.
+    /// </para>
+    /// </summary>
+    public TimeSpan? WalSaturationMaterialiserPinLatencyThreshold { get; set; }
+
+    /// <summary>
+    /// Number of consecutive saturation-sampler windows in which a tree must
+    /// record at least one durable pin write over
+    /// <see cref="WalSaturationMaterialiserPinLatencyThreshold"/> before the
+    /// classifier holds it at
+    /// <see cref="Orleans.Lattice.WalSaturationState.Throttled"/>. Defaults to
+    /// <see cref="DefaultWalSaturationMaterialiserPinLatencySampleWindows"/>
+    /// (3), mirroring the flush-latency and drain-lag inputs so a single slow
+    /// write cannot flip the regime. Has no effect when
+    /// <see cref="WalSaturationMaterialiserPinLatencyThreshold"/> is
+    /// <c>null</c>. Must be greater than or equal to 1.
+    /// </summary>
+    public int WalSaturationMaterialiserPinLatencySampleWindows { get; set; } =
+        DefaultWalSaturationMaterialiserPinLatencySampleWindows;
+
+    /// <summary>Default value for <see cref="WalSaturationMaterialiserPinLatencySampleWindows"/> (3).</summary>
+    public const int DefaultWalSaturationMaterialiserPinLatencySampleWindows = 3;
 
     /// <summary>
     /// Wall-clock budget the WAL writer admission gate

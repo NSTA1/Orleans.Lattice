@@ -115,6 +115,38 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     private readonly Dictionary<string, int> _consecutiveMaterialiserDrainLagWindows
         = new(StringComparer.Ordinal);
 
+    // Per-(tree, shard) prior reading of the cumulative durable pin-write
+    // latency-trip counter maintained caller-side by
+    // WalMaterialiserPinPressure. Same per-tick delta-from-prior pattern as the
+    // dispatch-timeout / provider-failure / flush-latency counters above, with
+    // the same first-tick baseline skip.
+    //
+    // This is the sampler's ONLY input that observes the DURABLE WAL retention
+    // floor. Every other input, drain lag included, reads in-memory progress:
+    // the drain-lag input measures the gap between the WAL head and the
+    // in-memory cursor registry, which keeps advancing perfectly well while the
+    // durable pin store is stalled. The floor the WAL GC actually trims against
+    // is the durable one, so a stalled pin store is invisible to every other
+    // input and the signal reads Healthy while the WAL grows without bound.
+    // That is issue #2015, and this counter is what closes it.
+    private readonly ConcurrentDictionary<(string TreeId, int Shard), long> _priorPinLatencyTripCounts
+        = new();
+
+    // Per-tree consecutive-window counter for the durable pin-latency
+    // classifier input, mirroring _consecutiveFlushLatencyWindows. Reaching
+    // LatticeOptions.WalSaturationMaterialiserPinLatencySampleWindows holds the
+    // tree at Throttled.
+    //
+    // Throttled, deliberately, and NOT Saturated: a stalled pin store is a
+    // retention-floor maintenance problem, not an acute inability to accept
+    // writes. Escalating it to Saturated would engage the writer admission
+    // gate's LatticeSaturatedException fast-fail and convert slow WAL trimming
+    // into user-visible write failures - which, in the incident that motivated
+    // this input, would have made the outage strictly worse. Slowing producers
+    // is the correct response: it gives the pin store room to drain.
+    private readonly Dictionary<string, int> _consecutiveMaterialiserPinLatencyWindows
+        = new(StringComparer.Ordinal);
+
     // Reusable per-tick accumulator map and a small free-list of accumulator
     // objects. The sampler is single-threaded (each tick awaits the previous
     // tick's fan-out before the next is scheduled), so the map and the pooled
@@ -396,6 +428,39 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             acc.AttributedShard ??= shard;
         }
 
+        // Snapshot the per-(tree, shard) cumulative durable pin-write
+        // latency-trip counts. Mirrors the flush-latency loop above exactly.
+        // The increment site (LeafCursorReporter, caller-side, via
+        // WalMaterialiserPinPressure) is gated on
+        // LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold being
+        // non-null, so when the input is disabled the map stays empty and this
+        // loop is a no-op.
+        //
+        // The counter is incremented by the CALLER rather than by the pin grain
+        // because the sampler reads process-wide statics: the pin activation for
+        // a shard lives on exactly one silo, so a grain-side increment would be
+        // invisible to every sampler but that silo's. Reporting leaves are
+        // cluster-wide, so measuring the write from the caller's side puts the
+        // reading in every process that could act on it.
+        foreach (var kv in WalMaterialiserPinPressure._latencyTrips)
+        {
+            var (treeId, shard) = kv.Key;
+            var current = kv.Value;
+            var prior = _priorPinLatencyTripCounts.TryGetValue(kv.Key, out var pp) ? pp : 0L;
+            _priorPinLatencyTripCounts[kv.Key] = current;
+            if (!_priorInitialised) continue;
+
+            var delta = current - prior;
+            if (delta <= 0) continue;
+
+            if (!perTree.TryGetValue(treeId, out var acc))
+            {
+                acc = RentAccumulator(treeId);
+            }
+            acc.MaterialiserPinLatencyTripDeltaInWindow += delta;
+            acc.AttributedShard ??= shard;
+        }
+
         _priorInitialised = true;
 
         var opts = _options.Get(string.Empty);
@@ -408,6 +473,8 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         var drainLagEnabled = opts.WalSaturationMaterialiserLagThreshold is not null;
         var drainLagSampleWindows = opts.WalSaturationMaterialiserLagSampleWindows;
         var drainLagThreshold = opts.WalSaturationMaterialiserLagThreshold;
+        var pinLatencyEnabled = opts.WalSaturationMaterialiserPinLatencyThreshold is not null;
+        var pinLatencySampleWindows = opts.WalSaturationMaterialiserPinLatencySampleWindows;
         var observedAt = _time.GetUtcNow();
 
         // Drain-lag is computed live every tick from two in-memory sources, so
@@ -520,6 +587,28 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             }
         }
 
+        // Same stale-reset sweep for the durable pin-latency consecutive-window
+        // counter.
+        if (pinLatencyEnabled && _consecutiveMaterialiserPinLatencyWindows.Count > 0)
+        {
+            var staleKeys = default(List<string>);
+            foreach (var treeId in _consecutiveMaterialiserPinLatencyWindows.Keys)
+            {
+                if (!perTree.TryGetValue(treeId, out var acc) || acc.MaterialiserPinLatencyTripDeltaInWindow == 0)
+                {
+                    staleKeys ??= new List<string>();
+                    staleKeys.Add(treeId);
+                }
+            }
+            if (staleKeys is not null)
+            {
+                foreach (var treeId in staleKeys)
+                {
+                    _consecutiveMaterialiserPinLatencyWindows[treeId] = 0;
+                }
+            }
+        }
+
         if (perTree.Count == 0) return;
 
         foreach (var acc in perTree.Values)
@@ -557,6 +646,18 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 ? dw
                 : 0;
 
+            // Maintain the per-tree durable pin-latency consecutive-window
+            // counter, mirroring the flush-latency counter above.
+            if (pinLatencyEnabled && acc.MaterialiserPinLatencyTripDeltaInWindow > 0)
+            {
+                var prior = _consecutiveMaterialiserPinLatencyWindows.TryGetValue(acc.TreeId, out var pl) ? pl : 0;
+                _consecutiveMaterialiserPinLatencyWindows[acc.TreeId] = prior + 1;
+            }
+            var pinLatencyConsecutiveWindows = pinLatencyEnabled
+                && _consecutiveMaterialiserPinLatencyWindows.TryGetValue(acc.TreeId, out var pw)
+                ? pw
+                : 0;
+
             var newState = Classify(
                 acc,
                 throttledRatio,
@@ -565,7 +666,22 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 flushLatencyConsecutiveWindows,
                 flushLatencyEnabled ? flushLatencySampleWindows : 0,
                 drainLagConsecutiveWindows,
-                drainLagEnabled ? drainLagSampleWindows : 0);
+                drainLagEnabled ? drainLagSampleWindows : 0,
+                pinLatencyConsecutiveWindows,
+                pinLatencyEnabled ? pinLatencySampleWindows : 0);
+
+            var cause = AttributeCause(
+                acc,
+                newState,
+                throttledRatio,
+                dispatchThreshold,
+                providerFailureThreshold,
+                flushLatencyConsecutiveWindows,
+                flushLatencyEnabled ? flushLatencySampleWindows : 0,
+                drainLagConsecutiveWindows,
+                drainLagEnabled ? drainLagSampleWindows : 0,
+                pinLatencyConsecutiveWindows,
+                pinLatencyEnabled ? pinLatencySampleWindows : 0);
 
             // Apply the recovery-window upgrade. When the current-
             // tick classification is Healthy but the tree was observed
@@ -622,12 +738,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             // match the WalSaturationSignal gauge's spelling.
             var newStateTag = WalSaturationSignal.StateTagValue(newState);
             var previousStateTag = WalSaturationSignal.StateTagValue(previousState);
-            var tags = new List<KeyValuePair<string, object?>>(capacity: 6)
+            var tags = new List<KeyValuePair<string, object?>>(capacity: 7)
             {
                 new(LatticeMetrics.TagTree, acc.TreeId),
                 LatticeTenantLabel.ForTree(acc.TreeId),
                 new(LatticeMetrics.TagWalSaturationState, newStateTag),
                 new(LatticeMetrics.TagWalSaturationPreviousState, previousStateTag),
+                new(LatticeMetrics.TagWalSaturationCause, CauseTagValue(cause)),
             };
             if (acc.AttributedPartition is int p)
             {
@@ -649,6 +766,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     AttributedPartition = acc.AttributedPartition,
                     AttributedShard = acc.AttributedShard,
                     ObservedAt = observedAt,
+                    Cause = cause,
                 };
                 await _dispatcher.PublishAsync(change, cancellationToken).ConfigureAwait(false);
             }
@@ -683,6 +801,21 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/> is
     /// <c>null</c>).
     /// </para>
+    /// <para>
+    /// The durable pin-latency input is likewise NOT a Saturated trigger, for a
+    /// sharper version of the same reason. A stalled materialiser-pin store
+    /// stops the WAL retention floor advancing, so the WAL grows - but the
+    /// system is still perfectly able to accept writes. Escalating to Saturated
+    /// would engage the admission gate's <c>LatticeSaturatedException</c>
+    /// fast-fail and convert a retention-floor maintenance problem into
+    /// user-visible write failures, making the very incident it detects worse.
+    /// It therefore drives <see cref="WalSaturationState.Throttled"/>, which
+    /// slows producers and gives the pin store room to drain. The trigger is
+    /// disabled when <paramref name="pinLatencySampleWindows"/> is zero (the
+    /// internal sentinel used when
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>
+    /// is <c>null</c>).
+    /// </para>
     /// </summary>
     private static WalSaturationState Classify(
         TreeAccumulator acc,
@@ -692,7 +825,9 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         int flushLatencyConsecutiveWindows,
         int flushLatencySampleWindows,
         int drainLagConsecutiveWindows,
-        int drainLagSampleWindows)
+        int drainLagSampleWindows,
+        int pinLatencyConsecutiveWindows,
+        int pinLatencySampleWindows)
     {
         // Saturated wins: dispatch-timeout threshold crossed OR
         // provider-failure threshold crossed (when enabled) OR
@@ -706,15 +841,90 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             return WalSaturationState.Saturated;
         }
         // Throttled: depth ratio at-or-above the throttled threshold OR a
-        // sustained drain-lag consecutive-window run (when enabled). Drain lag
-        // is a back-off, not a fault, so it stops here rather than escalating.
+        // sustained drain-lag consecutive-window run OR a sustained durable
+        // pin-latency run (each when enabled). All three are back-off signals,
+        // not faults, so they stop here rather than escalating.
         if (acc.MaxDepthRatio >= throttledRatio
-            || (drainLagSampleWindows > 0 && drainLagConsecutiveWindows >= drainLagSampleWindows))
+            || (drainLagSampleWindows > 0 && drainLagConsecutiveWindows >= drainLagSampleWindows)
+            || (pinLatencySampleWindows > 0 && pinLatencyConsecutiveWindows >= pinLatencySampleWindows))
         {
             return WalSaturationState.Throttled;
         }
         return WalSaturationState.Healthy;
     }
+
+    /// <summary>
+    /// Names the single input a classification is attributed to, evaluated in
+    /// the same order <see cref="Classify"/> tests them so the attribution can
+    /// never disagree with the state it accompanies. Returns
+    /// <see cref="WalSaturationCause.None"/> for
+    /// <see cref="WalSaturationState.Healthy"/>, and for a
+    /// <see cref="WalSaturationState.Throttled"/> reached only by the
+    /// recovery-window upgrade (which has no fresh input behind it).
+    /// </summary>
+    private static WalSaturationCause AttributeCause(
+        TreeAccumulator acc,
+        WalSaturationState state,
+        double throttledRatio,
+        int dispatchThreshold,
+        int providerFailureThreshold,
+        int flushLatencyConsecutiveWindows,
+        int flushLatencySampleWindows,
+        int drainLagConsecutiveWindows,
+        int drainLagSampleWindows,
+        int pinLatencyConsecutiveWindows,
+        int pinLatencySampleWindows)
+    {
+        if (state == WalSaturationState.Saturated)
+        {
+            if (acc.DispatchTimeoutDeltaInWindow >= dispatchThreshold)
+            {
+                return WalSaturationCause.DispatchTimeouts;
+            }
+            if (providerFailureThreshold > 0 && acc.ProviderFailureDeltaInWindow >= providerFailureThreshold)
+            {
+                return WalSaturationCause.ProviderFailures;
+            }
+            if (flushLatencySampleWindows > 0 && flushLatencyConsecutiveWindows >= flushLatencySampleWindows)
+            {
+                return WalSaturationCause.FlushLatency;
+            }
+            return WalSaturationCause.AdmissionDepth;
+        }
+
+        if (state == WalSaturationState.Throttled)
+        {
+            if (acc.MaxDepthRatio >= throttledRatio)
+            {
+                return WalSaturationCause.AdmissionDepth;
+            }
+            if (drainLagSampleWindows > 0 && drainLagConsecutiveWindows >= drainLagSampleWindows)
+            {
+                return WalSaturationCause.MaterialiserDrainLag;
+            }
+            if (pinLatencySampleWindows > 0 && pinLatencyConsecutiveWindows >= pinLatencySampleWindows)
+            {
+                return WalSaturationCause.MaterialiserPinLatency;
+            }
+        }
+
+        return WalSaturationCause.None;
+    }
+
+    /// <summary>
+    /// Lowercased metric-tag spelling of a cause, matching the convention
+    /// <see cref="WalSaturationSignal.StateTagValue"/> uses for states.
+    /// </summary>
+    internal static string CauseTagValue(WalSaturationCause cause) => cause switch
+    {
+        WalSaturationCause.DispatchTimeouts => "dispatch_timeouts",
+        WalSaturationCause.ProviderFailures => "provider_failures",
+        WalSaturationCause.FlushLatency => "flush_latency",
+        WalSaturationCause.AdmissionDepth => "admission_depth",
+        WalSaturationCause.MaterialiserDrainLag => "materialiser_drain_lag",
+        WalSaturationCause.MaterialiserPinLatency => "materialiser_pin_latency",
+        _ => "none",
+    };
 
     private sealed class TreeAccumulator
     {
@@ -725,6 +935,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         public long ProviderFailureDeltaInWindow;
         public long FlushLatencyTripDeltaInWindow;
         public bool MaterialiserDrainLagOverThreshold;
+        public long MaterialiserPinLatencyTripDeltaInWindow;
         public int? AttributedPartition;
         public int? AttributedShard;
 
@@ -740,6 +951,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             ProviderFailureDeltaInWindow = 0;
             FlushLatencyTripDeltaInWindow = 0;
             MaterialiserDrainLagOverThreshold = false;
+            MaterialiserPinLatencyTripDeltaInWindow = 0;
             AttributedPartition = null;
             AttributedShard = null;
         }

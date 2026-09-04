@@ -1045,6 +1045,46 @@ public static class LatticeMetrics
             description: "Durable writes to the leaf-materialiser pin store, tagged by birth/coalesced outcome.");
 
     /// <summary>
+    /// Histogram of <b>caller-observed</b> durable leaf-materialiser pin write
+    /// duration, in milliseconds, recorded by <c>LeafCursorReporter</c> around
+    /// each pin grain call whose duration reached
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>
+    /// (or which faulted). Tagged with <see cref="TagTree"/>.
+    /// <para>
+    /// This is the durable-storage counterpart to
+    /// <see cref="MaterialiserDrainLag"/>, which is derived from the in-memory
+    /// cursor registry and therefore cannot observe a stalled pin store (issue
+    /// #2015). Measured at the call site so it includes the time a report spent
+    /// queued ahead of the shard's non-reentrant activation - what the reporting
+    /// leaf actually experiences. Only emitted when the input is enabled; the
+    /// option defaults to <c>null</c>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> MaterialiserPinDurableWriteLatency =
+        Meter.CreateHistogram<double>("orleans.lattice.materialiser.pin.durable_write_latency", unit: "ms",
+            description: "Caller-observed durable leaf-materialiser pin write duration, tagged by tree.");
+
+    /// <summary>
+    /// Counter of coalescible leaf-materialiser pin reports shed by
+    /// <c>LeafCursorReporter</c> because the target shard's most recent durable
+    /// write demonstrated the store is not keeping up. Tagged with
+    /// <see cref="TagTree"/>.
+    /// <para>
+    /// Shedding is always safe - a shed report leaves the durable pin staler,
+    /// which only ever retains more WAL - and it is the caller-side half of the
+    /// issue #2012 fix: declining to enqueue removes queueing delay that a
+    /// grain-side refusal could not, because a refusal still has to reach the
+    /// front of the non-reentrancy queue before it can be issued. A sustained
+    /// non-zero rate means the pin store is the bottleneck; pair it with
+    /// <see cref="MaterialiserPinDurableWriteLatency"/> and consider raising
+    /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> MaterialiserPinReportsShed =
+        Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.reports_shed", unit: "{report}",
+            description: "Coalescible leaf-materialiser pin reports shed under durable pin-store pressure, tagged by tree.");
+
+    /// <summary>
     /// Histogram of leaf-materialiser drain lag, in milliseconds, sampled by the
     /// per-tree WAL GC pass as <c>now - slowest durable materialiser checkpoint</c>.
     /// A rising drain lag is the back-pressure signal (issue #1030): when it
@@ -2308,6 +2348,15 @@ public static class LatticeMetrics
     /// saturation episode).
     /// </summary>
     public const string TagWalSaturationPreviousState = "previous_state";
+
+    /// <summary>
+    /// Tag naming which sampler input a WAL saturation transition was
+    /// attributed to (the lowercased <see cref="WalSaturationCause"/>). Several
+    /// inputs map to the same state, so the state tag alone does not identify
+    /// the subsystem under pressure. Carried on
+    /// <see cref="WalSaturationTransitions"/>.
+    /// </summary>
+    public const string TagWalSaturationCause = "cause";
 
     /// <summary>
     /// Counter incremented once per per-tree WAL saturation-state

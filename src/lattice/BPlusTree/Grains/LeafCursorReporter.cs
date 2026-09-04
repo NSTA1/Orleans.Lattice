@@ -439,6 +439,28 @@ internal sealed class LeafCursorReporter(
     /// </summary>
     private async Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket, bool writeThrough)
     {
+        // Caller-side shed (issue #2014). A coalescible retention flush routed to
+        // a shard whose last durable write demonstrated it is not keeping up is
+        // dropped rather than enqueued: it could not have been serviced any
+        // sooner for having been enqueued, and enqueuing it lengthens the
+        // non-reentrancy queue every other reporting leaf is already waiting
+        // behind. Safe by the same argument the whole debounce rests on - a
+        // skipped report leaves the durable pin staler, which retains more WAL -
+        // and never applied to the write-through birth block-pin seed, which is
+        // a correctness barrier.
+        if (!writeThrough && WalMaterialiserPinPressure.ShouldShed(grainKey))
+        {
+            LatticeMetrics.MaterialiserPinReportsShed.Add(
+                bucket.Count,
+                new KeyValuePair<string, object?>(
+                    LatticeMetrics.TagTree,
+                    WalMaterialiserPinRouting.TreeNameFromKey(grainKey)));
+            return;
+        }
+
+        var latencyThresholdMs = ResolvePinLatencyThresholdMs();
+        var startedTickMs = Environment.TickCount64;
+        var faulted = false;
         try
         {
             var pin = grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey);
@@ -461,7 +483,35 @@ internal sealed class LeafCursorReporter(
             // swallowing-and-logging it for re-flush on the next checkpoint.
             await DirectStorePinAsync(grainKey, bucket).ConfigureAwait(false);
         }
+        catch
+        {
+            // Measure the fault as pressure before letting it propagate: a pin
+            // write that throws is at least as strong a signal that the durable
+            // store is unhealthy as one that merely runs long.
+            faulted = true;
+            throw;
+        }
+        finally
+        {
+            WalMaterialiserPinPressure.RecordWrite(
+                grainKey,
+                Environment.TickCount64 - startedTickMs,
+                faulted,
+                latencyThresholdMs);
+        }
     }
+
+    /// <summary>
+    /// Reads the configured durable pin latency threshold in milliseconds, or
+    /// <see langword="null"/> when the saturation input is disabled (the
+    /// default). Gating the increment site on the option mirrors how the
+    /// writer-side flush-latency counter is gated, so a host that has not opted
+    /// in records nothing at all.
+    /// </summary>
+    private long? ResolvePinLatencyThresholdMs()
+        => options?.Get(string.Empty).WalSaturationMaterialiserPinLatencyThreshold is { } threshold
+            ? (long)threshold.TotalMilliseconds
+            : null;
 
     /// <summary>
     /// Teardown fallback for <see cref="SeedShardAsync"/>: writes
@@ -475,46 +525,92 @@ internal sealed class LeafCursorReporter(
     private async Task DirectStorePinAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket)
     {
         var grainId = ResolvePinGrainId(grainKey);
+        var bucketCount = WalMaterialiserPinRouting.ResolveBucketCount(options);
         var gate = _directStoreLocks.GetOrAdd(grainKey, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var grainState = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
-            await pinStorage!.ReadStateAsync(WalMaterialiserPinState.StateName, grainId, grainState)
-                .ConfigureAwait(false);
-
-            var state = grainState.State ??= new WalMaterialiserPinState();
-            var pins = state.Pins;
-            var offsets = state.Offsets;
-            var changed = false;
-            for (var i = 0; i < bucket.Count; i++)
+            // Group by destination slot so each durable blob is read-modified-
+            // written once. At the default bucket count of one this yields a
+            // single group under the legacy slot name, so the write is
+            // byte-for-byte what every pre-bucketing build performed.
+            foreach (var group in GroupByBucketSlot(bucket, bucketCount))
             {
-                var report = bucket[i];
-                // Monotonic-max merge, identical to WalMaterialiserPinGrain.Merge:
-                // a report at or below the stored frontier/offset is coalesced,
-                // and each axis advances independently.
-                if (!pins.TryGetValue(report.ConsumerId, out var existing) || report.Frontier > existing)
-                {
-                    pins[report.ConsumerId] = report.Frontier;
-                    changed = true;
-                }
-
-                if (!offsets.TryGetValue(report.ConsumerId, out var existingOffset) || report.CheckpointOffset > existingOffset)
-                {
-                    offsets[report.ConsumerId] = report.CheckpointOffset;
-                    changed = true;
-                }
-            }
-
-            if (changed)
-            {
-                await pinStorage!.WriteStateAsync(WalMaterialiserPinState.StateName, grainId, grainState)
-                    .ConfigureAwait(false);
+                await DirectStoreSlotAsync(group.Key, grainId, group.Value).ConfigureAwait(false);
             }
         }
         finally
         {
             gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Buckets <paramref name="reports"/> by the durable slot name each one
+    /// persists to. Returns a single legacy-slot group when
+    /// <paramref name="bucketCount"/> is one.
+    /// </summary>
+    private static Dictionary<string, List<MaterialiserPinReport>> GroupByBucketSlot(
+        IReadOnlyList<MaterialiserPinReport> reports,
+        int bucketCount)
+    {
+        var grouped = new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var report = reports[i];
+            var slot = WalMaterialiserPinRouting.BucketStateName(report.ConsumerId, bucketCount);
+            if (!grouped.TryGetValue(slot, out var list))
+            {
+                list = new List<MaterialiserPinReport>();
+                grouped[slot] = list;
+            }
+
+            list.Add(report);
+        }
+
+        return grouped;
+    }
+
+    /// <summary>
+    /// Read-modify-writes one durable pin slot, replicating the grain's
+    /// monotonic-max merge.
+    /// </summary>
+    private async Task DirectStoreSlotAsync(
+        string stateName,
+        GrainId grainId,
+        List<MaterialiserPinReport> reports)
+    {
+        var grainState = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
+        await pinStorage!.ReadStateAsync(stateName, grainId, grainState)
+            .ConfigureAwait(false);
+
+        var state = grainState.State ??= new WalMaterialiserPinState();
+        var pins = state.Pins;
+        var offsets = state.Offsets;
+        var changed = false;
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var report = reports[i];
+            // Monotonic-max merge, identical to WalMaterialiserPinGrain.Merge:
+            // a report at or below the stored frontier/offset is coalesced,
+            // and each axis advances independently.
+            if (!pins.TryGetValue(report.ConsumerId, out var existing) || report.Frontier > existing)
+            {
+                pins[report.ConsumerId] = report.Frontier;
+                changed = true;
+            }
+
+            if (!offsets.TryGetValue(report.ConsumerId, out var existingOffset) || report.CheckpointOffset > existingOffset)
+            {
+                offsets[report.ConsumerId] = report.CheckpointOffset;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await pinStorage!.WriteStateAsync(stateName, grainId, grainState)
+                .ConfigureAwait(false);
         }
     }
 

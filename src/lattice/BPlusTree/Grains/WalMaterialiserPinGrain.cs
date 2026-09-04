@@ -1,7 +1,9 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 using Orleans.Runtime;
+using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -60,6 +62,48 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private bool _flushInFlight;
 
     /// <summary>
+    /// Optional durable-storage handle used only when
+    /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/> is greater than
+    /// one. At the default of one the grain persists through its injected
+    /// <see cref="IPersistentState{T}"/> exactly as every pre-bucketing build
+    /// did, and this is never touched.
+    /// </summary>
+    private readonly IGrainStorage? _pinStorage;
+
+    /// <summary>
+    /// Per-bucket durable state holders, keyed by bucket ordinal. Populated at
+    /// activation and reused for every write so each slot's ETag carries
+    /// forward. Empty in the default single-slot layout.
+    /// </summary>
+    private readonly Dictionary<int, GrainState<WalMaterialiserPinState>> _bucketStates = new();
+
+    /// <summary>
+    /// Bucket ordinals whose contents have advanced since their last durable
+    /// write. Only these are rewritten, which is what turns an
+    /// <c>O(consumers on this shard)</c> write into
+    /// <c>O(consumers in this bucket)</c>.
+    /// </summary>
+    private readonly HashSet<int> _dirtyBuckets = new();
+
+    /// <summary>
+    /// The bucket count this activation resolved at startup. Cached for the
+    /// activation's lifetime so a mid-flight options change cannot route a
+    /// consumer's write to a different slot than the one its neighbours were
+    /// read from.
+    /// </summary>
+    private int _bucketCount = 1;
+
+    /// <summary>
+    /// The bucket width recorded in durable storage. Held at the wider of the
+    /// configured and previously-persisted counts until a narrowing
+    /// consolidation has fully landed, so a crash midway through consolidation
+    /// cannot leave a later activation reading a narrow layout while pins are
+    /// still stranded in out-of-range slots. Narrowing the recorded width is the
+    /// last step, and only taken once every in-range bucket has been written.
+    /// </summary>
+    private int _persistedWidth = 1;
+
+    /// <summary>
     /// Wall-clock duration, in milliseconds, of the most recent durable write.
     /// Used to amortise the coalesced flush against its own cost; see the type
     /// remarks. Zero until the first write completes, so the first coalesced
@@ -97,7 +141,9 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         [PersistentState(WalMaterialiserPinState.StateName, LatticeOptions.StorageProviderName)]
         IPersistentState<WalMaterialiserPinState> state,
         IOptionsMonitor<LatticeOptions> options,
-        ILogger<WalMaterialiserPinGrain>? logger = null)
+        ILogger<WalMaterialiserPinGrain>? logger = null,
+        [FromKeyedServices(LatticeOptions.StorageProviderName)]
+        IGrainStorage? pinStorage = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(state);
@@ -106,7 +152,166 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _state = state;
         _options = options;
         _logger = logger;
+        _pinStorage = pinStorage;
     }
+
+    /// <inheritdoc />
+    async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
+    {
+        _bucketCount = WalMaterialiserPinRouting.ResolveBucketCount(_options);
+        if (_bucketCount <= 1 || _pinStorage is null)
+        {
+            // Default layout: the injected IPersistentState has already read the
+            // single legacy slot, which is the whole of this shard's state.
+            return;
+        }
+
+        // Bucketed layout. The injected IPersistentState has read the legacy
+        // slot, whose contents (pins written before bucketing was enabled) stay
+        // authoritative until each consumer re-pins. Merge every bucket on top
+        // of it, monotonic-max, so no pin is ever dropped from the trim floor
+        // during the transition - the same self-healing dual-read the shard
+        // dimension already relies on in WalMaterialiserPinRouting.
+        var toRead = await ResolvePersistedWidthAsync(cancellationToken);
+        _persistedWidth = toRead;
+        for (var bucket = 0; bucket < toRead; bucket++)
+        {
+            var slot = await ReadBucketAsync(bucket, cancellationToken);
+            if (slot?.State is not { } bucketState)
+            {
+                continue;
+            }
+
+            foreach (var pin in bucketState.Pins)
+            {
+                MergeLoaded(pin.Key, pin.Value);
+            }
+
+            foreach (var offset in bucketState.Offsets)
+            {
+                MergeLoadedOffset(offset.Key, offset.Value);
+            }
+        }
+
+        if (toRead <= _bucketCount)
+        {
+            return;
+        }
+
+        // The persisted layout was wider than this host's configuration: the
+        // pins just merged out of the now-out-of-range slots exist only in
+        // memory under the narrower layout. Consolidate them immediately rather
+        // than waiting for a report that may never come, so a restart cannot
+        // strand them.
+        _logger?.LogInformation(
+            "WAL materialiser pin store for {GrainKey} was persisted across {PersistedBuckets} buckets but is configured for {ConfiguredBuckets}; consolidating.",
+            _context.GrainId.Key.ToString(),
+            toRead,
+            _bucketCount);
+        for (var bucket = 0; bucket < _bucketCount; bucket++)
+        {
+            _dirtyBuckets.Add(bucket);
+        }
+
+        _dirty = true;
+        try
+        {
+            await PersistNowAsync();
+
+            // Every in-range bucket has landed, so the out-of-range slots are
+            // now redundant and it is safe to record the narrower width. Doing
+            // this only after the consolidation write succeeded is what makes a
+            // crash midway through it harmless: the recorded width still names
+            // the wide layout, so the next activation re-reads the stranded
+            // slots and retries.
+            _persistedWidth = _bucketCount;
+            _dirtyBuckets.Add(0);
+            _dirty = true;
+            await PersistNowAsync();
+        }
+        catch (Exception ex)
+        {
+            // Best effort. The pins are in memory and every subsequent advance
+            // re-marks its bucket dirty, so the consolidation retries naturally.
+            _logger?.LogWarning(
+                ex,
+                "Consolidating the WAL materialiser pin store for {GrainKey} failed; will retry on the next flush.",
+                _context.GrainId.Key.ToString());
+        }
+    }
+
+    /// <summary>
+    /// Resolves how many bucket slots this activation must read: the wider of
+    /// the configured count and the count recorded in bucket zero by whichever
+    /// build last wrote it. Reading the wider layout is what makes lowering
+    /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/> safe.
+    /// </summary>
+    private async Task<int> ResolvePersistedWidthAsync(CancellationToken cancellationToken)
+    {
+        var probe = await ReadBucketAsync(0, cancellationToken);
+        var persisted = probe?.State?.PersistedBucketCount ?? 0;
+        return Math.Max(_bucketCount, persisted);
+    }
+
+    /// <summary>
+    /// Reads one bucket slot, caching the holder so its ETag carries into later
+    /// writes. Returns <see langword="null"/> when the read fails, which is
+    /// treated as "nothing to merge": losing a bucket read leaves the durable
+    /// floor lower than it could be, retaining more WAL, which is safe.
+    /// </summary>
+    private async Task<GrainState<WalMaterialiserPinState>?> ReadBucketAsync(int bucket, CancellationToken cancellationToken)
+    {
+        if (_bucketStates.TryGetValue(bucket, out var cached))
+        {
+            return cached;
+        }
+
+        var holder = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
+        try
+        {
+            await _pinStorage!
+                .ReadStateAsync(WalMaterialiserPinRouting.BucketStateName(bucket), _context.GrainId, holder)
+                ;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Reading WAL materialiser pin bucket {Bucket} for {GrainKey} failed; its pins are omitted from this activation's floor until they are re-reported.",
+                bucket,
+                _context.GrainId.Key.ToString());
+            return null;
+        }
+
+        holder.State ??= new WalMaterialiserPinState();
+        _bucketStates[bucket] = holder;
+        cancellationToken.ThrowIfCancellationRequested();
+        return holder;
+    }
+
+    /// <summary>
+    /// Monotonic-max merge of a pin loaded from durable storage into the
+    /// in-memory map, without marking anything dirty (it is already durable).
+    /// </summary>
+    private void MergeLoaded(string consumerId, HybridLogicalClock frontier)
+    {
+        if (!_state.State.Pins.TryGetValue(consumerId, out var existing) || frontier > existing)
+        {
+            _state.State.Pins[consumerId] = frontier;
+        }
+    }
+
+    /// <summary>
+    /// Monotonic-max merge of a checkpoint offset loaded from durable storage.
+    /// </summary>
+    private void MergeLoadedOffset(string consumerId, long offset)
+    {
+        if (!_state.State.Offsets.TryGetValue(consumerId, out var existing) || offset > existing)
+        {
+            _state.State.Offsets[consumerId] = offset;
+        }
+    }
+
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => _context;
@@ -174,11 +379,20 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
 
+        // Resolve the bucket before removing: once the consumer is gone from the
+        // in-memory map its bucket can no longer be derived from state, and the
+        // bucket still has to be rewritten to make the removal durable.
+        var bucket = _bucketCount > 1 ? BucketOf(consumerId) : 0;
         var removed = _state.State.Pins.Remove(consumerId);
         removed |= _state.State.Offsets.Remove(consumerId);
         if (removed)
         {
             _dirty = true;
+            if (_bucketCount > 1)
+            {
+                _dirtyBuckets.Add(bucket);
+            }
+
             await PersistNowAsync();
         }
     }
@@ -194,7 +408,44 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _state.State.Pins.Clear();
         _state.State.Offsets.Clear();
         _dirty = true;
+        if (_bucketCount > 1)
+        {
+            // Every bucket must be rewritten empty, and the legacy slot cleared
+            // too. Clear is only reached on tree deletion, where retaining a
+            // stale pin would keep the deleted tree's WAL pinned forever.
+            for (var bucket = 0; bucket < _bucketCount; bucket++)
+            {
+                _dirtyBuckets.Add(bucket);
+            }
+        }
+
         await PersistNowAsync();
+        if (_bucketCount > 1)
+        {
+            await ClearLegacySlotAsync();
+        }
+    }
+
+    /// <summary>
+    /// Empties the legacy single-slot blob. Only called from
+    /// <see cref="ClearAsync"/>: outside tree deletion the legacy slot is read
+    /// but never rewritten, so that a host which rolls back to a pre-bucketing
+    /// build still finds the pins it wrote before the upgrade. Those pins are
+    /// stale, which retains more WAL and is safe; deleting them would not be.
+    /// </summary>
+    private async Task ClearLegacySlotAsync()
+    {
+        try
+        {
+            await _state.WriteStateAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Clearing the legacy WAL materialiser pin slot for {GrainKey} failed; stale pins may keep WAL retained until the next clear.",
+                _context.GrainId.Key.ToString());
+        }
     }
 
     /// <inheritdoc />
@@ -255,10 +506,28 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         if (changed)
         {
             _dirty = true;
+            MarkBucketDirty(consumerId);
         }
 
         return changed;
     }
+
+    /// <summary>
+    /// Marks the bucket owning <paramref name="consumerId"/> as needing a
+    /// durable write. A no-op in the default single-slot layout, where the whole
+    /// shard is one blob and <see cref="_dirty"/> alone drives the write.
+    /// </summary>
+    private void MarkBucketDirty(string consumerId)
+    {
+        if (_bucketCount > 1)
+        {
+            _dirtyBuckets.Add(BucketOf(consumerId));
+        }
+    }
+
+    /// <summary>Resolves the bucket ordinal owning <paramref name="consumerId"/>.</summary>
+    private int BucketOf(string consumerId)
+        => WalMaterialiserPinRouting.BucketOf(consumerId, _bucketCount);
 
     /// <summary>
     /// Either schedules a coalesced durable flush (when the flush interval is
@@ -379,7 +648,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             var startedTickMs = Environment.TickCount64;
             try
             {
-                await _state.WriteStateAsync();
+                await WriteDurableAsync();
                 LatticeMetrics.MaterialiserPinDurableWrites.Add(
                     1,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeTag),
@@ -403,6 +672,105 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 _lastWriteCompletedTickMs = completedTickMs;
             }
         }
+    }
+
+    /// <summary>
+    /// Issues the durable write for the current in-memory pins.
+    /// <para>
+    /// In the default single-slot layout this is exactly the pre-bucketing
+    /// <c>WriteStateAsync</c> on the injected
+    /// <see cref="IPersistentState{T}"/>. When bucketing is enabled only the
+    /// buckets whose contents advanced are rewritten, which is what removes the
+    /// <c>O(consumers on this shard)</c> write amplification behind issue #2012:
+    /// a single leaf advancing rewrites the tens of pins sharing its bucket
+    /// instead of the thousands sharing its shard.
+    /// </para>
+    /// <para>
+    /// Buckets are written concurrently. They are independent slots and each
+    /// carries its own ETag, and a partial failure is safe in the same way every
+    /// other failure on this path is: a bucket that did not land leaves its pins
+    /// staler than memory, which retains more WAL. The bucket stays dirty and
+    /// the next flush retries it.
+    /// </para>
+    /// </summary>
+    private async Task WriteDurableAsync()
+    {
+        if (_bucketCount <= 1 || _pinStorage is null)
+        {
+            await _state.WriteStateAsync();
+            return;
+        }
+
+        if (_dirtyBuckets.Count == 0)
+        {
+            return;
+        }
+
+        var buckets = _dirtyBuckets.ToArray();
+        _dirtyBuckets.Clear();
+        var writes = new Task[buckets.Length];
+        for (var i = 0; i < buckets.Length; i++)
+        {
+            writes[i] = WriteBucketAsync(buckets[i]);
+        }
+
+        try
+        {
+            await Task.WhenAll(writes);
+        }
+        catch
+        {
+            // Re-arm every bucket in this batch. Re-writing a bucket that
+            // actually landed is harmless (the write is idempotent - it persists
+            // whatever memory currently holds), and it is far cheaper than
+            // tracking per-bucket success only to risk dropping one.
+            foreach (var bucket in buckets)
+            {
+                _dirtyBuckets.Add(bucket);
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Persists the slice of the in-memory pin map owned by
+    /// <paramref name="bucket"/>.
+    /// </summary>
+    private async Task WriteBucketAsync(int bucket)
+    {
+        if (!_bucketStates.TryGetValue(bucket, out var holder))
+        {
+            // The activation read of this slot failed, so no ETag was captured.
+            // Re-read before writing rather than writing blind: a provider that
+            // enforces ETags would otherwise reject every write for the rest of
+            // this activation's life.
+            holder = await ReadBucketAsync(bucket, CancellationToken.None)
+                ?? throw new InvalidOperationException(
+                    $"WAL materialiser pin bucket {bucket} could not be read before writing.");
+        }
+
+        var slice = new WalMaterialiserPinState { PersistedBucketCount = _persistedWidth };
+        foreach (var pin in _state.State.Pins)
+        {
+            if (BucketOf(pin.Key) == bucket)
+            {
+                slice.Pins[pin.Key] = pin.Value;
+            }
+        }
+
+        foreach (var offset in _state.State.Offsets)
+        {
+            if (BucketOf(offset.Key) == bucket)
+            {
+                slice.Offsets[offset.Key] = offset.Value;
+            }
+        }
+
+        holder.State = slice;
+        await _pinStorage!
+            .WriteStateAsync(WalMaterialiserPinRouting.BucketStateName(bucket), _context.GrainId, holder)
+            ;
     }
 
     /// <summary>Outcome tag value for a birth-path (synchronous through-write) durable pin write.</summary>

@@ -60,4 +60,29 @@ internal sealed class WalMaterialiserPinState
     [Id(1)]
     public Dictionary<string, long> Offsets { get; set; } =
         new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The <see cref="LatticeOptions.WalMaterialiserPinBuckets"/> value in force
+    /// when this slot was last written, recorded so an activation can discover a
+    /// layout wider than its own configuration and read the slots it would
+    /// otherwise not know to look for.
+    /// <para>
+    /// Without this, <b>lowering</b> the bucket count would strand every pin
+    /// living in a now-out-of-range slot. A stranded pin is invisible to the
+    /// trim floor, which is the dangerous direction: the WAL GC could trim past
+    /// a leaf that has not yet re-activated to re-report, reintroducing the
+    /// cold-restart <c>LeafProjectionStaleException</c> the durable pin store
+    /// exists to prevent. Recording the width makes the read self-healing in
+    /// both directions - the activation reads the wider of the persisted and
+    /// configured layouts, merges everything it finds, and consolidates into the
+    /// configured layout on its next write.
+    /// </para>
+    /// <para>
+    /// Zero (the value state written before this field existed deserialises to,
+    /// and the value written by the default single-slot layout) means "no
+    /// bucketing", so a pre-bucketing deployment reads exactly as it always did.
+    /// </para>
+    /// </summary>
+    [Id(2)]
+    public int PersistedBucketCount { get; set; }
 }
