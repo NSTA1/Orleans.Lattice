@@ -254,6 +254,14 @@ public sealed class TenantObservabilityGaugePublishingTests
         await publisher.StartAsync(CancellationToken.None);
         await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await publisher.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(usage.Calls, Is.GreaterThanOrEqualTo(2),
+                "the loop must have published again on the second tick, not only on the initial cycle");
+            Assert.That(publisher.Loop!.IsCompleted, Is.True, "the loop must exit on stop");
+            Assert.That(publisher.Loop!.IsFaulted, Is.False, "the loop must not fault while ticking");
+        });
     }
 
     [Test]
@@ -277,6 +285,15 @@ public sealed class TenantObservabilityGaugePublishingTests
         await publisher.StartAsync(CancellationToken.None);
         await secondEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await publisher.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(usage.Calls, Is.GreaterThanOrEqualTo(2),
+                "the loop must have reached a second cycle after the first one threw");
+            Assert.That(publisher.Loop!.IsCompleted, Is.True, "the loop must exit on stop");
+            Assert.That(publisher.Loop!.IsFaulted, Is.False,
+                "the non-cancellation exception must be swallowed, not surfaced on the loop task");
+        });
     }
 
     /// <summary>
@@ -288,6 +305,9 @@ public sealed class TenantObservabilityGaugePublishingTests
     private sealed class SignalingFakeUsageIndex(TaskCompletionSource secondEntry) : ITenantUsageIndex
     {
         private int _calls;
+
+        /// <summary>Number of publish cycles that reached this index.</summary>
+        public int Calls => Volatile.Read(ref _calls);
 
         public bool TryGetView(TenantId tenant, out TenantUsageView view)
         {
@@ -317,6 +337,9 @@ public sealed class TenantObservabilityGaugePublishingTests
     private sealed class FaultingFirstCallUsageIndex(TaskCompletionSource secondEntry) : ITenantUsageIndex
     {
         private int _calls;
+
+        /// <summary>Number of publish cycles that reached this index.</summary>
+        public int Calls => Volatile.Read(ref _calls);
 
         public bool TryGetView(TenantId tenant, out TenantUsageView view)
         {

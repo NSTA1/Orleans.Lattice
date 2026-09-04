@@ -147,8 +147,8 @@ public class LeafAccessFrequencyModelTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(ranked[0], Is.EqualTo(Leaf(1)).Or.EqualTo(Leaf(2)));
-            Assert.That(ranked[1], Is.EqualTo(Leaf(1)).Or.EqualTo(Leaf(2)));
+            Assert.That(ranked.Take(2), Is.EquivalentTo(new[] { Leaf(1), Leaf(2) }),
+                "the two constantly-read leaves must occupy the top two ranks, in either order");
             Assert.That(ranked[2], Is.EqualTo(Leaf(9)));
         });
     }

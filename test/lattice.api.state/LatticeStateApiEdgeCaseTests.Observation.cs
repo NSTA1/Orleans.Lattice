@@ -64,7 +64,11 @@ public sealed partial class LatticeStateApiEdgeCaseTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        await InvokeObserverStaticTask("DelayAsync", TimeSpan.FromSeconds(1), cts.Token);
+        var delay = InvokeObserverStaticTask("DelayAsync", TimeSpan.FromSeconds(1), cts.Token);
+        await delay.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.That(delay.IsCompletedSuccessfully, Is.True,
+            "an already-cancelled delay must complete cleanly, never faulted or cancelled");
     }
 
     [Test]

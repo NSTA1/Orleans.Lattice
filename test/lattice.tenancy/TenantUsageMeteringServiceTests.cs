@@ -631,6 +631,13 @@ public sealed class TenantUsageMeteringServiceTests
         await service.StartAsync(CancellationToken.None);
         await firstCycleEntry.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(service.Loop!.IsCompleted, Is.True, "the loop must exit on stop");
+            Assert.That(service.Loop!.IsFaulted, Is.False,
+                "MeterOnceAsync must complete without faulting the loop");
+        });
     }
 
     [Test]
@@ -679,33 +686,15 @@ public sealed class TenantUsageMeteringServiceTests
         await service.MeterOnceAsync(CancellationToken.None);
         Assert.That(store.Published, Has.Count.EqualTo(1), "Acme was metered in the first cycle");
 
-        // Second cycle: empty registry - Acme is no longer registered.
-        // The retained-tenant pruning path should fire (lines 337-341).
-        var emptyService = Create(new FakeRegistry(), store, harness.Factory);
-        // Seed the retained map by running against the empty registry; the previous
-        // service's retained state is in a different instance, so we need to run two
-        // cycles on the same service instance.
-        var service2 = Create(new FakeRegistry(Acme), store, harness.Factory);
-        await service2.MeterOnceAsync(CancellationToken.None);
-        _ = emptyService;
+        // Second cycle: the retained-tenant pruning path (lines 337-341) only fires when
+        // the *same* service instance meters a smaller roster than the cycle before, so
+        // drive both cycles through the harness that exposes the prune outcome.
+        var pruneHarness = new MutableUsageHarness();
+        pruneHarness.AddTree("t/acme/orders", bytes: 100, keys: 10);
+        var pruningSvc = new TenantUsagePruneHarness(pruneHarness.Factory);
+        await pruningSvc.RunTwoCyclesAsync(Acme);
 
-        // Run the same service against an empty registry to trigger PruneRetainedTenants.
-        var service3 = Create(new FakeRegistry(), store, GrainFactoryWith([]));
-
-        // Expose the pruning path: first cycle populates _lastKnownByTenant,
-        // second cycle (on the same instance) with a smaller roster triggers the prune.
-        var harness2 = new MutableUsageHarness();
-        harness2.AddTree("t/acme/orders", bytes: 100, keys: 10);
-        var countingStore = new RecordingStore();
-        var pruningSvc = Create(new FakeRegistry(Acme), countingStore, harness2.Factory);
-        await pruningSvc.MeterOnceAsync(CancellationToken.None); // seeds _lastKnownByTenant
-        _ = service3;
-
-        // The second call with an empty registry triggers the prune loop.
-        var pruningSvc2 = new TenantUsagePruneHarness(harness2.Factory);
-        await pruningSvc2.RunTwoCyclesAsync(Acme);
-
-        Assert.That(pruningSvc2.WasPruned, Is.True,
+        Assert.That(pruningSvc.WasPruned, Is.True,
             "PruneRetainedTenants must remove the tenant that is no longer in the registry");
     }
 

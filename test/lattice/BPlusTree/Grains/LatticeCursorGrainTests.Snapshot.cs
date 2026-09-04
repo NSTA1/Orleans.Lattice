@@ -172,9 +172,9 @@ public partial class LatticeCursorGrainTests
 
         await grain.CloseAsync();
 
-        Assert.That(state.State.Phase, Is.EqualTo(LatticeCursorPhase.NotStarted)
-            .Or.EqualTo(LatticeCursorPhase.Closed),
-            "Close must clear or close the persisted phase.");
+        Assert.That(state.State.Phase, Is.EqualTo(LatticeCursorPhase.NotStarted),
+            "Close clears the persisted state, so the phase resets to its default; " +
+            "the in-memory Closed marker is only the fallback when the clear itself fails.");
     }
 
     // --- Lazy frozen-baseline persist (issue #916) ---

@@ -364,8 +364,10 @@ public partial class AtomicWriteGrainTests
         lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
             .Returns(Task.CompletedTask);
 
-        // No throw - the saga completes normally.
+        // No throw - the saga completes normally and still dispatches the batch.
         await grain.ExecuteAsync(TreeId, MakeEntries(("k1", [1])));
+
+        await lattice.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
     }
 
     // --- IsTerminalShutdownRefusal exception-walk coverage ---

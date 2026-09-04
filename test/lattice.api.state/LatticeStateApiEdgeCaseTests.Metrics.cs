@@ -16,7 +16,11 @@ public sealed partial class LatticeStateApiEdgeCaseTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        await InvokeSamplerStaticTask("DelayAsync", TimeSpan.FromSeconds(1), cts.Token);
+        var delay = InvokeSamplerStaticTask("DelayAsync", TimeSpan.FromSeconds(1), cts.Token);
+        await delay.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.That(delay.IsCompletedSuccessfully, Is.True,
+            "an already-cancelled delay must be absorbed as a clean loop shutdown, never faulted or cancelled");
     }
 
     [Test]

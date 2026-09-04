@@ -145,7 +145,7 @@ public class RangedCountAsyncIntegrationTests
         var tree = await SeedAsync(treeId, 300);
 
         var failures = new ConcurrentBag<string>();
-        var iterations = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var counter = Task.Run(async () =>
@@ -159,30 +159,28 @@ public class RangedCountAsyncIntegrationTests
                     var c = await tree.CountAsync("k-0000", null);
                     if (c != 300)
                         failures.Add($"CountAsync(range)={c}, expected 300");
-                    Interlocked.Increment(ref iterations);
+                    progress.RecordPass();
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
                 catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
             }
         });
 
-        await Task.Delay(100);
+        // The counter must be provably sampling before the split starts, so the
+        // split overlaps live observations rather than merely a fixed sleep.
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        await Task.Delay(150);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await counter;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                "Concurrent ranged CountAsync observations must all equal the pinned universe:\n  "
-                + string.Join("\n  ", failures.Take(10)));
-            Assert.That(iterations, Is.GreaterThan(0),
-                "Counter must have completed at least one iteration against the mid-split state.");
-        });
+        Assert.That(failures, Is.Empty,
+            "Concurrent ranged CountAsync observations must all equal the pinned universe:\n  "
+            + string.Join("\n  ", failures.Take(10)));
     }
 
     /// <summary>
@@ -198,7 +196,7 @@ public class RangedCountAsyncIntegrationTests
         var tree = await SeedAsync(treeId, 300);
 
         var failures = new ConcurrentBag<string>();
-        var iterations = 0;
+        var progress = new ConcurrentScanProgress(1);
         using var cts = new CancellationTokenSource();
 
         var counter = Task.Run(async () =>
@@ -212,29 +210,25 @@ public class RangedCountAsyncIntegrationTests
                     var c = await tree.CountAsync("k-0100", "k-0200");
                     if (c != 100)
                         failures.Add($"CountAsync(subrange)={c}, expected 100");
-                    Interlocked.Increment(ref iterations);
+                    progress.RecordPass();
                 }
                 catch (Exception) when (cts.IsCancellationRequested) { }
                 catch (Exception ex) when (ex.GetType().Name == "EnumerationAbortedException") { }
             }
         });
 
-        await Task.Delay(100);
+        await progress.WaitForOnePassEachAsync("before starting the split");
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        var beforeSwap = progress.Snapshot();
         await split.SplitAsync(0);
         await split.RunSplitPassAsync();
-        await Task.Delay(150);
+        await progress.WaitForFurtherPassEachAsync(beforeSwap, "after the split committed");
 
         cts.Cancel();
         await counter;
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(failures, Is.Empty,
-                "Concurrent bounded ranged CountAsync observations must all equal the pinned sub-range size:\n  "
-                + string.Join("\n  ", failures.Take(10)));
-            Assert.That(iterations, Is.GreaterThan(0),
-                "Counter must have completed at least one iteration against the mid-split state.");
-        });
+        Assert.That(failures, Is.Empty,
+            "Concurrent bounded ranged CountAsync observations must all equal the pinned sub-range size:\n  "
+            + string.Join("\n  ", failures.Take(10)));
     }
 }
