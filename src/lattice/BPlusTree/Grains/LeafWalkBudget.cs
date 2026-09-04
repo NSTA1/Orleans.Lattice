@@ -53,24 +53,55 @@ internal struct LeafWalkBudget
     /// the leaf bound, and a null or non-positive <paramref name="maxDuration"/>
     /// disables the deadline, so a misconfigured option degrades to today's
     /// unbounded behaviour rather than to a silently truncated walk.
+    /// <para>
+    /// <paramref name="startTimestamp"/> is the <see cref="Stopwatch"/> stamp the
+    /// deadline is measured from, so a caller can start the clock when it began
+    /// holding the shard rather than when it reached its walk loop. Pass
+    /// <c>0</c> to measure from now. See <see cref="StartClock"/>.
+    /// </para>
     /// </summary>
-    internal LeafWalkBudget(int maxLeaves, TimeSpan? maxDuration)
+    internal LeafWalkBudget(int maxLeaves, TimeSpan? maxDuration, long startTimestamp = 0L)
     {
         _maxLeaves = maxLeaves > 0 ? maxLeaves : int.MaxValue;
+        var start = startTimestamp != 0L ? startTimestamp : Stopwatch.GetTimestamp();
         _deadlineTimestamp = maxDuration is { } duration && duration > TimeSpan.Zero
-            ? Stopwatch.GetTimestamp() + (long)(duration.TotalSeconds * Stopwatch.Frequency)
+            ? start + (long)(duration.TotalSeconds * Stopwatch.Frequency)
             : 0L;
         _leavesVisited = 0;
     }
 
     /// <summary>
+    /// Takes the timestamp a budget's deadline should be measured from, at the
+    /// point the caller starts holding the resource the budget protects.
+    /// <para>
+    /// A page fill reaches its leaf loop only after preparing the grain and
+    /// traversing down to the start leaf, and on a cold activation that prologue
+    /// is itself a run of grain calls that can block for a long time - a leaf or
+    /// internal node replaying its WAL projection, in particular. Constructing
+    /// the budget at the loop excluded that prologue from the deadline, so a
+    /// request that had already held the non-reentrant shard for minutes was then
+    /// granted a further full <see cref="LatticeOptions.MaxScanPageDuration"/> of
+    /// leaf walking. Starting the clock here makes the deadline measure the whole
+    /// hold, which is the quantity that actually head-of-line-blocks the shard
+    /// (issue 1992).
+    /// </para>
+    /// </summary>
+    internal static long StartClock() => Stopwatch.GetTimestamp();
+
+    /// <summary>
     /// Builds the budget a shard range-scan page fill runs under, from the
     /// tree's resolved options.
+    /// <para>
+    /// Pass the stamp from <see cref="StartClock"/> taken at the top of the
+    /// grain call so the deadline covers the whole time the shard is held -
+    /// preparing the grain and traversing to the start leaf included - rather
+    /// than only the leaf loop. Omit it to measure from now.
+    /// </para>
     /// </summary>
-    internal static LeafWalkBudget ForScanPage(LatticeOptions options)
+    internal static LeafWalkBudget ForScanPage(LatticeOptions options, long startTimestamp = 0L)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return new LeafWalkBudget(options.MaxLeavesPerScanPage, options.MaxScanPageDuration);
+        return new LeafWalkBudget(options.MaxLeavesPerScanPage, options.MaxScanPageDuration, startTimestamp);
     }
 
     /// <summary>

@@ -459,7 +459,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "records materialise, so treat 'repocontext_index_status' as the authority for an "
                     + "onboarding still in progress. The per-row marker and file count are likewise best-effort "
                     + "while an ingest runs, and 'embeddedVectorCount' is served from the last completed "
-                    + "membership scan rather than measured on demand: it is null when no scan has completed "
+                    + "membership scan rather than measured on demand: it is absent when no scan has completed "
                     + "yet (which is not the same as zero), and 'embeddedVectorCountPending' is true whenever "
                     + "a refresh is outstanding - expect that throughout an active ingest, and poll again once "
                     + "it settles for an exact figure. Read-only.",

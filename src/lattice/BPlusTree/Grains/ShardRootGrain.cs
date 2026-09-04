@@ -1389,6 +1389,8 @@ internal sealed partial class ShardRootGrain(
 
     public async Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
@@ -1443,7 +1445,7 @@ internal sealed partial class ShardRootGrain(
         // ("a concurrent saga may be observed as committed for some keys and
         // pending for others"). The whole-shard atomicity of the old unbounded
         // walk was an implementation artifact, not a contract.
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         string? resumeFrom = null;
         while (true)
         {
@@ -1537,6 +1539,8 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -1561,7 +1565,7 @@ internal sealed partial class ShardRootGrain(
         var hasMovedAway = state.State.MovedAwaySlots.Count > 0
             && state.State.MovedAwayVirtualShardCount is not null;
 
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         var total = 0;
         string? resumeFrom = null;
         var currentId = leafId.Value;
@@ -1706,6 +1710,8 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task<ShardAnyPage> AnyBoundedAsync(string? resumeFromInclusive)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -1719,7 +1725,7 @@ internal sealed partial class ShardRootGrain(
         // overwhelmingly common case - costs a single leaf call, so the work
         // bound only ever engages on the empty or fully-tombstoned shard that
         // was the unbounded case here.
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         var currentId = leafId.Value;
         while (true)
         {
@@ -1783,6 +1789,8 @@ internal sealed partial class ShardRootGrain(
     /// <inheritdoc />
     public async Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedAsync(string? resumeFromInclusive)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -1799,7 +1807,7 @@ internal sealed partial class ShardRootGrain(
         var hasMovedAway = state.State.MovedAwaySlots.Count > 0
             && state.State.MovedAwayVirtualShardCount is not null;
 
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         var total = 0;
         HashSet<int>? movedSet = null;
         string? resumeFrom = null;
@@ -1874,6 +1882,8 @@ internal sealed partial class ShardRootGrain(
     public async Task<ShardCountPage> CountForSlotsBoundedAsync(
         int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -1887,7 +1897,7 @@ internal sealed partial class ShardRootGrain(
         var leafId = await ResolveWalkStartLeafAsync(startInclusive);
         if (leafId is null) return new ShardCountPage { Count = 0 };
 
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         var total = 0;
         string? resumeFrom = null;
         var currentId = leafId.Value;
@@ -2468,6 +2478,8 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -2497,7 +2509,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2596,6 +2608,8 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -2625,7 +2639,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2714,6 +2728,8 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -2735,7 +2751,7 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -2830,6 +2846,8 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -2851,7 +2869,7 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
@@ -2945,6 +2963,8 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -2972,7 +2992,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         var keys = new List<string>(pageSize);
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
@@ -3039,6 +3059,8 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
+        var walkClock = LeafWalkBudget.StartClock();
+
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -3066,7 +3088,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);

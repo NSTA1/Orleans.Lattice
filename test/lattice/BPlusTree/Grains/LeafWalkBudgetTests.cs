@@ -222,4 +222,72 @@ public class LeafWalkBudgetTests
             Assert.That(LatticeOptions.DefaultBackgroundDrainMaxDuration, Is.EqualTo(TimeSpan.FromSeconds(10)));
         });
     }
+
+    [Test]
+    public void ForScanPage_measures_the_deadline_from_the_supplied_start_clock()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = int.MaxValue,
+            MaxScanPageDuration = TimeSpan.FromMilliseconds(50),
+        };
+
+        // The shape of a page fill whose prologue - preparing the grain and
+        // traversing down to the start leaf - already held the shard for longer
+        // than the whole page budget before the loop was ever reached.
+        var startedHalfASecondAgo =
+            LeafWalkBudget.StartClock() - (long)(0.5 * System.Diagnostics.Stopwatch.Frequency);
+
+        var budget = LeafWalkBudget.ForScanPage(options, startedHalfASecondAgo);
+
+        Assert.That(budget.ShouldYield(), Is.True,
+            "time already spent holding the shard must count against the page budget");
+    }
+
+    [Test]
+    public void ForScanPage_without_a_start_clock_measures_from_construction()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = int.MaxValue,
+            MaxScanPageDuration = TimeSpan.FromSeconds(30),
+        };
+
+        var budget = LeafWalkBudget.ForScanPage(options);
+
+        Assert.That(budget.ShouldYield(), Is.False);
+    }
+
+    [Test]
+    public void A_zero_start_clock_is_treated_as_now_so_an_unstamped_caller_is_unchanged()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = int.MaxValue,
+            MaxScanPageDuration = TimeSpan.FromSeconds(30),
+        };
+
+        var explicitlyUnstamped = LeafWalkBudget.ForScanPage(options, startTimestamp: 0L);
+
+        Assert.That(explicitlyUnstamped.ShouldYield(), Is.False,
+            "0 means 'measure from now', not 'the epoch', which would expire every budget");
+    }
+
+    [Test]
+    public void A_start_clock_does_not_disturb_the_leaf_bound()
+    {
+        var options = new LatticeOptions
+        {
+            MaxLeavesPerScanPage = 2,
+            MaxScanPageDuration = TimeSpan.FromHours(1),
+        };
+
+        var budget = LeafWalkBudget.ForScanPage(options, LeafWalkBudget.StartClock());
+
+        budget.RecordLeafVisited();
+        Assert.That(budget.ShouldYield(), Is.False);
+
+        budget.RecordLeafVisited();
+        Assert.That(budget.ShouldYield(), Is.True);
+    }
 }
