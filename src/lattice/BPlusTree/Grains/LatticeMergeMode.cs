@@ -222,6 +222,7 @@ public enum LatticeMergeMode
     /// is a global closed shape, so no per-tree registration is required.
     /// </summary>
     RwSet = 11,
+    /// <summary>
     /// Monotone max register - keeps the greatest totally-ordered value ever
     /// seen. Each key carries a <see cref="Orleans.Lattice.BoundedRegister"/>
     /// whose state is a single value paired with an explicit total-order key;

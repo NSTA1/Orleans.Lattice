@@ -3,7 +3,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// <summary>
 /// One bounded batch of a shard-level count that also reports the moved-away
 /// virtual slots it observed (see
-/// <see cref="Grains.IShardRootGrain.CountWithMovedAwayBoundedAsync"/>).
+/// <see cref="IShardRootGrain.CountWithMovedAwayBoundedAsync"/>).
 /// <para>
 /// The caller sums <see cref="Count"/> across batches and <b>unions</b>
 /// <see cref="MovedAwaySlots"/>, so the completed walk reports exactly what the

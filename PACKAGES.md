@@ -46,7 +46,7 @@ The transport-agnostic facade family and its gRPC bindings. A facade is the in-p
 
 | Package | Description | Docs |
 |---|---|---|
-| `Orleans.Lattice.Api.Abstractions` | The shared, transport-agnostic API contract: the seven facade service interfaces (state, data, auth, backup, schema, replication, tree administration) and their request/response DTOs, referenced by the facade implementations, the gRPC bindings, and the MCP server without cross-package internal-visibility grants. | [README](docs/lattice.api.abstractions/README.md) |
+| `Orleans.Lattice.Api.Abstractions` | The shared, transport-agnostic API contract: the facade service interfaces - state, data, auth, backup, schema, replication, telemetry, tree administration, and tenant administration - and their request/response DTOs, referenced by the facade implementations, the gRPC bindings, and the MCP server without cross-package internal-visibility grants. | [README](docs/lattice.api.abstractions/README.md) |
 | `Orleans.Lattice.Api.State` | Read-only cluster state-API facade: query, observe, and subscribe to trees, structure, entries, change feeds, and metrics. | [README](docs/lattice.api.state/README.md) |
 | `Orleans.Lattice.Api.State.Grpc` | The code-first gRPC binding and public client for the read-only state API. | [README](docs/lattice.api.state.grpc/README.md) |
 | `Orleans.Lattice.Api.Data` | Write-capable external data-plane facade: point set/delete, point and bounded-range reads, and single- and cross-tree atomic batches for non-.NET clients, each authorized through the core gate. | [README](docs/lattice.api.data/README.md) |

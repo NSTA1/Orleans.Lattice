@@ -788,6 +788,8 @@ internal sealed class RepoContextBootstrapService
 
         return unified;
     }
+    /// <summary>
+    /// Computes the number of durable write chunks a reconciliation pass takes
     /// for a plan: one per <see cref="WriteChunkSize"/> upserts, where the upserts
     /// are the repository root marker plus every added, updated, and
     /// anchor-refreshed file, plus every back-fill file whose node is being

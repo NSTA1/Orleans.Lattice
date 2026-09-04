@@ -2,7 +2,7 @@ namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
 /// One bounded batch of a shard-level range delete (see
-/// <see cref="Grains.IShardRootGrain.DeleteRangeBoundedAsync"/>).
+/// <see cref="IShardRootGrain.DeleteRangeBoundedAsync"/>).
 /// <para>
 /// The shard tombstones matching entries across a bounded number of leaves and
 /// then returns, releasing the non-reentrant shard so other traffic can

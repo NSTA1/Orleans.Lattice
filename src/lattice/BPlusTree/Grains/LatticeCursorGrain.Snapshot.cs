@@ -488,6 +488,8 @@ internal sealed partial class LatticeCursorGrain
 
         return new LatticeCursorRawEntriesPage { Entries = collected, HasMore = hasMore };
     }
+    /// <summary>
+    /// Fans a snapshot key page out across every physical shard the snapshot
     /// coordinate covers. Concurrent activation of per-shard snapshot
     /// leaves is intentional - replay is read-only and CPU-bound, so
     /// the fan-out reduces wall-clock per-page latency. Any per-shard
@@ -605,6 +607,8 @@ internal sealed partial class LatticeCursorGrain
 
         return await Task.WhenAll(tasks);
     }
+    /// <summary>
+    /// Resolves the per-shard, per-partition WAL offsets the snapshot
     /// leaves replay against. Prefers
     /// <see cref="LatticeSnapshotCoordinate.PerShardPerPartitionWalOffsets"/>
     /// when non-null (multi-partition capture path); falls back to

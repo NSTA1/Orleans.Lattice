@@ -415,6 +415,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// Entries must already be sorted in ascending key order.
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
+    /// <param name="sortedEntries">The entries to load, already sorted in ascending key order.</param>
     Task BulkLoadAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 
     /// <summary>
@@ -426,6 +427,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// key order.
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
+    /// <param name="sortedEntries">The pre-stamped entries to load, already sorted in ascending key order.</param>
     Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries);
 
     /// <summary>
@@ -435,6 +437,7 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// separators into internal nodes. Used by the streaming bulk-load extension method.
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
+    /// <param name="sortedEntries">The entries to append, already sorted in ascending key order and all greater than every existing key in the shard.</param>
     Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 
     /// <summary>

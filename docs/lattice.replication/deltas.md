@@ -46,7 +46,7 @@ The typed CRDT delta records each expose a static `Empty` property that returns 
 
 ## Sender-side delta combine (pre-ship coalescing)
 
-When pre-ship coalescing is enabled (`LatticeReplicationOptions.PreShipCoalescingEnabled`, **default off**), the per-(tree, peer) shipper folds the typed deltas of a same-key run drained into one outbound batch into a single combined delta, re-encodes it onto the kept (highest-HLC) entry, and elides the earlier same-key entries. The combine for each primitive is a join over its own semilattice, so the combined delta's receiver-side apply effect is identical to applying the source deltas in sequence - for **every** receiver state `S`, `MergeDelta(S, combine(d1, d2)) == MergeDelta(MergeDelta(S, d1), d2)`:
+When pre-ship coalescing is enabled (`LatticeReplicationOptions.PreShipCoalescingEnabled`, **default on**), the per-(tree, peer) shipper folds the typed deltas of a same-key run drained into one outbound batch into a single combined delta, re-encodes it onto the kept (highest-HLC) entry, and elides the earlier same-key entries. The combine for each primitive is a join over its own semilattice, so the combined delta's receiver-side apply effect is identical to applying the source deltas in sequence - for **every** receiver state `S`, `MergeDelta(S, combine(d1, d2)) == MergeDelta(MergeDelta(S, d1), d2)`:
 
 | Delta | Sender combines by |
 |-------|--------------------|

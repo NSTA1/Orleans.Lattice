@@ -23,6 +23,11 @@ namespace Orleans.Lattice.Views;
 /// instead of rebuilding. Only an explicit operator rebuild clears an
 /// accumulative view.
 /// </param>
+/// <param name="ProjectionProviderKey">
+/// The host-configured provider key the runtime registration was rehydrated
+/// from, used for faithful reconstruction, or <see langword="null"/> for a
+/// legacy type-based registration.
+/// </param>
 internal sealed record ViewRegistration(
     string ViewName,
     string SourceTreeId,
