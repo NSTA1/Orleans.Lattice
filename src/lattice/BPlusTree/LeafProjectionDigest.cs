@@ -93,4 +93,36 @@ public readonly record struct LeafProjectionDigest
     /// field. New producers stamp <see cref="CurrentVersion"/>.
     /// </summary>
     [Id(3)] public int Version { get; init; }
+
+    /// <summary>
+    /// Compares two digests by value: every scalar field plus the
+    /// <see cref="Hash"/> bytes compared by content. The compiler-generated
+    /// record-struct equality compares <see cref="Hash"/> with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for a <see cref="byte"/>
+    /// array is reference equality, so two structurally identical digests would
+    /// otherwise never compare equal - and a digest that round-trips through
+    /// serialization would never equal its pre-serialization self, defeating the
+    /// cross-silo divergence check this type exists for.
+    /// </summary>
+    /// <param name="other">The digest to compare against.</param>
+    public bool Equals(LeafProjectionDigest other) =>
+        EntryCount == other.EntryCount
+        && CheckpointOffset == other.CheckpointOffset
+        && Version == other.Version
+        && (Hash is null ? other.Hash is null : other.Hash is not null && Hash.AsSpan().SequenceEqual(other.Hash));
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(EntryCount);
+        hash.Add(CheckpointOffset);
+        hash.Add(Version);
+        if (Hash is { } bytes)
+        {
+            hash.AddBytes(bytes);
+        }
+
+        return hash.ToHashCode();
+    }
 }

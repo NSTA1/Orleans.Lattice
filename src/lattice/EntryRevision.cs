@@ -104,4 +104,63 @@ public readonly record struct EntryRevision
     /// not persist the frontier per revision.
     /// </summary>
     [Id(12)] public VersionVector? VectorClock { get; init; }
+
+    /// <summary>
+    /// Compares two revisions by value: every scalar field plus the
+    /// <see cref="ValuePreview"/> and <see cref="Delta"/> bytes compared by
+    /// content. The compiler-generated record-struct equality compares those
+    /// arrays with <see cref="EqualityComparer{T}.Default"/>, which for a
+    /// <see cref="byte"/> array is reference equality, so two structurally
+    /// identical revisions would otherwise never compare equal - and a revision
+    /// that round-trips through serialization would never equal its
+    /// pre-serialization self. <see cref="VectorClock"/> is compared by its own
+    /// equality (it is <see langword="null"/> on the history-view path).
+    /// </summary>
+    /// <param name="other">The revision to compare against.</param>
+    public bool Equals(EntryRevision other) =>
+        Hlc.Equals(other.Hlc)
+        && Kind == other.Kind
+        && string.Equals(SourceKey, other.SourceKey, StringComparison.Ordinal)
+        && string.Equals(OriginClusterId, other.OriginClusterId, StringComparison.Ordinal)
+        && ValueLength == other.ValueLength
+        && ValueTruncated == other.ValueTruncated
+        && ValueHash == other.ValueHash
+        && Mode == other.Mode
+        && RetentionShape == other.RetentionShape
+        && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
+        && BytesEqual(ValuePreview, other.ValuePreview)
+        && BytesEqual(Delta, other.Delta)
+        && Equals(VectorClock, other.VectorClock);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Hlc);
+        hash.Add(Kind);
+        hash.Add(SourceKey, StringComparer.Ordinal);
+        hash.Add(OriginClusterId, StringComparer.Ordinal);
+        hash.Add(ValueLength);
+        hash.Add(ValueTruncated);
+        hash.Add(ValueHash);
+        hash.Add(Mode);
+        hash.Add(RetentionShape);
+        hash.Add(EndKey, StringComparer.Ordinal);
+        if (ValuePreview is { } preview)
+        {
+            hash.AddBytes(preview);
+        }
+
+        if (Delta is { } delta)
+        {
+            hash.AddBytes(delta);
+        }
+
+        hash.Add(VectorClock);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

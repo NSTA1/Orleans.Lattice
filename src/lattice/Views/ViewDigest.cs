@@ -46,12 +46,36 @@ public readonly record struct ViewDigest
     /// <summary>
     /// Whether this digest is byte-for-byte equal to <paramref name="other"/>:
     /// the same <see cref="EntryCount"/> and the same <see cref="Hash"/> bytes.
-    /// Provided because the compiler-generated record-struct equality compares the
-    /// <see cref="Hash"/> array by reference, which is never what a drift check
-    /// wants.
+    /// This is the value-equality implementation that <see cref="Equals(ViewDigest)"/>
+    /// and the <c>==</c> operator delegate to; it is retained as an explicitly
+    /// named drift-check alias.
     /// </summary>
     /// <param name="other">The digest to compare against.</param>
     public bool ContentEquals(ViewDigest other) =>
         EntryCount == other.EntryCount
         && (Hash is null ? other.Hash is null : other.Hash is not null && Hash.AsSpan().SequenceEqual(other.Hash));
+
+    /// <summary>
+    /// Compares two digests by value. Overrides the compiler-generated
+    /// record-struct equality, which compares the <see cref="Hash"/> array with
+    /// <see cref="EqualityComparer{T}.Default"/> - reference equality - so two
+    /// structurally identical digests (or a digest and its post-serialization
+    /// self) would otherwise never compare equal, defeating the drift check this
+    /// type exists for.
+    /// </summary>
+    /// <param name="other">The digest to compare against.</param>
+    public bool Equals(ViewDigest other) => ContentEquals(other);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(EntryCount);
+        if (Hash is { } bytes)
+        {
+            hash.AddBytes(bytes);
+        }
+
+        return hash.ToHashCode();
+    }
 }
