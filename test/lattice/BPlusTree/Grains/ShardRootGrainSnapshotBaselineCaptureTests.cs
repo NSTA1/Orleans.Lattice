@@ -37,19 +37,77 @@ public sealed class ShardRootGrainSnapshotBaselineCaptureTests
     /// </summary>
     private sealed class CaptureHarness
     {
+        private readonly List<int> _foldsDispatched = [];
+        private readonly Dictionary<int, TaskCompletionSource> _dispatchWaiters = [];
+
         public ShardRootGrain Grain { get; set; } = null!;
 
         /// <summary>The baseline handed to <c>ISnapshotLeafGrain.SeedAsync</c>, once captured.</summary>
         public SnapshotShardBaseline? Seeded { get; set; }
-
-        /// <summary>Leaf-chain index of every fold, in the order the folds were dispatched.</summary>
-        public List<int> FoldsDispatched { get; } = [];
 
         /// <summary>Highest number of folds observed in flight at the same instant.</summary>
         public int PeakConcurrentFolds;
 
         /// <summary>Gates each leaf's fold when the harness was built parked.</summary>
         public TaskCompletionSource<IReadOnlyList<LeafSnapshotRow>>[] Gates { get; set; } = [];
+
+        /// <summary>
+        /// Leaf-chain index of every fold, in the order the folds were
+        /// dispatched. A snapshot: folds are dispatched from the thread pool, so
+        /// the live list must never be read without its lock.
+        /// </summary>
+        public IReadOnlyList<int> FoldsDispatched
+        {
+            get
+            {
+                lock (_foldsDispatched)
+                {
+                    return _foldsDispatched.ToList();
+                }
+            }
+        }
+
+        public void RecordDispatch(int leafIndex)
+        {
+            lock (_foldsDispatched)
+            {
+                _foldsDispatched.Add(leafIndex);
+                foreach (var (at, waiter) in _dispatchWaiters)
+                {
+                    if (_foldsDispatched.Count >= at)
+                    {
+                        waiter.TrySetResult();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// A task that completes when the <paramref name="count"/>th fold has
+        /// been dispatched, so a test waits on the dispatch <em>event</em>
+        /// rather than on a guessed number of yields or a sleep. Folds are
+        /// dispatched on the thread pool, so yielding on the test thread
+        /// establishes no happens-before with one and cannot be used to decide
+        /// the window has settled - which is what made this fixture flake on CI.
+        /// </summary>
+        public Task DispatchCountReaches(int count)
+        {
+            lock (_foldsDispatched)
+            {
+                if (_foldsDispatched.Count >= count)
+                {
+                    return Task.CompletedTask;
+                }
+
+                if (!_dispatchWaiters.TryGetValue(count, out var waiter))
+                {
+                    waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _dispatchWaiters[count] = waiter;
+                }
+
+                return waiter.Task;
+            }
+        }
     }
 
     private static LeafSnapshotRow Row(string key, string value, long hlc, LatticeMergeMode? mode = null) =>
@@ -133,10 +191,7 @@ public sealed class ShardRootGrainSnapshotBaselineCaptureTests
                     Arg.Any<LeafBaselineFreeze>(), Arg.Any<long[]>(), Arg.Any<CancellationToken>())
                 .Returns(_ =>
                 {
-                    lock (harness.FoldsDispatched)
-                    {
-                        harness.FoldsDispatched.Add(index);
-                    }
+                    harness.RecordDispatch(index);
 
                     var now = Interlocked.Increment(ref inFlight);
                     InterlockedMax(ref harness.PeakConcurrentFolds, now);
@@ -341,33 +396,34 @@ public sealed class ShardRootGrainSnapshotBaselineCaptureTests
             parkFolds: true);
 
         var capture = harness.Grain.CaptureSnapshotBaselineAsync(Guid.NewGuid(), CancellationToken.None);
-        await SettleAsync();
 
-        Assert.That(harness.FoldsDispatched, Has.Count.EqualTo(3),
+        await AwaitDispatchAsync(harness, 3);
+        await AssertNoFurtherDispatchAsync(harness, 3,
             "only the window may be dispatched before any result is consumed");
 
         // Releasing the chain-head fold consumes one result, which frees exactly
         // one slot and admits exactly one more fold.
         harness.Gates[0].SetResult([]);
-        await SettleAsync();
-        Assert.That(harness.FoldsDispatched, Has.Count.EqualTo(4),
+        await AwaitDispatchAsync(harness, 4);
+        await AssertNoFurtherDispatchAsync(harness, 4,
             "consuming one result must admit exactly one more fold");
 
         // Completing an out-of-order fold must NOT admit more work: the window
         // slides on consumption, and leaf 1 has not been consumed yet.
         harness.Gates[2].SetResult([]);
-        await SettleAsync();
-        Assert.That(harness.FoldsDispatched, Has.Count.EqualTo(4),
+        await AssertNoFurtherDispatchAsync(harness, 4,
             "a fold completing out of order must not slide the window");
 
         for (var i = 1; i < 10; i++)
             harness.Gates[i].TrySetResult([]);
 
         await capture;
+
+        var dispatched = harness.FoldsDispatched;
         Assert.Multiple(() =>
         {
-            Assert.That(harness.FoldsDispatched, Has.Count.EqualTo(10), "every leaf must be folded exactly once");
-            Assert.That(harness.FoldsDispatched.Order(), Is.EqualTo(Enumerable.Range(0, 10)));
+            Assert.That(dispatched, Has.Count.EqualTo(10), "every leaf must be folded exactly once");
+            Assert.That(dispatched.Order(), Is.EqualTo(Enumerable.Range(0, 10)));
             Assert.That(harness.PeakConcurrentFolds, Is.LessThanOrEqualTo(3));
         });
     }
@@ -487,13 +543,48 @@ public sealed class ShardRootGrainSnapshotBaselineCaptureTests
     }
 
     /// <summary>
-    /// Lets every ready continuation run. The fan-out window is driven by
-    /// awaits, not timers, so yielding repeatedly is enough to reach a quiescent
-    /// state without sleeping.
+    /// Bounds a wait that should succeed. The wait itself completes on the
+    /// dispatch event, so a healthy run never spends this; it exists only to
+    /// turn a broken window into a named failure instead of a hang.
     /// </summary>
-    private static async Task SettleAsync()
+    private static readonly TimeSpan DispatchTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How long to hold still to prove no <em>further</em> fold is dispatched.
+    /// A negative cannot be event-driven, so this is the one place a duration is
+    /// load-bearing - and it is safe to keep short, because a window that
+    /// over-dispatches does so the instant a gate is released rather than after
+    /// a delay.
+    /// </summary>
+    private static readonly TimeSpan QuietPeriod = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Waits for the <paramref name="count"/>th fold to be dispatched.</summary>
+    private static async Task AwaitDispatchAsync(CaptureHarness harness, int count)
     {
-        for (var i = 0; i < 64; i++)
-            await Task.Yield();
+        var reached = harness.DispatchCountReaches(count);
+
+        if (await Task.WhenAny(reached, Task.Delay(DispatchTimeout)) != reached)
+        {
+            Assert.Fail(
+                $"timed out waiting for fold {count} to be dispatched; " +
+                $"only {harness.FoldsDispatched.Count} were");
+        }
+    }
+
+    /// <summary>
+    /// Asserts exactly <paramref name="expected"/> folds have been dispatched,
+    /// and that no further one follows while the window is held still.
+    /// </summary>
+    private static async Task AssertNoFurtherDispatchAsync(
+        CaptureHarness harness, int expected, string because)
+    {
+        var overshoot = harness.DispatchCountReaches(expected + 1);
+        var raced = await Task.WhenAny(overshoot, Task.Delay(QuietPeriod));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(raced, Is.Not.SameAs(overshoot), because);
+            Assert.That(harness.FoldsDispatched, Has.Count.EqualTo(expected), because);
+        });
     }
 }

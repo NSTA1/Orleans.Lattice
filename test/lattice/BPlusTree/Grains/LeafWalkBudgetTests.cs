@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 
@@ -54,10 +55,25 @@ public class LeafWalkBudgetTests
             "the leaf cap must fire on a run of leaves that yields no rows at all");
     }
 
+    /// <summary>
+    /// The deadline arm of the same regression: an elapsed deadline must yield
+    /// on a sterile run too.
+    /// <para>
+    /// The clock is started explicitly in the past rather than measuring a tiny
+    /// budget from now. A one-tick budget resolves to a deadline roughly 100ns
+    /// away, which the single <see cref="LeafWalkBudget.RecordLeafVisited"/>
+    /// below can win the race against, so the test flaked on CI. Backdating the
+    /// start makes the deadline unambiguously elapsed and removes the timing
+    /// dependence entirely.
+    /// </para>
+    /// </summary>
     [Test]
     public void An_elapsed_deadline_yields_even_with_nothing_collected()
     {
-        var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.FromTicks(1));
+        var budget = new LeafWalkBudget(
+            maxLeaves: int.MaxValue,
+            maxDuration: TimeSpan.FromMilliseconds(1),
+            startTimestamp: Stopwatch.GetTimestamp() - Stopwatch.Frequency);
         budget.RecordLeafVisited();
 
         Assert.That(budget.ShouldYield(), Is.True);
