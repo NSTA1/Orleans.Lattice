@@ -69,6 +69,11 @@
          InternalsVisibleTo on the api.state csproj, since LatticeStateQuery is
          internal. -->
     <ProjectReference Include="..\..\..\src\lattice.api.state\Orleans.Lattice.Api.State.csproj" />
+    <!-- The tenancy package is referenced so the reshard/merge/pin-fold suite
+         (suite "reshardfolds") can drive the real, public
+         TenantRecord.MergeFrom join against the reproduced prior shape. No
+         InternalsVisibleTo is needed - TenantRecord is public API. -->
+    <ProjectReference Include="..\..\..\src\lattice.tenancy\Orleans.Lattice.Tenancy.csproj" />
   </ItemGroup>
 
   <ItemGroup>

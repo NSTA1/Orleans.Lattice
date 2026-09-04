@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -423,26 +424,46 @@ public sealed class LatticeWalGc(
         }
 
         var results = await Task.WhenAll(reads).ConfigureAwait(false);
-        var union = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        // Presize to the widest shard's consumer count. Consumers overlap
+        // heavily across pin shards - the routing shards a tree's pins, it does
+        // not partition its consumers - so the union lands between that maximum
+        // and the sum, and seeding at the maximum removes most of the
+        // grow-and-rehash chain the prior grown-from-empty map paid.
+        var union = new Dictionary<string, HybridLogicalClock>(
+            WidestResultCount(results), StringComparer.Ordinal);
         for (var i = 0; i < results.Length; i++)
         {
             foreach (var (consumerId, pin) in results[i])
             {
-                if (union.TryGetValue(consumerId, out var existing))
+                // Single-probe min-fold: the prior shape probed `union` twice
+                // per consumer (a TryGetValue then an indexer set on the same
+                // key) in both branches. Nothing mutates `union` while the ref
+                // is live.
+                ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, consumerId, out var existed);
+                if (!existed || pin < slot)
                 {
-                    if (pin < existing)
-                    {
-                        union[consumerId] = pin;
-                    }
-                }
-                else
-                {
-                    union[consumerId] = pin;
+                    slot = pin;
                 }
             }
         }
 
         return union;
+    }
+
+    /// <summary>
+    /// Returns the largest entry count across <paramref name="results"/>, a
+    /// lower bound on the size of their union and therefore a safe capacity
+    /// hint for it. Null shard results are skipped.
+    /// </summary>
+    private static int WidestResultCount<TValue>(IReadOnlyDictionary<string, TValue>?[] results)
+    {
+        var widest = 0;
+        for (var i = 0; i < results.Length; i++)
+        {
+            var count = results[i]?.Count ?? 0;
+            if (count > widest) widest = count;
+        }
+        return widest;
     }
 
     /// <summary>
@@ -537,7 +558,9 @@ public sealed class LatticeWalGc(
         }
 
         var results = await Task.WhenAll(reads).ConfigureAwait(false);
-        var union = new Dictionary<string, long>(StringComparer.Ordinal);
+        // Presized on the same reasoning as ReadDurablePinsAsync above.
+        var union = new Dictionary<string, long>(
+            WidestResultCount(results), StringComparer.Ordinal);
         for (var i = 0; i < results.Length; i++)
         {
             if (results[i] is null)
@@ -547,16 +570,11 @@ public sealed class LatticeWalGc(
 
             foreach (var (consumerId, offset) in results[i])
             {
-                if (union.TryGetValue(consumerId, out var existing))
+                // Single-probe min-fold, as in ReadDurablePinsAsync above.
+                ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(union, consumerId, out var existed);
+                if (!existed || offset < slot)
                 {
-                    if (offset < existing)
-                    {
-                        union[consumerId] = offset;
-                    }
-                }
-                else
-                {
-                    union[consumerId] = offset;
+                    slot = offset;
                 }
             }
         }

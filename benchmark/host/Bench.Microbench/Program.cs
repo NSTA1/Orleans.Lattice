@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -274,6 +274,13 @@ if (string.Equals(suite, "slotfolds", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> slotfolds (SlotPartitionAndProbeFoldBenchmarks)");
     var slotFoldsSummary = BenchmarkRunner.Run<SlotPartitionAndProbeFoldBenchmarks>(config);
     return slotFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "reshardfolds", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> reshardfolds (ReshardMergeAndPinFoldBenchmarks)");
+    var reshardFoldsSummary = BenchmarkRunner.Run<ReshardMergeAndPinFoldBenchmarks>(config);
+    return reshardFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);

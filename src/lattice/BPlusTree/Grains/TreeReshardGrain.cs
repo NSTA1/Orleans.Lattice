@@ -348,10 +348,10 @@ internal sealed class TreeReshardGrain(
             return;
         }
 
-        // Count virtual-slot ownership per physical shard.
-        var slotCounts = new Dictionary<int, int>(physicalShards.Count);
-        foreach (var idx in physicalShards) slotCounts[idx] = 0;
-        foreach (var slot in currentMap.Slots) slotCounts[slot]++;
+        // Count virtual-slot ownership per physical shard, aligned to the
+        // physicalShards ordinals so the eligibility scan below reads the
+        // count by position rather than re-hashing the physical index.
+        var slotCounts = CountSlotsPerPhysicalShard(physicalShards, currentMap.Slots);
 
         // Filter to eligible sources: owns ≥ 2 slots AND is not already
         // splitting. Splits-in-flight are counted separately and reduce the
@@ -359,12 +359,16 @@ internal sealed class TreeReshardGrain(
         var physicalTreeId = await ResolvePhysicalTreeIdAsync();
         var splittingTasks = new List<Task<bool>>(physicalShards.Count);
         var splittingIndices = new List<int>(physicalShards.Count);
-        foreach (var idx in physicalShards)
+        var splittingSlotCounts = new List<int>(physicalShards.Count);
+        for (var i = 0; i < physicalShards.Count; i++)
         {
-            if (slotCounts[idx] < 2) continue;
+            var owned = slotCounts[i];
+            if (owned < 2) continue;
+            var idx = physicalShards[i];
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{idx}");
             splittingTasks.Add(shard.IsSplittingAsync());
             splittingIndices.Add(idx);
+            splittingSlotCounts.Add(owned);
         }
         await Task.WhenAll(splittingTasks);
 
@@ -373,7 +377,7 @@ internal sealed class TreeReshardGrain(
         for (int i = 0; i < splittingIndices.Count; i++)
         {
             if (splittingTasks[i].Result) { inFlight++; continue; }
-            eligible.Add((splittingIndices[i], slotCounts[splittingIndices[i]]));
+            eligible.Add((splittingIndices[i], splittingSlotCounts[i]));
         }
 
         var maxConcurrent = resolved.MaxConcurrentMigrations;
@@ -400,6 +404,78 @@ internal sealed class TreeReshardGrain(
             dispatches.Add(DispatchSplitAsync(split, sourceShardIndex));
         }
         await Task.WhenAll(dispatches);
+    }
+
+    /// <summary>
+    /// Counts how many virtual slots each physical shard owns, returning the
+    /// counts aligned to <paramref name="physicalShards"/> ordinals - that is,
+    /// the result at index <c>i</c> is the slot count for
+    /// <c>physicalShards[i]</c>.
+    /// </summary>
+    /// <remarks>
+    /// Physical shard indices form a small, dense, non-negative domain
+    /// (typically 1..16) while <paramref name="slots"/> spans the virtual slot
+    /// space (4096 by default), so the prior
+    /// <c>Dictionary&lt;int, int&gt;</c> histogram paid a hash read plus a hash
+    /// write for every virtual slot on every migrating tick. A dense counter
+    /// array indexed by physical shard hashes nothing per slot.
+    /// <para>
+    /// <see cref="ShardMap.GetPhysicalShardIndices"/> returns distinct indices
+    /// in ascending order, so the last element bounds the counter array.
+    /// Pathologically large indices - never emitted by
+    /// <c>ShardMap.CreateDefault</c> or the split path, and the same case
+    /// <see cref="ShardMap.GetPhysicalShardIndices"/> guards - fall back to a
+    /// binary search over that ascending list rather than over-allocating.
+    /// </para>
+    /// </remarks>
+    internal static int[] CountSlotsPerPhysicalShard(IReadOnlyList<int> physicalShards, int[] slots)
+    {
+        var counts = new int[physicalShards.Count];
+        if (counts.Length == 0) return counts;
+
+        const int DenseCounterLimit = 1 << 20;
+        var max = physicalShards[physicalShards.Count - 1];
+        if (max < DenseCounterLimit)
+        {
+            var byPhysicalIndex = new int[max + 1];
+            for (var i = 0; i < slots.Length; i++)
+            {
+                // Slots are sourced from the same map as physicalShards, so
+                // every value is in range; the explicit guard replaces the
+                // implicit bounds check rather than adding one, and keeps a
+                // mismatched pair a no-op instead of a throw.
+                var owner = (uint)slots[i];
+                if (owner < (uint)byPhysicalIndex.Length) byPhysicalIndex[owner]++;
+            }
+            for (var i = 0; i < counts.Length; i++) counts[i] = byPhysicalIndex[physicalShards[i]];
+            return counts;
+        }
+
+        for (var i = 0; i < slots.Length; i++)
+        {
+            var ordinal = IndexOfAscending(physicalShards, slots[i]);
+            if (ordinal >= 0) counts[ordinal]++;
+        }
+        return counts;
+    }
+
+    /// <summary>
+    /// Binary-searches an ascending, distinct index list, returning the
+    /// ordinal of <paramref name="value"/> or <c>-1</c> when absent.
+    /// </summary>
+    private static int IndexOfAscending(IReadOnlyList<int> ascending, int value)
+    {
+        var lo = 0;
+        var hi = ascending.Count - 1;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) >> 1);
+            var candidate = ascending[mid];
+            if (candidate == value) return mid;
+            if (candidate < value) lo = mid + 1;
+            else hi = mid - 1;
+        }
+        return -1;
     }
 
     private async Task DispatchSplitAsync(ITreeShardSplitGrain split, int sourceShardIndex)

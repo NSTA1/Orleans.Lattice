@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Orleans.Lattice.Tenancy;
 
 /// <summary>
@@ -662,32 +664,32 @@ public sealed class TenantRecord
         QuotasRegister = TenantLwwRegister<TenantQuotas>.Merge(QuotasRegister, other.QuotasRegister);
         PlacementRegister = TenantLwwRegister<TenantPlacement>.Merge(PlacementRegister, other.PlacementRegister);
 
+        // Single-probe folds: each slot dictionary is read and written on the
+        // same key, so CollectionsMarshal.GetValueRefOrAddDefault collapses two
+        // hash probes into one. Nothing mutates the target dictionary while a
+        // ref is live, so the ref stays valid across the merge call.
         foreach (var (subjectId, slot) in other.Subjects)
         {
-            Subjects[subjectId] = Subjects.TryGetValue(subjectId, out var mine)
-                ? TenantSubjectSlot.Merge(mine, slot)
-                : slot;
+            ref var mine = ref CollectionsMarshal.GetValueRefOrAddDefault(Subjects, subjectId, out var existed);
+            mine = existed ? TenantSubjectSlot.Merge(mine, slot) : slot;
         }
 
         foreach (var (grantId, slot) in other.GrantSlots)
         {
-            GrantSlots[grantId] = GrantSlots.TryGetValue(grantId, out var mine)
-                ? TenantGrantSlot.Merge(mine, slot)
-                : slot;
+            ref var mine = ref CollectionsMarshal.GetValueRefOrAddDefault(GrantSlots, grantId, out var existed);
+            mine = existed ? TenantGrantSlot.Merge(mine, slot) : slot;
         }
 
         foreach (var (regionId, slot) in other.AllowedRegions)
         {
-            AllowedRegions[regionId] = AllowedRegions.TryGetValue(regionId, out var mine)
-                ? TenantRegionAllowSlot.Merge(mine, slot)
-                : slot;
+            ref var mine = ref CollectionsMarshal.GetValueRefOrAddDefault(AllowedRegions, regionId, out var existed);
+            mine = existed ? TenantRegionAllowSlot.Merge(mine, slot) : slot;
         }
 
         foreach (var (regionId, slot) in other.RegionStatuses)
         {
-            RegionStatuses[regionId] = RegionStatuses.TryGetValue(regionId, out var mine)
-                ? TenantRegionStatusSlot.Merge(mine, slot)
-                : slot;
+            ref var mine = ref CollectionsMarshal.GetValueRefOrAddDefault(RegionStatuses, regionId, out var existed);
+            mine = existed ? TenantRegionStatusSlot.Merge(mine, slot) : slot;
         }
 
         return this;
