@@ -2788,6 +2788,13 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> PhaseScanPageLeafWalkTag = new(TagPhase, "leaf-walk");
 
+    /// <summary>
+    /// <see cref="TagPhase"/> = <c>baseline-fold</c> (a snapshot baseline
+    /// capture was folding the frozen leaves' WAL tails back onto their frozen
+    /// caches, the fanned-out second pass of the capture).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> PhaseScanPageBaselineFoldTag = new(TagPhase, "baseline-fold");
+
     /// <summary><see cref="TagStage"/> = <c>resolve</c> (step 1 affected-leaves resolution).</summary>
     public static readonly KeyValuePair<string, object?> StageResolveTag = new(TagStage, "resolve");
 

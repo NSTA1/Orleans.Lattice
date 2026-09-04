@@ -236,11 +236,16 @@ public class ShardRootGrainScanPageStallTests
     /// are meant to bound. Each entry point is therefore a synchronous wrapper
     /// that arms the walk and delegates to an <c>async</c> core.
     /// <para>
-    /// Deliberately absent: <c>CaptureSnapshotBaselineAsync</c>, whose
-    /// freeze/fold walk must observe one consistent point across the whole
-    /// chain and therefore uses <c>AtomicLeafWalk</c> rather than a scan-page
-    /// budget. Bounding or abandoning it would break the snapshot cursor's
-    /// zero-observable-writes guarantee; it is tracked separately as issue 1961.
+    /// <c>CaptureSnapshotBaselineAsync</c> is in this list even though it is
+    /// <em>not</em> work-bounded. It arms only the hard end-to-end ceiling, and
+    /// never samples the cooperative per-page budget, because its freeze/fold
+    /// walk has nowhere it can stop and resume from. Abandoning it does not
+    /// break the snapshot cursor's zero-observable-writes guarantee, which comes
+    /// from <c>capturedHead</c> dominating every leaf frontier rather than from
+    /// the exclusive hold: the capture is read-only right up to its closing
+    /// <c>SeedAsync</c>, so a stalled capture simply fails the open, which the
+    /// caller retries with a fresh baseline token. Making the walk resumable
+    /// remains tracked as issue 1961.
     /// </para>
     /// </summary>
     [Test]
@@ -263,6 +268,7 @@ public class ShardRootGrainScanPageStallTests
             nameof(ShardRootGrain.GetDiagnosticsBoundedAsync),
             nameof(ShardRootGrain.RefreshLeafByteFootprintsBoundedAsync),
             nameof(ShardRootGrain.GetShardMaterialiserLagBoundedAsync),
+            nameof(ShardRootGrain.CaptureSnapshotBaselineAsync),
         ];
 
         Assert.Multiple(() =>

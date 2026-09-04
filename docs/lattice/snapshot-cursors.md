@@ -48,7 +48,18 @@ returning the cursor ID:
    [`LatticeOptions.MaxConcurrentSnapshotCaptures`](configuration.md#maxconcurrentsnapshotcaptures)
    shard captures at a time (default 4); the open then proceeds in waves.
    The captured baseline is identical under any cap - only the dispatch
-   schedule changes.
+   schedule changes. Within a single shard, the fold pass is itself
+   fanned out over a sliding window of
+   [`LatticeOptions.MaxConcurrentSnapshotBaselineFolds`](configuration.md#maxconcurrentsnapshotbaselinefolds)
+   leaves (default 4) to cut that shard's hold; the freeze pass stays
+   sequential because the chain is discovered one sibling hop at a time.
+   Fold results are consumed in strict leaf-chain order, so the baseline
+   is byte-identical to a serial fold. The whole capture is additionally
+   covered by the hard end-to-end stall ceiling
+   ([`MaxScanPageStallDuration`](configuration.md#maxscanpagestallduration)),
+   so a shard root can never be held indefinitely by an unresponsive
+   leaf: the capture is abandoned instead, which is safe because it
+   performs no observable writes until the baseline is seeded.
 3. **Registry HLC capture.** The current `IWalCursorRegistry` snapshot
    HLC pins the WAL retention floor.
 

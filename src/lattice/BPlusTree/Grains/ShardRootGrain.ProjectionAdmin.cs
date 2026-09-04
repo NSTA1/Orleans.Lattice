@@ -322,13 +322,59 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(Guid token, CancellationToken cancellationToken)
+    // Deliberately NOT work-bounded, and a resume budget is not a drop-in fix
+    // (issue 1956). Issue 1961 settled on two mitigations that do not require
+    // making the walk resumable, and both are applied here: the hard
+    // end-to-end stall ceiling armed by the wrapper bounds the *hold*, and the
+    // fold pass below is fanned out to cut the dominant cost.
+    //
+    // Do NOT "fix" this by capturing capturedHead first and freezing each leaf
+    // AT it. That inversion is unsafe, not merely insufficient.
+    // FreezeProjectionAsync always freezes at the leaf's OWN frontier - there
+    // is no seam to freeze at a caller-supplied head - and
+    // FoldTailOntoFrozenAsync folds only FORWARD over (frontier, capturedHead],
+    // skipping any partition whose frontier already exceeds it. A leaf whose
+    // head advanced past capturedHead before it was frozen would therefore have
+    // post-capture writes baked into its frozen cache, the forward fold would
+    // skip that partition, and those writes would be materialised into the
+    // baseline: the exact zero-observable-writes violation this design exists to
+    // prevent, failing silently rather than erroring. CRDT and LWW folds are not
+    // invertible, so there is no rewind. See the class doc on LeafBaselineFreeze
+    // (which names the same "overshooting re-freeze past capturedHead" hazard)
+    // and issue 1961.
+    public Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(
+        Guid token,
+        CancellationToken cancellationToken)
     {
         if (token == Guid.Empty)
             throw new ArgumentException("Snapshot baseline token must not be empty.", nameof(token));
+
+        // Armed before the first await, like every other bounded entry point on
+        // this grain, so the ceiling covers the whole hold rather than starting
+        // after the prologue. Only the HARD ceiling is in force here: the core
+        // never samples the cooperative per-page budget, because this walk has
+        // nowhere it can stop and resume from. Abandoning it is nonetheless safe
+        // - the capture is read-only right up to the closing SeedAsync, so
+        // nothing is half-applied, and the failed open is simply retried with a
+        // fresh baseline token.
+        var scan = BeginScanPage(nameof(CaptureSnapshotBaselineAsync));
+        return GuardScanPageAsync(
+            scan,
+            CaptureSnapshotBaselineCoreAsync(token, cancellationToken, scan));
+    }
+
+    private async Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineCoreAsync(
+        Guid token,
+        CancellationToken cancellationToken,
+        ScanPageWalk scan)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         await PrepareForOperationAsync();
         cancellationToken.ThrowIfCancellationRequested();
+
+        // Resolved synchronously and up front, so the fan-out costs no registry
+        // round trip inside the window the stall ceiling bounds.
+        var foldConcurrency = optionsResolver.GetSnapshotBaselineFoldConcurrency(TreeId);
 
         // Pass 1 (freeze): walk this shard's leaf chain and freeze each leaf's
         // committed cache, per-partition projection frontier, and in-flight
@@ -336,23 +382,14 @@ internal sealed partial class ShardRootGrain
         // unnecessary here (the freeze is read-only and does not deactivate the
         // leaf), but we keep the leaf handle alongside its freeze so the fold
         // pass can target the exact same leaf with the uniform capturedHead.
+        scan.Phase = ScanPagePhase.Descent;
         var leftmostId = await GetLeftmostLeafIdAsync();
         var frozen = new List<(IBPlusLeafGrain Leaf, LeafBaselineFreeze Freeze)>();
+        var walk = new AtomicLeafWalk(nameof(CaptureSnapshotBaselineAsync));
         if (leftmostId is not null)
         {
+            scan.Phase = ScanPagePhase.LeafWalk;
             var leafId = leftmostId.Value;
-            // NOT WORK-BOUNDED, and a budget is not the fix (issue 1956).
-            // capturedHead is read AFTER every freeze has returned (see below),
-            // which is what makes the baseline a single consistent point.
-            // Releasing the shard mid-freeze would let writes land between two
-            // leaves' freezes, so the snapshot cursor's zero-observable-writes
-            // guarantee would not hold.
-            //
-            // The real fix is to invert that dependency - capture the head
-            // first and freeze each leaf AT it - which makes the walk
-            // resumable: tracked as issue 1961. Until then this is
-            // instrumented, not fixed.
-            var walk = new AtomicLeafWalk(nameof(CaptureSnapshotBaselineAsync));
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -360,23 +397,27 @@ internal sealed partial class ShardRootGrain
                 var freeze = await leaf.FreezeProjectionAsync(cancellationToken);
                 frozen.Add((leaf, freeze));
                 walk.RecordLeafVisited();
+                scan.Budget.RecordLeafVisited();
 
                 var next = await leaf.GetNextSiblingAsync();
                 if (next is null)
                     break;
                 leafId = next.Value;
             }
-
-            walk.ReportIfSlow(logger, context.GrainId);
         }
 
         // Capture capturedHead AFTER every freeze has returned. Because each
         // freeze happened earlier in wall-clock than this head read,
         // head_now >= head_at_freeze >= frontier_at_freeze for every leaf and
         // partition, so frontier_p <= capturedHead_p uniformly with no
-        // overshoot. The uniform head also keeps a cross-leaf saga atomic: a
-        // terminal beyond capturedHead leaves its saga pending (invisible) on
-        // every leaf the saga touched.
+        // overshoot. That domination, not the exclusive hold, is what makes the
+        // baseline a single consistent point: a leaf frozen early still receives
+        // every write in [frontier, capturedHead] back from its tail fold, so
+        // the materialised baseline equals the shard's state at capturedHead
+        // however long the walk took and however many writes landed during it.
+        // The uniform head also keeps a cross-leaf saga atomic: a terminal
+        // beyond capturedHead leaves its saga pending (invisible) on every leaf
+        // the saga touched.
         var capturedHead = await SnapshotWalHeadAsync(cancellationToken);
 
         // Pass 2 (fold + union): fold each leaf's own (frontier, capturedHead]
@@ -385,39 +426,87 @@ internal sealed partial class ShardRootGrain
         // duplicate left behind by an adaptive split; LWW-merging on collision
         // keeps the highest-timestamp variant (the snapshot leaf's read-time
         // IsKeyOwned filter then drops the orphan for the non-owning shard).
+        //
+        // The folds are fanned out because, unlike the chain walk above, this
+        // pass is order-independent: every fold targets an already-captured head
+        // and is a self-contained per-leaf call. Results are nonetheless
+        // CONSUMED in strict leaf-chain order, so the union - including the
+        // tie-breaking of the merge-mode adoption rule below, which is written
+        // against a single accumulating pass - is byte-for-byte identical to a
+        // serial fold. Only the dispatch schedule changes.
+        //
+        // The window is a ring buffer rather than a semaphore so that completed
+        // -but-unconsumed results are bounded too: a plain gate would let folds
+        // run arbitrarily far ahead of a slow leaf at the head of the chain and
+        // pile every folded row set up in memory alongside the union.
+        scan.Phase = ScanPagePhase.BaselineFold;
         var union = new SortedDictionary<string, LwwValue<byte[]>>(StringComparer.Ordinal);
         var unionModes = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal);
-        foreach (var (leaf, freeze) in frozen)
+        if (frozen.Count > 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var rows = await leaf.FoldTailOntoFrozenAsync(freeze, capturedHead, cancellationToken);
-            foreach (var row in rows)
+            var window = Math.Min(foldConcurrency, frozen.Count);
+            var inFlight = new Task<IReadOnlyList<LeafSnapshotRow>>[window];
+            for (var i = 0; i < window; i++)
+                inFlight[i] = FoldLeafTailAsync(i);
+
+            try
             {
-                if (union.TryGetValue(row.Key, out var existing))
+                for (var i = 0; i < frozen.Count; i++)
                 {
-                    var merged = LwwValue<byte[]>.Merge(existing, row.Value);
-                    union[row.Key] = merged;
-                    // On a donor-orphan collision the per-key merge mode must
-                    // follow whichever value the LWW merge kept. If the incoming
-                    // row won (its timestamp is the survivor), adopt its mode;
-                    // otherwise leave the existing mode untouched.
-                    if (ReferenceEquals(merged.Value, row.Value.Value)
-                        || merged.Timestamp.Equals(row.Value.Timestamp))
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var slot = i % window;
+                    var rows = await inFlight[slot];
+
+                    var dispatch = i + window;
+                    inFlight[slot] = dispatch < frozen.Count
+                        ? FoldLeafTailAsync(dispatch)
+                        : CompletedNoRows;
+
+                    foreach (var row in rows)
                     {
-                        if (row.MergeMode is { } wonMode)
-                            unionModes[row.Key] = wonMode;
+                        if (union.TryGetValue(row.Key, out var existing))
+                        {
+                            var merged = LwwValue<byte[]>.Merge(existing, row.Value);
+                            union[row.Key] = merged;
+                            // On a donor-orphan collision the per-key merge mode
+                            // must follow whichever value the LWW merge kept. If
+                            // the incoming row won (its timestamp is the
+                            // survivor), adopt its mode; otherwise leave the
+                            // existing mode untouched.
+                            if (ReferenceEquals(merged.Value, row.Value.Value)
+                                || merged.Timestamp.Equals(row.Value.Timestamp))
+                            {
+                                if (row.MergeMode is { } wonMode)
+                                    unionModes[row.Key] = wonMode;
+                                else
+                                    unionModes.Remove(row.Key);
+                            }
+                        }
                         else
-                            unionModes.Remove(row.Key);
+                        {
+                            union[row.Key] = row.Value;
+                            if (row.MergeMode is { } mode)
+                                unionModes[row.Key] = mode;
+                        }
                     }
                 }
-                else
-                {
-                    union[row.Key] = row.Value;
-                    if (row.MergeMode is { } mode)
-                        unionModes[row.Key] = mode;
-                }
+            }
+            catch
+            {
+                // One fold faulting (or a cancellation) abandons the rest of the
+                // window. They are read-only calls, so abandoning them is safe,
+                // but their faults must still be observed or they surface later
+                // as TaskScheduler.UnobservedTaskException on a finalizer thread,
+                // attributed to nothing.
+                ObserveOutstandingFolds(inFlight);
+                throw;
             }
         }
+
+        // Reported once for the WHOLE hold, both passes included. The fold pass
+        // dominates, so timing only the chain walk would under-report the hold
+        // this diagnostic exists to surface.
+        walk.ReportIfSlow(logger, context.GrainId);
 
         var materialised = new List<LeafSnapshotRow>(union.Count);
         long rowBytes = 0;
@@ -450,6 +539,44 @@ internal sealed partial class ShardRootGrain
         await snapshotLeaf.SeedAsync(TreeId, ShardIndex, baseline, token, cancellationToken);
 
         return new SnapshotBaselineCaptureResult(capturedHead, materialised.Count);
+
+        Task<IReadOnlyList<LeafSnapshotRow>> FoldLeafTailAsync(int index)
+        {
+            var (leaf, freeze) = frozen[index];
+            return leaf.FoldTailOntoFrozenAsync(freeze, capturedHead, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A shared already-completed empty fold result, so draining the tail of the
+    /// fan-out window allocates nothing.
+    /// </summary>
+    private static readonly Task<IReadOnlyList<LeafSnapshotRow>> CompletedNoRows =
+        Task.FromResult<IReadOnlyList<LeafSnapshotRow>>([]);
+
+    /// <summary>
+    /// Marks every still-outstanding fold in an abandoned fan-out window as
+    /// observed. The folds are read-only, so leaving them running is harmless,
+    /// but an unobserved faulted <see cref="Task"/> is not: it is re-raised on a
+    /// finalizer thread as <see cref="TaskScheduler.UnobservedTaskException"/>,
+    /// long after the call it belonged to, with no context attached.
+    /// </summary>
+    private static void ObserveOutstandingFolds(Task<IReadOnlyList<LeafSnapshotRow>>[] folds)
+    {
+        foreach (var fold in folds)
+        {
+            if (fold.IsCompleted)
+            {
+                _ = fold.Exception;
+                continue;
+            }
+
+            _ = fold.ContinueWith(
+                static completed => _ = completed.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
     }
 }
 

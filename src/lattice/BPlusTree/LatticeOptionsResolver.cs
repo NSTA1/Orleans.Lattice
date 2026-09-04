@@ -273,6 +273,22 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// Resolves the effective bounded fan-out for a snapshot baseline capture's
+    /// fold pass: how many per-leaf tail folds one shard's capture may have in
+    /// flight at once. Resolved synchronously, like
+    /// <see cref="GetScanPageBounds(string)"/>, because the capture arms its
+    /// stall ceiling as the first statement of the grain call and must not spend
+    /// a registry round trip inside the window that ceiling bounds.
+    /// </summary>
+    /// <param name="treeId">The tree whose effective fold fan-out to resolve.</param>
+    /// <returns>The effective fan-out, clamped to at least 1.</returns>
+    public int GetSnapshotBaselineFoldConcurrency(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        return Math.Max(1, optionsMonitor.Get(treeId).MaxConcurrentSnapshotBaselineFolds);
+    }
+
+    /// <summary>
     /// Resolves the effective end-to-end stall ceiling for a page fill: the
     /// explicit <see cref="LatticeOptions.MaxScanPageStallDuration"/> when one
     /// is configured, otherwise one derived from this silo's Orleans response

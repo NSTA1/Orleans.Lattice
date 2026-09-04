@@ -16,6 +16,14 @@ internal enum ScanPagePhase
 
     /// <summary>Reading the leaf chain.</summary>
     LeafWalk,
+
+    /// <summary>
+    /// Folding each frozen leaf's WAL tail back onto its frozen cache during a
+    /// snapshot baseline capture. Distinct from <see cref="LeafWalk"/> because
+    /// the fold pass is fanned out, so "the read in flight is leaf N + 1" - true
+    /// of the serial chain walk - does not describe it.
+    /// </summary>
+    BaselineFold,
 }
 
 internal sealed partial class ShardRootGrain
@@ -235,6 +243,9 @@ internal sealed partial class ShardRootGrain
                 "while preparing the shard for the operation, before any leaf was read",
             ScanPagePhase.Descent =>
                 "while traversing down to the start leaf, before any leaf was read",
+            ScanPagePhase.BaselineFold =>
+                $"while folding the frozen leaves' WAL tails, over a chain of {leaves} leaf/leaves; "
+                + "the fold pass is fanned out, so several leaf folds may have been in flight",
             _ => $"while reading the leaf chain, after {leaves} leaf/leaves; the read in flight was leaf {leaves + 1}",
         };
 
@@ -260,6 +271,7 @@ internal sealed partial class ShardRootGrain
     {
         ScanPagePhase.Prologue => LatticeMetrics.PhaseScanPagePrologueTag,
         ScanPagePhase.Descent => LatticeMetrics.PhaseScanPageDescentTag,
+        ScanPagePhase.BaselineFold => LatticeMetrics.PhaseScanPageBaselineFoldTag,
         _ => LatticeMetrics.PhaseScanPageLeafWalkTag,
     };
 
@@ -267,6 +279,7 @@ internal sealed partial class ShardRootGrain
     {
         ScanPagePhase.Prologue => "prologue",
         ScanPagePhase.Descent => "descent",
+        ScanPagePhase.BaselineFold => "baseline-fold",
         _ => "leaf-walk",
     };
 }

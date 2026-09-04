@@ -745,6 +745,40 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentSnapshotCaptures = 4;
 
     /// <summary>
+    /// Maximum number of per-leaf tail folds that a single shard's snapshot
+    /// baseline capture may have in flight at once.
+    /// <para>
+    /// A capture runs two passes over the shard's leaf chain: it freezes every
+    /// leaf, reads one uniform WAL head, then folds each leaf's own
+    /// <c>(frontier, capturedHead]</c> tail back on top of its frozen cache and
+    /// unions the results. The fold pass dominates the cost, and unlike the
+    /// freeze pass it is <i>order-independent</i>: each fold is a self-contained
+    /// per-leaf call against an already-captured head, and the union is a
+    /// commutative CRDT last-writer-wins merge. Issuing several folds
+    /// concurrently therefore shortens the shard root's hold without changing
+    /// what the capture produces.
+    /// </para>
+    /// <para>
+    /// This is a different dimension from
+    /// <see cref="MaxConcurrentSnapshotCaptures"/>, which bounds how many
+    /// <i>shards</i> capture at once. The two multiply into the peak number of
+    /// concurrent leaf folds a single snapshot open can dispatch, so raise them
+    /// together with that product in mind.
+    /// </para>
+    /// The materialised baseline is byte-for-byte identical under any value -
+    /// results are consumed in leaf-chain order regardless of the order they
+    /// complete in, so even the tie-breaking of a donor-orphan collision is
+    /// unchanged. Only the dispatch schedule differs. Higher values shorten the
+    /// hold but raise the capture's peak memory, because that many folded row
+    /// sets are held alongside the accumulating union. Must be at least 1;
+    /// values below 1 are clamped to 1 at the fan-out site.
+    /// </summary>
+    public int MaxConcurrentSnapshotBaselineFolds { get; set; } = DefaultMaxConcurrentSnapshotBaselineFolds;
+
+    /// <summary>Default value for <see cref="MaxConcurrentSnapshotBaselineFolds"/> (4).</summary>
+    public const int DefaultMaxConcurrentSnapshotBaselineFolds = 4;
+
+    /// <summary>
     /// Whether a snapshot-isolated cursor open (the <c>OpenSnapshot*CursorAsync</c>
     /// family) is shed fast with a retryable <see cref="LatticeSaturatedException"/>
     /// when the tree's per-silo WAL saturation signal reports
