@@ -82,6 +82,51 @@ public sealed class LeafReReplayerTests
     }
 
     [Test]
+    public async Task ReplayAsync_retained_log_empty_skips_range_empty_after_counting_the_ranges()
+    {
+        // Non-empty ranges but nothing retained to select from: the pass is
+        // still a skip, but it reports the ranges it was given so the caller can
+        // tell "no ranges to repair" from "ranges given, nothing retained".
+        using var skipped = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName, LatticeReplicationMetrics.LeafReReplaySkippedName);
+
+        var (outcome, sink) = await RunAsync(
+            new WalReReplayReadResult { Entries = Array.Empty<WalRecord>() },
+            new[] { Range("a", "m"), Range("m", null) },
+            HybridLogicalClock.Zero);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Attempted, Is.False);
+            Assert.That(outcome.RangesProcessed, Is.EqualTo(2));
+            Assert.That(outcome.SkipReason, Is.EqualTo(LeafReReplaySkipReason.RangeEmpty));
+            Assert.That(sink.Calls, Is.Zero);
+        });
+        Assert.That(skipped.Measurements.Single().Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == LatticeReplicationMetrics.TagReason
+            && (string?)t.Value == LatticeReplicationMetrics.LeafReReplaySkipRangeEmpty));
+    }
+
+    [Test]
+    public async Task ReplayAsync_null_entry_list_skips_range_empty()
+    {
+        // A source that reports no entry list at all is treated exactly like an
+        // empty one rather than faulting the repair pass.
+        var (outcome, sink) = await RunAsync(
+            new WalReReplayReadResult { Entries = null! },
+            new[] { Range(null, null) },
+            HybridLogicalClock.Zero);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.Attempted, Is.False);
+            Assert.That(outcome.RangesProcessed, Is.EqualTo(1));
+            Assert.That(outcome.SkipReason, Is.EqualTo(LeafReReplaySkipReason.RangeEmpty));
+            Assert.That(sink.Calls, Is.Zero);
+        });
+    }
+
+    [Test]
     public async Task ReplayAsync_wal_trimmed_past_cursor_skips_with_operator_alert()
     {
         using var skipped = new MeterCollector<long>(
