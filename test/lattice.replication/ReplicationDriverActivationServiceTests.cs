@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// one <see cref="IReplicationMaintenanceGrain"/> per replicated tree.
 /// </summary>
 [TestFixture]
-public class ReplicationDriverActivationServiceTests
+public partial class ReplicationDriverActivationServiceTests
 {
     private static IOptionsMonitor<LatticeReplicationOptions> Monitor(
         IReadOnlyDictionary<string, LatticeMergeMode>? trees,
