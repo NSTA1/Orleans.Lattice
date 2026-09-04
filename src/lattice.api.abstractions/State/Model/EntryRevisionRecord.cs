@@ -103,4 +103,97 @@ public sealed record EntryRevisionRecord
     /// for point revisions.
     /// </summary>
     [Id(13)] public string? EndKey { get; init; }
+
+    /// <summary>
+    /// Compares two revisions by value, with <see cref="ValuePreview"/>,
+    /// <see cref="Delta"/>, and the <see cref="MemberChanges"/> sequence compared
+    /// by content. The compiler-generated record equality compares the
+    /// <see cref="byte"/> arrays with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality) and the <see cref="MemberChanges"/> list by reference,
+    /// so two structurally identical revisions - and, in particular, a revision and
+    /// its post-serialization self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The revision to compare against.</param>
+    public bool Equals(EntryRevisionRecord? other) =>
+        other is not null
+        && Hlc.Equals(other.Hlc)
+        && Kind == other.Kind
+        && Category == other.Category
+        && string.Equals(SourceKey, other.SourceKey, StringComparison.Ordinal)
+        && string.Equals(OriginClusterId, other.OriginClusterId, StringComparison.Ordinal)
+        && ValueLength == other.ValueLength
+        && Truncated == other.Truncated
+        && ValueHash == other.ValueHash
+        && Mode == other.Mode
+        && Retention.Equals(other.Retention)
+        && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
+        && BytesEqual(ValuePreview, other.ValuePreview)
+        && BytesEqual(Delta, other.Delta)
+        && MemberChangesEqual(MemberChanges, other.MemberChanges);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Hlc);
+        hash.Add(Kind);
+        hash.Add(Category);
+        hash.Add(SourceKey, StringComparer.Ordinal);
+        hash.Add(OriginClusterId, StringComparer.Ordinal);
+        hash.Add(ValueLength);
+        hash.Add(Truncated);
+        hash.Add(ValueHash);
+        hash.Add(Mode);
+        hash.Add(Retention);
+        hash.Add(EndKey, StringComparer.Ordinal);
+        if (ValuePreview is { } preview)
+        {
+            hash.AddBytes(preview);
+        }
+
+        if (Delta is { } delta)
+        {
+            hash.AddBytes(delta);
+        }
+
+        if (MemberChanges is { } changes)
+        {
+            hash.Add(changes.Count);
+            foreach (var change in changes)
+            {
+                hash.Add(change);
+            }
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
+
+    private static bool MemberChangesEqual(
+        IReadOnlyList<CrdtMemberChange>? left,
+        IReadOnlyList<CrdtMemberChange>? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
