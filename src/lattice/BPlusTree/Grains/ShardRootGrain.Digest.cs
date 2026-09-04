@@ -20,8 +20,10 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// When the shard's root is a single leaf (flat-tree case), the
 /// digest is read directly from that leaf via
-/// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetProjectionDigestAsync"/>. When the
-/// shard has no root (empty shard), an empty digest is returned.
+/// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetProjectionDigestAsync"/>.
+/// Every entry point below awaits <c>PrepareForOperationAsync</c> first,
+/// which materialises a root leaf on a never-written shard, so by the
+/// time the digest is read the shard always has a root.
 /// </para>
 /// </summary>
 internal sealed partial class ShardRootGrain
@@ -42,17 +44,6 @@ internal sealed partial class ShardRootGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
             LatticeTenantLabel.ForTree(TreeId));
-
-        if (state.State.RootNodeId is null)
-        {
-            return new LeafProjectionDigest
-            {
-                Hash = new XxHash128().GetHashAndReset(),
-                EntryCount = 0,
-                CheckpointOffset = 0,
-                Version = LeafProjectionDigest.CurrentVersion,
-            };
-        }
 
         if (RootIsLeafTyped)
         {
@@ -88,20 +79,6 @@ internal sealed partial class ShardRootGrain
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagShard, ShardIndex),
             LatticeTenantLabel.ForTree(TreeId));
-
-        if (state.State.RootNodeId is null)
-        {
-            // Empty shard: return the exact same bare empty digest as
-            // GetShardProjectionDigestAsync so a full-range probe of an empty
-            // shard is byte-identical to its whole-shard digest.
-            return new LeafProjectionDigest
-            {
-                Hash = new XxHash128().GetHashAndReset(),
-                EntryCount = 0,
-                CheckpointOffset = 0,
-                Version = LeafProjectionDigest.CurrentVersion,
-            };
-        }
 
         if (RootIsLeafTyped)
         {
@@ -342,17 +319,11 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<ShardTopologyNode?> GetTopologySnapshotAsync(int depthLimit, CancellationToken cancellationToken)
+    public async Task<ShardTopologyNode> GetTopologySnapshotAsync(int depthLimit, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await PrepareForOperationAsync();
         cancellationToken.ThrowIfCancellationRequested();
-
-        // Empty shard (no root yet): nothing to describe.
-        if (state.State.RootNodeId is null)
-        {
-            return null;
-        }
 
         if (RootIsLeafTyped)
         {

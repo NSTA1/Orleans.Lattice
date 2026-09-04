@@ -1313,10 +1313,6 @@ internal sealed class LatticeStateQuery(
             // One structural read per shard root: O(shards), never per-leaf.
             var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
             var snapshot = await shard.GetTopologySnapshotAsync(depthLimit, cancellationToken).ConfigureAwait(false);
-            if (snapshot is null)
-            {
-                continue;
-            }
 
             if (budget.Remaining <= 0)
             {
