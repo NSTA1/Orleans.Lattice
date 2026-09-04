@@ -48,6 +48,22 @@ is one registerable child.
 export REPO_PATH=/absolute/path/to/some/parent    # PowerShell: $env:REPO_PATH="C:\path\to\parent"
 ```
 
+## The published port
+
+The MCP endpoint and health probes are published on host port **8080** by default.
+That port is a common one to already have in use, and a clash shows up only as an
+opaque bind failure when you run `up`, so it is overridable with
+`REPOCONTEXT_PORT`:
+
+```bash
+export REPOCONTEXT_PORT=18080                     # PowerShell: $env:REPOCONTEXT_PORT="18080"
+docker compose up -d
+```
+
+Only the host side moves; inside the container the listener stays on 8080. Every
+`localhost:8080` in the walkthrough below then becomes
+`localhost:$REPOCONTEXT_PORT`.
+
 Every path passed to `repocontext_add_repo` is resolved to its real location - `..`
 traversal and symlink escape are both defeated - and must resolve under
 `/workspace` (set by `LATTICE_WORKSPACE_ROOT`); a path outside it is refused.

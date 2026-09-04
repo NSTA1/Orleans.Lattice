@@ -110,7 +110,19 @@ services:
       LATTICE_FULL_WALK_INTERVAL_SECONDS: "120"
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
-      - "8080:8080"
+      #
+      # The HOST side is overridable because 8080 is one of the most commonly
+      # occupied ports on a developer machine, and a collision surfaces only as
+      # an opaque bind failure at `up` time. Set REPOCONTEXT_PORT (in .env or the
+      # environment) to publish elsewhere:
+      #
+      #   REPOCONTEXT_PORT=18080 docker compose up -d
+      #
+      # The CONTAINER side stays 8080 and must keep matching LATTICE_MCP_PORT
+      # above - only the published port moves, so the health probes and the MCP
+      # endpoint are then at http://localhost:$REPOCONTEXT_PORT. The default is
+      # deliberately unchanged, so existing clients keep working untouched.
+      - "${REPOCONTEXT_PORT:-8080}:8080"
     volumes:
       # Durable state survives restart / recreation / image upgrade.
       - repocontext-data:/data
