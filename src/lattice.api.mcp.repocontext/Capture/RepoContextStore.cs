@@ -783,12 +783,13 @@ internal sealed class RepoContextStore
     /// Walks the registered repository ids without building a per-repository
     /// summary.
     /// <para>
-    /// A summary carries <c>embeddedVectorCount</c>, which is scanned from the
-    /// membership tree - the largest and slowest tree in the store. A caller that
-    /// only needs the ids (the retrieval warmup, which discards everything else)
-    /// would otherwise pay that scan per repository, and it runs at startup while
-    /// the vector trees are still replaying, which is precisely when that scan is
-    /// slowest and times out.
+    /// A summary carries <c>embeddedVectorCount</c>, which is derived from the
+    /// membership tree - the largest and slowest tree in the store. That read no longer
+    /// blocks (issue 1992), but it still reads the repository root marker per repository
+    /// and schedules an out-of-band membership walk when its memo is stale. A caller that
+    /// only needs the ids (the retrieval warmup and the approximate-index sweep, which
+    /// discard everything else) has no reason to pay either, least of all at startup
+    /// while the vector trees are still replaying.
     /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the scan between repositories.</param>
@@ -957,7 +958,8 @@ internal sealed class RepoContextStore
             RepoId = repoId,
             LastIngested = lastIngested,
             FileCount = fileCount,
-            EmbeddedVectorCount = embeddedVectorCount,
+            EmbeddedVectorCount = embeddedVectorCount.Count,
+            EmbeddedVectorCountPending = embeddedVectorCount.Pending,
         };
     }
 
@@ -967,10 +969,18 @@ internal sealed class RepoContextStore
     /// writer maintains as embeddings land. A source is a file or a captured symbol, so
     /// this counts embedded files plus embedded symbols. It is read from the store of
     /// record (the vector-membership tree), never from a run's in-flight progress, so
-    /// it is a restart-durable diagnostic. Returns <c>0</c> when nothing has been
-    /// embedded yet.
+    /// it is a restart-durable diagnostic.
+    /// <para>
+    /// The read never blocks on that walk. It serves the last completed count and lets
+    /// the writer refresh out of band, reporting whether the value is current, because
+    /// an active ingest invalidates the exactness key on every write and an exact-only
+    /// contract turned this diagnostic into a whole-tree scan per <c>list_repos</c> call
+    /// (issue 1992). A not-yet-measured repository reports <see langword="null"/>, which
+    /// is a different answer from <c>0</c>.
+    /// </para>
     /// </summary>
-    private Task<long> ReadEmbeddedVectorCountAsync(string repoId, CancellationToken cancellationToken) =>
+    private Task<RepoContextEmbeddedCount> ReadEmbeddedVectorCountAsync(
+        string repoId, CancellationToken cancellationToken) =>
         _vectorWriter.CountEmbeddedAsync(repoId, cancellationToken);
 
     private TimeSpan? ResolveTtl(string repoId, long? ttlSeconds, bool created)

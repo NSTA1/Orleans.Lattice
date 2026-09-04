@@ -111,6 +111,12 @@ public sealed class RepoContextStoreListRepoIdsTests
         await SeedRepoMarkerAsync(harness, "acme", Ct);
         await writer.AddMembersAsync("acme", new[] { RepoContextKeys.File("acme", "src/A.cs") }, Ct);
 
+        // The full listing serves the last completed membership walk rather than
+        // scanning inline (issue 1992), so prime that walk to make the reported count
+        // exact here. The point under test is which trees each path reads, not the
+        // freshness protocol.
+        await writer.ScanEmbeddedAsync("acme", Ct);
+
         var ids = await store.ListRepoIdsAsync(Ct);
         var full = await store.ListReposAsync(Ct);
 

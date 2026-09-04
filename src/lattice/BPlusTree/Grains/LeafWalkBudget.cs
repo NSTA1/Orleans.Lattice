@@ -19,18 +19,27 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// duration (issue 1955).
 /// </para>
 /// <para>
-/// <b>Forward progress is the load-bearing invariant.</b>
-/// <see cref="ShouldYield"/> only ever returns <see langword="true"/> once at
-/// least one result has been collected. A caller derives its next continuation
-/// token from the last result in the page, so a page that is empty but claims
-/// <c>HasMore = true</c> would leave it re-issuing an identical request
-/// forever. Guaranteeing at least one result keeps every existing caller
-/// correct with no wire-format change: a short page is already a representable
-/// state, whereas an empty one carrying more is not. The residual cost is that
-/// a genuinely sterile run of leaves (a wide range whose entries are all
-/// tombstoned or moved away) still walks unbounded; closing that needs an
-/// additive resume-key on the page records, which is deliberately out of scope
-/// here.
+/// <b>This type answers "is the work budget spent?" and nothing else.</b>
+/// Whether the walk may actually stop here is the call site's business, because
+/// only the call site knows whether it can name a position to resume from.
+/// <see cref="ShouldYield"/> deliberately takes no result count: an earlier
+/// revision gated it behind <c>resultsCollected &gt; 0</c> so that a page could
+/// never come back empty while claiming more, and that gate silently disarmed
+/// both the leaf cap and the deadline for exactly the run of leaves they exist
+/// to bound - a wide range whose rows are all tombstoned, TTL-expired,
+/// moved away by an adaptive split, or rejected by a pushed-down predicate
+/// (issue 1992).
+/// </para>
+/// <para>
+/// <b>Forward progress remains load-bearing, one level up.</b> A bounded walk
+/// may only stop where it can hand back a resume position strictly beyond the
+/// leaf it stopped on - the visited leaf's exclusive high bound for a forward
+/// walk, its inclusive low bound for a reverse one - which the page records
+/// carry as <c>ResumeFromKey</c>. A site that cannot name such a position keeps
+/// walking rather than emitting a page a caller could not advance past. See
+/// <see cref="BoundedLeafWalk"/>, which implements that rule for the background
+/// coordinators, and the <c>ShardRootGrain</c> page fills, which implement it
+/// for the shard read paths.
 /// </para>
 /// </summary>
 internal struct LeafWalkBudget
@@ -117,22 +126,18 @@ internal struct LeafWalkBudget
     internal void RecordLeafVisited() => _leavesVisited++;
 
     /// <summary>
-    /// Whether the walk should stop here and return a partial page.
+    /// Whether this turn's work budget is spent - the leaf cap has been reached
+    /// or the wall-clock deadline has passed.
     /// <para>
-    /// Returns <see langword="false"/> whenever
-    /// <paramref name="resultsCollected"/> is zero, regardless of how much
-    /// budget has been spent: yielding an empty page that claims more is
-    /// available would strand a caller that derives its continuation from the
-    /// last returned result. See the type remarks.
+    /// It is a pure work question, independent of how many results the caller
+    /// has collected, so it fires just as reliably on a sterile run of leaves
+    /// that yields nothing as on a productive one (issue 1992). Acting on it is
+    /// the caller's decision: stop only where a resume position can be named.
+    /// See the type remarks.
     /// </para>
     /// </summary>
-    internal readonly bool ShouldYield(int resultsCollected)
+    internal readonly bool ShouldYield()
     {
-        if (resultsCollected <= 0)
-        {
-            return false;
-        }
-
         if (_leavesVisited >= _maxLeaves)
         {
             return true;

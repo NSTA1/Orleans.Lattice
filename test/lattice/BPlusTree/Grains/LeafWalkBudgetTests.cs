@@ -19,7 +19,7 @@ public class LeafWalkBudgetTests
         budget.RecordLeafVisited();
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 10), Is.False);
+        Assert.That(budget.ShouldYield(), Is.False);
     }
 
     [Test]
@@ -30,34 +30,37 @@ public class LeafWalkBudgetTests
         for (var i = 0; i < 3; i++)
             budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     /// <summary>
-    /// The forward-progress invariant. A caller derives its next continuation
-    /// token from the last result in the page, so a page that is empty but
-    /// claims more is available would leave it re-issuing an identical request
-    /// forever. The budget must therefore never authorise yielding an empty
-    /// page, no matter how far over budget the walk has run.
+    /// The regression this budget exists for. An earlier revision gated
+    /// <see cref="LeafWalkBudget.ShouldYield"/> behind a positive result count,
+    /// which disarmed both the leaf cap and the deadline for precisely the run
+    /// of leaves they are there to bound - a sterile run whose rows are all
+    /// tombstoned, TTL-expired, moved away, or predicate-rejected. One page fill
+    /// could then hold a non-reentrant shard for minutes (issue 1992). The
+    /// budget is now a pure work question; naming a resume position is the call
+    /// site's job.
     /// </summary>
     [Test]
-    public void ShouldYield_is_never_true_with_no_results_collected()
+    public void ShouldYield_is_true_on_a_sterile_run_that_collected_nothing()
     {
         var budget = new LeafWalkBudget(maxLeaves: 1, maxDuration: null);
 
-        for (var i = 0; i < 500; i++)
-            budget.RecordLeafVisited();
+        budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 0), Is.False);
+        Assert.That(budget.ShouldYield(), Is.True,
+            "the leaf cap must fire on a run of leaves that yields no rows at all");
     }
 
     [Test]
-    public void ShouldYield_treats_a_negative_result_count_as_no_results()
+    public void An_elapsed_deadline_yields_even_with_nothing_collected()
     {
-        var budget = new LeafWalkBudget(maxLeaves: 1, maxDuration: null);
+        var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.FromTicks(1));
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: -1), Is.False);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -68,23 +71,9 @@ public class LeafWalkBudgetTests
         for (var i = 0; i < 10_000; i++)
             budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False,
+        Assert.That(budget.ShouldYield(), Is.False,
             "a misconfigured budget must degrade to the historical unbounded walk, " +
             "never to a silently truncated one");
-    }
-
-    [Test]
-    public void An_elapsed_deadline_yields_once_a_result_has_been_collected()
-    {
-        var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.FromTicks(1));
-        budget.RecordLeafVisited();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
-            Assert.That(budget.ShouldYield(resultsCollected: 0), Is.False,
-                "the deadline must not override the forward-progress invariant");
-        });
     }
 
     [Test]
@@ -93,7 +82,7 @@ public class LeafWalkBudgetTests
         var budget = new LeafWalkBudget(maxLeaves: int.MaxValue, maxDuration: TimeSpan.Zero);
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False);
+        Assert.That(budget.ShouldYield(), Is.False);
     }
 
     [Test]
@@ -120,7 +109,7 @@ public class LeafWalkBudgetTests
         budget.RecordLeafVisited();
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -148,10 +137,10 @@ public class LeafWalkBudgetTests
 
         var budget = LeafWalkBudget.ForBackgroundDrain(options);
         budget.RecordLeafVisited();
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False);
+        Assert.That(budget.ShouldYield(), Is.False);
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -178,7 +167,7 @@ public class LeafWalkBudgetTests
         var budget = LeafWalkBudget.ForBackgroundDrain(maxLeaves: 1, options);
         budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.True);
+        Assert.That(budget.ShouldYield(), Is.True);
     }
 
     [Test]
@@ -202,7 +191,7 @@ public class LeafWalkBudgetTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False);
+            Assert.That(budget.ShouldYield(), Is.False);
             Assert.That(budget.LeavesVisited, Is.EqualTo(10_000));
         });
     }
@@ -220,7 +209,7 @@ public class LeafWalkBudgetTests
         for (var i = 0; i < 1_000; i++)
             budget.RecordLeafVisited();
 
-        Assert.That(budget.ShouldYield(resultsCollected: 1), Is.False,
+        Assert.That(budget.ShouldYield(), Is.False,
             "a misconfigured bound must degrade to the unbounded walk, never to a truncated one");
     }
 

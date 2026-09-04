@@ -143,19 +143,35 @@ internal sealed class RepoContextVectorWriter
     /// they were scanned at.
     /// <para>
     /// <c>CountEmbeddedAsync</c> feeds <c>embeddedVectorCount</c> on every
-    /// <c>repocontext_list_repos</c> call, and it computes that by walking the WHOLE
-    /// membership prefix and JSON-decoding every row - over 81,000 records on a real
-    /// repository, on the largest and slowest tree in the store. That is the direct
+    /// <c>repocontext_list_repos</c> call, and computing that exactly means walking the
+    /// WHOLE membership prefix and JSON-decoding every row - over 81,000 records on a
+    /// real repository, on the largest and slowest tree in the store. That is the direct
     /// cause of the "list_repos times out on first call after a restart" symptom in
     /// issue #1819: a diagnostic field was paying a full-tree scan per call.
     /// </para>
     /// <para>
     /// Membership writes already invalidate the vector cache, which advances the
-    /// repository's generation, so that generation is exactly the right key: an
-    /// unchanged membership set serves the memo, and any write forces a re-scan.
+    /// repository's generation, so that generation is exactly the right key for
+    /// <em>exactness</em>: a memo stamped with the generation a reader captures is
+    /// current by construction. It is the wrong key for <em>availability</em>, because
+    /// an active back-fill advances the generation continuously and the memo then never
+    /// hits (issue #1992). So the generation still decides whether the memo is exact,
+    /// but a miss no longer blocks the caller on a re-scan: the stale value is served,
+    /// labelled pending, and refreshed out of band through
+    /// <see cref="_countRefreshes"/>.
     /// </para>
     /// </summary>
     private readonly ConcurrentDictionary<string, EmbeddedCountMemo> _countMemo = new();
+
+    /// <summary>
+    /// The single-flight guard for the out-of-band embedded-count refresh: at most one
+    /// membership scan per repository is ever in flight, however many callers observe a
+    /// generation miss. Without it, a back-fill (which misses on every call) would let
+    /// each <c>list_repos</c> stack another whole-tree scan on the same shard - trading
+    /// one slow synchronous call for an unbounded number of concurrent background ones,
+    /// which is strictly worse for the partition that was already the bottleneck.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, Task> _countRefreshes = new();
 
     /// <summary>Creates the vector writer.</summary>
     /// <param name="grainFactory">The grain factory used to reach the reserved vector trees. Must not be <see langword="null"/>.</param>
@@ -1083,19 +1099,157 @@ internal sealed class RepoContextVectorWriter
     }
 
     /// <summary>
-    /// Counts the live embedded sources for <paramref name="repoId"/> - the number of
-    /// enabled membership flags that carry a real vector. A disabled flag still occupies
-    /// a key until the compactor reclaims it, so the count decodes each row rather than
-    /// counting keys, and it excludes contentless "considered, no passages" markers (see
-    /// <see cref="ContentlessMarkerPrefix"/>) so <c>embeddedVectorCount</c> stays an
-    /// honest count of sources that actually have a landed embedding. Returns zero when
-    /// nothing is embedded.
+    /// Serves the live embedded-source count for <paramref name="repoId"/> - the number
+    /// of enabled membership flags that carry a real vector - <b>without blocking on a
+    /// membership scan</b>. Returns the last completed count, marked
+    /// <see cref="RepoContextEmbeddedCount.Pending"/> when it is carried over from an
+    /// earlier membership generation, and starts at most one background refresh per
+    /// repository. When no scan has completed yet the count is reported as not-yet-known
+    /// (<see langword="null"/>) rather than forcing a synchronous whole-tree walk.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the read <c>repocontext_list_repos</c> makes, once per repository, and it
+    /// used to be an O(tree) scan whenever the memo missed. The memo is keyed by the
+    /// vector cache generation and <b>any</b> membership write advances that generation,
+    /// so during an active back-fill - exactly when an operator calls <c>list_repos</c>
+    /// to watch progress - it never hit and every call re-walked every membership entry
+    /// on the largest tree in the store, timing the tool out and head-of-line-blocking
+    /// the shard it walked (issue 1992).
+    /// </para>
+    /// <para>
+    /// The contract that replaces "a stale count is never served" is: a count is served
+    /// immediately, and its currency is stated rather than assumed. An exact count is
+    /// still available on demand through <see cref="ScanEmbeddedAsync"/>, which is what
+    /// the background refresh runs and what a caller that genuinely needs exactness
+    /// should call knowing what it costs.
+    /// </para>
+    /// </remarks>
     /// <param name="repoId">The repository whose embedded source count to read. Must not be <see langword="null"/>.</param>
-    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <param name="cancellationToken">Cancels before the memo is consulted.</param>
+    /// <returns>The served count and whether a refresh is outstanding.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
+    public Task<RepoContextEmbeddedCount> CountEmbeddedAsync(string repoId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(repoId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Capture the generation BEFORE deciding, exactly as the candidate cache does,
+        // so a membership write that landed since the memo was stamped is observed as a
+        // miss rather than served as exact.
+        var generation = _cache.CaptureGeneration(repoId);
+        var carried = _countMemo.TryGetValue(repoId, out var memo) ? memo : (EmbeddedCountMemo?)null;
+        if (carried is { } current && current.Generation == generation)
+        {
+            return Task.FromResult(RepoContextEmbeddedCount.Exact(current.Count));
+        }
+
+        // Read the memo before scheduling, not after: a refresh that happened to finish
+        // in between would otherwise make the answer depend on scheduling luck, and a
+        // count whose staleness is stated is worth more than one that is occasionally,
+        // unpredictably fresher.
+        StartEmbeddedCountRefresh(repoId);
+        return Task.FromResult(RepoContextEmbeddedCount.PendingRefresh(carried?.Count));
+    }
+
+    /// <summary>
+    /// Starts a background refresh of the memoised embedded-source count for
+    /// <paramref name="repoId"/>, unless one is already in flight.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Single-flight by construction: the refresh task is published into
+    /// <see cref="_countRefreshes"/> with <c>GetOrAdd</c> before it is started, so a
+    /// burst of <c>list_repos</c> calls during a back-fill produces one scan, not one
+    /// per call. The entry is cleared once the refresh settles, so the next generation
+    /// miss after it completes starts a fresh one.
+    /// </para>
+    /// <para>
+    /// The refresh runs on <see cref="CancellationToken.None"/> deliberately. The token
+    /// a caller supplies here is an MCP request token that is cancelled the moment the
+    /// response is written - which is before the scan could possibly finish - so
+    /// threading it through would cancel every refresh immediately and the count would
+    /// never advance past "not yet known". The work it guards is bounded (a finite tree,
+    /// walked a work-bounded page at a time) and single-flight, so it cannot accumulate.
+    /// </para>
+    /// <para>
+    /// Failures are swallowed: this type has no logger by design (see the field
+    /// declarations above), the count is a diagnostic, and a failed refresh simply
+    /// leaves the previous memo in place to be retried on the next call. What must not
+    /// be swallowed is the guard entry, so it is cleared from a continuation that runs
+    /// however the refresh ended.
+    /// </para>
+    /// </remarks>
+    /// <param name="repoId">The repository to refresh.</param>
+    private void StartEmbeddedCountRefresh(string repoId)
+    {
+        _ = _countRefreshes.GetOrAdd(repoId, static (id, self) =>
+        {
+            var refresh = Task.Run(() => self.RefreshEmbeddedCountAsync(id));
+
+            // Clear the guard from a continuation rather than from inside the refresh,
+            // so an entry in the dictionary always denotes a scan that is genuinely
+            // still running: absence implies the previous scan completed, which is the
+            // property the single-flight guarantee rests on.
+            _ = refresh.ContinueWith(
+                completed => self._countRefreshes.TryRemove(id, out _),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            return refresh;
+        }, this);
+    }
+
+    /// <summary>
+    /// Runs one out-of-band embedded-count scan, absorbing any fault.
+    /// </summary>
+    /// <param name="repoId">The repository to re-count.</param>
+    private async Task RefreshEmbeddedCountAsync(string repoId)
+    {
+        try
+        {
+            await ScanEmbeddedAsync(repoId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // The count is a diagnostic and this type carries no logger by design; a
+            // failed refresh leaves the previous memo in place and the next generation
+            // miss schedules another attempt.
+        }
+    }
+
+    /// <summary>
+    /// The out-of-band embedded-count refresh currently running for
+    /// <paramref name="repoId"/>, or <see langword="null"/> when none is. Exposed for
+    /// tests, which need to observe the single-flight guard and await a refresh instead
+    /// of racing it.
+    /// </summary>
+    /// <param name="repoId">The repository to inspect.</param>
+    /// <returns>The in-flight refresh, or <see langword="null"/>.</returns>
+    internal Task? PendingEmbeddedCountRefresh(string repoId)
+        => _countRefreshes.TryGetValue(repoId, out var refresh) ? refresh : null;
+
+    /// <summary>
+    /// Counts the live embedded sources for <paramref name="repoId"/> by walking the
+    /// membership tree, and memoises the result against the membership generation the
+    /// walk ran at - the number of enabled membership flags that carry a real vector. A
+    /// disabled flag still occupies a key until the compactor reclaims it, so the count
+    /// decodes each row rather than counting keys, and it excludes contentless
+    /// "considered, no passages" markers (see <see cref="ContentlessMarkerPrefix"/>) so
+    /// <c>embeddedVectorCount</c> stays an honest count of sources that actually have a
+    /// landed embedding. Returns zero when nothing is embedded.
+    /// </summary>
+    /// <remarks>
+    /// This is an O(tree) walk over the largest tree in the store. It is the background
+    /// refresh <see cref="CountEmbeddedAsync"/> schedules; call it directly only when
+    /// exactness is worth that cost, and never on a request path with a deadline.
+    /// </remarks>
+    /// <param name="repoId">The repository whose embedded source count to scan. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
     /// <returns>The number of live embedded sources.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
-    public Task<long> CountEmbeddedAsync(string repoId, CancellationToken cancellationToken)
+    public Task<long> ScanEmbeddedAsync(string repoId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(repoId);
 
@@ -1103,12 +1257,8 @@ internal sealed class RepoContextVectorWriter
         {
             // Capture the generation BEFORE the scan, exactly as the candidate cache
             // does, so a membership write that lands mid-scan supersedes this result
-            // instead of caching a stale count.
+            // instead of memoising a count it never reflected.
             var generation = _cache.CaptureGeneration(repoId);
-            if (_countMemo.TryGetValue(repoId, out var memo) && memo.Generation == generation)
-            {
-                return memo.Count;
-            }
 
             var tree = _grainFactory.GetGrain<ILattice>(RepoContextTrees.VectorMembership);
             var prefix = RepoContextKeys.VectorMembershipsPrefix(repoId);
@@ -1131,10 +1281,11 @@ internal sealed class RepoContextVectorWriter
                 }
             }
 
-            // Stamped with the generation this scan ran against. A membership write
-            // that landed mid-scan has already advanced the generation, so the next
-            // read captures a newer one, misses this entry, and re-scans - a stale
-            // count is never served rather than being detected and discarded.
+            // Stamped with the generation this scan ran against, so a write that landed
+            // mid-scan leaves the memo addressed to a generation no later reader will
+            // capture: the next read misses, serves this count as PENDING rather than
+            // exact, and schedules a refresh. Staleness is therefore represented in the
+            // answer instead of being silently served as exact (issue 1992).
             _countMemo[repoId] = new EmbeddedCountMemo(generation, enabled);
             return enabled;
         }, cancellationToken);

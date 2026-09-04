@@ -1467,7 +1467,7 @@ internal sealed partial class ShardRootGrain(
             // there is no safe key to resume from, so the walk continues rather
             // than risk truncating - the same "only stop where you can resume"
             // rule the read-path bound follows.
-            if (budget.ShouldYield(resultsCollected: 1))
+            if (budget.ShouldYield())
             {
                 var bounds = await leafGrain.GetKeyRangeAsync();
                 if (bounds.HighKeyExclusive is { } high
@@ -1617,7 +1617,7 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (budget.ShouldYield(resultsCollected: 1))
+            if (budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
                 {
@@ -1736,7 +1736,7 @@ internal sealed partial class ShardRootGrain(
             // output to strand a caller with, so the forward-progress rule the
             // page fills need does not apply. A resume key is still only
             // emitted when a next leaf exists, so the walk cannot stall.
-            if (budget.ShouldYield(resultsCollected: 1))
+            if (budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
                 {
@@ -1829,7 +1829,7 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (budget.ShouldYield(resultsCollected: 1))
+            if (budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
                 {
@@ -1925,7 +1925,7 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (budget.ShouldYield(resultsCollected: 1))
+            if (budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
                 {
@@ -2404,40 +2404,78 @@ internal sealed partial class ShardRootGrain(
     // in-range row on a leaf (issue 1046). A null bound (outermost leaf, or
     // legacy state that pre-dates the slot) means "no constraint" so the walk
     // falls back to its prior end-of-tree behaviour.
-    private async Task<bool> ForwardWalkLeftRangeAsync(IBPlusLeafGrain leafGrain, string? endExclusive)
-    {
-        if (endExclusive is null)
-            return false;
-        var bounds = await leafGrain.GetKeyRangeAsync();
-        return bounds.HighKeyExclusive is not null
+    private static bool ForwardWalkLeftRange(in LeafKeyRange bounds, string? endExclusive)
+        => endExclusive is not null
+            && bounds.HighKeyExclusive is not null
             && string.CompareOrdinal(bounds.HighKeyExclusive, endExclusive) >= 0;
-    }
 
-    // Reverse counterpart of <see cref="ForwardWalkLeftRangeAsync"/>: a backward
+    // Reverse counterpart of <see cref="ForwardWalkLeftRange"/>: a backward
     // walk has left the range once the current leaf's LowKeyInclusive is
     // at/before startInclusive, since every previous sibling holds only keys
     // strictly below that bound (issue 1046).
-    private async Task<bool> ReverseWalkLeftRangeAsync(IBPlusLeafGrain leafGrain, string? startInclusive)
-    {
-        if (startInclusive is null)
-            return false;
-        var bounds = await leafGrain.GetKeyRangeAsync();
-        return bounds.LowKeyInclusive is not null
+    private static bool ReverseWalkLeftRange(in LeafKeyRange bounds, string? startInclusive)
+        => startInclusive is not null
+            && bounds.LowKeyInclusive is not null
             && string.CompareOrdinal(bounds.LowKeyInclusive, startInclusive) <= 0;
+
+    // The position a work-bounded forward page fill hands back so the next call
+    // resumes where this one stopped (issue 1992). It is the visited leaf's
+    // exclusive high bound, which is exactly where the next sibling begins, so
+    // resuming there is *inclusive* and skips nothing - unlike a continuation
+    // token, which the leaf applies as afterExclusive and which therefore cannot
+    // carry a boundary. Returns null when the leaf declares no high bound, or
+    // when that bound is not strictly ahead of where this call started, which is
+    // what keeps a resumed walk from re-issuing an identical request forever.
+    private static string? ForwardResumeKey(
+        in LeafKeyRange bounds, string? startInclusive, string? continuationToken, string? resumeFromKey)
+    {
+        if (bounds.HighKeyExclusive is not { } high)
+            return null;
+        var floor = MaxOrdinal(MaxOrdinal(startInclusive, resumeFromKey), continuationToken);
+        return floor is null || string.CompareOrdinal(high, floor) > 0 ? high : null;
     }
+
+    // Reverse counterpart of <see cref="ForwardResumeKey"/>: the visited leaf's
+    // inclusive low bound, which the resumed walk applies as beforeExclusive so
+    // it picks up strictly below the leaf just visited (issue 1992). The resumed
+    // call re-reads that one leaf (it owns the boundary key) and gets nothing
+    // from it, which is the same single wasted read a continuation token already
+    // costs on this path.
+    private static string? ReverseResumeKey(
+        in LeafKeyRange bounds, string? endExclusive, string? continuationToken, string? resumeFromKey)
+    {
+        if (bounds.LowKeyInclusive is not { } low)
+            return null;
+        var ceiling = MinOrdinal(MinOrdinal(endExclusive, resumeFromKey), continuationToken);
+        return ceiling is null || string.CompareOrdinal(low, ceiling) < 0 ? low : null;
+    }
+
+    private static string? MaxOrdinal(string? left, string? right)
+        => left is null ? right
+            : right is null ? left
+            : string.CompareOrdinal(left, right) >= 0 ? left : right;
+
+    private static string? MinOrdinal(string? left, string? right)
+        => left is null ? right
+            : right is null ? left
+            : string.CompareOrdinal(left, right) <= 0 ? left : right;
 
     public async Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        LatticePredicateNode? predicate = null)
+        LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
 
-        // Determine the starting leaf.
-        var seekKey = continuationToken ?? startInclusive;
+        // Determine the starting leaf. A resume key is an inclusive lower
+        // boundary handed back by a work-bounded page, so it composes with the
+        // range start and the continuation token by taking the furthest of them.
+        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
+        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2467,7 +2505,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids transferring keys that would be
             // discarded here. The optional predicate is evaluated inside the
             // leaf so non-matching values never cross the wire.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
             budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
@@ -2485,7 +2523,15 @@ internal sealed partial class ShardRootGrain(
             if (keys.Count >= pageSize)
                 break;
 
-            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+            // Range termination and the work bound both read this leaf's
+            // bounds, so read them once per leaf, and only when one of them
+            // can actually use them.
+            var spent = budget.ShouldYield();
+            var bounds = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAsync()
+                : (LeafKeyRange?)null;
+
+            if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new KeysPage
                 {
                     Keys = keys,
@@ -2493,12 +2539,31 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            // Work bound (issue 1955): stop holding this non-reentrant shard
-            // once the leaf/time budget is spent. Only ever fires with at
-            // least one key collected, so the caller can derive its next
-            // continuation and make forward progress.
-            if (budget.ShouldYield(keys.Count))
-                break;
+            // Work bound (issues 1955, 1992): stop holding this non-reentrant
+            // shard once the leaf/time budget is spent. Prefer the leaf
+            // boundary as the resume position even when keys were collected -
+            // it is strictly further along than the last collected key, so the
+            // sterile leaves this call already walked are not re-walked, and a
+            // page that collected nothing at all is still resumable. Fall back
+            // to stopping on a collected key only when the leaf declares no
+            // usable bound; with neither, keep walking rather than emit a page
+            // the caller could not advance past.
+            if (spent)
+            {
+                var resume = bounds is { } resumable
+                    ? ForwardResumeKey(resumable, startInclusive, continuationToken, resumeFromKey)
+                    : null;
+                if (resume is not null)
+                    return new KeysPage
+                    {
+                        Keys = keys,
+                        HasMore = true,
+                        MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                        ResumeFromKey = resume,
+                    };
+                if (keys.Count > 0)
+                    break;
+            }
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2528,13 +2593,17 @@ internal sealed partial class ShardRootGrain(
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        LatticePredicateNode? predicate = null)
+        LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
 
         // Determine the starting leaf (rightmost, or the leaf for the seek key).
-        var seekKey = continuationToken ?? endExclusive;
+        // A reverse resume key is an exclusive upper boundary, so it composes
+        // with the continuation token by taking the nearer of the two.
+        var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
+        var seekKey = MinOrdinal(effectiveBefore, endExclusive);
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2560,10 +2629,10 @@ internal sealed partial class ShardRootGrain(
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            // Pass continuationToken as beforeExclusive so the leaf filters
-            // at the source - avoids transferring keys that would be
+            // Pass the effective upper boundary as beforeExclusive so the leaf
+            // filters at the source - avoids transferring keys that would be
             // discarded here.
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
             budget.RecordLeafVisited();
 
             // Walk the leaf's keys in reverse order.
@@ -2583,7 +2652,12 @@ internal sealed partial class ShardRootGrain(
             if (keys.Count >= pageSize)
                 break;
 
-            if (await ReverseWalkLeftRangeAsync(leafGrain, startInclusive))
+            var spent = budget.ShouldYield();
+            var bounds = startInclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAsync()
+                : (LeafKeyRange?)null;
+
+            if (bounds is { } outOfRange && ReverseWalkLeftRange(outOfRange, startInclusive))
                 return new KeysPage
                 {
                     Keys = keys,
@@ -2591,10 +2665,23 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            // Work bound (issue 1955): see the forward variant. Only fires
-            // with at least one key collected so the caller can resume.
-            if (budget.ShouldYield(keys.Count))
-                break;
+            // Work bound (issues 1955, 1992): see the forward variant.
+            if (spent)
+            {
+                var resume = bounds is { } resumable
+                    ? ReverseResumeKey(resumable, endExclusive, continuationToken, resumeFromKey)
+                    : null;
+                if (resume is not null)
+                    return new KeysPage
+                    {
+                        Keys = keys,
+                        HasMore = true,
+                        MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                        ResumeFromKey = resume,
+                    };
+                if (keys.Count > 0)
+                    break;
+            }
 
             var prevSibling = await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
@@ -2624,12 +2711,14 @@ internal sealed partial class ShardRootGrain(
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        LatticePredicateNode? predicate = null)
+        LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
 
-        var seekKey = continuationToken ?? startInclusive;
+        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
+        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2657,7 +2746,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as afterExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
             budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
@@ -2675,7 +2764,15 @@ internal sealed partial class ShardRootGrain(
             if (entries.Count >= pageSize)
                 break;
 
-            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+            // Range termination and the work bound both read this leaf's
+            // bounds, so read them once per leaf, and only when one of them
+            // can actually use them.
+            var spent = budget.ShouldYield();
+            var bounds = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAsync()
+                : (LeafKeyRange?)null;
+
+            if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new EntriesPage
                 {
                     Entries = entries,
@@ -2683,12 +2780,25 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            // Work bound (issue 1955): stop holding this non-reentrant shard
-            // once the leaf/time budget is spent. Only ever fires with at
-            // least one entry collected, so the caller can derive its next
-            // continuation and make forward progress.
-            if (budget.ShouldYield(entries.Count))
-                break;
+            // Work bound (issues 1955, 1992): stop holding this non-reentrant
+            // shard once the leaf/time budget is spent, handing back the leaf
+            // boundary to resume from. See GetSortedKeysBatchAsync.
+            if (spent)
+            {
+                var resume = bounds is { } resumable
+                    ? ForwardResumeKey(resumable, startInclusive, continuationToken, resumeFromKey)
+                    : null;
+                if (resume is not null)
+                    return new EntriesPage
+                    {
+                        Entries = entries,
+                        HasMore = true,
+                        MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                        ResumeFromKey = resume,
+                    };
+                if (entries.Count > 0)
+                    break;
+            }
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2717,12 +2827,14 @@ internal sealed partial class ShardRootGrain(
         string? endExclusive,
         int pageSize,
         string? continuationToken = null,
-        LatticePredicateNode? predicate = null)
+        LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null)
     {
         await PrepareForOperationAsync();
         RecordRead();
 
-        var seekKey = continuationToken ?? endExclusive;
+        var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
+        var seekKey = MinOrdinal(effectiveBefore, endExclusive);
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2750,7 +2862,7 @@ internal sealed partial class ShardRootGrain(
             // Pass continuationToken as beforeExclusive so the leaf filters
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: continuationToken, predicate: predicate);
+            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
             budget.RecordLeafVisited();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
@@ -2769,7 +2881,12 @@ internal sealed partial class ShardRootGrain(
             if (entries.Count >= pageSize)
                 break;
 
-            if (await ReverseWalkLeftRangeAsync(leafGrain, startInclusive))
+            var spent = budget.ShouldYield();
+            var bounds = startInclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAsync()
+                : (LeafKeyRange?)null;
+
+            if (bounds is { } outOfRange && ReverseWalkLeftRange(outOfRange, startInclusive))
                 return new EntriesPage
                 {
                     Entries = entries,
@@ -2777,10 +2894,23 @@ internal sealed partial class ShardRootGrain(
                     MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
                 };
 
-            // Work bound (issue 1955): see the forward variant. Only fires
-            // with at least one entry collected so the caller can resume.
-            if (budget.ShouldYield(entries.Count))
-                break;
+            // Work bound (issues 1955, 1992): see the forward variant.
+            if (spent)
+            {
+                var resume = bounds is { } resumable
+                    ? ReverseResumeKey(resumable, endExclusive, continuationToken, resumeFromKey)
+                    : null;
+                if (resume is not null)
+                    return new EntriesPage
+                    {
+                        Entries = entries,
+                        HasMore = true,
+                        MovedAwaySlots = movedSet is null ? null : SortedSlotsArray(movedSet),
+                        ResumeFromKey = resume,
+                    };
+                if (entries.Count > 0)
+                    break;
+            }
 
             var prevSibling = await leafGrain.GetPrevSiblingAsync();
             if (prevSibling is null)
@@ -2812,7 +2942,8 @@ internal sealed partial class ShardRootGrain(
         string? continuationToken,
         int[] sortedSlots,
         int virtualShardCount,
-        LatticePredicateNode? predicate = null)
+        LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null)
     {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
@@ -2824,7 +2955,8 @@ internal sealed partial class ShardRootGrain(
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
             return new KeysPage { Keys = [], HasMore = false };
 
-        var seekKey = continuationToken ?? startInclusive;
+        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
+        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2847,7 +2979,7 @@ internal sealed partial class ShardRootGrain(
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, afterExclusive: continuationToken, predicate: predicate);
+            var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
             budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
@@ -2860,15 +2992,29 @@ internal sealed partial class ShardRootGrain(
 
             if (keys.Count >= pageSize) break;
 
-            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+            var spent = budget.ShouldYield();
+            var bounds = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAsync()
+                : (LeafKeyRange?)null;
+
+            if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new KeysPage { Keys = keys, HasMore = false };
 
-            // Work bound (issue 1955): a slot filter rejects most keys in a
-            // post-split shard, so this walk is especially prone to visiting
-            // many leaves per page. Only fires with at least one key
-            // collected so the caller can resume.
-            if (budget.ShouldYield(keys.Count))
-                break;
+            // Work bound (issues 1955, 1992): a slot filter rejects most keys
+            // in a post-split shard, so this walk is especially prone to
+            // visiting many leaves per page - and to collecting nothing at all
+            // while doing it, which is exactly why it resumes from a leaf
+            // boundary rather than from a collected key.
+            if (spent)
+            {
+                var resume = bounds is { } resumable
+                    ? ForwardResumeKey(resumable, startInclusive, continuationToken, resumeFromKey)
+                    : null;
+                if (resume is not null)
+                    return new KeysPage { Keys = keys, HasMore = true, ResumeFromKey = resume };
+                if (keys.Count > 0)
+                    break;
+            }
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)
@@ -2890,7 +3036,8 @@ internal sealed partial class ShardRootGrain(
         string? continuationToken,
         int[] sortedSlots,
         int virtualShardCount,
-        LatticePredicateNode? predicate = null)
+        LatticePredicateNode? predicate = null,
+        string? resumeFromKey = null)
     {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
@@ -2902,7 +3049,8 @@ internal sealed partial class ShardRootGrain(
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
             return new EntriesPage { Entries = [], HasMore = false };
 
-        var seekKey = continuationToken ?? startInclusive;
+        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
+        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2925,7 +3073,7 @@ internal sealed partial class ShardRootGrain(
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, continuationToken, predicate: predicate);
+            var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
             budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
@@ -2938,15 +3086,27 @@ internal sealed partial class ShardRootGrain(
 
             if (entries.Count >= pageSize) break;
 
-            if (await ForwardWalkLeftRangeAsync(leafGrain, endExclusive))
+            var spent = budget.ShouldYield();
+            var bounds = endExclusive is not null || spent
+                ? await leafGrain.GetKeyRangeAsync()
+                : (LeafKeyRange?)null;
+
+            if (bounds is { } outOfRange && ForwardWalkLeftRange(outOfRange, endExclusive))
                 return new EntriesPage { Entries = entries, HasMore = false };
 
-            // Work bound (issue 1955): a slot filter rejects most keys in a
-            // post-split shard, so this walk is especially prone to visiting
-            // many leaves per page. Only fires with at least one entry
-            // collected so the caller can resume.
-            if (budget.ShouldYield(entries.Count))
-                break;
+            // Work bound (issues 1955, 1992): see
+            // GetSortedKeysBatchForSlotsAsync - the slot filter makes a page
+            // that collects nothing at all the common case here.
+            if (spent)
+            {
+                var resume = bounds is { } resumable
+                    ? ForwardResumeKey(resumable, startInclusive, continuationToken, resumeFromKey)
+                    : null;
+                if (resume is not null)
+                    return new EntriesPage { Entries = entries, HasMore = true, ResumeFromKey = resume };
+                if (entries.Count > 0)
+                    break;
+            }
 
             var nextSibling = await leafGrain.GetNextSiblingAsync();
             if (nextSibling is null)

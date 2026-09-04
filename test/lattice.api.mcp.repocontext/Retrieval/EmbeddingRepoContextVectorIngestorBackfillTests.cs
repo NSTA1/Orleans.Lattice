@@ -312,7 +312,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         await ingestor.IngestAsync(RepoId, root, new[] { real, empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
 
         var emptyId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "empty.cs"));
-        var count = await writer.CountEmbeddedAsync(RepoId, Ct);
+        var count = await writer.ScanEmbeddedAsync(RepoId, Ct);
         var members = await writer.LoadEmbeddedMembersAsync(RepoId, Ct);
         var covered = await writer.LoadCoveredSourceIdsAsync(RepoId, Ct);
         Assert.Multiple(() =>

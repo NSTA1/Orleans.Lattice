@@ -39,6 +39,23 @@ public sealed record RepoContextRepoSummary
     /// vectorising completes. Because it is read from durable state rather than run
     /// progress, it survives a host restart, so an operator can confirm the vectors
     /// persisted by re-reading it after a restart.
+    /// <para>
+    /// <see langword="null"/> means <em>not yet measured</em>, which is not the same
+    /// answer as <c>0</c>: computing the count exactly costs a walk of the whole
+    /// membership tree, so it is served from the last completed walk and refreshed out
+    /// of band rather than blocking this call (issue 1992). Read it together with
+    /// <see cref="EmbeddedVectorCountPending"/>.
+    /// </para>
     /// </summary>
-    public long EmbeddedVectorCount { get; init; }
+    public long? EmbeddedVectorCount { get; init; }
+
+    /// <summary>
+    /// Whether a refresh of <see cref="EmbeddedVectorCount"/> is outstanding, so the
+    /// reported count is from an earlier membership generation (or absent entirely)
+    /// rather than the current one. <see langword="false"/> means the count is exact as
+    /// of this call. Expect <see langword="true"/> throughout an active ingest, which
+    /// advances the membership set continuously; poll again once it settles for an
+    /// exact figure.
+    /// </summary>
+    public bool EmbeddedVectorCountPending { get; init; }
 }

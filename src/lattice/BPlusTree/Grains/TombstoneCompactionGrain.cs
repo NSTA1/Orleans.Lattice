@@ -894,7 +894,7 @@ internal sealed class TombstoneCompactionGrain(
                     // returned. Only stop where the next batch can resume: an
                     // exhausted list falls through to the completion branch
                     // rather than yielding a cursor pointing past its end.
-                    if (dirtyIndex < dirtyLeaves.Length && budget.ShouldYield(resultsCollected: 1)) break;
+                    if (dirtyIndex < dirtyLeaves.Length && budget.ShouldYield()) break;
                 }
 
                 if (dirtyIndex >= dirtyLeaves.Length)
