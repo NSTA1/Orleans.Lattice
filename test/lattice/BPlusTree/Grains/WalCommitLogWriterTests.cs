@@ -251,8 +251,88 @@ public class WalCommitLogWriterTests
     }
 
     [Test]
-    public async Task AppendManyAsync_returns_offsets_in_input_order_across_multiple_partitions()
+    public async Task AppendManyAsync_keeps_two_trees_apart_on_the_same_partition_number()
     {
+        // The batched dispatch groups by "{treeId}/{partition}" and memoizes
+        // the last partition it routed to, so a batch that alternates between
+        // two trees which both hash to partition 0 must not let the memo carry
+        // one tree's records into the other tree's WAL grain.
+        var batchesByGrainKey = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>())
+            .Returns(call =>
+            {
+                var key = (string)call[0];
+                var shardLocal = Substitute.For<IWalShardGrain>();
+                shardLocal
+                    .AppendBatchAsync(Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>())
+                    .Returns(c =>
+                    {
+                        var entries = (IReadOnlyList<WalRecord>)c[0];
+                        if (!batchesByGrainKey.TryGetValue(key, out var seen))
+                        {
+                            seen = [];
+                            batchesByGrainKey[key] = seen;
+                        }
+
+                        var offsets = new long[entries.Count];
+                        for (var i = 0; i < entries.Count; i++)
+                        {
+                            offsets[i] = seen.Count;
+                            seen.Add(entries[i].Key);
+                        }
+
+                        return Task.FromResult<IReadOnlyList<long>>(offsets);
+                    });
+                return shardLocal;
+            });
+
+        var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions { WalPartitions = 1 });
+        var modeResolver = Substitute.For<ILatticeMergeModeResolver>();
+        modeResolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
+        var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
+        clusterIdResolver.Resolve(Arg.Any<string>()).Returns("site-test");
+
+        var writer = new WalCommitLogWriter(grainFactory, optionsMonitor, TestOptionsResolver.Create(baseOptions: optionsMonitor.Get(string.Empty), factory: grainFactory), modeResolver, clusterIdResolver);
+
+        // WalPartitions = 1 forces both trees onto partition 0, so the grain
+        // keys differ only by tree id - exactly the case a partition-only memo
+        // would conflate.
+        var mutations = new List<WalRecord>();
+        for (var i = 0; i < 16; i++)
+        {
+            mutations.Add(new WalRecord
+            {
+                TreeId = i % 2 == 0 ? "tree-a" : "tree-b",
+                Op = MutationKind.Set,
+                Key = $"k{i:D2}",
+                Value = [(byte)i],
+                Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            });
+        }
+
+        var offsets = await writer.AppendManyAsync(mutations);
+
+        Assert.That(offsets, Has.Count.EqualTo(16));
+        Assert.That(batchesByGrainKey.Keys, Is.EquivalentTo(new[] { "tree-a/0", "tree-b/0" }));
+        Assert.That(
+            batchesByGrainKey["tree-a/0"],
+            Is.EqualTo(new[] { "k00", "k02", "k04", "k06", "k08", "k10", "k12", "k14" }),
+            "tree-a's WAL grain must receive only tree-a's records, in input order");
+        Assert.That(
+            batchesByGrainKey["tree-b/0"],
+            Is.EqualTo(new[] { "k01", "k03", "k05", "k07", "k09", "k11", "k13", "k15" }),
+            "tree-b's WAL grain must receive only tree-b's records, in input order");
+
+        // Each record's returned offset is its position within its own tree's
+        // partition bucket, stitched back into caller order.
+        for (var i = 0; i < mutations.Count; i++)
+            Assert.That(offsets[i], Is.EqualTo((long)(i / 2)), $"input index {i}");
+    }
+
+    [Test]
+    public async Task AppendManyAsync_returns_offsets_in_input_order_across_multiple_partitions()    {
         // Two WAL partitions: the batched dispatch fans out per
         // partition, but the writer must reassemble the per-partition
         // offsets back into the caller's input order.

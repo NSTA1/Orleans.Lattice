@@ -1316,27 +1316,27 @@ internal sealed partial class LatticeGrain(
             // this attempt.
             //
             // Presize discipline (see also the ConcurrentDictionary
-            // presize below): the outer shardBuckets dictionary holds
-            // at most one entry per distinct physical shard that owns
-            // at least one of the requested keys - bounded above by
-            // min(keys.Count, distinct-physical-shard-count). The
-            // ShardMap caches its physical-shard set on first call so
-            // the .Count lookup is O(1) after the first resolve. Each
-            // per-shard bucket list holds at most keys.Count entries
-            // (worst case: all keys hash to the same shard); presizing
-            // to keys.Count over-allocates by N x 8 B per list in the
-            // perfectly-distributed case but eliminates the geometric
-            // 0->4->8->...->keys.Count grow chain that an un-presized
-            // List<string>() would walk on the dominant single-shard
-            // hot path. This is the locus called out as carry-forward
-            // item #3 in POSTMORTEM-2026-06-09-retry-on-stale-routing-tstate.
+            // presize below): the bucket set holds at most one entry per
+            // distinct physical shard that owns at least one of the
+            // requested keys. Physical shard indices live in a tiny dense
+            // domain, so ShardFanout buckets into an array indexed by that
+            // index rather than hashing it once per key (see
+            // ShardFanoutBuckets). The ShardMap caches its physical-shard
+            // set on first call so the .Count lookup is O(1) after the
+            // first resolve. Each per-shard bucket list is presized to the
+            // shard-fair fraction of the batch (floored at 4, capped at
+            // 256), which removes the geometric 0->4->8->... grow chain
+            // without pre-allocating the whole batch per shard. This is the
+            // locus called out as carry-forward item #3 in
+            // POSTMORTEM-2026-06-09-retry-on-stale-routing-tstate.
             var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-            Dictionary<int, List<string>>? shardBuckets = null;
+            ShardFanoutBuckets<string> shardBuckets = default;
             int fastShardIdx = 0;
             List<string>? fastBucket = null;
             try
             {
-                var physicalShardCount = shardMap.GetPhysicalShardIndices().Count;
+                var physicalShards = shardMap.GetPhysicalShardIndices();
+                var physicalShardCount = physicalShards.Count;
                 if (physicalShardCount == 1 && keys.Count > 0)
                 {
                     // Single physical shard: every key provably resolves to the
@@ -1354,18 +1354,11 @@ internal sealed partial class LatticeGrain(
                 }
                 else
                 {
-                    shardBuckets = new Dictionary<int, List<string>>(
-                        capacity: Math.Min(keys.Count, physicalShardCount));
-                    foreach (var key in keys)
-                    {
-                        var idx = shardMap.Resolve(key);
-                        if (!shardBuckets.TryGetValue(idx, out var bucket))
-                        {
-                            bucket = new List<string>(capacity: keys.Count);
-                            shardBuckets[idx] = bucket;
-                        }
-                        bucket.Add(key);
-                    }
+                    shardBuckets = ShardFanout.BucketKeys(
+                        keys,
+                        shardMap,
+                        physicalShards,
+                        ShardFanout.BucketCapacity(keys.Count, physicalShardCount));
                     if (shardBuckets.Count == 1)
                     {
                         // Multi-shard map but every requested key happened to
@@ -1389,7 +1382,7 @@ internal sealed partial class LatticeGrain(
             }
 
 #if LATTICE_DIAG
-            DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} bucketCount={(shardBuckets?.Count ?? (fastBucket != null ? 1 : 0))} buckets=[{(shardBuckets != null ? string.Join(';', shardBuckets.Select(kv => $"s{kv.Key}:[{string.Join(',', kv.Value)}]")) : $"s{fastShardIdx}:[{string.Join(',', fastBucket ?? [])}]")}]");
+            DiagSink.Write($"[DIAG reader-batch-enter] tree={physicalTreeId} attempt={attempt} keyCount={keys.Count} bucketCount={(fastBucket != null ? 1 : shardBuckets.Count)} buckets=[{(fastBucket != null ? $"s{fastShardIdx}:[{string.Join(',', fastBucket)}]" : DescribeBuckets(shardBuckets))}]");
 #endif
 
             // Fan-out stage: registry-snapshot probe + per-shard parallel
@@ -1453,7 +1446,7 @@ internal sealed partial class LatticeGrain(
                     // presize semantics on the common path while keeping
                     // the empty-batch path well-defined.
                     concurrent = new ConcurrentDictionary<string, byte[]>(
-                        concurrencyLevel: Math.Max(1, shardBuckets!.Count),
+                        concurrencyLevel: Math.Max(1, shardBuckets.Count),
                         capacity: Math.Max(1, keys.Count));
                     using (LatticeRegistrySnapshotContext.BeginScope(snap1))
                     {
@@ -1532,6 +1525,16 @@ internal sealed partial class LatticeGrain(
             $"GetManyAsync exceeded {Options.MaxScanRetries} retries while the TxRegistry " +
             "kept committing sagas faster than the fan-out could complete. Increase " +
             "LatticeOptions.MaxScanRetries or reduce concurrent saga rate.");
+
+#if LATTICE_DIAG
+        static string DescribeBuckets(ShardFanoutBuckets<string> buckets)
+        {
+            var parts = new List<string>(buckets.Count);
+            foreach (var (shardIdx, bucket) in buckets)
+                parts.Add($"s{shardIdx}:[{string.Join(',', bucket)}]");
+            return string.Join(';', parts);
+        }
+#endif
 
         static async Task FetchFromShardAsync(
             IShardRootGrain shard,
@@ -2039,18 +2042,8 @@ internal sealed partial class LatticeGrain(
 
         var expectedPerShard = Math.Max(4, deltas.Count / physicalShardCount);
         var bucketCapacity = Math.Min(expectedPerShard, 256);
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
-        foreach (var entry in deltas)
-        {
-            var idx = shardMap.Resolve(entry.Key);
-            if (!shardBuckets.TryGetValue(idx, out var bucket))
-            {
-                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
-                shardBuckets[idx] = bucket;
-            }
-
-            bucket.Add(entry);
-        }
+        var shardBuckets = ShardFanout.BucketEntries(
+            deltas, shardMap, shardMap.GetPhysicalShardIndices(), bucketCapacity);
 
         var tasks = new List<Task>(shardBuckets.Count);
         foreach (var (shardIdx, bucket) in shardBuckets)
@@ -2245,7 +2238,7 @@ internal sealed partial class LatticeGrain(
         // allocations.
 
         var bucketStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-        Dictionary<int, List<KeyValuePair<string, byte[]>>>? shardBuckets = null;
+        ShardFanoutBuckets<KeyValuePair<string, byte[]>> shardBuckets = default;
         List<KeyValuePair<string, byte[]>>? singleShardEntries = null;
         int singleShardIdx = 0;
         try
@@ -2271,17 +2264,8 @@ internal sealed partial class LatticeGrain(
             {
                 var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
                 var bucketCapacity = Math.Min(expectedPerShard, 256);
-                shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
-                foreach (var entry in entries)
-                {
-                    var idx = shardMap.Resolve(entry.Key);
-                    if (!shardBuckets.TryGetValue(idx, out var bucket))
-                    {
-                        bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
-                        shardBuckets[idx] = bucket;
-                    }
-                    bucket.Add(entry);
-                }
+                shardBuckets = ShardFanout.BucketEntries(
+                    entries, shardMap, shardMap.GetPhysicalShardIndices(), bucketCapacity);
             }
         }
         finally
@@ -2305,7 +2289,7 @@ internal sealed partial class LatticeGrain(
             }
             else
             {
-                var tasks = new List<Task>(shardBuckets!.Count);
+                var tasks = new List<Task>(shardBuckets.Count);
                 foreach (var (shardIdx, bucket) in shardBuckets)
                 {
                     var shard = GetShardGrainByIndex(physicalTreeId, shardIdx);
@@ -2386,17 +2370,8 @@ internal sealed partial class LatticeGrain(
         var physicalShardCount = Math.Max(1, shardMap.GetPhysicalShardIndices().Count);
         var expectedPerShard = Math.Max(4, entries.Count / physicalShardCount);
         var bucketCapacity = Math.Min(expectedPerShard, 256);
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(physicalShardCount);
-        foreach (var entry in entries)
-        {
-            var idx = shardMap.Resolve(entry.Key);
-            if (!shardBuckets.TryGetValue(idx, out var bucket))
-            {
-                bucket = new List<KeyValuePair<string, byte[]>>(bucketCapacity);
-                shardBuckets[idx] = bucket;
-            }
-            bucket.Add(entry);
-        }
+        var shardBuckets = ShardFanout.BucketEntries(
+            entries, shardMap, shardMap.GetPhysicalShardIndices(), bucketCapacity);
 
         // Fan out the conditional writes per shard and collect each shard's
         // written-key set.
