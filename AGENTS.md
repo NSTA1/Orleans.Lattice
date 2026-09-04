@@ -80,8 +80,12 @@ several `Orleans.Lattice.Explorer.*` assemblies.
 - Build: `dotnet build -c Release`.
 - While iterating, run the smallest scope that validates the change - a single
   method or fixture, never the whole suite. Before raising a PR, run the
-  non-chaos suite scoped to the test project(s) covering the packages you
-  changed - not the whole solution; the full cross-solution sweep is CI's job.
+  non-chaos tests covering the fixtures your change can plausibly break, within
+  the test project(s) for the packages you changed - not the whole solution, and
+  not reflexively a whole project. CI re-runs the full per-package and
+  cross-solution non-chaos sweep on every PR, so repeating it locally buys only
+  wall-clock; widen the local scope only when the blast radius is genuinely
+  unpredictable.
 - **The single master for all testing rules** - the tiered run strategy, the
   exact per-tier filters, the pre-PR run scope, the categorization conventions,
   and the repository hygiene gates - is
@@ -90,7 +94,11 @@ several `Orleans.Lattice.Explorer.*` assemblies.
   the **testing** skill (`.github/skills/testing/SKILL.md`) points there too.
   Follow that file rather than any command pasted elsewhere, so nothing drifts.
   Chaos tests (`[Category("Chaos")]`) are CI-only; the Azure Table emulator suite
-  (`[Category("AzureStorageEmulator")]`) only runs when Azurite is started locally.
+  (`[Category("AzureStorageEmulator")]`) only runs when Azurite is started
+  locally. Beware the false green: those fixtures call `Assert.Inconclusive`
+  when Azurite is unreachable, which NUnit counts as neither passed, failed, nor
+  skipped, so the run still prints `Passed!` with `Skipped: 0` and only the
+  `Total` drops. The master file has the `docker run` command.
 
 ## Conventions that matter
 

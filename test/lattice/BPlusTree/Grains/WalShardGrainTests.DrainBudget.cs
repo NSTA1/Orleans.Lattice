@@ -164,6 +164,46 @@ public partial class WalShardGrainTests
         }
     }
 
+    /// <summary>
+    /// Polls until the storage provider has been entered at least
+    /// <paramref name="expected"/> times, proving the flushes a test
+    /// needs in flight have actually reached - and parked inside - the
+    /// provider seam before the drain under test begins.
+    /// <para>
+    /// This replaces the fixed <c>Task.Delay</c> settle windows these
+    /// tests used to open with. A fixed sleep is unsound in both
+    /// directions: it is dead time on a fast machine, and on a loaded
+    /// CI worker it can elapse before the flush has reached the
+    /// provider at all - in which case the follow-up
+    /// <c>IsCompleted, Is.False</c> assertion passes for the wrong
+    /// reason (nothing has started yet, so of course the append has not
+    /// completed) and the drain path the test exists to cover is never
+    /// exercised. Polling a monotonically increasing, interlocked
+    /// invocation counter is positive evidence instead: the wait ends
+    /// exactly when the precondition holds, and fails loudly with the
+    /// observed count if it never does.
+    /// </para>
+    /// </summary>
+    private static async Task WaitForAppendInvocationsAsync(
+        Func<int> observedInvocations,
+        int expected,
+        string because,
+        int timeoutMs = 10_000)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        int observed;
+        while ((observed = observedInvocations()) < expected)
+        {
+            if (stopwatch.ElapsedMilliseconds > timeoutMs)
+            {
+                Assert.Fail(
+                    $"Timed out after {timeoutMs} ms waiting for {expected} provider append invocation(s) - {because}. Observed {observed}.");
+            }
+
+            await Task.Delay(5);
+        }
+    }
+
     [Test]
     public async Task OnDeactivateAsync_cancels_in_flight_cooperative_provider_call_at_drain_entry()
     {
@@ -188,7 +228,10 @@ public partial class WalShardGrainTests
         });
 
         var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
-        await Task.Delay(50);
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            1,
+            "the flush must be parked inside the cooperative provider before the drain starts, otherwise drain entry has no in-flight call to cancel");
         Assert.That(append.IsCompleted, Is.False);
         Assert.That(provider.AppendInvocations, Is.GreaterThanOrEqualTo(1));
 
@@ -229,7 +272,10 @@ public partial class WalShardGrainTests
         });
 
         var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
-        await Task.Delay(50);
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            1,
+            "the flush must be parked inside the uncancellable provider before the drain starts, otherwise the budget has no wedged slot to force-fault");
         Assert.That(append.IsCompleted, Is.False);
 
         // The drain budget must fire well before the per-flush
@@ -311,7 +357,10 @@ public partial class WalShardGrainTests
         });
 
         var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
-        await Task.Delay(50);
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            1,
+            "the flush must be parked inside the cooperative provider before the drain starts, otherwise the unbounded-drain shape is never exercised");
         Assert.That(append.IsCompleted, Is.False);
 
         await grain.OnDeactivateAsync(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"), CancellationToken.None)
@@ -347,7 +396,10 @@ public partial class WalShardGrainTests
         });
 
         var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
-        await Task.Delay(50);
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            1,
+            "the flush must be parked inside the uncancellable provider before the clock starts, otherwise the measured deactivation window would not cover a wedged drain at all");
         Assert.That(append.IsCompleted, Is.False);
 
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -388,8 +440,16 @@ public partial class WalShardGrainTests
         var t1 = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
         var t2 = grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
         var t3 = grain.AppendAsync(MakeEntry("c"), CancellationToken.None);
-        // Yield long enough for all three flushes to be in flight.
-        await Task.Delay(80);
+        // Wait for positive evidence that all three flushes are parked
+        // inside the provider. This is the precondition the histogram
+        // assertion below depends on: without it the recorded slot
+        // count is whatever happened to be in flight when the fixed
+        // sleep elapsed, which is exactly why that assertion used to be
+        // a toothless range check.
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            3,
+            "all three flushes must be in flight before deactivation so the drain has three slots to force-fault");
         Assert.That(t1.IsCompleted, Is.False);
         Assert.That(t2.IsCompleted, Is.False);
         Assert.That(t3.IsCompleted, Is.False);
@@ -407,16 +467,19 @@ public partial class WalShardGrainTests
             "drain-budget gate: expiration counter must fire exactly once per drain regardless of slot count");
 
         // The histogram records the slot count force-faulted in this
-        // drain. With three slots in flight, the recorded value must
-        // be >= 1 (some slots may have settled naturally before the
-        // budget tripped); a healthy implementation faults all three
-        // in one shot.
+        // drain. All three flushes are provably parked inside the
+        // provider (asserted above) and the provider never releases
+        // them, so not one of them can settle naturally before the
+        // budget trips - the drain must therefore abandon exactly
+        // three. Asserting the exact count is what gives this test its
+        // stated teeth: a chain-clear regression that only handles the
+        // head slot would record 1 and still satisfy the old
+        // ">= 1 and <= 3" range check, so that range could never have
+        // caught the regression the test was written for.
         var forceFaulted = capture.FirstFor("orleans.lattice.wal.shard.drain.budget.force_faulted_slots");
         Assert.That(forceFaulted, Is.Not.Null);
-        Assert.That(forceFaulted!.Value.Value, Is.GreaterThanOrEqualTo(1L),
-            "drain-budget gate: at least one slot must be force-faulted; ideally all three");
-        Assert.That(forceFaulted.Value.Value, Is.LessThanOrEqualTo(3L),
-            "drain-budget gate: cannot force-fault more slots than were in flight");
+        Assert.That(forceFaulted!.Value.Value, Is.EqualTo(3L),
+            "drain-budget gate: every in-flight slot must be force-faulted in a single drain expiration, not just the head slot");
 
         provider.Released.TrySetResult();
     }
@@ -439,7 +502,10 @@ public partial class WalShardGrainTests
         });
 
         var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
-        await Task.Delay(50);
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            1,
+            "the flush must be parked inside the uncancellable provider before the drain starts, otherwise no slot is force-faulted and no message is produced to inspect");
 
         await grain.OnDeactivateAsync(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(5));
@@ -475,7 +541,10 @@ public partial class WalShardGrainTests
         });
 
         var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
-        await Task.Delay(50);
+        await WaitForAppendInvocationsAsync(
+            () => Volatile.Read(ref provider.AppendInvocations),
+            1,
+            "the flush must be parked inside the token-observing provider before the drain starts, otherwise there is no in-flight call for the drain CTS to reach");
         Assert.That(append.IsCompleted, Is.False);
 
         // Start the deactivation; the drain entry must signal the
@@ -503,8 +572,11 @@ public partial class WalShardGrainTests
     /// </summary>
     private sealed class TokenObservingProvider(TaskCompletionSource<bool> observedCancellation) : IWalStorageProvider
     {
+        public int AppendInvocations;
+
         public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref AppendInvocations);
             using var reg = cancellationToken.Register(() => observedCancellation.TrySetResult(true));
             await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
         }
