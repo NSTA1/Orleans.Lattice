@@ -20,17 +20,20 @@ Two containers, one private network:
   single SQLite file, plus the file-backed Lattice WAL - all under `/data`, which
   is a named volume, so state survives `docker compose restart`, `docker compose
   down`, and image upgrades. Zero external services.
-- **`embedder`** - the Onyx model-server companion (`apps/embedding/Dockerfile`).
-  It stays a SEPARATE container so the MCP host keeps its
-  single-listener surface. The host's default embedding provider is pointed at it
-  via `LATTICE_EMBEDDING_ENDPOINT`. Its HuggingFace model cache is a named volume.
+- **`embedder`** - the ONNX Runtime model companion
+  (`apps/embedding-onnx/Dockerfile`). It stays a SEPARATE container so the MCP
+  host keeps its single-listener surface. The host's default embedding provider
+  is pointed at it via `LATTICE_EMBEDDING_ENDPOINT`. Its model weights are baked
+  into an image layer, so it needs no cache volume and no download on first run.
 
 ## Prerequisites
 
 - Docker with Compose v2.
-- Build context is the REPOSITORY ROOT (the host image ProjectReferences the
-  just-built `src/` bits), so this compose file sets `context: ../..`. Run it from
-  this directory.
+- Build context differs per image: the host image's is the REPOSITORY ROOT (it
+  ProjectReferences the just-built `src/` bits), so its service sets
+  `context: ../..`; the embedder builds from its own `apps/embedding-onnx`
+  directory, which has no `src/` dependency and so keeps a small context. Run
+  compose from this directory either way.
 
 ## The mounted workspace
 
@@ -51,21 +54,72 @@ traversal and symlink escape are both defeated - and must resolve under
 
 ## Choosing an embedding companion
 
-The sample brings up the default Onyx companion
-([`apps/embedding`](../../apps/embedding/README.md)). An alternative ONNX Runtime
-companion ([`apps/embedding-onnx`](../../apps/embedding-onnx/README.md)) is
-available and can be selected with an override file:
+The sample brings up the ONNX Runtime companion
+([`apps/embedding-onnx`](../../apps/embedding-onnx/README.md)) by default. It
+bakes its weights into an image layer, so a cold start needs no model download,
+and it selects its accelerator - CPU or NVIDIA - from one build via
+`EMBED_PROVIDER`.
+
+The original Onyx companion
+([`apps/embedding`](../../apps/embedding/README.md)) remains available as a
+fallback, selected with an override file:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.onnx.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
 ```
 
-Nothing else changes. It serves the same contract on the same port, so the
-service name and `LATTICE_EMBEDDING_ENDPOINT` are identical, and it produces
-**numerically identical vectors** (same pinned model revision, fp32, same
-tokenizer and pooling), so switching does not invalidate an existing `/data`
-volume. It is roughly an order of magnitude smaller than the default image and
-selects its accelerator - CPU or NVIDIA - from one build via `EMBED_PROVIDER`.
+Nothing else changes in either direction. Both serve the same contract on the
+same port, so the service name and `LATTICE_EMBEDDING_ENDPOINT` are identical,
+and they produce **numerically identical vectors** (same pinned model revision,
+fp32, same tokenizer and pooling), so switching does not invalidate an existing
+`/data` volume. The ONNX image is roughly an order of magnitude smaller
+(about 1.3 GB against 13 GB).
+
+### Running the embedder on an NVIDIA GPU
+
+The default build is CPU-only, and it stays CPU-only on a GPU host: the `cpu`
+flavour has no GPU support compiled in. Enabling the GPU needs all three of these
+together, because they do different jobs - the build arg picks a different ONNX
+Runtime package, the environment variable binds the accelerator at runtime, and
+the reservation is what actually exposes the device to the container. In
+`docker-compose.yml` under the `embedder` service:
+
+```yaml
+    build:
+      args:
+        ONNX_FLAVOR: cuda
+    environment:
+      EMBED_PROVIDER: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+```
+
+Then rebuild, because a plain `up -d` would reuse the cached CPU image:
+
+```bash
+docker compose build embedder
+docker compose up -d
+```
+
+Requires the NVIDIA Container Toolkit on the host. The `cuda` flavour is a much
+larger image but still includes the CPU provider, so it serves CPU hosts too, and
+an unrecognised `EMBED_PROVIDER` falls back to the CPU rather than failing to
+boot. That fallback is silent by design, so verify what actually bound:
+
+```bash
+docker compose exec repocontext curl -s http://embedder:9000/api/health
+# {"status":"ok","provider":"Cuda","model":"model.onnx","dimension":768}
+```
+
+A `provider` of `Cpu` here means the GPU was not picked up - check the toolkit
+and the device reservation. The Onyx fallback companion takes a different route
+to the same place (clear `CUDA_VISIBLE_DEVICES` and add the reservation); see
+[`apps/embedding`](../../apps/embedding/README.md).
 
 ## Walkthrough
 

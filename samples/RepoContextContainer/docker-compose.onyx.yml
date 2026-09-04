@@ -1,0 +1,43 @@
+# Optional override: run the sample against the Onyx embedding companion
+# (apps/embedding) instead of the default ONNX Runtime one (apps/embedding-onnx).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.onyx.yml up -d
+#
+# This is opt-in and additive. The base compose file is unchanged, so plain
+# `docker compose up` still brings up the ONNX companion.
+#
+# You almost certainly do not need this. The ONNX companion is the default
+# because it is better on every measured axis - a ~10x smaller image (1.34 GB vs
+# 13 GB), a markedly faster cold start, lower query latency, and no model
+# download on first run - while emitting numerically identical vectors. This
+# override exists for one reason: to fall back quickly if the ONNX image ever
+# misbehaves on a particular host, without editing the base file.
+#
+# Only the embedder IMAGE changes. The service name, the port, and therefore the
+# host''s LATTICE_EMBEDDING_ENDPOINT (http://embedder:9000) are all identical,
+# because both images serve the same contract on the same port. The vectors are
+# numerically identical too (fp32, same pinned model revision, same tokenizer and
+# pooling), so switching either way does NOT require re-indexing an existing
+# volume - see apps/embedding-onnx/README.md.
+
+services:
+  embedder:
+    build:
+      context: ../..
+      dockerfile: apps/embedding/Dockerfile
+      # The ONNX flavour argument means nothing to this image.
+      args: !reset {}
+    environment:
+      # The ONNX image selects its accelerator with this variable; the Onyx image
+      # does not read it. Reset so it cannot look like live configuration.
+      EMBED_PROVIDER: null
+    volumes:
+      # Persist the HuggingFace model cache so a restart needs no re-download.
+      # The ONNX image bakes its weights into an image layer and needs no cache,
+      # so the base file declares no volume here and this override adds one.
+      - hf-cache:/app/.cache/huggingface
+
+volumes:
+  # Only this override mounts it, so the declaration lives here rather than in
+  # the base file where it would be an unused, misleading leftover.
+  hf-cache:

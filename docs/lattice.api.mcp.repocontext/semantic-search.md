@@ -31,7 +31,7 @@ The semantic path range-scans all vector metadata and decodes every vector paylo
 
 ## The embedding seam
 
-Embedding is provided by an `IEmbeddingProvider` the host binds (for example the Onyx embedding companion). The provider is fail-closed by contract: it never throws, and reports its own availability, so a missing or unhealthy embedder degrades search to keyword recall instead of erroring. The bundled container points its default embedding provider at a separate Onyx model-server container, keeping the MCP host a single-listener surface.
+Embedding is provided by an `IEmbeddingProvider` the host binds (for example the Onyx embedding companion). The provider is fail-closed by contract: it never throws, and reports its own availability, so a missing or unhealthy embedder degrades search to keyword recall instead of erroring. The bundled container points its default embedding provider at a separate embedding companion container, keeping the MCP host a single-listener surface.
 
 ## Where vectors come from
 

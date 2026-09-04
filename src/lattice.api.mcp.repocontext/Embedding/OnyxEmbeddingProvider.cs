@@ -25,8 +25,11 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <para>
 /// It wraps the server's internal, versioned request/response contract
 /// (<see cref="OnyxEmbedRequest"/> / <see cref="OnyxEmbedResponse"/>) behind this
-/// single seam; the endpoint is pinned to the image tag shipped under
-/// <c>apps/embedding</c>.
+/// single seam. That contract is served by both shipped companion images -
+/// <c>apps/embedding-onnx</c> (the sample's default) and <c>apps/embedding</c>
+/// (the reference implementation it is pinned against) - on the same port and
+/// with numerically identical vectors, so this client is unaware of which one is
+/// running.
 /// </para>
 /// </remarks>
 internal sealed class OnyxEmbeddingProvider : IEmbeddingProvider
