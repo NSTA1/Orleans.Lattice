@@ -52,4 +52,42 @@ public readonly record struct CrdtMemberChange
     /// folded-state fallback).
     /// </summary>
     [Id(4)] public HybridLogicalClock? WallClock { get; init; }
+
+    /// <summary>
+    /// Compares two changes by value, with <see cref="Element"/> compared by
+    /// content. The compiler-generated record-struct equality compares
+    /// <see cref="Element"/> with <see cref="EqualityComparer{T}.Default"/>, which
+    /// for a <see cref="byte"/> array is reference equality - so two changes built
+    /// from independently allocated but byte-identical <see cref="Element"/> arrays
+    /// (including a change and its post-serialization self) would otherwise never
+    /// compare equal, contradicting this type's documented by-content element
+    /// identity.
+    /// </summary>
+    /// <param name="other">The change to compare against.</param>
+    public bool Equals(CrdtMemberChange other) =>
+        BytesEqual(Element, other.Element)
+        && Kind == other.Kind
+        && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
+        && Ordinal == other.Ordinal
+        && Nullable.Equals(WallClock, other.WallClock);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Element is { } element)
+        {
+            hash.AddBytes(element);
+        }
+
+        hash.Add(Kind);
+        hash.Add(ReplicaId, StringComparer.Ordinal);
+        hash.Add(Ordinal);
+        hash.Add(WallClock);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

@@ -52,4 +52,37 @@ public readonly record struct CrdtMemberValue
     /// value), or zero (a flag state). A causal coordinate, not a wall-clock time.
     /// </summary>
     [Id(2)] public long Ordinal { get; init; }
+
+    /// <summary>
+    /// Compares two members by value, with <see cref="Element"/> compared by
+    /// content. The compiler-generated record-struct equality compares
+    /// <see cref="Element"/> with <see cref="EqualityComparer{T}.Default"/> -
+    /// reference equality for a <see cref="byte"/> array - so two members built
+    /// from independently allocated but byte-identical <see cref="Element"/> arrays
+    /// (including a member and its post-serialization self) would otherwise never
+    /// compare equal.
+    /// </summary>
+    /// <param name="other">The member to compare against.</param>
+    public bool Equals(CrdtMemberValue other) =>
+        BytesEqual(Element, other.Element)
+        && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
+        && Ordinal == other.Ordinal;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Element is { } element)
+        {
+            hash.AddBytes(element);
+        }
+
+        hash.Add(ReplicaId, StringComparer.Ordinal);
+        hash.Add(Ordinal);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
