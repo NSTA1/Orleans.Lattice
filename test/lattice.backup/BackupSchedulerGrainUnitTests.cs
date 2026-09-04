@@ -258,6 +258,42 @@ public sealed class BackupSchedulerGrainUnitTests
         Assert.That(resultId, Is.Not.Null);
     }
 
+    [Test]
+    public async Task RunScheduledCycleAsync_retention_max_age_at_extreme_window_keeps_all_without_faulting()
+    {
+        // Regression: the validator only rejects a non-positive RetentionMaxAge, so a
+        // very large window (here TimeSpan.MaxValue) is permitted. Computing the cutoff
+        // as (now - maxAge) then underflows DateTimeOffset and throws
+        // ArgumentOutOfRangeException, faulting the whole retention pass. The cutoff is
+        // now saturated at DateTimeOffset.MinValue, so an effectively-unbounded window
+        // keeps every manifest instead of crashing.
+        var manifest = BackupManifestModelTests.Sample("full-1");
+        var catalog = new FakeSchedulerCatalog(manifest);
+        var captureResult = new LatticeBackupCaptureResult("full-1", manifest);
+        var captureService = Substitute.For<ILatticeBackupCaptureService>();
+        captureService.CaptureAsync(Arg.Any<LatticeBackupCaptureRequest>())
+            .Returns(captureResult);
+
+        var state = new FakePersistentState<BackupSchedulerState>();
+        state.State.Scope = TestScope;
+
+        var opts = new LatticeBackupScheduleOptions
+        {
+            RetentionEnabled = true,
+            RetentionKeepLast = null,
+            RetentionMaxAge = TimeSpan.MaxValue,
+        };
+
+        var grain = CreateGrain(captureService: captureService, catalog: catalog, options: opts, state: state);
+
+        string? resultId = null;
+        Assert.That(
+            async () => resultId = await grain.RunScheduledCycleAsync(incremental: false),
+            Throws.Nothing);
+        Assert.That(resultId, Is.EqualTo("full-1"));
+        Assert.That(state.State.LastRunOutcome, Is.EqualTo(BackupScopeRunOutcome.Success));
+    }
+
     // ---- Retention-after-capture path (lines 150-151) ---------------------------
 
     [Test]

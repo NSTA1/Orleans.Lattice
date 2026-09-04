@@ -407,7 +407,14 @@ internal sealed class BackupSchedulerGrain(
 
         if (opts.RetentionMaxAge is { } maxAge)
         {
-            var cutoff = now - maxAge;
+            // Guard the subtraction: a very large (but validator-permitted, since the
+            // validator only rejects a non-positive window) RetentionMaxAge would push
+            // the cutoff below DateTimeOffset.MinValue and throw. A "retain for
+            // practically forever" window means keep every manifest, so saturate the
+            // cutoff at MinValue rather than fault the retention pass.
+            var cutoff = maxAge >= now - DateTimeOffset.MinValue
+                ? DateTimeOffset.MinValue
+                : now - maxAge;
             foreach (var manifest in manifests.Where(m => m.CreatedAtUtc >= cutoff))
             {
                 keep.Add(manifest.Id);
