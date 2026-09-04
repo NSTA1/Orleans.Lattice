@@ -120,6 +120,64 @@ public sealed class WalMaterialiserPinRoutingBucketTests
     }
 
     [Test]
+    public void BucketOf_spreads_the_consumers_of_a_single_shard_across_buckets()
+    {
+        // The regression that matters. A shard activation only ever writes the
+        // consumers routed to IT, so the distribution that reduces the per-write
+        // blob is the one CONDITIONED on a shard - not the global spread the test
+        // above measures, which stays healthy even when bucketing does nothing.
+        // Deriving the bucket from the unmixed shard hash makes the two
+        // selections dependent: with equal counts, every consumer in shard N can
+        // only land in bucket N, so the shard's whole map sits in one bucket. A
+        // live deployment showed exactly that - one 1.08 MB bucket, seven empty.
+        const int shards = 8;
+        const int buckets = 8;
+        const string tree = "tree-2014";
+
+        var perShard = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
+        for (var i = 0; i < 4096; i++)
+        {
+            var consumer = $"_lattice_materialiser_tree-2014_leaf-{i}";
+            var shardKey = WalMaterialiserPinRouting.ShardKey(tree, consumer, shards);
+            if (!perShard.TryGetValue(shardKey, out var seen))
+            {
+                seen = new HashSet<int>();
+                perShard[shardKey] = seen;
+            }
+
+            seen.Add(WalMaterialiserPinRouting.BucketOf(consumer, buckets));
+        }
+
+        Assert.That(perShard, Has.Count.EqualTo(shards), "the sample must reach every shard");
+        Assert.Multiple(() =>
+        {
+            foreach (var (shardKey, seen) in perShard)
+            {
+                Assert.That(seen, Has.Count.EqualTo(buckets),
+                    $"shard '{shardKey}' must spread its consumers over every bucket; it used {seen.Count} of {buckets}");
+            }
+        });
+    }
+
+    [Test]
+    public void BucketOf_is_not_a_function_of_the_shard_ordinal()
+    {
+        // Stated directly as a property, so the dependency cannot creep back in
+        // under a different bucket count. With 4 buckets and 8 shards a correlated
+        // hash makes bucket == shard % 4 for every consumer.
+        var pairs = new HashSet<(string Shard, int Bucket)>();
+        for (var i = 0; i < 2048; i++)
+        {
+            var consumer = $"_lattice_materialiser_tree-2014_leaf-{i}";
+            pairs.Add((WalMaterialiserPinRouting.ShardKey("tree-2014", consumer, 8),
+                WalMaterialiserPinRouting.BucketOf(consumer, 4)));
+        }
+
+        Assert.That(pairs, Has.Count.EqualTo(8 * 4),
+            "every (shard, bucket) combination must be reachable; a correlated hash reaches only 8 of the 32");
+    }
+
+    [Test]
     public void EnumerateBucketStateNames_single_bucket_yields_only_the_legacy_slot()
     {
         Assert.That(

@@ -226,15 +226,41 @@ internal static class WalMaterialiserPinRouting
 
     /// <summary>
     /// Resolves the bucket ordinal owning <paramref name="consumerId"/> under
-    /// <paramref name="bucketCount"/>. Uses the same stable, process-independent
-    /// hash as shard routing, so a consumer lands in the same bucket in every
-    /// process and after every restart.
+    /// <paramref name="bucketCount"/>. Deterministic and process-independent, so
+    /// a consumer lands in the same bucket in every process and after every
+    /// restart.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bucket hash is deliberately <b>decorrelated</b> from the shard hash
+    /// rather than reusing it. Shard routing takes
+    /// <c>StableHash(consumerId) % shardCount</c>; taking the bucket from the
+    /// same value would make the two selections functionally dependent, and for
+    /// the natural configuration - a bucket count equal to (or a multiple or
+    /// divisor of) the shard count, both typically powers of two - it collapses
+    /// entirely: every consumer routed to shard <c>N</c> satisfies
+    /// <c>hash % 8 == N</c>, so with eight buckets it can only ever land in
+    /// bucket <c>N</c>. The shard's whole pin map would then occupy a single
+    /// bucket and bucketing would degenerate into renaming the slot, delivering
+    /// none of the write reduction it exists for. This was observed on a live
+    /// deployment: with eight shards and eight buckets one bucket held the full
+    /// 1.08 MB blob and the other seven were empty.
+    /// </para>
+    /// <para>
+    /// Applying an avalanche finaliser first makes every output bit depend on
+    /// every input bit, so the low bits used for the bucket modulo carry no
+    /// information about the low bits used for the shard modulo and consumers
+    /// spread evenly across buckets whatever the two counts are. Reassigning a
+    /// consumer to a different bucket is always safe: an activation reads every
+    /// bucket and merges monotonic-max, so a stale copy left in the old bucket
+    /// loses to the newer one and can only ever over-retain WAL.
+    /// </para>
+    /// </remarks>
     /// <param name="consumerId">The leaf-materialiser consumer id.</param>
     /// <param name="bucketCount">The configured bucket count.</param>
     /// <returns>The bucket ordinal, or zero when bucketing is disabled.</returns>
     public static int BucketOf(string consumerId, int bucketCount)
-        => bucketCount <= 1 ? 0 : (int)(StableHash(consumerId) % (uint)bucketCount);
+        => bucketCount <= 1 ? 0 : (int)(Avalanche(StableHash(consumerId)) % (uint)bucketCount);
 
     /// <summary>
     /// Returns the durable grain-state slot name for bucket
@@ -339,6 +365,22 @@ internal static class WalMaterialiserPinRouting
             hash *= prime;
         }
 
+        return hash;
+    }
+
+    /// <summary>
+    /// The MurmurHash3 32-bit finaliser: an avalanche mix that makes every
+    /// output bit depend on every input bit. Applied to <see cref="StableHash"/>
+    /// before the bucket modulo so bucket selection is statistically independent
+    /// of shard selection, which takes its modulo from the unmixed value.
+    /// </summary>
+    private static uint Avalanche(uint hash)
+    {
+        hash ^= hash >> 16;
+        hash *= 0x85ebca6b;
+        hash ^= hash >> 13;
+        hash *= 0xc2b2ae35;
+        hash ^= hash >> 16;
         return hash;
     }
 }
