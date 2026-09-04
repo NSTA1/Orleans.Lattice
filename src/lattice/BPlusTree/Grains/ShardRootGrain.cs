@@ -1387,10 +1387,28 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    public async Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
+    // Mutating, and therefore the one site where the stall ceiling abandons work
+    // in flight rather than merely an idle read. That is safe: a range delete is
+    // idempotent (it writes tombstones under last-writer-wins), the shadow
+    // forward it awaits is itself independently bounded by ShardForwardTimeout,
+    // and convergence is separately guaranteed by the split coordinator's drain.
+    // An abandoned continuation therefore completes harmlessly unobserved on the
+    // activation's own scheduler, and the caller safely retries from the last
+    // continuation token it was given.
+    public Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(DeleteRangeBoundedAsync));
+        return GuardScanPageAsync(
+            scan,
+            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan));
+    }
 
+    private async Task<ShardRangeDeletePage> DeleteRangeBoundedCoreAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        ScanPageWalk scan)
+    {
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
         await PrepareForOperationAsync();
@@ -1409,6 +1427,7 @@ internal sealed partial class ShardRootGrain(
         var forwardTask = TrackShadowForward((startInclusive, endExclusive, predicate), static (t, s) => t.DeleteRangeAsync(s.startInclusive, s.endExclusive, s.predicate));
 
         // Find the starting leaf for the range.
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -1445,14 +1464,14 @@ internal sealed partial class ShardRootGrain(
         // ("a concurrent saga may be observed as committed for some keys and
         // pending for others"). The whole-shard atomicity of the old unbounded
         // walk was an implementation artifact, not a contract.
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         string? resumeFrom = null;
         while (true)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var result = await leafGrain.DeleteRangeAsync(startInclusive, endExclusive, predicate);
             totalDeleted += result.Deleted;
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
             if (result.Deleted > 0)
                 await MarkLeafDirtyAsync(leafId);
             if (matchedKeys is not null && result.MatchedKeys is { Count: > 0 })
@@ -1469,7 +1488,7 @@ internal sealed partial class ShardRootGrain(
             // there is no safe key to resume from, so the walk continues rather
             // than risk truncating - the same "only stop where you can resume"
             // rule the read-path bound follows.
-            if (budget.ShouldYield())
+            if (scan.Budget.ShouldYield())
             {
                 var bounds = await leafGrain.GetKeyRangeAsync();
                 if (bounds.HighKeyExclusive is { } high
@@ -1537,10 +1556,17 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive)
+    public Task<ShardCountPage> CountBoundedAsync(string? startInclusive, string? endExclusive)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(CountBoundedAsync));
+        return GuardScanPageAsync(scan, CountBoundedCoreAsync(startInclusive, endExclusive, scan));
+    }
 
+    private async Task<ShardCountPage> CountBoundedCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -1551,6 +1577,7 @@ internal sealed partial class ShardRootGrain(
         // the leftmost leaf, so a resumed walk does not re-count what earlier
         // batches already counted. Resuming by key (never by leaf grain id) is
         // what makes this safe across a structural change between batches.
+        scan.Phase = ScanPagePhase.Descent;
         GrainId? leafId = await ResolveWalkStartLeafAsync(startInclusive);
         if (leafId is null) return new ShardCountPage { Count = 0 };
 
@@ -1565,7 +1592,7 @@ internal sealed partial class ShardRootGrain(
         var hasMovedAway = state.State.MovedAwaySlots.Count > 0
             && state.State.MovedAwayVirtualShardCount is not null;
 
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         var total = 0;
         string? resumeFrom = null;
         var currentId = leafId.Value;
@@ -1586,7 +1613,7 @@ internal sealed partial class ShardRootGrain(
                 leafCount = await leaf.CountAsync(startInclusive, endExclusive);
             }
             total += leafCount;
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             // Past-range early exit (issue 1971). Without this a narrow range
             // still costs a walk to the end of the shard's chain. The bounds
@@ -1621,7 +1648,7 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (budget.ShouldYield())
+            if (scan.Budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
                 {
@@ -1708,16 +1735,21 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<ShardAnyPage> AnyBoundedAsync(string? resumeFromInclusive)
+    public Task<ShardAnyPage> AnyBoundedAsync(string? resumeFromInclusive)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(AnyBoundedAsync));
+        return GuardScanPageAsync(scan, AnyBoundedCoreAsync(resumeFromInclusive, scan));
+    }
 
+    private async Task<ShardAnyPage> AnyBoundedCoreAsync(string? resumeFromInclusive, ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
         if (state.State.RootNodeId is null)
             return new ShardAnyPage { Found = false };
 
+        scan.Phase = ScanPagePhase.Descent;
         var leafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
         if (leafId is null) return new ShardAnyPage { Found = false };
 
@@ -1725,14 +1757,14 @@ internal sealed partial class ShardRootGrain(
         // overwhelmingly common case - costs a single leaf call, so the work
         // bound only ever engages on the empty or fully-tombstoned shard that
         // was the unbounded case here.
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         var currentId = leafId.Value;
         while (true)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             if (await leaf.CountAsync(null, null) > 0)
                 return new ShardAnyPage { Found = true };
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) return new ShardAnyPage { Found = false };
@@ -1742,7 +1774,7 @@ internal sealed partial class ShardRootGrain(
             // output to strand a caller with, so the forward-progress rule the
             // page fills need does not apply. A resume key is still only
             // emitted when a next leaf exists, so the walk cannot stall.
-            if (budget.ShouldYield())
+            if (scan.Budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
                 {
@@ -1787,16 +1819,23 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedAsync(string? resumeFromInclusive)
+    public Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedAsync(string? resumeFromInclusive)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(CountWithMovedAwayBoundedAsync));
+        return GuardScanPageAsync(scan, CountWithMovedAwayBoundedCoreAsync(resumeFromInclusive, scan));
+    }
 
+    private async Task<ShardCountWithMovedAwayPage> CountWithMovedAwayBoundedCoreAsync(
+        string? resumeFromInclusive,
+        ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
         if (state.State.RootNodeId is null)
             return new ShardCountWithMovedAwayPage { Count = 0 };
 
+        scan.Phase = ScanPagePhase.Descent;
         var leafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
         if (leafId is null) return new ShardCountWithMovedAwayPage { Count = 0 };
 
@@ -1807,7 +1846,7 @@ internal sealed partial class ShardRootGrain(
         var hasMovedAway = state.State.MovedAwaySlots.Count > 0
             && state.State.MovedAwayVirtualShardCount is not null;
 
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         var total = 0;
         HashSet<int>? movedSet = null;
         string? resumeFrom = null;
@@ -1832,12 +1871,12 @@ internal sealed partial class ShardRootGrain(
             {
                 total += await leaf.CountAsync();
             }
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (budget.ShouldYield())
+            if (scan.Budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null) is { } high)
                 {
@@ -1879,11 +1918,22 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<ShardCountPage> CountForSlotsBoundedAsync(
+    public Task<ShardCountPage> CountForSlotsBoundedAsync(
         int[] sortedSlots, int virtualShardCount, string? startInclusive, string? endExclusive)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(CountForSlotsBoundedAsync));
+        return GuardScanPageAsync(
+            scan,
+            CountForSlotsBoundedCoreAsync(sortedSlots, virtualShardCount, startInclusive, endExclusive, scan));
+    }
 
+    private async Task<ShardCountPage> CountForSlotsBoundedCoreAsync(
+        int[] sortedSlots,
+        int virtualShardCount,
+        string? startInclusive,
+        string? endExclusive,
+        ScanPageWalk scan)
+    {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -1894,10 +1944,11 @@ internal sealed partial class ShardRootGrain(
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
             return new ShardCountPage { Count = 0 };
 
+        scan.Phase = ScanPagePhase.Descent;
         var leafId = await ResolveWalkStartLeafAsync(startInclusive);
         if (leafId is null) return new ShardCountPage { Count = 0 };
 
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         var total = 0;
         string? resumeFrom = null;
         var currentId = leafId.Value;
@@ -1916,7 +1967,7 @@ internal sealed partial class ShardRootGrain(
                 if (Array.BinarySearch(sortedSlots, slot) >= 0)
                     total++;
             }
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             // Past-range early exit (issue 1971): a bounded range must not cost
             // a walk to the end of the chain. The probe is paid only when a
@@ -1935,7 +1986,7 @@ internal sealed partial class ShardRootGrain(
             var next = await leaf.GetNextSiblingAsync();
             if (next is null) break;
 
-            if (budget.ShouldYield())
+            if (scan.Budget.ShouldYield())
             {
                 if (await TryResolveResumeKeyAsync(leaf, startInclusive, endExclusive) is { } high)
                 {
@@ -2470,7 +2521,7 @@ internal sealed partial class ShardRootGrain(
             : right is null ? left
             : string.CompareOrdinal(left, right) <= 0 ? left : right;
 
-    public async Task<KeysPage> GetSortedKeysBatchAsync(
+    public Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
@@ -2478,8 +2529,22 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(GetSortedKeysBatchAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetSortedKeysBatchCoreAsync(
+                startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan));
+    }
 
+    private async Task<KeysPage> GetSortedKeysBatchCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        LatticePredicateNode? predicate,
+        string? resumeFromKey,
+        ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -2488,6 +2553,7 @@ internal sealed partial class ShardRootGrain(
         // range start and the continuation token by taking the furthest of them.
         var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
         var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2509,7 +2575,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2518,7 +2584,7 @@ internal sealed partial class ShardRootGrain(
             // discarded here. The optional predicate is evaluated inside the
             // leaf so non-matching values never cross the wire.
             var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
             {
@@ -2538,7 +2604,7 @@ internal sealed partial class ShardRootGrain(
             // Range termination and the work bound both read this leaf's
             // bounds, so read them once per leaf, and only when one of them
             // can actually use them.
-            var spent = budget.ShouldYield();
+            var spent = scan.Budget.ShouldYield();
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
@@ -2600,7 +2666,7 @@ internal sealed partial class ShardRootGrain(
         };
     }
 
-    public async Task<KeysPage> GetSortedKeysBatchReverseAsync(
+    public Task<KeysPage> GetSortedKeysBatchReverseAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
@@ -2608,8 +2674,22 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(GetSortedKeysBatchReverseAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetSortedKeysBatchReverseCoreAsync(
+                startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan));
+    }
 
+    private async Task<KeysPage> GetSortedKeysBatchReverseCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        LatticePredicateNode? predicate,
+        string? resumeFromKey,
+        ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
@@ -2618,6 +2698,7 @@ internal sealed partial class ShardRootGrain(
         // with the continuation token by taking the nearer of the two.
         var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
         var seekKey = MinOrdinal(effectiveBefore, endExclusive);
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2639,7 +2720,7 @@ internal sealed partial class ShardRootGrain(
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
         var keys = new List<string>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
+        scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2647,7 +2728,7 @@ internal sealed partial class ShardRootGrain(
             // filters at the source - avoids transferring keys that would be
             // discarded here.
             var leafKeys = await leafGrain.GetKeysAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             // Walk the leaf's keys in reverse order.
             for (int i = leafKeys.Count - 1; i >= 0; i--)
@@ -2666,7 +2747,7 @@ internal sealed partial class ShardRootGrain(
             if (keys.Count >= pageSize)
                 break;
 
-            var spent = budget.ShouldYield();
+            var spent = scan.Budget.ShouldYield();
             var bounds = startInclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
@@ -2720,7 +2801,7 @@ internal sealed partial class ShardRootGrain(
         };
     }
 
-    public async Task<EntriesPage> GetSortedEntriesBatchAsync(
+    public Task<EntriesPage> GetSortedEntriesBatchAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
@@ -2728,13 +2809,28 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(GetSortedEntriesBatchAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetSortedEntriesBatchCoreAsync(
+                startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan));
+    }
 
+    private async Task<EntriesPage> GetSortedEntriesBatchCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        LatticePredicateNode? predicate,
+        string? resumeFromKey,
+        ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
         var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
         var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2751,11 +2847,11 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: the start node must be a leaf; re-descend to the leftmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
+        scan.Phase = ScanPagePhase.LeafWalk;
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2763,7 +2859,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
             var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
             {
@@ -2783,7 +2879,7 @@ internal sealed partial class ShardRootGrain(
             // Range termination and the work bound both read this leaf's
             // bounds, so read them once per leaf, and only when one of them
             // can actually use them.
-            var spent = budget.ShouldYield();
+            var spent = scan.Budget.ShouldYield();
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
@@ -2838,7 +2934,7 @@ internal sealed partial class ShardRootGrain(
         };
     }
 
-    public async Task<EntriesPage> GetSortedEntriesBatchReverseAsync(
+    public Task<EntriesPage> GetSortedEntriesBatchReverseAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
@@ -2846,13 +2942,28 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(GetSortedEntriesBatchReverseAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetSortedEntriesBatchReverseCoreAsync(
+                startInclusive, endExclusive, pageSize, continuationToken, predicate, resumeFromKey, scan));
+    }
 
+    private async Task<EntriesPage> GetSortedEntriesBatchReverseCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        LatticePredicateNode? predicate,
+        string? resumeFromKey,
+        ScanPageWalk scan)
+    {
         await PrepareForOperationAsync();
         RecordRead();
 
         var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
         var seekKey = MinOrdinal(effectiveBefore, endExclusive);
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2869,11 +2980,11 @@ internal sealed partial class ShardRootGrain(
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
         HashSet<int>? movedSet = null;
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: the start node must be a leaf; re-descend to the rightmost
         // leaf if a corrupt ChildrenAreLeaves flag returned an internal node
         // rather than blind-casting it (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: true);
+        scan.Phase = ScanPagePhase.LeafWalk;
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
@@ -2881,7 +2992,7 @@ internal sealed partial class ShardRootGrain(
             // at the source - avoids serializing byte[] values that would be
             // discarded here.
             var leafEntries = await leafGrain.GetEntriesAsync(startInclusive, endExclusive, beforeExclusive: effectiveBefore, predicate: predicate);
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             for (int i = leafEntries.Count - 1; i >= 0; i--)
             {
@@ -2899,7 +3010,7 @@ internal sealed partial class ShardRootGrain(
             if (entries.Count >= pageSize)
                 break;
 
-            var spent = budget.ShouldYield();
+            var spent = scan.Budget.ShouldYield();
             var bounds = startInclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
@@ -2953,7 +3064,7 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<KeysPage> GetSortedKeysBatchForSlotsAsync(
+    public Task<KeysPage> GetSortedKeysBatchForSlotsAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
@@ -2963,8 +3074,25 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(GetSortedKeysBatchForSlotsAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetSortedKeysBatchForSlotsCoreAsync(
+                startInclusive, endExclusive, pageSize, continuationToken, sortedSlots,
+                virtualShardCount, predicate, resumeFromKey, scan));
+    }
 
+    private async Task<KeysPage> GetSortedKeysBatchForSlotsCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        int[] sortedSlots,
+        int virtualShardCount,
+        LatticePredicateNode? predicate,
+        string? resumeFromKey,
+        ScanPageWalk scan)
+    {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -2977,6 +3105,7 @@ internal sealed partial class ShardRootGrain(
 
         var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
         var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -2992,15 +3121,15 @@ internal sealed partial class ShardRootGrain(
         }
 
         var keys = new List<string>(pageSize);
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
+        scan.Phase = ScanPagePhase.LeafWalk;
         while (keys.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafKeys = await leafGrain.GetKeysAsync(effectiveStart, endExclusive, afterExclusive: continuationToken, predicate: predicate);
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             foreach (var key in leafKeys)
             {
@@ -3012,7 +3141,7 @@ internal sealed partial class ShardRootGrain(
 
             if (keys.Count >= pageSize) break;
 
-            var spent = budget.ShouldYield();
+            var spent = scan.Budget.ShouldYield();
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;
@@ -3049,7 +3178,7 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
-    public async Task<EntriesPage> GetSortedEntriesBatchForSlotsAsync(
+    public Task<EntriesPage> GetSortedEntriesBatchForSlotsAsync(
         string? startInclusive,
         string? endExclusive,
         int pageSize,
@@ -3059,8 +3188,25 @@ internal sealed partial class ShardRootGrain(
         LatticePredicateNode? predicate = null,
         string? resumeFromKey = null)
     {
-        var walkClock = LeafWalkBudget.StartClock();
+        var scan = BeginScanPage(nameof(GetSortedEntriesBatchForSlotsAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetSortedEntriesBatchForSlotsCoreAsync(
+                startInclusive, endExclusive, pageSize, continuationToken, sortedSlots,
+                virtualShardCount, predicate, resumeFromKey, scan));
+    }
 
+    private async Task<EntriesPage> GetSortedEntriesBatchForSlotsCoreAsync(
+        string? startInclusive,
+        string? endExclusive,
+        int pageSize,
+        string? continuationToken,
+        int[] sortedSlots,
+        int virtualShardCount,
+        LatticePredicateNode? predicate,
+        string? resumeFromKey,
+        ScanPageWalk scan)
+    {
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -3073,6 +3219,7 @@ internal sealed partial class ShardRootGrain(
 
         var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
         var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
         {
@@ -3088,15 +3235,15 @@ internal sealed partial class ShardRootGrain(
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>(pageSize);
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync(), walkClock);
         // Guard: re-descend to a real leaf if the start node is internal
         // (issue 899).
         leafId = await DescendToLeafAsync(leafId, rightmost: false);
+        scan.Phase = ScanPagePhase.LeafWalk;
         while (entries.Count < pageSize)
         {
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
             var leafEntries = await leafGrain.GetEntriesAsync(effectiveStart, endExclusive, continuationToken, predicate: predicate);
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             foreach (var entry in leafEntries)
             {
@@ -3108,7 +3255,7 @@ internal sealed partial class ShardRootGrain(
 
             if (entries.Count >= pageSize) break;
 
-            var spent = budget.ShouldYield();
+            var spent = scan.Budget.ShouldYield();
             var bounds = endExclusive is not null || spent
                 ? await leafGrain.GetKeyRangeAsync()
                 : (LeafKeyRange?)null;

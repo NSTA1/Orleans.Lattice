@@ -27,14 +27,34 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<ShardProjectionRebuildPage> RebuildShardProjectionBoundedAsync(
+    // The stall ceiling can abandon this walk mid-chain, which is safe because
+    // RebuildProjectionFromWalAsync is idempotent - it deactivates the leaf so
+    // the projection is rebuilt lazily on its next activation, and rebuilding an
+    // already-rebuilt leaf is a no-op. An abandoned continuation therefore
+    // completes harmlessly unobserved, and an operator retries from the cursor
+    // of the last page that returned. The pre-rebuild ordering below is what
+    // keeps the walk resumable at all (issue 1972) and is unaffected by the
+    // ceiling, which never interposes inside the loop.
+    public Task<ShardProjectionRebuildPage> RebuildShardProjectionBoundedAsync(
         string? resumeFromInclusive,
         CancellationToken cancellationToken)
+    {
+        var scan = BeginScanPage(nameof(RebuildShardProjectionBoundedAsync));
+        return GuardScanPageAsync(
+            scan,
+            RebuildShardProjectionBoundedCoreAsync(resumeFromInclusive, cancellationToken, scan));
+    }
+
+    private async Task<ShardProjectionRebuildPage> RebuildShardProjectionBoundedCoreAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken,
+        ScanPageWalk scan)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await PrepareForOperationAsync();
         cancellationToken.ThrowIfCancellationRequested();
 
+        scan.Phase = ScanPagePhase.Descent;
         var startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
         if (startLeafId is null)
         {
@@ -56,7 +76,7 @@ internal sealed partial class ShardRootGrain
         // rules are otherwise the shared ones: the same LeafWalkBudget, a key
         // cursor rather than a leaf id, and no stopping anywhere the walk
         // cannot name a resume position (issues 1955, 1972, 1973).
-        var budget = LeafWalkBudget.ForScanPage(await GetOptionsAsync());
+        scan.Phase = ScanPagePhase.LeafWalk;
         var leafId = startLeafId.Value;
         var rebuilt = 0;
 
@@ -74,7 +94,7 @@ internal sealed partial class ShardRootGrain
             // state to continue the chain walk.
             var next = await leaf.GetNextSiblingAsync();
 
-            budget.RecordLeafVisited();
+            scan.Budget.RecordLeafVisited();
 
             // Decide whether this is a yield point while the leaf is still
             // activated, so the resume key can be read before the rebuild for
@@ -85,7 +105,7 @@ internal sealed partial class ShardRootGrain
             // therefore excludes the current leaf's rebuild, which costs at
             // most one extra leaf per batch.
             string? resumeFrom = null;
-            if (next is not null && budget.ShouldYield())
+            if (next is not null && scan.Budget.ShouldYield())
             {
                 resumeFrom = await TryResolveResumeKeyAsync(leaf, resumeFromInclusive, null);
             }

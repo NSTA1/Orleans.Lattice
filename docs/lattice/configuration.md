@@ -153,6 +153,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxPhysicalShardsPerTree`](#maxphysicalshardspertree) | `int` | 256 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
 | [`MaxScanPageDuration`](#maxscanpageduration) | `TimeSpan` | 5 seconds | Yes |
+| [`MaxScanPageStallDuration`](#maxscanpagestallduration) | `TimeSpan` | 30 seconds | Yes |
 | [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
 | [`MaxValueSizeBytes`](#maxvaluesizebytes) | `int?` | `null` (unbounded) | Yes |
@@ -857,7 +858,30 @@ Wall-clock safety net for a single shard range-scan page fill (default: 5 second
 
 [`MaxLeavesPerScanPage`](#maxleavesperscanpage) is the primary, deterministic bound; this covers the case a leaf count cannot, where a small number of leaves are individually very slow - typically cold activations rehydrating a large snapshot or replaying a WAL projection. It is sampled between leaf reads, so it bounds how many slow leaves one page fill chains together; it cannot preempt a leaf read already in flight. Set to `TimeSpan.Zero` to disable it and rely on the leaf count alone.
 
+Because it is cooperative it is a *graceful* bound: it can only stop the walk somewhere the walk can name a resume position, which by construction means between leaf reads. [`MaxScanPageStallDuration`](#maxscanpagestallduration) is the hard ceiling that covers the two cases it structurally cannot.
+
 This option can be changed freely at any time.
+
+### `MaxScanPageStallDuration`
+
+Hard end-to-end ceiling on a single shard range-scan page fill (default: 30 seconds). Unlike [`MaxScanPageDuration`](#maxscanpageduration), which the walk samples cooperatively between leaf reads, this one bounds the *whole* grain call: when it elapses the call stops waiting and faults with a `ScanPageStalledException`, so the deliberately non-reentrant shard is released and its queue drains.
+
+It exists because a cooperative budget can only stop a walk at a point the walk reaches. Two shapes never reach one:
+
+- the **prologue or descent** parks - preparing the shard, or traversing down to the start leaf, before the leaf loop is entered at all;
+- a **single leaf read already in flight** never returns, so the budget is never sampled again.
+
+Either shape holds the shard for as long as the underlying call takes, which in the field has meant minutes: a page fill has been observed holding a shard for 576 seconds against a 5 second budget, head-of-line-blocking every point read, write, split and health probe on that shard for the whole hold.
+
+The fault is retriable and loses no work. A page fill only reads a key range, so nothing is half-applied, and the caller resumes from the continuation token it already holds. Every trip is counted by `orleans.lattice.shard_root.scan_page.stalls`, tagged with the phase (`prologue`, `descent`, or `leaf-walk`) that names which of the shapes above occurred.
+
+```csharp verify
+siloBuilder.ConfigureLattice(o => o.MaxScanPageStallDuration = TimeSpan.FromSeconds(45));
+```
+
+Set it to `Timeout.InfiniteTimeSpan` to disable the ceiling and restore the historical behaviour where a stalled page fill holds the shard until the Orleans response deadline expires. When enabled it must be strictly greater than `MaxScanPageDuration`, so the graceful bound always gets the chance to return a partial page before the hard ceiling faults the call.
+
+This option can be changed freely at any time. It is armed per call, so a new value takes effect on the next page fill.
 
 ### `MaxValueSizeBytes`
 

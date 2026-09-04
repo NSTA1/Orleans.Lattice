@@ -183,6 +183,21 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeOptions.LeafProjectionRetention)} must be positive or {nameof(Timeout.InfiniteTimeSpan)}.");
         }
+        if (options.MaxScanPageStallDuration <= TimeSpan.Zero
+            && options.MaxScanPageStallDuration != Timeout.InfiniteTimeSpan)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxScanPageStallDuration)} must be positive or {nameof(Timeout.InfiniteTimeSpan)} "
+                + "(a non-positive ceiling would stall-fault every range scan before it read a single leaf).");
+        }
+        if (options.MaxScanPageStallDuration != Timeout.InfiniteTimeSpan
+            && options.MaxScanPageDuration > TimeSpan.Zero
+            && options.MaxScanPageStallDuration <= options.MaxScanPageDuration)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxScanPageStallDuration)} must be greater than {nameof(LatticeOptions.MaxScanPageDuration)} "
+                + "so a page fill can always return a partial page before the hard stall ceiling faults it.");
+        }
         if (!Enum.IsDefined(options.ProjectionRebuildPolicy))
         {
             return ValidateOptionsResult.Fail(

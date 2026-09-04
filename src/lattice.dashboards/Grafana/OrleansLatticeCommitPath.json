@@ -517,14 +517,15 @@
     },
     {
       "id": 113,
-      "title": "Shard-forward timeouts (ops/s) - reshard swap-phase wedge guard",
-      "description": "shard_root.forward.timeouts is the rate of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout. Zero in steady state. A sustained non-zero rate during a resize means a forward parked against a sibling shard whose ownership was changing during the reshard swap; the forward was faulted as a TimeoutException so the foreground write pipeline could make progress and the write retried against refreshed routing. A persistent non-zero rate outside a resize window indicates the swap phase is outlasting the configured forward deadline.",
+      "title": "Shard-root wedge guards (ops/s) - forward timeouts and scan-page stalls",
+      "description": "Two guards that release a deliberately non-reentrant shard root rather than let a caller hold it indefinitely. shard_root.forward.timeouts is the rate of outbound shard-to-shard write forwards abandoned after exceeding ShardForwardTimeout. Zero in steady state. A sustained non-zero rate during a resize means a forward parked against a sibling shard whose ownership was changing during the reshard swap; the forward was faulted as a TimeoutException so the foreground write pipeline could make progress and the write retried against refreshed routing. A persistent non-zero rate outside a resize window indicates the swap phase is outlasting the configured forward deadline. shard_root.scan_page.stalls is the rate of range-scan page fills abandoned after exceeding MaxScanPageStallDuration, broken out by phase. MaxScanPageDuration is cooperative (sampled between leaf reads), so it cannot bound a prologue that parks or a single leaf read that never returns; a non-zero rate here means the hard end-to-end ceiling fired so the shard's queue could drain, and the phase label attributes it: prologue = shard preparation, descent = traversal to the start leaf, leaf-walk = one in-flight leaf read.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
       "targets": [
-        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_shard_root_forward_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}}" }
+        { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_shard_root_forward_timeouts_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} forward timeouts/s" },
+        { "refId": "B", "expr": "sum by (tree, phase) (rate(orleans_lattice_shard_root_scan_page_stalls_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "{{tree}} scan-page stalls/s ({{phase}})" }
       ]
     },
     {

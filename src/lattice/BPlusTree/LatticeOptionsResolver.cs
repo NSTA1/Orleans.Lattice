@@ -234,6 +234,33 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// Resolves the bounds that govern a single shard range-scan page fill for
+    /// a tree, synchronously and without touching the registry.
+    /// <para>
+    /// The bounds exist to stop a page fill holding its non-reentrant shard
+    /// root for an unbounded time, so the clock they start has to begin at the
+    /// very first statement of the grain call. An <c>await</c> to resolve them
+    /// would put the resolve itself - a registry round trip on a cold cache -
+    /// outside the window it is meant to bound, which is the residual gap
+    /// issue 2002 reports. All three are non-structural passthroughs of the
+    /// silo-wide options (see <see cref="ResolveAsync"/>), so no round trip is
+    /// needed to read them; <c>LatticeOptionsResolverTests</c> pins that
+    /// equivalence so the two paths cannot drift.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose effective scan-page bounds to resolve.</param>
+    /// <returns>The effective bounds for one page fill.</returns>
+    public ScanPageBounds GetScanPageBounds(string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var options = optionsMonitor.Get(treeId);
+        return new ScanPageBounds(
+            options.MaxLeavesPerScanPage,
+            options.MaxScanPageDuration,
+            options.MaxScanPageStallDuration);
+    }
+
+    /// <summary>
     /// Test-only seam to drop a tree's cached
     /// <see cref="LatticeOptions.WalPartitions"/> pin so a subsequent
     /// <see cref="GetWalPartitionsAsync"/> or <see cref="ResolveAsync"/>
@@ -572,6 +599,7 @@ internal sealed class LatticeOptionsResolver(
             MaxScanRetries = baseOptions.MaxScanRetries,
             MaxLeavesPerScanPage = baseOptions.MaxLeavesPerScanPage,
             MaxScanPageDuration = baseOptions.MaxScanPageDuration,
+            MaxScanPageStallDuration = baseOptions.MaxScanPageStallDuration,
             BackgroundDrainLeavesPerPass = baseOptions.BackgroundDrainLeavesPerPass,
             BackgroundDrainMaxDuration = baseOptions.BackgroundDrainMaxDuration,
             CursorIdleTtl = baseOptions.CursorIdleTtl,

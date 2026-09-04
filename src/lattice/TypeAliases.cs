@@ -127,6 +127,13 @@ internal static class TypeAliases
     internal const string StaleShardRouting = "ol.ssr";
     internal const string ShardActivationTimeout = "ol.sat";
 
+    // Range-scan page-fill stall surface. Thrown by ShardRootGrain when a
+    // single page fill exceeds MaxScanPageStallDuration end to end, so the
+    // deliberately non-reentrant shard is released instead of being held for
+    // an unbounded time by one slow await (issue 2002). Serializable because
+    // range scans are routinely driven cross-silo.
+    internal const string ScanPageStalled = "ol.spt";
+
     // Online shard consolidation (the inverse of an adaptive split).
     internal const string TreeShardConsolidationState = "ol.cns";
     internal const string ShardConsolidationPhase = "ol.cnp";
