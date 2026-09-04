@@ -57,15 +57,6 @@ internal sealed partial class ShardRootGrain
         // walk deeper - traversal warmup of the full subtree would be
         // O(nodes) RPCs and is out of scope for the lightweight startup
         // probe.
-        if (state.State.RootNodeId is null)
-        {
-            // EnsureRootAsync above sets RootNodeId on success; a null
-            // here would only be reached on a thrown WriteStateAsync
-            // whose Class B revert has rolled back, in which case the
-            // caller's bounded retry loop will re-issue WarmUpAsync.
-            return;
-        }
-
         var rootId = state.State.RootNodeId!.Value;
         if (RootIsLeafTyped)
         {

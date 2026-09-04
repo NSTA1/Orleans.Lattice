@@ -786,9 +786,9 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// levels (0 = root summary only); leaves are summarised from their
     /// parent's stored snapshot, so the read never fans out to the leaf
     /// chain except in the flat-tree case, where the single root leaf is
-    /// read once. Returns <see langword="null"/> for an empty shard.
+    /// read once.
     /// </summary>
-    Task<ShardTopologyNode?> GetTopologySnapshotAsync(int depthLimit, CancellationToken cancellationToken);
+    Task<ShardTopologyNode> GetTopologySnapshotAsync(int depthLimit, CancellationToken cancellationToken);
 
     /// <summary>
     /// Operator-tooling rebuild: clears the materialised projection state
