@@ -29,6 +29,24 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// is durable before its data becomes reachable. A final flush runs on
 /// deactivation so a clean shutdown loses no pending advance.
 /// </para>
+/// <para>
+/// The coalesced flush is additionally <b>amortised against its own cost</b>
+/// (issue #2012). A pin write is <c>O(consumers routed to this shard)</c>
+/// because Orleans rewrites the whole state blob, so on a tree with thousands
+/// of leaves a single write is megabytes and takes far longer than the flush
+/// window. Ticking on the fixed window regardless would leave this
+/// non-reentrant grain writing essentially back-to-back, so its non-reentrancy
+/// queue - which every leaf's report joins - would grow without bound and
+/// callers would time out. Instead a timer tick defers unless at least
+/// <see cref="WriteAmortisationFactor"/> times the last write's own duration
+/// has elapsed since that write completed, which bounds the share of time this
+/// grain spends writing to <c>1 / (1 + factor)</c> and leaves the rest for
+/// draining the queue. The mechanism is self-tuning (a cheap write on a small
+/// tree barely defers at all) and always safe, because deferring only leaves
+/// the durable pin staler, which retains more WAL. Explicit durability points -
+/// the birth seed, <see cref="RemoveAsync"/>, <see cref="ClearAsync"/>, and the
+/// deactivation flush - are never deferred.
+/// </para>
 /// </summary>
 internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinGrain
 {
@@ -40,6 +58,32 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private IGrainTimer? _flushTimer;
     private bool _dirty;
     private bool _flushInFlight;
+
+    /// <summary>
+    /// Wall-clock duration, in milliseconds, of the most recent durable write.
+    /// Used to amortise the coalesced flush against its own cost; see the type
+    /// remarks. Zero until the first write completes, so the first coalesced
+    /// flush is never deferred.
+    /// </summary>
+    private long _lastWriteDurationMs;
+
+    /// <summary>
+    /// <see cref="Environment.TickCount64"/> at which the most recent durable
+    /// write completed (successfully or not).
+    /// </summary>
+    private long _lastWriteCompletedTickMs;
+
+    /// <summary>
+    /// Multiple of the previous write's duration that a coalesced timer flush
+    /// waits, beyond that write's completion, before starting the next one.
+    /// Bounds the share of wall-clock time this non-reentrant grain spends
+    /// inside <c>WriteStateAsync</c> to <c>1 / (1 + WriteAmortisationFactor)</c>
+    /// - one tenth at the value below - so the remaining nine tenths are
+    /// available to drain the non-reentrancy queue every reporting leaf joins.
+    /// Only gates the debounced flush; explicit durability points are never
+    /// deferred.
+    /// </summary>
+    private const long WriteAmortisationFactor = 9;
 
     /// <summary>
     /// Creates the pin grain.
@@ -269,6 +313,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             return;
         }
 
+        if (ShouldDeferCoalescedFlush(Environment.TickCount64, _lastWriteCompletedTickMs, _lastWriteDurationMs))
+        {
+            // Amortisation: the previous write has not yet "paid for itself" in
+            // queue-draining time. Stay dirty and let a later tick (or an
+            // explicit durability point) persist the accumulated advances - the
+            // in-memory pins the WAL GC reads are already current, and a staler
+            // durable pin only retains more WAL.
+            return;
+        }
+
         try
         {
             await PersistNowAsync();
@@ -281,6 +335,26 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 _context.GrainId.Key.ToString());
         }
     }
+
+    /// <summary>
+    /// Decides whether a coalesced timer flush should be skipped because the
+    /// previous durable write has not yet been followed by
+    /// <see cref="WriteAmortisationFactor"/> times its own duration of
+    /// non-writing time. Returns <see langword="false"/> before any write has
+    /// completed (<paramref name="lastWriteDurationMs"/> is zero), so the first
+    /// flush after a burst starts immediately and the mechanism only engages
+    /// once a write has proved to be expensive. Pure and side-effect free so
+    /// the policy is directly testable.
+    /// </summary>
+    /// <param name="nowTickMs">Current <see cref="Environment.TickCount64"/>.</param>
+    /// <param name="lastWriteCompletedTickMs">Tick at which the last write completed.</param>
+    /// <param name="lastWriteDurationMs">Duration of the last write, in milliseconds.</param>
+    internal static bool ShouldDeferCoalescedFlush(
+        long nowTickMs,
+        long lastWriteCompletedTickMs,
+        long lastWriteDurationMs) =>
+        lastWriteDurationMs > 0 &&
+        nowTickMs - lastWriteCompletedTickMs < lastWriteDurationMs * WriteAmortisationFactor;
 
     /// <summary>
     /// Persists the current in-memory pins, coalescing with any concurrent
@@ -302,6 +376,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
             _flushInFlight = true;
             _dirty = false;
+            var startedTickMs = Environment.TickCount64;
             try
             {
                 await _state.WriteStateAsync();
@@ -319,6 +394,13 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             finally
             {
                 _flushInFlight = false;
+
+                // Record what this write cost so the coalesced flush can
+                // amortise against it. A failed write is timed too: it consumed
+                // the same grain time and the retry should back off equally.
+                var completedTickMs = Environment.TickCount64;
+                _lastWriteDurationMs = Math.Max(0, completedTickMs - startedTickMs);
+                _lastWriteCompletedTickMs = completedTickMs;
             }
         }
     }
