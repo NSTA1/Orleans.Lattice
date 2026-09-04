@@ -886,15 +886,47 @@ public class LatticeOptions
     /// <para>
     /// It should sit comfortably above <see cref="MaxScanPageDuration"/> so the
     /// graceful partial-page path is always preferred and this only fires when
-    /// that path could not run. Set it to
-    /// <see cref="Timeout.InfiniteTimeSpan"/> to disable it and restore the
-    /// unbounded wait.
+    /// that path could not run, and it must sit <em>below</em> the Orleans
+    /// response timeout that governs the call. Above that timeout the ceiling
+    /// is dead configuration: the caller's own RPC deadline expires first, so
+    /// the caller sees a generic Orleans timeout instead of the typed,
+    /// retriable <see cref="ScanPageStalledException"/>, and - worse - nothing
+    /// releases the shard, which is the very failure this exists to stop.
+    /// </para>
+    /// <para>
+    /// Because that is a <em>relative</em> constraint, this option defaults to
+    /// <c>null</c>, meaning "derive it": the effective ceiling becomes the
+    /// silo's configured
+    /// <c>SiloMessagingOptions.ResponseTimeout</c> minus
+    /// <see cref="DefaultMaxScanPageStallHeadroom"/>, floored so it never drops
+    /// below <see cref="MaxScanPageDuration"/>. A deployment that tightens or
+    /// relaxes its response timeout therefore keeps a correct ceiling with no
+    /// second knob to remember. Set an explicit value to override the
+    /// derivation, or <see cref="Timeout.InfiniteTimeSpan"/> to disable the
+    /// ceiling and restore the unbounded wait.
+    /// </para>
+    /// <para>
+    /// The derivation reads the <em>local silo's</em> response timeout, which
+    /// is the deadline that applies to a silo-to-silo page fill. An external
+    /// client with a different <c>ClientMessagingOptions.ResponseTimeout</c> is
+    /// not visible from here; a cluster that configures the two differently
+    /// should set this option explicitly.
     /// </para>
     /// </summary>
-    public TimeSpan MaxScanPageStallDuration { get; set; } = DefaultMaxScanPageStallDuration;
+    public TimeSpan? MaxScanPageStallDuration { get; set; }
 
-    /// <summary>Default value for <see cref="MaxScanPageStallDuration"/> (30 seconds).</summary>
-    public static readonly TimeSpan DefaultMaxScanPageStallDuration = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Margin subtracted from the silo's configured response timeout when
+    /// <see cref="MaxScanPageStallDuration"/> is left to derive (5 seconds).
+    /// <para>
+    /// The ceiling has to fire far enough ahead of the caller's RPC deadline
+    /// that the fault is built and marshalled back while the caller is still
+    /// listening, so the operator sees a typed
+    /// <see cref="ScanPageStalledException"/> naming the stalled phase rather
+    /// than an anonymous Orleans timeout.
+    /// </para>
+    /// </summary>
+    public static readonly TimeSpan DefaultMaxScanPageStallHeadroom = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum number of source leaves a background coordinator - the split

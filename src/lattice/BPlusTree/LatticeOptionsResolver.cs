@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 
 namespace Orleans.Lattice.BPlusTree;
 
@@ -52,9 +53,20 @@ internal sealed class LatticeOptionsResolver(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ILogger<LatticeOptionsResolver>? logger = null,
-    IWalStorageProviderCatalog? walProviderCatalog = null)
+    IWalStorageProviderCatalog? walProviderCatalog = null,
+    IOptions<SiloMessagingOptions>? siloMessagingOptions = null)
 {
     private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
+
+    /// <summary>
+    /// The Orleans response timeout this silo is configured with, captured
+    /// once. Orleans reads this at silo start and does not reload it, so
+    /// there is nothing to monitor; when it is not registered - which is the
+    /// case in unit tests that construct the resolver directly - the Orleans
+    /// default is used, which is what such a silo would have run with anyway.
+    /// </summary>
+    private readonly TimeSpan _responseTimeout =
+        siloMessagingOptions?.Value.ResponseTimeout ?? new SiloMessagingOptions().ResponseTimeout;
 
     /// <summary>
     /// Per-tree cache of the registry-pinned <see cref="LatticeOptions.WalPartitions"/>
@@ -257,7 +269,47 @@ internal sealed class LatticeOptionsResolver(
         return new ScanPageBounds(
             options.MaxLeavesPerScanPage,
             options.MaxScanPageDuration,
-            options.MaxScanPageStallDuration);
+            ResolveStallDuration(options));
+    }
+
+    /// <summary>
+    /// Resolves the effective end-to-end stall ceiling for a page fill: the
+    /// explicit <see cref="LatticeOptions.MaxScanPageStallDuration"/> when one
+    /// is configured, otherwise one derived from this silo's Orleans response
+    /// timeout.
+    /// <para>
+    /// The ceiling only does its job if it fires before the caller's own RPC
+    /// deadline - after it, the caller has already given up, so it sees an
+    /// anonymous Orleans timeout instead of a typed
+    /// <see cref="ScanPageStalledException"/> and, critically, the shard is
+    /// still held. Deriving it keeps that ordering true for any configured
+    /// response timeout rather than only for the Orleans default, so a
+    /// deployment that tightens its timeout does not silently turn the ceiling
+    /// into dead configuration (issue 2002).
+    /// </para>
+    /// </summary>
+    private TimeSpan ResolveStallDuration(LatticeOptions options)
+    {
+        if (options.MaxScanPageStallDuration is { } configured)
+        {
+            return configured;
+        }
+
+        if (_responseTimeout == Timeout.InfiniteTimeSpan)
+        {
+            // No RPC deadline to stay ahead of, so there is no derivation to
+            // make and nothing to clamp against.
+            return Timeout.InfiniteTimeSpan;
+        }
+
+        var derived = _responseTimeout - LatticeOptions.DefaultMaxScanPageStallHeadroom;
+
+        // Floor at the graceful budget. A silo with a response timeout at or
+        // below the headroom would otherwise derive a zero or negative ceiling
+        // that fires instantly and fails every page fill; holding the shard for
+        // the graceful budget is the least-bad behaviour available there.
+        var floor = options.MaxScanPageDuration;
+        return floor != Timeout.InfiniteTimeSpan && derived < floor ? floor : derived;
     }
 
     /// <summary>
@@ -599,7 +651,10 @@ internal sealed class LatticeOptionsResolver(
             MaxScanRetries = baseOptions.MaxScanRetries,
             MaxLeavesPerScanPage = baseOptions.MaxLeavesPerScanPage,
             MaxScanPageDuration = baseOptions.MaxScanPageDuration,
-            MaxScanPageStallDuration = baseOptions.MaxScanPageStallDuration,
+            // Folded to its effective value, not passed through raw, so a
+            // caller reading the resolved options sees the same ceiling the
+            // page-fill path enforces rather than the "derive it" null.
+            MaxScanPageStallDuration = ResolveStallDuration(baseOptions),
             BackgroundDrainLeavesPerPass = baseOptions.BackgroundDrainLeavesPerPass,
             BackgroundDrainMaxDuration = baseOptions.BackgroundDrainMaxDuration,
             CursorIdleTtl = baseOptions.CursorIdleTtl,

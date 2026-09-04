@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Configuration;
 using Orleans.Lattice.BPlusTree;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -39,26 +40,110 @@ public class LatticeOptionsResolverScanPageBoundsTests
     // ---- validation
 
     [Test]
-    public void Default_stall_duration_passes_validation()
+    public void Default_stall_duration_is_left_to_derive()
     {
         Assert.Multiple(() =>
         {
             Assert.That(Validate(_ => { }).Succeeded, Is.True);
+            Assert.That(new LatticeOptions().MaxScanPageStallDuration, Is.Null);
+        });
+    }
+
+    /// <summary>
+    /// The derived ceiling has to beat the caller's own RPC deadline. Past it
+    /// the caller has already timed out, so it sees an anonymous Orleans
+    /// timeout rather than a typed <see cref="ScanPageStalledException"/>, and
+    /// nothing has released the shard - the exact failure the ceiling exists to
+    /// prevent (issue 2002).
+    /// </summary>
+    [Test]
+    public void Derived_stall_duration_sits_below_the_configured_response_timeout()
+    {
+        var bounds = ResolverWithResponseTimeout(TimeSpan.FromSeconds(30))
+            .GetScanPageBounds("t");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bounds.StallDuration, Is.LessThan(TimeSpan.FromSeconds(30)));
             Assert.That(
-                new LatticeOptions().MaxScanPageStallDuration,
-                Is.EqualTo(LatticeOptions.DefaultMaxScanPageStallDuration));
+                bounds.StallDuration,
+                Is.EqualTo(TimeSpan.FromSeconds(30) - LatticeOptions.DefaultMaxScanPageStallHeadroom));
+        });
+    }
+
+    /// <summary>
+    /// The point of deriving rather than hardcoding: a deployment that tightens
+    /// its response timeout must not be left with a ceiling that can never fire
+    /// in time to matter.
+    /// </summary>
+    [Test]
+    public void Derived_stall_duration_tracks_a_tightened_response_timeout()
+    {
+        var bounds = ResolverWithResponseTimeout(TimeSpan.FromSeconds(12))
+            .GetScanPageBounds("t");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bounds.StallDuration, Is.EqualTo(TimeSpan.FromSeconds(7)));
+            Assert.That(bounds.StallDuration, Is.LessThan(TimeSpan.FromSeconds(12)));
         });
     }
 
     [Test]
-    public void Default_stall_duration_exceeds_the_default_graceful_budget()
+    public void Derived_stall_duration_never_falls_below_the_graceful_budget()
+    {
+        // A response timeout at or under the headroom would derive a zero or
+        // negative ceiling that faults every page fill on arrival.
+        var bounds = ResolverWithResponseTimeout(TimeSpan.FromSeconds(2))
+            .GetScanPageBounds("t");
+
+        Assert.That(bounds.StallDuration, Is.EqualTo(LatticeOptions.DefaultMaxScanPageDuration));
+    }
+
+    [Test]
+    public void Explicit_stall_duration_overrides_the_derivation()
+    {
+        var bounds = ResolverWithResponseTimeout(
+                TimeSpan.FromSeconds(30),
+                o => o.MaxScanPageStallDuration = TimeSpan.FromSeconds(9))
+            .GetScanPageBounds("t");
+
+        Assert.That(bounds.StallDuration, Is.EqualTo(TimeSpan.FromSeconds(9)));
+    }
+
+    [Test]
+    public void Infinite_response_timeout_derives_an_infinite_ceiling()
+    {
+        var bounds = ResolverWithResponseTimeout(Timeout.InfiniteTimeSpan)
+            .GetScanPageBounds("t");
+
+        Assert.That(bounds.StallDuration, Is.EqualTo(Timeout.InfiniteTimeSpan));
+        Assert.That(bounds.IsStallGuarded, Is.False);
+    }
+
+    private static LatticeOptionsResolver ResolverWithResponseTimeout(
+        TimeSpan responseTimeout,
+        Action<LatticeOptions>? configure = null)
+    {
+        var options = new LatticeOptions();
+        configure?.Invoke(options);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(options);
+        var messaging = Options.Create(new SiloMessagingOptions { ResponseTimeout = responseTimeout });
+        return new LatticeOptionsResolver(
+            Substitute.For<IGrainFactory>(), monitor, siloMessagingOptions: messaging);
+    }
+
+    [Test]
+    public void Default_derived_ceiling_exceeds_the_default_graceful_budget()
     {
         // The graceful budget must get the chance to return a partial page
         // before the hard ceiling faults the call, or the cooperative bound is
         // dead configuration.
-        Assert.That(
-            LatticeOptions.DefaultMaxScanPageStallDuration,
-            Is.GreaterThan(LatticeOptions.DefaultMaxScanPageDuration));
+        var bounds = ResolverWithResponseTimeout(new SiloMessagingOptions().ResponseTimeout)
+            .GetScanPageBounds("t");
+
+        Assert.That(bounds.StallDuration, Is.GreaterThan(LatticeOptions.DefaultMaxScanPageDuration));
     }
 
     [Test]
@@ -145,7 +230,11 @@ public class LatticeOptionsResolverScanPageBoundsTests
         {
             Assert.That(bounds.MaxLeaves, Is.EqualTo(LatticeOptions.DefaultMaxLeavesPerScanPage));
             Assert.That(bounds.MaxDuration, Is.EqualTo(LatticeOptions.DefaultMaxScanPageDuration));
-            Assert.That(bounds.StallDuration, Is.EqualTo(LatticeOptions.DefaultMaxScanPageStallDuration));
+            Assert.That(
+                bounds.StallDuration,
+                Is.EqualTo(
+                    new SiloMessagingOptions().ResponseTimeout
+                    - LatticeOptions.DefaultMaxScanPageStallHeadroom));
             Assert.That(bounds.IsStallGuarded, Is.True);
         });
     }

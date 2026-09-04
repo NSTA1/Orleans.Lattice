@@ -153,7 +153,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxPhysicalShardsPerTree`](#maxphysicalshardspertree) | `int` | 256 | Yes |
 | [`MaxPinnedSagaDecisions`](#maxpinnedsagadecisions) | `int` | 100 000 | Yes |
 | [`MaxScanPageDuration`](#maxscanpageduration) | `TimeSpan` | 5 seconds | Yes |
-| [`MaxScanPageStallDuration`](#maxscanpagestallduration) | `TimeSpan` | 30 seconds | Yes |
+| [`MaxScanPageStallDuration`](#maxscanpagestallduration) | `TimeSpan?` | `null` (derived from `ResponseTimeout`) | Yes |
 | [`MaxScanRetries`](#maxscanretries) | `int` | 3 | Yes |
 | [`MaxSnapshotReplayEntries`](snapshot-cursors.md) | `long` | 10 000 000 | Yes |
 | [`MaxValueSizeBytes`](#maxvaluesizebytes) | `int?` | `null` (unbounded) | Yes |
@@ -864,7 +864,7 @@ This option can be changed freely at any time.
 
 ### `MaxScanPageStallDuration`
 
-Hard end-to-end ceiling on a single shard range-scan page fill (default: 30 seconds). Unlike [`MaxScanPageDuration`](#maxscanpageduration), which the walk samples cooperatively between leaf reads, this one bounds the *whole* grain call: when it elapses the call stops waiting and faults with a `ScanPageStalledException`, so the deliberately non-reentrant shard is released and its queue drains.
+Hard end-to-end ceiling on a single shard range-scan page fill (default: derived, see below). Unlike [`MaxScanPageDuration`](#maxscanpageduration), which the walk samples cooperatively between leaf reads, this one bounds the *whole* grain call: when it elapses the call stops waiting and faults with a `ScanPageStalledException`, so the deliberately non-reentrant shard is released and its queue drains.
 
 It exists because a cooperative budget can only stop a walk at a point the walk reaches. Two shapes never reach one:
 
@@ -875,11 +875,27 @@ Either shape holds the shard for as long as the underlying call takes, which in 
 
 The fault is retriable and loses no work. A page fill only reads a key range, so nothing is half-applied, and the caller resumes from the continuation token it already holds. Every trip is counted by `orleans.lattice.shard_root.scan_page.stalls`, tagged with the phase (`prologue`, `descent`, or `leaf-walk`) that names which of the shapes above occurred.
 
+#### The default is derived, not fixed
+
+The ceiling is only useful if it fires *before* the Orleans response timeout that governs the call. Past that deadline the caller has already given up, so it sees an anonymous Orleans timeout instead of the typed `ScanPageStalledException` - and, worse, nothing has released the shard, which is the whole point of the ceiling.
+
+That is a constraint relative to another setting, not an absolute number, so the option is left `null` by default and derived:
+
+```text
+effective ceiling = SiloMessagingOptions.ResponseTimeout - 5 seconds
+```
+
+floored so it never drops below `MaxScanPageDuration`. With Orleans' own 30 second default response timeout that yields 25 seconds. A deployment that tightens `ResponseTimeout` to 12 seconds gets a 7 second ceiling automatically, where a hardcoded default would have been dead configuration - never firing before the caller's deadline, and so never releasing the shard.
+
+The derivation reads the **local silo's** response timeout, which is the deadline that applies to a silo-to-silo page fill. An external client configured with a different `ClientMessagingOptions.ResponseTimeout` is not visible from the silo; a cluster that sets the two differently should configure this option explicitly.
+
+Set it explicitly to override the derivation:
+
 ```csharp verify
 siloBuilder.ConfigureLattice(o => o.MaxScanPageStallDuration = TimeSpan.FromSeconds(45));
 ```
 
-Set it to `Timeout.InfiniteTimeSpan` to disable the ceiling and restore the historical behaviour where a stalled page fill holds the shard until the Orleans response deadline expires. When enabled it must be strictly greater than `MaxScanPageDuration`, so the graceful bound always gets the chance to return a partial page before the hard ceiling faults the call.
+Set it to `Timeout.InfiniteTimeSpan` to disable the ceiling and restore the historical behaviour where a stalled page fill holds the shard until the Orleans response deadline expires. When set explicitly it must be strictly greater than `MaxScanPageDuration`, so the graceful bound always gets the chance to return a partial page before the hard ceiling faults the call.
 
 This option can be changed freely at any time. It is armed per call, so a new value takes effect on the next page fill.
 

@@ -188,9 +188,20 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<ShardMaterialiserLagPage> GetShardMaterialiserLagBoundedAsync(
+    public Task<ShardMaterialiserLagPage> GetShardMaterialiserLagBoundedAsync(
         string? resumeFromInclusive,
         CancellationToken cancellationToken)
+    {
+        var scan = BeginScanPage(nameof(GetShardMaterialiserLagBoundedAsync));
+        return GuardScanPageAsync(
+            scan,
+            GetShardMaterialiserLagBoundedCoreAsync(resumeFromInclusive, cancellationToken, scan));
+    }
+
+    private async Task<ShardMaterialiserLagPage> GetShardMaterialiserLagBoundedCoreAsync(
+        string? resumeFromInclusive,
+        CancellationToken cancellationToken,
+        ScanPageWalk scan)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await PrepareForOperationAsync();
@@ -225,6 +236,7 @@ internal sealed partial class ShardRootGrain
             }
         }
 
+        scan.Phase = ScanPagePhase.Descent;
         var startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
         if (startLeafId is null)
         {
@@ -242,11 +254,12 @@ internal sealed partial class ShardRootGrain
         // the driver reduces the per-batch minima and subtracts from the heads.
         var minCheckpoint = long.MaxValue;
 
+        scan.Phase = ScanPagePhase.LeafWalk;
         var walk = BoundedLeafWalk.FromResolvedStart(
             grainFactory,
             startLeafId,
             resumeFromInclusive,
-            LeafWalkBudget.ForScanPage(await GetOptionsAsync()));
+            scan.Budget);
 
         while (walk.HasLeaf)
         {

@@ -63,7 +63,16 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <inheritdoc />
-    public async Task<ShardDiagnosticsPage> GetDiagnosticsBoundedAsync(bool deep, string? resumeFromInclusive)
+    public Task<ShardDiagnosticsPage> GetDiagnosticsBoundedAsync(bool deep, string? resumeFromInclusive)
+    {
+        var scan = BeginScanPage(nameof(GetDiagnosticsBoundedAsync));
+        return GuardScanPageAsync(scan, GetDiagnosticsBoundedCoreAsync(deep, resumeFromInclusive, scan));
+    }
+
+    private async Task<ShardDiagnosticsPage> GetDiagnosticsBoundedCoreAsync(
+        bool deep,
+        string? resumeFromInclusive,
+        ScanPageWalk scan)
     {
         // Ensure persistent state is loaded before inspection.
         if (state.RecordExists == false)
@@ -114,6 +123,7 @@ internal sealed partial class ShardRootGrain
         else
         {
             GrainId? startLeafId;
+            scan.Phase = ScanPagePhase.Descent;
             if (resuming)
             {
                 startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
@@ -152,12 +162,15 @@ internal sealed partial class ShardRootGrain
             // Walk the leaf chain through the shared bounded walk, so this
             // aggregation obeys the same budget, key cursor and
             // "only stop where you can resume" rule as every other bounded
-            // chain walk (issues 1973, 1972).
+            // chain walk (issues 1973, 1972). The budget is armed by
+            // BeginScanPage at the top of the grain call, so the leftmost
+            // descent above is charged against it too (issue 2002).
+            scan.Phase = ScanPagePhase.LeafWalk;
             var walk = BoundedLeafWalk.FromResolvedStart(
                 grainFactory,
                 startLeafId,
                 resumeFromInclusive,
-                LeafWalkBudget.ForScanPage(await GetOptionsAsync()));
+                scan.Budget);
 
             while (walk.HasLeaf)
             {
@@ -308,14 +321,27 @@ internal sealed partial class ShardRootGrain
     };
 
     /// <inheritdoc />
-    public async Task<ShardStorageUsagePage> RefreshLeafByteFootprintsBoundedAsync(
+    public Task<ShardStorageUsagePage> RefreshLeafByteFootprintsBoundedAsync(
         string? resumeFromInclusive,
         ShardStorageUsage accumulatedSoFar,
         CancellationToken cancellationToken)
     {
+        var scan = BeginScanPage(nameof(RefreshLeafByteFootprintsBoundedAsync));
+        return GuardScanPageAsync(
+            scan,
+            RefreshLeafByteFootprintsBoundedCoreAsync(
+                resumeFromInclusive, accumulatedSoFar, cancellationToken, scan));
+    }
+
+    private async Task<ShardStorageUsagePage> RefreshLeafByteFootprintsBoundedCoreAsync(
+        string? resumeFromInclusive,
+        ShardStorageUsage accumulatedSoFar,
+        CancellationToken cancellationToken,
+        ScanPageWalk scan)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var page = await DeepWalkLeafFootprintsBoundedAsync(resumeFromInclusive, cancellationToken);
+        var page = await DeepWalkLeafFootprintsBoundedAsync(resumeFromInclusive, cancellationToken, scan);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (page.ResumeFromInclusive is null)
@@ -328,7 +354,9 @@ internal sealed partial class ShardRootGrain
             // its own footprint for the rest of the walk. A mid-walk
             // deactivation therefore leaves the totals untouched rather than
             // wrong, which is the same state a freshly-reactivated shard is
-            // already documented to be in (issue 1972).
+            // already documented to be in (issue 1972) - and is equally the
+            // state the scan-page stall ceiling leaves behind when it abandons
+            // a wedged walk (issue 2002).
             var rollup = Add(accumulatedSoFar, page.Usage);
             _leafStateBytesTotal = rollup.LeafStateBytes;
             _snapshotBytesTotal = rollup.SnapshotBytes;
@@ -339,7 +367,7 @@ internal sealed partial class ShardRootGrain
     }
 
     private async Task<ShardStorageUsagePage> DeepWalkLeafFootprintsBoundedAsync(
-        string? resumeFromInclusive, CancellationToken cancellationToken)
+        string? resumeFromInclusive, CancellationToken cancellationToken, ScanPageWalk scan)
     {
         var rootNodeId = state.State.RootNodeId;
         if (rootNodeId is null)
@@ -359,6 +387,7 @@ internal sealed partial class ShardRootGrain
         }
 
         GrainId? startLeafId;
+        scan.Phase = ScanPagePhase.Descent;
         if (resumeFromInclusive is not null)
         {
             startLeafId = await ResolveWalkStartLeafAsync(resumeFromInclusive);
@@ -387,11 +416,12 @@ internal sealed partial class ShardRootGrain
             startLeafId = currentId;
         }
 
+        scan.Phase = ScanPagePhase.LeafWalk;
         var walk = BoundedLeafWalk.FromResolvedStart(
             grainFactory,
             startLeafId,
             resumeFromInclusive,
-            LeafWalkBudget.ForScanPage(await GetOptionsAsync()));
+            scan.Budget);
 
         var usage = default(ShardStorageUsage);
         while (walk.HasLeaf)

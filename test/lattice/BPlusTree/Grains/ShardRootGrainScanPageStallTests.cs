@@ -210,7 +210,7 @@ public class ShardRootGrainScanPageStallTests
     }
 
     /// <summary>
-    /// The structural guard, and the one that would have caught the site issue
+    /// The structural guard, and the one that would have caught the sites issue
     /// 1992 missed. Both scan-page bounds are only honest if their clock starts
     /// at the very first statement of the grain call, which means the public
     /// entry point must not be a C# <c>async</c> method: an <c>async</c> body
@@ -218,6 +218,13 @@ public class ShardRootGrainScanPageStallTests
     /// front of the clock, leaving the prologue outside the window the bounds
     /// are meant to bound. Each entry point is therefore a synchronous wrapper
     /// that arms the walk and delegates to an <c>async</c> core.
+    /// <para>
+    /// Deliberately absent: <c>CaptureSnapshotBaselineAsync</c>, whose
+    /// freeze/fold walk must observe one consistent point across the whole
+    /// chain and therefore uses <c>AtomicLeafWalk</c> rather than a scan-page
+    /// budget. Bounding or abandoning it would break the snapshot cursor's
+    /// zero-observable-writes guarantee; it is tracked separately as issue 1961.
+    /// </para>
     /// </summary>
     [Test]
     public void Every_scan_page_entry_point_arms_its_budget_before_any_await()
@@ -236,6 +243,9 @@ public class ShardRootGrainScanPageStallTests
             nameof(ShardRootGrain.GetSortedKeysBatchForSlotsAsync),
             nameof(ShardRootGrain.GetSortedEntriesBatchForSlotsAsync),
             nameof(ShardRootGrain.RebuildShardProjectionBoundedAsync),
+            nameof(ShardRootGrain.GetDiagnosticsBoundedAsync),
+            nameof(ShardRootGrain.RefreshLeafByteFootprintsBoundedAsync),
+            nameof(ShardRootGrain.GetShardMaterialiserLagBoundedAsync),
         ];
 
         Assert.Multiple(() =>
