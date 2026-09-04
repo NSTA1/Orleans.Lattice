@@ -114,17 +114,17 @@ internal sealed partial class LatticeGrain
         // Partition this chunk across physical shards. Only shards that actually
         // receive an entry are grafted, so a sparse (post-split) map costs
         // nothing for the shards this chunk does not touch.
-        var shardBuckets = new Dictionary<int, List<KeyValuePair<string, byte[]>>>();
-        foreach (var entry in effectiveEntries)
-        {
-            var idx = shardMap.Resolve(entry.Key);
-            if (!shardBuckets.TryGetValue(idx, out var bucket))
-            {
-                bucket = [];
-                shardBuckets[idx] = bucket;
-            }
-            bucket.Add(entry);
-        }
+        //
+        // The grouping key is a physical shard index, so the shared dense
+        // fan-out helper indexes buckets by that index directly instead of
+        // hashing it once per entry, and gives each bucket a shard-fair
+        // capacity rather than growing it from empty.
+        var physicalShards = shardMap.GetPhysicalShardIndices();
+        var shardBuckets = ShardFanout.BucketEntries(
+            effectiveEntries,
+            shardMap,
+            physicalShards,
+            ShardFanout.BucketCapacity(effectiveEntries.Count, physicalShards.Count));
 
         // Each shard's graft is idempotent under the deterministic per-shard
         // operation id "{operationId}-{shardIndex}": re-driving the same chunk
