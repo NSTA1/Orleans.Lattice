@@ -97,6 +97,35 @@ public sealed partial class LatticeStateApiEdgeCaseTests
     }
 
     [Test]
+    public void Query_clamp_helpers_never_exceed_the_maximum_when_the_default_is_misconfigured_above_it()
+    {
+        // Nothing validates LatticeApiStateOptions, so an operator can configure a
+        // default that exceeds the maximum. A non-positive request (the "use the
+        // default" arm) must still be capped to the maximum rather than returning
+        // the raw, over-max default - which would let a page size or preview budget
+        // exceed the configured ceiling.
+        var query = CreateQuery(apiOptions: new LatticeApiStateOptions
+        {
+            DefaultScanPageSize = 1000,
+            MaxScanPageSize = 50,
+            DefaultScanValuePreviewBytes = 1000,
+            MaxScanValuePreviewBytes = 9,
+            DefaultHistoryPageSize = 1000,
+            MaxHistoryPageSize = 8,
+            DefaultHistoryValuePreviewBytes = 1000,
+            MaxHistoryValuePreviewBytes = 7,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(InvokeInstance<int>(query, "ClampPageSize", 0), Is.EqualTo(50));
+            Assert.That(InvokeInstance<int>(query, "ClampScanPreviewBudget", 0), Is.EqualTo(9));
+            Assert.That(InvokeInstance<int>(query, "ClampHistoryLimit", 0), Is.EqualTo(8));
+            Assert.That(InvokeInstance<int>(query, "ClampHistoryPreviewBudget", 0), Is.EqualTo(7));
+        });
+    }
+
+    [Test]
     public void History_bound_maps_view_truncated_and_fallback_sources()
     {
         Assert.Multiple(() =>

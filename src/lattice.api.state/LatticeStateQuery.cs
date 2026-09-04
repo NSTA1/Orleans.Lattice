@@ -1926,14 +1926,14 @@ internal sealed class LatticeStateQuery(
 
     private int ClampHistoryLimit(int requested) => requested switch
     {
-        < 1 => _apiOptions.DefaultHistoryPageSize,
+        < 1 => Math.Min(_apiOptions.DefaultHistoryPageSize, _apiOptions.MaxHistoryPageSize),
         _ when requested > _apiOptions.MaxHistoryPageSize => _apiOptions.MaxHistoryPageSize,
         _ => requested,
     };
 
     private int ClampHistoryPreviewBudget(int requested) => requested switch
     {
-        < 1 => _apiOptions.DefaultHistoryValuePreviewBytes,
+        < 1 => Math.Min(_apiOptions.DefaultHistoryValuePreviewBytes, _apiOptions.MaxHistoryValuePreviewBytes),
         _ when requested > _apiOptions.MaxHistoryValuePreviewBytes => _apiOptions.MaxHistoryValuePreviewBytes,
         _ => requested,
     };
@@ -2297,14 +2297,14 @@ internal sealed class LatticeStateQuery(
 
     private int ClampPageSize(int requested) => requested switch
     {
-        < 1 => _apiOptions.DefaultScanPageSize,
+        < 1 => Math.Min(_apiOptions.DefaultScanPageSize, _apiOptions.MaxScanPageSize),
         _ when requested > _apiOptions.MaxScanPageSize => _apiOptions.MaxScanPageSize,
         _ => requested,
     };
 
     private int ClampScanPreviewBudget(int requested) => requested switch
     {
-        < 1 => _apiOptions.DefaultScanValuePreviewBytes,
+        < 1 => Math.Min(_apiOptions.DefaultScanValuePreviewBytes, _apiOptions.MaxScanValuePreviewBytes),
         _ when requested > _apiOptions.MaxScanValuePreviewBytes => _apiOptions.MaxScanValuePreviewBytes,
         _ => requested,
     };

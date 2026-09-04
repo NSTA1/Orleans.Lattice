@@ -215,13 +215,20 @@ public sealed class LatticeFoldProjection : ILatticeFoldProjection
 
     private static void AppendNode(StringBuilder builder, in LatticePredicateNode node)
     {
+        // Length-prefix the two variable-length, caller-controlled string fields
+        // (member path and constant) so a value containing the ':' field delimiter
+        // cannot shift a field boundary and make a structurally different node
+        // serialize identically - which would let a redefined view reuse a stale
+        // ProjectionVersion and skip the rebuild the change requires.
+        var memberPath = node.MemberPath ?? string.Empty;
+        var constant = node.Constant.ToString() ?? string.Empty;
         builder.Append('(')
             .Append((int)node.Kind).Append(':')
-            .Append(node.MemberPath ?? string.Empty).Append(':')
+            .Append(memberPath.Length).Append(':').Append(memberPath).Append(':')
             .Append((int)node.ComparisonOperator).Append(':')
             .Append((int)node.BooleanOperator).Append(':')
             .Append((int)node.StringMethod).Append(':')
-            .Append(node.Constant.ToString());
+            .Append(constant.Length).Append(':').Append(constant);
 
         if (node.Children is { } children)
         {
