@@ -157,6 +157,95 @@ public class WalCommitLogWriterDrainTests
     };
 
     /// <summary>
+    /// Interlocked counter of inbound shard dispatches, used as the
+    /// positive-evidence anchor these drain tests wait on.
+    /// <para>
+    /// NSubstitute's <c>Received()</c> throws when the expectation is
+    /// not yet met, so it can never be used as a polling predicate; an
+    /// interlocked counter can. Waiting on it replaces the fixed
+    /// <c>Task.Delay</c> settle windows these tests used to open with.
+    /// A fixed sleep is unsound in both directions: it is dead time on
+    /// a fast machine, and on a loaded CI worker it can elapse before
+    /// the held dispatch has reached the shard at all - in which case
+    /// the admission cap is not yet full, the tail callers are not
+    /// actually parked, and the follow-up "still parked" assertions
+    /// pass for the wrong reason.
+    /// </para>
+    /// </summary>
+    private sealed class DispatchCounter
+    {
+        private int _count;
+
+        public void Increment() => Interlocked.Increment(ref _count);
+
+        public int Value => Volatile.Read(ref _count);
+    }
+
+    /// <summary>
+    /// Builds the hanging <see cref="IWalShardGrain"/> substitute these
+    /// drain tests dispatch into, wired so every inbound
+    /// <c>AppendAsync</c> increments <paramref name="dispatches"/>
+    /// before returning the caller-controlled hanging task.
+    /// </summary>
+    private static IWalShardGrain CreateHangingShard(Task<long> hangingDispatch, DispatchCounter dispatches)
+    {
+        var shard = Substitute.For<IWalShardGrain>();
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                dispatches.Increment();
+                return hangingDispatch;
+            });
+        return shard;
+    }
+
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds, failing the
+    /// test with <paramref name="because"/> if it never does inside
+    /// <paramref name="timeoutMs"/>. The wait ends the moment the
+    /// precondition is observable rather than after a fixed sleep, so
+    /// it is both faster on an idle machine and robust on a loaded one.
+    /// </summary>
+    private static async Task WaitUntilAsync(Func<bool> condition, string because, int timeoutMs = 10_000)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (stopwatch.ElapsedMilliseconds > timeoutMs)
+            {
+                Assert.Fail($"Timed out after {timeoutMs} ms waiting for {because}.");
+            }
+
+            await Task.Delay(5);
+        }
+    }
+
+    /// <summary>
+    /// Waits until exactly one dispatch has reached the shard - i.e.
+    /// the single admission slot (cap = 1) is provably occupied by the
+    /// held caller - and asserts that no tail caller slipped through
+    /// the admission gate behind it.
+    /// <para>
+    /// The dispatch-count equality is the assertion that gives the
+    /// "tail callers are parked" claim teeth: a tail caller that had
+    /// wrongly acquired a slot would have dispatched, taking the count
+    /// above one. Checking only <c>IsCompleted == false</c> (as these
+    /// tests used to) cannot distinguish "parked on the semaphore"
+    /// from "has not started yet".
+    /// </para>
+    /// </summary>
+    private static async Task WaitUntilAdmissionCapFilledAsync(DispatchCounter dispatches, Task<long>[] parked)
+    {
+        await WaitUntilAsync(
+            () => dispatches.Value >= 1,
+            "the held dispatch to reach the shard, which is what fills the single admission slot the tail callers must then park behind");
+        Assert.That(dispatches.Value, Is.EqualTo(1),
+            "only the held dispatch may reach the shard; every tail caller must still be parked on the admission semaphore rather than dispatched");
+        Assert.That(parked.All(t => !t.IsCompleted), Is.True,
+            "tail callers should be parked on the admission semaphore");
+    }
+
+    /// <summary>
     /// Drives <paramref name="totalCallers"/> concurrent <see cref="WalCommitLogWriter.AppendAsync"/>
     /// calls so all of them target the <em>same</em> per-(tree, partition) admission
     /// semaphore. The shared partition is achieved by reusing one fixed key
@@ -211,8 +300,8 @@ public class WalCommitLogWriterDrainTests
     public async Task AppendAsync_parked_callers_are_released_within_drain_budget_when_writer_drains()
     {
         var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+        var dispatches = new DispatchCounter();
+        var shard = CreateHangingShard(heldRelease.Task, dispatches);
 
         var drainBudget = TimeSpan.FromMilliseconds(250);
         var writer = CreateWriter(shard, new LatticeOptions
@@ -232,11 +321,11 @@ public class WalCommitLogWriterDrainTests
 
         var (held, parked) = PinAdmissionSemaphoreFull(writer, heldRelease, totalCallers: 4);
 
-        // Let the held dispatch fill the cap and the tail callers park
-        // inside AcquireAsync.
-        await Task.Delay(80);
+        // Wait for positive evidence that the held dispatch filled the
+        // cap and no tail caller got through the admission gate behind
+        // it.
+        await WaitUntilAdmissionCapFilledAsync(dispatches, parked);
         Assert.That(held.IsCompleted, Is.False, "held dispatch should still be hanging in the substitute");
-        Assert.That(parked.All(t => !t.IsCompleted), Is.True, "tail callers should be parked on the admission semaphore");
 
         // Invoke the writer's drain seam. The drain must release every
         // parked caller within WalDrainBudget + a small grace window;
@@ -289,8 +378,8 @@ public class WalCommitLogWriterDrainTests
     public async Task AppendAsync_parked_callers_surface_LatticeShuttingDownException_naming_WalDrainBudget()
     {
         var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+        var dispatches = new DispatchCounter();
+        var shard = CreateHangingShard(heldRelease.Task, dispatches);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -300,8 +389,7 @@ public class WalCommitLogWriterDrainTests
         });
 
         var (held, parked) = PinAdmissionSemaphoreFull(writer, heldRelease, totalCallers: 2);
-        await Task.Delay(80);
-        Assert.That(parked[0].IsCompleted, Is.False);
+        await WaitUntilAdmissionCapFilledAsync(dispatches, parked);
 
         await writer.DrainAsync(CancellationToken.None);
         Assert.That(
@@ -382,8 +470,8 @@ public class WalCommitLogWriterDrainTests
     {
         using var capture = new MeterCapture();
         var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+        var dispatches = new DispatchCounter();
+        var shard = CreateHangingShard(heldRelease.Task, dispatches);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -393,7 +481,7 @@ public class WalCommitLogWriterDrainTests
         });
 
         var (held, parked) = PinAdmissionSemaphoreFull(writer, heldRelease, totalCallers: 3);
-        await Task.Delay(80);
+        await WaitUntilAdmissionCapFilledAsync(dispatches, parked);
 
         await writer.DrainAsync(CancellationToken.None);
         // Wait for the parked continuations to surface so their metric
@@ -433,8 +521,8 @@ public class WalCommitLogWriterDrainTests
     public async Task AppendAsync_after_drain_fails_fast_instead_of_re_entering_admission_queue()
     {
         var heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+        var dispatches = new DispatchCounter();
+        var shard = CreateHangingShard(heldRelease.Task, dispatches);
 
         var writer = CreateWriter(shard, new LatticeOptions
         {
@@ -450,7 +538,9 @@ public class WalCommitLogWriterDrainTests
         // than meeting the writer-level drain gate we are pinning here.
         const string SharedKey = "shared-key";
         var held = writer.AppendAsync(MakeMutation(SharedKey));
-        await Task.Delay(40);
+        await WaitUntilAsync(
+            () => dispatches.Value >= 1,
+            "the held dispatch to reach the shard, which is what fills the admission cap the post-drain caller would otherwise park behind");
         Assert.That(held.IsCompleted, Is.False);
 
         await writer.DrainAsync(CancellationToken.None);
@@ -509,11 +599,11 @@ public class WalCommitLogWriterDrainTests
         var heldReleaseA = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
         var heldReleaseB = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var shardA = Substitute.For<IWalShardGrain>();
-        shardA.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldReleaseA.Task);
+        var dispatchesA = new DispatchCounter();
+        var shardA = CreateHangingShard(heldReleaseA.Task, dispatchesA);
 
-        var shardB = Substitute.For<IWalShardGrain>();
-        shardB.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldReleaseB.Task);
+        var dispatchesB = new DispatchCounter();
+        var shardB = CreateHangingShard(heldReleaseB.Task, dispatchesB);
 
         var options = new LatticeOptions
         {
@@ -541,10 +631,19 @@ public class WalCommitLogWriterDrainTests
         var heldB = writerB.AppendAsync(MakeMutationForTree(siloBtree, SharedKey));
         var parkedB = writerB.AppendAsync(MakeMutationForTree(siloBtree, SharedKey));
 
-        // Let the held dispatches fill each cap and the parked callers park.
-        await Task.Delay(80);
+        // Wait for positive evidence that each writer's held dispatch
+        // filled its own cap. Asserting the per-writer dispatch count is
+        // exactly one is what proves the parked callers are genuinely
+        // parked on their admission semaphores rather than merely
+        // not-yet-started: a parked caller that had wrongly acquired a
+        // slot would have dispatched, taking its writer's count to two.
+        await WaitUntilAsync(
+            () => dispatchesA.Value >= 1 && dispatchesB.Value >= 1,
+            "both writers' held dispatches to reach their shards, which is what fills each writer's admission cap");
         Assert.Multiple(() =>
         {
+            Assert.That(dispatchesA.Value, Is.EqualTo(1), "only writer A's held dispatch may reach shard A");
+            Assert.That(dispatchesB.Value, Is.EqualTo(1), "only writer B's held dispatch may reach shard B");
             Assert.That(heldA.IsCompleted, Is.False, "writer A held dispatch should still be hanging");
             Assert.That(parkedA.IsCompleted, Is.False, "writer A parked caller should be on the admission semaphore");
             Assert.That(heldB.IsCompleted, Is.False, "writer B held dispatch should still be hanging");

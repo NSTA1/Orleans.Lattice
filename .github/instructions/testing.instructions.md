@@ -131,6 +131,32 @@ dotnet test test/lattice.storage.azuretable/Orleans.Lattice.Storage.AzureTable.T
   --filter "TestCategory=Integration|TestCategory=Docs|TestCategory=AzureStorageEmulator"
 ```
 
+#### Starting Azurite - and why a green run without it is a false green
+
+Emulator-gated fixtures probe reachability in `[OneTimeSetUp]` and fall through to `Assert.Inconclusive` when Azurite is not listening. **NUnit counts an inconclusive result as neither passed, nor failed, nor skipped**, so those tests vanish from every summary counter with no warning. Measured on `test/lattice.storage.azuretable` with `--filter "TestCategory!=Chaos"`:
+
+| Azurite | Console summary |
+| --- | --- |
+| down | `Passed!  - Failed: 0, Passed: 272, Skipped: 0, Total: 272` |
+| up | `Passed!  - Failed: 0, Passed: 361, Skipped: 0, Total: 361` |
+
+89 tests silently disappeared and the banner still read `Passed!` with `Skipped: 0`. **Do not use the `Skipped:` count to detect this - it is always `0`.** The only signal is the `Total` / `Passed` count being lower than you expect. (If *every* selected test is inconclusive - say you filtered down to a single emulator fixture - the banner degrades to `None - ... Total: 0`, and each test additionally logs a per-test `Skipped <name>` line after a ~15 s probe timeout.)
+
+All of these fixtures use the literal `UseDevelopmentStorage=true`, which is hard-wired to ports 10000/10001/10002, so the container must publish those exact ports:
+
+```powershell
+docker run -d --name lattice-test-azurite `
+  -p 10000:10000 -p 10001:10001 -p 10002:10002 `
+  mcr.microsoft.com/azure-storage/azurite:latest `
+  azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+
+docker logs lattice-test-azurite   # expect "Table service is successfully listening at http://0.0.0.0:10002"
+```
+
+Prefer the container over a global `azurite` install: invoking `azurite` from a PowerShell agent shell resolves to `azurite.ps1` and may not bind the ports. Check the ports are free first (`Get-NetTCPConnection -LocalPort 10002 -State Listen`) - the repo's reference local-dev compose leaves behind exited containers named `lattice-reference-local-dev-azurite-{a,b,backup-shared}` that are bound to *non-default* ports and therefore do **not** satisfy `UseDevelopmentStorage=true`.
+
+The projects with emulator-gated fixtures are `test/lattice.storage.azuretable`, `test/lattice.backup.azureblob`, `test/lattice.caching.azureblob`, and `test/lattice.integration`.
+
 The strict-delta filter relies on every cluster-based fixture in the project actually carrying one of those category tags. That convention is enforced structurally by `IntegrationCategoryHygieneTests`, a thin per-project subclass of the shared `IntegrationCategoryHygieneTestsBase` (in `Orleans.Lattice.Testing`) that runs against its own assembly in every test project; see "Categorization conventions" below. If you add a new cluster fixture without tagging it, that hygiene test fails before Tier 3 ever runs, so a silent gap in the strict-delta filter cannot accumulate.
 
 You can skip Tier 3 and go straight from Tier 2 to Tier 4 if you're about to do the pre-PR run anyway - Tier 4 subsumes Tier 3 for the packages you touched. Tier 3 exists for the case where you want to validate the project-scoped integration / docs tests *before* running the full pre-PR pass.
@@ -146,7 +172,9 @@ dotnet test test/lattice.replication/Orleans.Lattice.Replication.Tests.csproj --
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "FullyQualifiedName~Hygiene|FullyQualifiedName~SliceCoverage|FullyQualifiedName~DocsSnippet"
 ```
 
-Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI runs the Azure Table suite separately against an emulator that's spun up as part of the pipeline.
+Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging test rather than stalling) and do not filter the failure output. Keep `AzureStorageEmulator` excluded unless Azurite is running locally - CI runs the Azure Table suite separately against an emulator that's spun up as part of the pipeline. If you *do* have Azurite up, remember the false-green trap above: a missing emulator shows up as a lower `Total`, never as a `Skipped` count.
+
+**Scope Tier 4 to the fixtures your change can plausibly break, not reflexively to whole projects.** CI re-runs the full non-chaos suite for every matched package on the PR anyway, so a second full local run of the same project buys nothing but wall-clock. The local pass exists to catch *your* mistake before it costs a CI cycle - so run the fixtures you touched (and their nearest neighbours) first, and widen only when the change is broad enough that you genuinely cannot predict the blast radius. A test-only or single-grain change is usually well served by a `--filter "FullyQualifiedName~<Fixture>"` pass plus the hygiene filter; a change to a widely-referenced core type warrants the whole project. When you are unsure of the blast radius, `repocontext_related <path>` lists the indexed dependents and covering test types for a file, which is a cheaper way to size the run than guessing.
 
 **Catching cross-project breakage is CI's job, not the local dev loop's.** CI runs the full cross-solution non-chaos suite on every PR (plus the `Chaos` and `AzureStorageEmulator` suites), so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
 

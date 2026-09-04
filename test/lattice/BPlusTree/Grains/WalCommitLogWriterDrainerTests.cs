@@ -34,7 +34,71 @@ public class WalCommitLogWriterDrainerTests
     private static int _treeIdSeed;
     private string _treeId = null!;
 
+    /// <summary>
+    /// Interlocked counter of inbound shard dispatches, used as the
+    /// positive-evidence anchor these tests wait on instead of a fixed
+    /// sleep. NSubstitute's <c>Received()</c> throws when the
+    /// expectation is not yet met, so it cannot serve as a polling
+    /// predicate; an interlocked counter can.
+    /// </summary>
+    private sealed class DispatchCounter
+    {
+        private int _count;
+
+        public void Increment() => Interlocked.Increment(ref _count);
+
+        public int Value => Volatile.Read(ref _count);
+    }
+
+    /// <summary>
+    /// Polls <paramref name="condition"/> until it holds, failing with
+    /// <paramref name="because"/> if it never does inside
+    /// <paramref name="timeoutMs"/>.
+    /// </summary>
+    private static async Task WaitUntilAsync(Func<bool> condition, string because, int timeoutMs = 10_000)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition())
+        {
+            if (stopwatch.ElapsedMilliseconds > timeoutMs)
+            {
+                Assert.Fail($"Timed out after {timeoutMs} ms waiting for {because}.");
+            }
+
+            await Task.Delay(5);
+        }
+    }
+
+    /// <summary>
+    /// Waits until the held caller has provably filled the single
+    /// admission slot (its dispatch reached the shard substitute) and
+    /// asserts that the follower did not slip through the admission
+    /// gate behind it.
+    /// <para>
+    /// The dispatch-count equality is what gives the "the follower is
+    /// parked" claim teeth. Checking only
+    /// <c>parked.IsCompleted == false</c> after a fixed sleep - as
+    /// these tests used to - cannot distinguish "parked on the
+    /// admission semaphore" (the state under test) from "has not
+    /// started yet" (in which case the drain below would fault it at
+    /// the writer-level gate with a different exception, or the sleep
+    /// simply was not long enough on a loaded CI worker).
+    /// </para>
+    /// </summary>
+    private static async Task WaitUntilFollowerParkedAsync(DispatchCounter dispatches, Task<long> parked)
+    {
+        await WaitUntilAsync(
+            () => dispatches.Value >= 1,
+            "the held caller's dispatch to reach the shard, which is what fills the cap=1 admission slot the follower must then park behind");
+        Assert.That(dispatches.Value, Is.EqualTo(1),
+            "only the held caller may reach the shard; the follower must still be parked on the admission semaphore rather than dispatched");
+        Assert.That(parked.IsCompleted, Is.False, "parked caller should be on the admission semaphore");
+    }
+
     private WalCommitLogWriter CreateWalWriter(out TaskCompletionSource<long> heldRelease)
+        => CreateWalWriter(out heldRelease, out _);
+
+    private WalCommitLogWriter CreateWalWriter(out TaskCompletionSource<long> heldRelease, out DispatchCounter dispatches)
     {
         var options = new LatticeOptions
         {
@@ -46,12 +110,22 @@ public class WalCommitLogWriterDrainerTests
         // AppendAsync so the held caller stays parked on the shard RPC
         // (filling the cap=1 admission slot) and the next caller parks
         // on the admission semaphore - the saturation shape the drain
-        // seam closes. Test cleanup releases the TCS at the end so the
-        // abandoned shard-RPC task settles before the fixture tears
-        // down.
+        // seam closes. Every inbound dispatch bumps an interlocked
+        // counter so tests can wait on positive evidence that the cap is
+        // full rather than sleeping and hoping. Test cleanup releases
+        // the TCS at the end so the abandoned shard-RPC task settles
+        // before the fixture tears down.
         heldRelease = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = heldRelease;
+        var counter = new DispatchCounter();
+        dispatches = counter;
         var shard = Substitute.For<IWalShardGrain>();
-        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>()).Returns(heldRelease.Task);
+        shard.AppendAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                counter.Increment();
+                return release.Task;
+            });
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(shard);
@@ -90,7 +164,10 @@ public class WalCommitLogWriterDrainerTests
         var writer = CreateWalWriter(out var heldRelease);
         var drainer = new WalCommitLogWriterDrainer(writer, NullLogger<WalCommitLogWriterDrainer>.Instance);
 
-        await drainer.StartAsync(CancellationToken.None);
+        var start = drainer.StartAsync(CancellationToken.None);
+        Assert.That(start.IsCompletedSuccessfully, Is.True,
+            "StartAsync must return an already-completed task so host startup pays no scheduling cost for the passive drain seam");
+        await start;
 
         // Writer is still usable post-Start: a fresh append acquires its
         // admission slot normally. We don't await the append (the
@@ -114,7 +191,7 @@ public class WalCommitLogWriterDrainerTests
         // StopAsync and asserting the parked caller surfaces a typed
         // TimeoutException naming WalDrainBudget - the canonical
         // attribution string the drain emits.
-        var writer = CreateWalWriter(out var heldRelease);
+        var writer = CreateWalWriter(out var heldRelease, out var dispatches);
         var drainer = new WalCommitLogWriterDrainer(writer, NullLogger<WalCommitLogWriterDrainer>.Instance);
         await drainer.StartAsync(CancellationToken.None);
 
@@ -124,8 +201,7 @@ public class WalCommitLogWriterDrainerTests
         const string SharedKey = "shared-key";
         var held = writer.AppendAsync(MakeMutation(SharedKey));
         var parked = writer.AppendAsync(MakeMutation(SharedKey));
-        await Task.Delay(80);
-        Assert.That(parked.IsCompleted, Is.False, "parked caller should be on the admission semaphore");
+        await WaitUntilFollowerParkedAsync(dispatches, parked);
 
         await drainer.StopAsync(CancellationToken.None);
 
@@ -151,9 +227,22 @@ public class WalCommitLogWriterDrainerTests
         var drainer = new WalCommitLogWriterDrainer(nonWalWriter, NullLogger<WalCommitLogWriterDrainer>.Instance);
 
         // Both StartAsync and StopAsync should complete synchronously
-        // without touching the substitute.
-        await drainer.StartAsync(CancellationToken.None);
-        await drainer.StopAsync(CancellationToken.None);
+        // without touching the substitute. Assert the synchronous
+        // completion the comment claims rather than only that the
+        // awaits did not throw - an implementation that started
+        // scheduling work on the opt-out path would still satisfy a
+        // bare `await`.
+        var start = drainer.StartAsync(CancellationToken.None);
+        var stop = drainer.StopAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(start.IsCompletedSuccessfully, Is.True,
+                "StartAsync must complete synchronously for a non-WalCommitLogWriter");
+            Assert.That(stop.IsCompletedSuccessfully, Is.True,
+                "StopAsync must complete synchronously for a non-WalCommitLogWriter rather than scheduling drain work it cannot perform");
+        });
+        await start;
+        await stop;
 
         // Substitute received no calls - the drainer correctly
         // recognised it as a non-WalCommitLogWriter and did not invoke
@@ -170,14 +259,14 @@ public class WalCommitLogWriterDrainerTests
         // IHostApplicationLifetime.StopApplication() call. The second
         // invocation must not throw, must not double-release any
         // tracker, and must complete promptly.
-        var writer = CreateWalWriter(out var heldRelease);
+        var writer = CreateWalWriter(out var heldRelease, out var dispatches);
         var drainer = new WalCommitLogWriterDrainer(writer, NullLogger<WalCommitLogWriterDrainer>.Instance);
         await drainer.StartAsync(CancellationToken.None);
 
         const string SharedKey = "shared-key";
         var held = writer.AppendAsync(MakeMutation(SharedKey));
         var parked = writer.AppendAsync(MakeMutation(SharedKey));
-        await Task.Delay(80);
+        await WaitUntilFollowerParkedAsync(dispatches, parked);
 
         await drainer.StopAsync(CancellationToken.None);
         // Second invocation must be a clean no-op.

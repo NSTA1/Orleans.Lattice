@@ -96,33 +96,102 @@ public class StallWatchdogTests
             Throws.TypeOf<ArgumentOutOfRangeException>());
     }
 
+    /// <summary>
+    /// Counts how many poll iterations the watchdog has actually
+    /// completed, by wrapping one of its snapshot functions.
+    /// <see cref="StallWatchdog.RunAsync"/> reads
+    /// <c>inFlightSnapshot</c> exactly once per loop iteration (and
+    /// never during pre-loop priming), so wrapping that function yields
+    /// an exact iteration counter.
+    /// </summary>
+    private sealed class PollCounter
+    {
+        private int _polls;
+
+        public int Polls => Volatile.Read(ref _polls);
+
+        public Func<long> Counting(Func<long> snapshot) => () =>
+        {
+            Interlocked.Increment(ref _polls);
+            return snapshot();
+        };
+    }
+
+    /// <summary>
+    /// Waits until the watchdog has completed at least
+    /// <paramref name="polls"/> poll iterations.
+    /// <para>
+    /// This is the sound anchor for a "must NOT fire" assertion.
+    /// <see cref="StallWatchdog.RunAsync"/> awaits <c>pollInterval</c>
+    /// and then samples every snapshot exactly once per iteration, and
+    /// <see cref="Task.Delay(TimeSpan, CancellationToken)"/> never
+    /// returns early, so N observed polls proves at least
+    /// N * pollInterval elapsed <em>inside the watchdog's own loop</em>
+    /// - the gate genuinely had N opportunities to arm and fire. A bare
+    /// <c>Task.Delay</c> in the test proves only that wall-clock passed
+    /// in the test; on a starved CI worker it can elapse while the
+    /// watchdog loop has barely run, so the negative assertion would
+    /// pass without ever exercising the gate it exists to cover.
+    /// </para>
+    /// </summary>
+    private static async Task WaitForPollsAsync(PollCounter counter, int polls, int timeoutMs = 30_000)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (counter.Polls < polls)
+        {
+            if (stopwatch.ElapsedMilliseconds > timeoutMs)
+            {
+                Assert.Fail(
+                    $"Timed out after {timeoutMs} ms waiting for {polls} watchdog poll iterations; observed {counter.Polls}.");
+            }
+
+            await Task.Delay(5);
+        }
+    }
+
+    /// <summary>
+    /// Poll count that gives a negative ("must not fire") assertion its
+    /// evidence: with the fixture's default 10 ms poll interval and
+    /// 50 ms stall window, 20 polls means the watchdog looped for at
+    /// least four consecutive stall windows without firing.
+    /// </summary>
+    private const int PollsCoveringSeveralStallWindows = 20;
+
     [Test]
     public async Task RunAsync_progressing_writtenTotal_does_not_fire()
     {
         // Healthy: writtenTotal advances every sample. The watchdog
         // must not fire even with non-zero in-flight.
+        //
+        // Progress is driven from the snapshot callback (the watchdog
+        // reads it once per poll) rather than a background pump on its
+        // own timer, so no timer race can starve a poll of progress and
+        // let the in-flight arm accumulate a stall window.
         var written = 0L;
+        var polls = new PollCounter();
         var watchdog = Create(
-            writtenTotal: () => Interlocked.Read(ref written),
-            inFlight: () => 5L);
+            writtenTotal: () => Interlocked.Increment(ref written),
+            inFlight: polls.Counting(() => 5L));
 
         using var cts = new CancellationTokenSource();
         var run = watchdog.RunAsync(cts.Token);
-        // Drive progress for a window longer than the stallWindow so
-        // a healthy run would have to fire if the gate were broken.
-        for (var i = 0; i < 20; i++)
-        {
-            Interlocked.Increment(ref written);
-            await Task.Delay(15);
-        }
+
+        // Let the watchdog loop across several stall windows so a
+        // broken gate would have had ample opportunity to fire.
+        await WaitForPollsAsync(polls, PollsCoveringSeveralStallWindows);
+
+        // Non-firing IS directly observable via HasFiredForTesting (the
+        // sibling positive tests below assert the same flag is true), so
+        // assert it rather than settling for "RunAsync returned without
+        // throwing" - which this test's name promises but which holds
+        // even when the watchdog has fired.
+        Assert.That(watchdog.HasFiredForTesting, Is.False,
+            "healthy operation: must not fire while writtenTotal is advancing on every sample");
+
         cts.Cancel();
         await run.WaitAsync(TimeSpan.FromSeconds(5));
-        // Cannot directly observe non-firing without ClrMD; the
-        // assertion here is that RunAsync returns cleanly on
-        // cancellation without throwing - the absence of an emit is
-        // exercised by the construction (the watchdog cannot fire
-        // because progress keeps resetting lastProgressAt).
-        Assert.That(run.IsCompletedSuccessfully, Is.True);
+        Assert.That(run.IsCompletedSuccessfully, Is.True,
+            "RunAsync must return cleanly on cancellation rather than surfacing the OperationCanceledException");
     }
 
     [Test]
@@ -132,19 +201,27 @@ public class StallWatchdogTests
         // The watchdog must NOT arm (the old gate fired when
         // inFlight >= cap; this proves the dual-arm gate keeps the
         // drained-idle non-firing).
+        var polls = new PollCounter();
         var watchdog = Create(
             writtenTotal: () => 1_000L,
-            inFlight: () => 0L,
+            inFlight: polls.Counting(() => 0L),
             failedTotal: () => 0L,
             failedDeltaThreshold: 100L);
 
         using var cts = new CancellationTokenSource();
         var run = watchdog.RunAsync(cts.Token);
-        // Wait well past the stallWindow.
-        await Task.Delay(200);
+
+        // Loop across several stall windows: with writtenTotal frozen,
+        // an over-eager gate would fire here.
+        await WaitForPollsAsync(polls, PollsCoveringSeveralStallWindows);
+
+        Assert.That(watchdog.HasFiredForTesting, Is.False,
+            "drained idle: must not arm when writtenTotal is frozen but in-flight is zero and no failures are accruing");
+
         cts.Cancel();
         await run.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.That(run.IsCompletedSuccessfully, Is.True);
+        Assert.That(run.IsCompletedSuccessfully, Is.True,
+            "RunAsync must return cleanly on cancellation rather than surfacing the OperationCanceledException");
     }
 
     [Test]
@@ -249,22 +326,27 @@ public class StallWatchdogTests
         // provider-saturation arm; the threshold guards against
         // false positives.
         long failedTotal = 0L;
+        var polls = new PollCounter();
         var watchdog = Create(
             writtenTotal: () => 1_000L,
-            inFlight: () => 0L,
+            inFlight: polls.Counting(() => 0L),
             failedTotal: () => Interlocked.Read(ref failedTotal),
             failedDeltaThreshold: 100L,
             stallWindow: TimeSpan.FromMilliseconds(50),
             pollInterval: TimeSpan.FromMilliseconds(10));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        // The cancellation budget is a safety net only; it is kept well
+        // clear of the wait below so the two cannot race on a slow
+        // worker (a token that fired first would stop the poll loop and
+        // strand the wait).
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = watchdog.RunAsync(cts.Token);
 
         // One straggler failure of 5 entries; far below the 100
         // threshold. The watchdog must not fire.
         Interlocked.Add(ref failedTotal, 5L);
 
-        await Task.Delay(300);
+        await WaitForPollsAsync(polls, PollsCoveringSeveralStallWindows);
         Assert.That(watchdog.HasFiredForTesting, Is.False,
             "failure arm: must not fire on a single below-threshold straggler");
 
@@ -284,18 +366,23 @@ public class StallWatchdogTests
         // timer race can starve a poll of progress and let the
         // in-flight arm accumulate a stall window.
         long written = 0L;
+        var polls = new PollCounter();
         var watchdog = Create(
             writtenTotal: () => Interlocked.Increment(ref written),
-            inFlight: () => 16L, // pinned at "cap"
+            inFlight: polls.Counting(() => 16L), // pinned at "cap"
             failedTotal: () => 0L,
             failedDeltaThreshold: 100L,
             stallWindow: TimeSpan.FromMilliseconds(50),
             pollInterval: TimeSpan.FromMilliseconds(10));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        // The cancellation budget is a safety net only; it is kept well
+        // clear of the wait below so the two cannot race on a slow
+        // worker (a token that fired first would stop the poll loop and
+        // strand the wait).
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var run = watchdog.RunAsync(cts.Token);
 
-        await Task.Delay(300);
+        await WaitForPollsAsync(polls, PollsCoveringSeveralStallWindows);
         Assert.That(watchdog.HasFiredForTesting, Is.False,
             "healthy operation: must not fire while writtenTotal is advancing");
 
