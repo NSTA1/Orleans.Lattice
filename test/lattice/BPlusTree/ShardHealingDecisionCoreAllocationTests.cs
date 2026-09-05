@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
@@ -23,10 +24,43 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// (a background GC's own bookkeeping, say) cannot decide the outcome.
 /// </para>
 /// <para>
+/// That discipline is not re-implemented here: it lives once in
+/// <see cref="AllocationProbe"/>, together with its own battery tests proving it
+/// can both report growth for a provably-escaping allocation and report none for
+/// a loop that allocates nothing. A local copy of a probe is how this bug class
+/// fragments into near-identical variants, one of which is eventually
+/// "simplified" into a false negative.
+/// </para>
+/// <para>
+/// Two properties this fixture used to spell out are now the harness's, and both
+/// are load-bearing. The <b>warm-up runs at the full loop size</b>, not a token
+/// one: that moves tiered-JIT and on-stack-replacement costs outside every
+/// measured window, and forces tier-1 promotion before the first measurement, so
+/// a loop whose allocation escape analysis can remove is caught even in a
+/// single-test run rather than only in a batch large enough to have promoted the
+/// method by luck. And the minimum is kept across every repeat rather than
+/// <b>short-circuiting on the first non-positive sample</b> - short-circuiting is
+/// the third way an allocation probe silently fails, because on a loop that
+/// genuinely allocates, one noisy round where the small window absorbed more
+/// noise than the large one would be reported as allocation-free.
+/// </para>
+/// <para>
+/// The harness clamps the reported minimum at zero, where this fixture's own
+/// helper deliberately did not - it returned the raw value so a failure message
+/// reported what was actually measured. That is behaviour-neutral here, as the
+/// original note itself recorded: noise can only add allocation, so a negative
+/// minimum means "no per-iteration term was observed", which is exactly what the
+/// clamped zero says. Both assertion directions used below are unaffected - a
+/// negative growth satisfies <c>Is.Zero</c> after clamping just as it satisfied
+/// <c>&lt;= 0</c> before, and fails <c>&gt; 0</c> either way - and a failing
+/// assertion reports a positive growth, which the clamp never touches.
+/// </para>
+/// <para>
 /// Nothing on this path awaits, so
 /// <see cref="GC.GetAllocatedBytesForCurrentThread"/> is the right counter: it
 /// is thread-affine and therefore immune to the process-wide noise that would
-/// otherwise swamp a zero-allocation claim.
+/// otherwise swamp a zero-allocation claim. That is the harness's default, so
+/// no call below passes <c>crossesThreads</c>.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -35,17 +69,6 @@ public class ShardHealingDecisionCoreAllocationTests
     private const int NarrowIterations = 50_000;
     private const int WideIterations = 100_000;
     private const int Repeats = 5;
-
-    /// <summary>
-    /// Escape hatch for the battery test's allocation. A field of reference
-    /// type that the loop assigns to on every iteration is the only reliable
-    /// way to force a heap allocation under a modern JIT: escape analysis
-    /// stack-allocates - or elides outright - a non-escaping allocation of
-    /// constant size, so a "deliberately allocating" loop that keeps nothing
-    /// alive allocates nothing at all and silently disarms the very test that
-    /// exists to prove the probe can fail. Do not "simplify" this away.
-    /// </summary>
-    private static object? _escapeSink;
 
     private static ShardHealingPolicy DefaultPolicy => ShardHealingPolicy.FromOptions(new LatticeOptions());
 
@@ -59,58 +82,24 @@ public class ShardHealingDecisionCoreAllocationTests
     };
 
     /// <summary>
-    /// Runs <paramref name="body"/> at two loop sizes and returns the smallest
-    /// observed difference in allocated bytes across <see cref="Repeats"/>
-    /// rounds. A per-iteration allocation shows up as a growth proportional to
-    /// the extra iterations; a one-off cost cancels.
+    /// Runs <paramref name="body"/> at <see cref="NarrowIterations"/> and
+    /// <see cref="WideIterations"/> through <see cref="AllocationProbe.Growth"/>
+    /// and returns the growth between them.
     /// <para>
-    /// Every round is measured and the <b>minimum</b> is kept - the helper never
-    /// short-circuits on the first non-positive sample. Short-circuiting is the
-    /// third way an allocation probe silently fails: on a loop that genuinely
-    /// allocates, one noisy round where the small window absorbed more noise
-    /// than the large one would be reported as allocation-free.
-    /// </para>
-    /// <para>
-    /// The minimum is deliberately <i>not</i> clamped at zero. Noise can only
-    /// add allocation, so the minimum is the closest estimate of the true
-    /// per-iteration term, and a genuine allocation appears in every round and
-    /// survives it. Leaving the raw value makes a failure message report what
-    /// was actually measured; clamping would be behaviour-neutral for both
-    /// assertion directions used here (a negative growth satisfies
-    /// <c>&lt;= 0</c> and fails <c>&gt; 0</c> either way).
-    /// </para>
-    /// <para>
-    /// The warm-up is deliberately at the <b>full</b> loop size, not a token
-    /// one. That matters twice: it moves tiered-JIT and on-stack-replacement
-    /// costs outside every measured window, and it forces tier-1 promotion
-    /// before the first measurement - so a loop whose allocation escape
-    /// analysis can remove is caught even in a single-test run, rather than
-    /// only in a batch large enough to have promoted the method by luck.
+    /// None of these probes has per-size state - each one's fixture is built by
+    /// the caller before the probe starts, which is already outside every
+    /// measured window - so <c>prepare</c> is a no-op. It exists so a probe that
+    /// <em>does</em> need per-size set-up cannot accidentally build it inside
+    /// the window, which is the one failure mode of this family that produces a
+    /// false <em>positive</em>.
     /// </para>
     /// </summary>
-    private static long MeasureGrowth(Action<int> body)
-    {
-        // Full-size warm-up outside every measured window, so tier-1 promotion
-        // has already happened before the first measurement.
-        body(WideIterations);
-
-        var smallest = long.MaxValue;
-        for (var round = 0; round < Repeats; round++)
-        {
-            var beforeNarrow = GC.GetAllocatedBytesForCurrentThread();
-            body(NarrowIterations);
-            var narrow = GC.GetAllocatedBytesForCurrentThread() - beforeNarrow;
-
-            var beforeWide = GC.GetAllocatedBytesForCurrentThread();
-            body(WideIterations);
-            var wide = GC.GetAllocatedBytesForCurrentThread() - beforeWide;
-
-            var growth = wide - narrow;
-            if (growth < smallest) smallest = growth;
-        }
-
-        return smallest;
-    }
+    private static long MeasureGrowth(Action<int> body) => AllocationProbe.Growth(
+        static _ => 0,
+        (_, iterations) => body(iterations),
+        NarrowIterations,
+        WideIterations,
+        attempts: Repeats);
 
     [Test]
     public void Decide_allocates_nothing_per_sweep()
@@ -131,7 +120,7 @@ public class ShardHealingDecisionCoreAllocationTests
         Assert.Multiple(() =>
         {
             Assert.That(admitted, Is.GreaterThan(0), "the measured loop must actually have reached a decision");
-            Assert.That(growth, Is.LessThanOrEqualTo(0L),
+            Assert.That(growth, Is.Zero,
                 $"doubling the sweep count allocated {growth} extra bytes; the healing decision runs "
                 + "continuously against every tree and must not allocate per sweep");
         });
@@ -156,7 +145,7 @@ public class ShardHealingDecisionCoreAllocationTests
         Assert.Multiple(() =>
         {
             Assert.That(settled, Is.GreaterThan(0));
-            Assert.That(growth, Is.LessThanOrEqualTo(0L),
+            Assert.That(growth, Is.Zero,
                 $"doubling the sweep count allocated {growth} extra bytes; the structural clause is the "
                 + "steady-state path for every healthy tree in the cluster");
         });
@@ -179,7 +168,7 @@ public class ShardHealingDecisionCoreAllocationTests
         Assert.Multiple(() =>
         {
             Assert.That(sink, Is.GreaterThan(0));
-            Assert.That(growth, Is.LessThanOrEqualTo(0L),
+            Assert.That(growth, Is.Zero,
                 $"doubling the sweep count allocated {growth} extra bytes");
         });
     }
@@ -219,7 +208,7 @@ public class ShardHealingDecisionCoreAllocationTests
         Assert.Multiple(() =>
         {
             Assert.That(sink, Is.GreaterThan(0d));
-            Assert.That(growth, Is.LessThanOrEqualTo(0L),
+            Assert.That(growth, Is.Zero,
                 $"doubling the sweep count allocated {growth} extra bytes; the median sort must operate "
                 + "in place on a caller-owned buffer");
         });
@@ -246,19 +235,25 @@ public class ShardHealingDecisionCoreAllocationTests
             }
         });
 
-        Assert.That(growth, Is.LessThanOrEqualTo(0L),
+        Assert.That(growth, Is.Zero,
             $"doubling the sweep count allocated {growth} extra bytes publishing the healing metrics");
     }
 
     [Test]
     public void Allocation_probe_detects_a_loop_that_really_does_allocate()
     {
-        // The battery test for the probe itself. Its allocation must PROVABLY
-        // ESCAPE: assigning a fresh object to a static field of reference type
-        // is a definite escape at every JIT tier with no constant-folding
-        // surface, whereas a non-escaping `new long[1]` whose only use is
-        // `.Length` is stack-allocated or elided outright - which would make
-        // this test quietly become the false negative it exists to prevent.
+        // The battery test for this fixture's wiring of AllocationProbe: it
+        // proves the sizes and repeat count above can actually observe a
+        // per-iteration allocation, so a `Is.Zero` above is evidence rather
+        // than an accident. AllocationProbe carries its own battery for the
+        // harness itself.
+        //
+        // The allocation must PROVABLY ESCAPE, which is why it is stored to
+        // AllocationProbe.EscapeSink: a static field of reference type is a
+        // definite escape at every JIT tier with no constant-folding surface,
+        // whereas a non-escaping `new long[1]` whose only use is `.Length` is
+        // stack-allocated or elided outright - which would make this test
+        // quietly become the false negative it exists to prevent.
         //
         // VERIFIED BY DELIBERATE FAILURE, not by assumption. Substituting the
         // non-escaping `sink += new long[1].Length` body makes this test fail
@@ -270,13 +265,23 @@ public class ShardHealingDecisionCoreAllocationTests
         {
             for (var i = 0; i < iterations; i++)
             {
-                _escapeSink = new object();
+                AllocationProbe.EscapeSink = new object();
             }
         });
 
-        Assert.That(growth, Is.GreaterThan(0L),
-            "the probe must report growth for a loop that genuinely allocates per iteration, "
-            + "or it could not catch a real per-sweep regression");
-        Assert.That(_escapeSink, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(growth, Is.GreaterThan(0L),
+                "the probe must report growth for a loop that genuinely allocates per iteration, "
+                + "or it could not catch a real per-sweep regression");
+
+            // Checked against the arithmetic, not merely for a positive number:
+            // the extra 50,000 iterations must show up as at least one object
+            // header apiece, or something other than the loop is being
+            // measured. The bound is deliberately below the real 24-byte object
+            // size so it cannot become architecture-dependent.
+            Assert.That(growth, Is.GreaterThanOrEqualTo((WideIterations - NarrowIterations) * 8L),
+                "the growth must track the extra allocations, not merely be non-zero noise");
+        });
     }
 }
