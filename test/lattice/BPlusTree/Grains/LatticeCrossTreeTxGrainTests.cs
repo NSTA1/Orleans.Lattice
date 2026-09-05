@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// exercised without a silo.
 /// </summary>
 [TestFixture]
-public class LatticeCrossTreeTxGrainTests
+public partial class LatticeCrossTreeTxGrainTests
 {
     private const string OperationId = "xop-1";
 
@@ -26,10 +26,16 @@ public class LatticeCrossTreeTxGrainTests
                     IGrainFactory grainFactory,
                     Dictionary<string, IAtomicWriteGrain> participants) CreateGrain(
         IEnumerable<string>? treeIds = null,
-        FakePersistentState<CrossTreeTxState>? existingState = null)
+        FakePersistentState<CrossTreeTxState>? existingState = null,
+        IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("cross-tree-tx", OperationId));
+        // The coordinator resolves the access gate and write interceptor off the
+        // activation's services. An unconfigured substitute returns null for
+        // every service, which is what selects the zero-cost null-gate / null-
+        // interceptor fallbacks the majority of these tests run under.
+        context.ActivationServices.Returns(activationServices ?? Substitute.For<IServiceProvider>());
 
         var grainFactory = Substitute.For<IGrainFactory>();
         var participants = new Dictionary<string, IAtomicWriteGrain>(StringComparer.Ordinal);
