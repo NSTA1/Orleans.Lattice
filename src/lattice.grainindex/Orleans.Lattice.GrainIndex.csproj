@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.GrainIndex</PackageId>
-    <Version>9.5.0</Version>
+    <Version>9.6.0</Version>
     <Description>Typed grain indexing for Orleans.Lattice. Projects an Orleans grain's typed state into a lattice-backed index tree so grains can be discovered with the server-side predicate query surface.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

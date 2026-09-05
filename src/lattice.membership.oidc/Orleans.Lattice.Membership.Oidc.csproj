@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Membership.Oidc</PackageId>
-    <Version>9.5.0</Version>
+    <Version>9.6.0</Version>
     <Description>Generic OpenID Connect credential authenticator for Orleans.Lattice.Membership. Specializes the built-in JWT authenticator with discovery-document-driven JWKS rotation from any conformant OIDC provider (Okta, Auth0, Keycloak, Ping, Google), standard OIDC claim conventions (sub subject, configurable group / role claims), exact-issuer authenticator selection, and fail-closed signature-algorithm pinning taken from the discovery document when it is not configured explicitly. An additive sibling to the Entra authenticator; neither package depends on the other.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

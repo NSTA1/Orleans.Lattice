@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Api.TenantAdmin.Grpc</PackageId>
-    <Version>9.5.0</Version>
+    <Version>9.6.0</Version>
     <Description>Code-first gRPC transport binding and strongly-typed client for Orleans.Lattice.Api.TenantAdmin. Exposes the tenant-administration control facade (create, suspend, resume, and delete-with-tree-cascade) over a remote gRPC surface, with a default-deny authorization interceptor and an unauthenticated auth-scheme discovery RPC. Fail-closed: every lifecycle RPC is rejected until the host opts in.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>

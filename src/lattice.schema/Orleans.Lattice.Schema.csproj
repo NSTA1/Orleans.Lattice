@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>Orleans.Lattice.Schema</PackageId>
-    <Version>9.5.0</Version>
+    <Version>9.6.0</Version>
     <Description>Schema add-on foundation for Orleans.Lattice. Ships LatticeValueTransform - a shared, serializable value-to-value transform IR (a sibling of the boolean LatticePredicateNode) with a client-side translator, a deterministic server-side JSON evaluator, and an ILatticeValueTransform DI escape hatch. Consumed by the schema-enforcement remediation and schema-versioning upcast layers delivered by later releases.</Description>
     <PackageProjectUrl>https://github.com/NSTA1/Orleans.Lattice</PackageProjectUrl>
     <RepositoryUrl>https://github.com/NSTA1/Orleans.Lattice</RepositoryUrl>
