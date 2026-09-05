@@ -114,7 +114,7 @@ public sealed class RepoContextSelfIndexGrainScanTests
 
         await harness.TickAsync();
 
-        await harness.Job.DidNotReceive().EnsureIndexedAsync();
+        await harness.Job.DidNotReceive().EnsureIndexedAsync(Arg.Any<bool>());
         await harness.Job.DidNotReceive().GetProgressAsync();
         Assert.That(harness.State.WriteCount, Is.EqualTo(writesBefore),
             "A cooling-down tick writes nothing: it is the cheap idle path between scans.");
@@ -173,7 +173,7 @@ public sealed class RepoContextSelfIndexGrainScanTests
 
         await harness.TickAsync();
 
-        await harness.Job.DidNotReceive().EnsureIndexedAsync();
+        await harness.Job.DidNotReceive().EnsureIndexedAsync(Arg.Any<bool>());
         Assert.Multiple(() =>
         {
             Assert.That(harness.State.State.ResumeKey, Is.Null,
@@ -196,7 +196,7 @@ public sealed class RepoContextSelfIndexGrainScanTests
 
         await harness.TickAsync();
 
-        await harness.Job.Received(1).EnsureIndexedAsync();
+        await harness.Job.Received(1).EnsureIndexedAsync(true);
         Assert.Multiple(() =>
         {
             Assert.That(harness.State.State.ResumeKey, Is.Null,
@@ -211,7 +211,7 @@ public sealed class RepoContextSelfIndexGrainScanTests
     {
         var harness = new SelfIndexGrainHarness();
         harness.SeedFile("src/only.cs");
-        harness.Job.EnsureIndexedAsync().Returns(Task.FromResult(false));
+        harness.Job.EnsureIndexedAsync(Arg.Any<bool>()).Returns(Task.FromResult(false));
 
         await ArmedPastReconcileAsync(harness);
 
@@ -264,7 +264,7 @@ public sealed class RepoContextSelfIndexGrainScanTests
 
         await harness.TickAsync();
 
-        await harness.Job.DidNotReceive().EnsureIndexedAsync();
+        await harness.Job.DidNotReceive().EnsureIndexedAsync(Arg.Any<bool>());
         Assert.That(harness.State.State.ResumeKey, Is.Null,
             "The resumed page exhausted the range, so the completed scan clears its checkpoint.");
     }

@@ -296,8 +296,14 @@ internal sealed class RepoContextSelfIndexGrain(
             // back-fill re-embeds every missing file, so one trigger heals all of
             // this repository's gaps. EnsureIndexedAsync is a no-op when a run is
             // already in flight.
+            //
+            // Force the in-pass embedding gap scan: the reconcile only re-probes the
+            // whole unchanged set on its own cadence, and this sweep is the evidence
+            // that a probe is warranted now. Without the flag the re-driven pass
+            // would skip the scan, heal nothing, and be re-driven again next cycle.
             var triggered = await grainFactory
-                .GetGrain<IRepoIndexJobGrain>(RepoId).EnsureIndexedAsync().ConfigureAwait(true);
+                .GetGrain<IRepoIndexJobGrain>(RepoId)
+                .EnsureIndexedAsync(forceEmbeddingGapScan: true).ConfigureAwait(true);
             if (triggered)
             {
                 logger.LogInformation(

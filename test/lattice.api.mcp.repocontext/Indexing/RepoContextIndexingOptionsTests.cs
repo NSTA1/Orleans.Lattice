@@ -14,6 +14,7 @@ public sealed class RepoContextIndexingOptionsTests
         RepoContextIndexingOptions.ReconcileIntervalSecondsKey,
         RepoContextIndexingOptions.ReconcileJitterSecondsKey,
         RepoContextIndexingOptions.FullWalkIntervalSecondsKey,
+        RepoContextIndexingOptions.EmbeddingGapScanIntervalSecondsKey,
         RepoContextIndexingOptions.TokenizerProfileKey,
         RepoContextIndexingOptions.IndexingRoleKey,
         RepoContextIndexingOptions.SemanticRetrievalKey,
@@ -41,6 +42,7 @@ public sealed class RepoContextIndexingOptionsTests
             Assert.That(options.ReconcileInterval, Is.EqualTo(defaults.ReconcileInterval));
             Assert.That(options.ReconcileIntervalJitter, Is.EqualTo(defaults.ReconcileIntervalJitter));
             Assert.That(options.FullWalkInterval, Is.EqualTo(defaults.FullWalkInterval));
+            Assert.That(options.EmbeddingGapScanInterval, Is.EqualTo(defaults.EmbeddingGapScanInterval));
         });
     }
 
@@ -51,6 +53,8 @@ public sealed class RepoContextIndexingOptionsTests
         Environment.SetEnvironmentVariable(RepoContextIndexingOptions.ReconcileIntervalSecondsKey, "5");
         Environment.SetEnvironmentVariable(RepoContextIndexingOptions.ReconcileJitterSecondsKey, "0");
         Environment.SetEnvironmentVariable(RepoContextIndexingOptions.FullWalkIntervalSecondsKey, "120");
+        Environment.SetEnvironmentVariable(
+            RepoContextIndexingOptions.EmbeddingGapScanIntervalSecondsKey, "600");
 
         var options = RepoContextIndexingOptions.FromEnvironment();
 
@@ -60,6 +64,91 @@ public sealed class RepoContextIndexingOptionsTests
             Assert.That(options.ReconcileInterval, Is.EqualTo(TimeSpan.FromSeconds(5)));
             Assert.That(options.ReconcileIntervalJitter, Is.EqualTo(TimeSpan.Zero));
             Assert.That(options.FullWalkInterval, Is.EqualTo(TimeSpan.FromSeconds(120)));
+            Assert.That(options.EmbeddingGapScanInterval, Is.EqualTo(TimeSpan.FromSeconds(600)));
+        });
+    }
+
+    // --- The pass-count deadlines the reconcile actually enforces (issue #2048) ---
+
+    [Test]
+    public void An_interval_is_expressed_as_a_pass_count_at_the_widest_reconcile_spacing()
+    {
+        // The reconcile is single-flight, so the deadline it can enforce is a count
+        // of passes, not a wall clock. A pass count is derived by rounding the
+        // configured interval up against the widest spacing the scheduler produces.
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.FromSeconds(10),
+            ReconcileIntervalJitter = TimeSpan.FromSeconds(10),
+            FullWalkInterval = TimeSpan.FromSeconds(100),
+            EmbeddingGapScanInterval = TimeSpan.FromSeconds(41),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.MaximumReconcileSpacing, Is.EqualTo(TimeSpan.FromSeconds(20)));
+            Assert.That(options.PassesPerFullWalk, Is.EqualTo(5));
+            Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(3), "41s over 20s rounds up to 3 passes.");
+        });
+    }
+
+    [Test]
+    [TestCase(0)]
+    [TestCase(-30)]
+    public void A_non_positive_interval_degenerates_to_every_pass(int seconds)
+    {
+        // Rounding up must never yield zero: a zero deadline would mean "never
+        // force", silently disabling the safety net instead of tightening it.
+        var options = new RepoContextIndexingOptions
+        {
+            FullWalkInterval = TimeSpan.FromSeconds(seconds),
+            EmbeddingGapScanInterval = TimeSpan.FromSeconds(seconds),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.PassesPerFullWalk, Is.EqualTo(1));
+            Assert.That(options.PassesPerEmbeddingGapScan, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void Pruning_cannot_engage_when_every_pass_is_a_forced_full_walk()
+    {
+        // Issue #2048: a full-walk interval that does not outlive the reconcile
+        // spacing makes every pass a forced full sweep, so the prune snapshot is
+        // written every run and never read. That is dead code with no other symptom,
+        // and this is the property that names it.
+        var tooTight = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.FromSeconds(20),
+            ReconcileIntervalJitter = TimeSpan.Zero,
+            FullWalkInterval = TimeSpan.FromSeconds(20),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tooTight.PassesPerFullWalk, Is.EqualTo(1));
+            Assert.That(tooTight.PruningCanEngage, Is.False);
+            Assert.That(new RepoContextIndexingOptions().PruningCanEngage, Is.True, "the shipped defaults prune");
+        });
+    }
+
+    [Test]
+    public void A_degenerate_reconcile_spacing_reports_that_pruning_cannot_engage()
+    {
+        // With no spacing at all there is no meaningful pass budget, so the honest
+        // answer is that pruning cannot engage rather than a deadline nobody meets.
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.Zero,
+            ReconcileIntervalJitter = TimeSpan.Zero,
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.PassesPerFullWalk, Is.EqualTo(1));
+            Assert.That(options.PruningCanEngage, Is.False);
         });
     }
 

@@ -160,6 +160,40 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
     }
 
     [Test]
+    public async Task A_saturated_vector_plane_stops_the_arm_instead_of_driving_every_batch_into_it()
+    {
+        // Issue #2049. Under saturation every batch times out, and before this the
+        // arm ran the whole queue anyway - adding load to a store already failing
+        // and landing nothing. Consecutive record failures are evidence about the
+        // plane, not about the batch, so the arm defers the rest to a quieter pass.
+        var (options, injector) = FaultingOptions(failFirst: int.MaxValue);
+        await using var harness = await RepoContextMcpHarness.StartAsync(options, Ct);
+
+        var batches = EmbeddingRepoContextVectorIngestor.MaxConsecutiveBatchFailures + 3;
+        var keys = await SeedSymbolsAsync(
+            harness, EmbeddingRepoContextVectorIngestor.EmbedBatchSize * batches, Ct);
+
+        // Nothing landed, so the fault still surfaces: backing off must not be a
+        // quiet way of reporting a healthy pass.
+        Assert.That(
+            async () => await Ingestor(harness).IngestSymbolsAsync(RepoId, keys, Array.Empty<string>(), Ct),
+            Throws.InstanceOf<TimeoutException>());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                injector.Failed,
+                Is.EqualTo(EmbeddingRepoContextVectorIngestor.MaxConsecutiveBatchFailures),
+                "the arm stops after the threshold rather than attempting all "
+                + $"{batches} batches against a saturated store");
+            Assert.That(
+                EmbeddedCountAsync(harness, keys, Ct).Result,
+                Is.Zero,
+                "every deferred source stays unmarked, so the next reconcile picks it up");
+        });
+    }
+
+    [Test]
     public async Task A_pass_where_every_batch_fails_surfaces_the_fault()
     {
         var (options, injector) = FaultingOptions(failFirst: int.MaxValue);
@@ -263,8 +297,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBatchResilienceTests
                 changed.Add(new RepoFileEntry { RelativePath = rel, Digest = $"d{i}", SizeBytes = 64 });
             }
 
-            var embedded = await Ingestor(harness).IngestAsync(
-                RepoId, root, changed, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+            var embedded = (await Ingestor(harness).IngestAsync(
+                RepoId, root, changed, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
             Assert.Multiple(() =>
             {
