@@ -212,6 +212,8 @@ GitHub Pages serves one site, and every deploy replaces it wholesale, so the pub
 
 An older line is **skipped, not failed**. The packages that hotfix publishes are perfectly legitimate; it is only the site that must not move. So the `Docs` run for an old-line hotfix is green with a skipped `deploy` job, and the guard's log says which line it saw and which line is newest. Do not "fix" that by re-running it or dispatching the site by hand - a green run with a skipped deploy is the guard working.
 
+The guard lives in the workflow file, and GitHub resolves that file **from the ref that triggered the run** - the tagged commit for a tag push, the dispatched ref for a dispatch. It never reads `main`. A guard merged only to `main` therefore protects nothing: the run that needs stopping is the one firing from the line. So the guard defends a line only if that line's own `docs.yml` carries it. Lines cut from `main` after the guard landed inherit it and need no action; `release/9.6` was cut before it existed and was backfilled onto the line directly; `release/9.4` and `release/9.5` predate `docs.yml` altogether, so they fire no `Docs` run at all and cannot move the site under any trigger. When auditing this, read the file **on the line**, not on `main`.
+
 The practical consequences are worth stating plainly:
 
 - The site always describes the newest released minor line, and no older-line activity can move it.
