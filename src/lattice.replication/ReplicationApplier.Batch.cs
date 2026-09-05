@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
@@ -23,6 +24,15 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 internal sealed partial class ReplicationApplier
 {
+    /// <summary>
+    /// Upper bound on the capacity hint given to the batched-apply pending
+    /// buckets in <see cref="ApplyOriginRunAsync"/>. The run length is an exact
+    /// upper bound on a bucket's final size, but a long run may defer only a
+    /// few entries (the rest deduped, rejected or causally parked), so the hint
+    /// is clamped to keep a pathological run from over-allocating.
+    /// </summary>
+    private const int PendingBatchCapacityHintLimit = 256;
+
     /// <inheritdoc />
     public async Task<ApplyResult> ApplyBatchAsync(
         IReadOnlyList<WalRecord> entries,
@@ -357,29 +367,44 @@ internal sealed partial class ReplicationApplier
         var i = 0;
         while (i < entries.Count)
         {
-            var startTreeId = entries[i].TreeId ?? string.Empty;
-            var startOrigin = entries[i].OriginClusterId;
+            // WalRecord is a wide readonly struct, so every read through the
+            // IReadOnlyList<WalRecord> indexer copies the whole record onto the
+            // stack. Bind each entry once and project the run-key fields off
+            // that single copy instead of indexing three times per candidate.
+            var start = entries[i];
+            var startTreeId = start.TreeId ?? string.Empty;
+            var startOrigin = start.OriginClusterId;
             // Mode is part of the run key here for the same reason as on the
             // sequential path: the gate classifies a run from its first entry,
             // so a heterogeneous-mode run would carry unclassified entries past
             // it. See ApplyRunsSequentiallyAsync.
-            var startMode = entries[i].Mode;
+            var startMode = start.Mode;
             var j = i + 1;
-            while (j < entries.Count
-                && string.Equals(entries[j].TreeId ?? string.Empty, startTreeId, StringComparison.Ordinal)
-                && string.Equals(entries[j].OriginClusterId, startOrigin, StringComparison.Ordinal)
-                && entries[j].Mode == startMode)
+            while (j < entries.Count)
             {
+                var candidate = entries[j];
+                if (!string.Equals(candidate.TreeId ?? string.Empty, startTreeId, StringComparison.Ordinal)
+                    || !string.Equals(candidate.OriginClusterId, startOrigin, StringComparison.Ordinal)
+                    || candidate.Mode != startMode)
+                {
+                    break;
+                }
                 j++;
             }
 
-            if (!groups.TryGetValue(startTreeId, out var list))
+            // One hash and one bucket walk per run: the miss branch assigns
+            // unconditionally, so the probe-then-store pair folds onto a single
+            // slot reference. Legal here because the enclosing method is
+            // synchronous - ref locals are illegal in async methods - and safe
+            // because nothing mutates `groups` while the ref is live (`order`
+            // is a distinct collection).
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(groups, startTreeId, out var existed);
+            if (!existed)
             {
-                list = new List<(int Start, int End)>();
-                groups[startTreeId] = list;
+                slot = new List<(int Start, int End)>();
                 order.Add(startTreeId);
             }
-            list.Add((i, j));
+            slot!.Add((i, j));
             i = j;
         }
 
@@ -632,6 +657,19 @@ internal sealed partial class ReplicationApplier
         List<ApplyMergeItem>? pendingItems = null;
         List<(int EntryIndex, long StartTs)>? pendingApplies = null;
         IReplicationApplyGrain? applyGrain = null;
+
+        // Capacity hint for the pending buckets below. The run length is an
+        // exact upper bound on how many entries either bucket can take, so it
+        // removes the whole 4/8/16/.../1024 doubling chain a bucket grown from
+        // empty would walk (each doubling allocates a fresh backing array and
+        // abandons the previous one). It is clamped so a long run that defers
+        // only a handful of entries - most of it deduped or causally parked -
+        // cannot over-allocate. The buckets stay lazily constructed, so a run
+        // that defers nothing still allocates nothing.
+        var pendingCapacityHint = Math.Clamp(
+            endExclusive - startInclusive,
+            4,
+            PendingBatchCapacityHintLimit);
 
         // Pending batched typed-CRDT delta items. Mirror of pendingItems
         // for non-prepared CRDT-mode Set entries: each passes the same
@@ -1005,8 +1043,8 @@ internal sealed partial class ReplicationApplier
                     // ordering invariant explicit).
                     await FlushPendingAsync().ConfigureAwait(false);
 
-                    pendingCrdtItems ??= new List<ApplyCrdtDeltaItem>();
-                    pendingCrdtApplies ??= new List<(int, long)>();
+                    pendingCrdtItems ??= new List<ApplyCrdtDeltaItem>(pendingCapacityHint);
+                    pendingCrdtApplies ??= new List<(int, long)>(pendingCapacityHint);
                     pendingCrdtItems.Add(new ApplyCrdtDeltaItem
                     {
                         Key = entry.Key,
@@ -1040,8 +1078,8 @@ internal sealed partial class ReplicationApplier
                         nameof(entries));
                 }
 
-                pendingItems ??= new List<ApplyMergeItem>();
-                pendingApplies ??= new List<(int, long)>();
+                pendingItems ??= new List<ApplyMergeItem>(pendingCapacityHint);
+                pendingApplies ??= new List<(int, long)>(pendingCapacityHint);
                 pendingItems.Add(new ApplyMergeItem
                 {
                     Key = entry.Key,
