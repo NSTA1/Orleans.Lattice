@@ -30,16 +30,32 @@ public class ZstdLatticeCompressorTests
     }
 
     [Test]
-    public void Compress_returns_zero_for_empty_input()
+    public void Compress_of_empty_input_emits_a_decompressible_empty_frame()
     {
         using var c = new ZstdLatticeCompressor(3);
         // A Span destination is a struct - it cannot be null - so the
         // historical "null destination" guard is moot. Pin the boundary
-        // case (empty source) instead: Zstd's empty-frame still has
-        // header bytes, so the writer is non-negative.
-        var dest = new byte[c.GetMaxCompressedLength(0)];
+        // case (empty source) instead: Zstd's empty frame still carries
+        // header bytes, so the write is strictly positive, stays inside
+        // the advertised bound, and round-trips back to nothing.
+        var bound = c.GetMaxCompressedLength(0);
+        var dest = new byte[bound];
         var written = c.Compress(ReadOnlySpan<byte>.Empty, dest);
-        Assert.That(written, Is.GreaterThanOrEqualTo(0));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Is.GreaterThan(0),
+                "an empty payload still produces a framed Zstd block, not zero bytes");
+            Assert.That(written, Is.LessThanOrEqualTo(bound),
+                "GetMaxCompressedLength(0) must bound the empty frame it is sized for");
+        });
+
+        // The frame is a real frame: decompressing it yields the empty
+        // payload rather than throwing, which is what makes the boundary
+        // safe for a zero-length WAL/segment write.
+        Assert.That(
+            () => c.Decompress(dest.AsSpan(0, written), Span<byte>.Empty, 0),
+            Throws.Nothing);
     }
 
     [Test]

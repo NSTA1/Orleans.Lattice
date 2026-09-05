@@ -14,13 +14,21 @@ public class IWalStorageProviderReconcileDefaultTests
     {
         IWalStorageProvider provider = new MinimalProvider();
 
-        await provider.ReconcileAsync("tree", 0, CancellationToken.None);
+        var reconcile = provider.ReconcileAsync("tree", 0, CancellationToken.None);
 
-        // The default no-op must not invoke any other interface method;
-        // the minimal provider below throws on every other call so a
-        // regression that delegated to ReadAsync/GetHighestOffsetAsync
-        // surfaces as a test failure rather than a silent perf bug.
-        Assert.Pass();
+        // The name's two claims are both asserted rather than assumed. The
+        // no-op must not invoke any other interface method - the minimal
+        // provider below throws on every other call, so a regression that
+        // delegated to ReadAsync/GetHighestOffsetAsync surfaces as a failure
+        // - and it must complete synchronously, which is the property that
+        // makes the default free for third-party providers to inherit. A
+        // default body that started awaiting real I/O would leave the task
+        // pending here even though it would still eventually succeed.
+        Assert.That(reconcile.IsCompletedSuccessfully, Is.True,
+            "the default ReconcileAsync body returns Task.CompletedTask without awaiting, "
+            + "so it must already be complete before it is awaited");
+
+        await reconcile;
     }
 
     [Test]

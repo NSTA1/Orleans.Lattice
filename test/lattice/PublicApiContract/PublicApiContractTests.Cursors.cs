@@ -224,7 +224,14 @@ public partial class PublicApiContractTests
         var tree = Tree("pac-cursors-close-idempotent");
         // Closing a never-opened cursor id is a no-op.
         await tree.CloseCursorAsync("never-opened-cursor-id");
-        Assert.Pass();
+
+        // "No-op" is a claim about state, not just about not throwing: the
+        // unknown id must not have been registered as a live cursor by the
+        // close itself, so paging it still reports it as unknown.
+        Assert.That(
+            async () => await tree.NextKeysAsync("never-opened-cursor-id", pageSize: 10),
+            Throws.InstanceOf<InvalidOperationException>(),
+            "closing an unknown cursor id must not create one");
     }
 
     [Test]
@@ -234,6 +241,13 @@ public partial class PublicApiContractTests
         var cursor = await tree.OpenKeyCursorAsync();
         await tree.CloseCursorAsync(cursor);
         await tree.CloseCursorAsync(cursor);
-        Assert.Pass();
+
+        // The second close must leave the cursor closed rather than resurrect
+        // it; without this the test passes even if the repeat close silently
+        // re-registered the id.
+        Assert.That(
+            async () => await tree.NextKeysAsync(cursor, pageSize: 10),
+            Throws.InstanceOf<InvalidOperationException>(),
+            "a twice-closed cursor must stay closed");
     }
 }

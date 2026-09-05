@@ -81,7 +81,9 @@ public sealed class TiktokenRepoContextTokenCounterTests
         }
         else
         {
-            Assert.That(counter.CountTokens(text), Is.GreaterThanOrEqualTo(0));
+            Assert.That(counter.CountTokens(text), Is.GreaterThan(0),
+                "whitespace is not free: the BPE encodes runs of spaces and newlines as real "
+                + "tokens, so a whitespace-only chunk must still be charged against a budget.");
         }
     }
 
