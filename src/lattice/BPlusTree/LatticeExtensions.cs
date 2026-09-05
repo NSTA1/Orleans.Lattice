@@ -57,61 +57,84 @@ public static class LatticeExtensions
         var shardMap = routing.Map;
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        // Per-physical-shard buffers, in-flight tasks, chunk counters, and grain
-        // proxies. Keyed by physical shard index so sparse maps (post-split)
-        // don't allocate empty slots for non-existent shards. Proxies are cached
-        // once so repeated chunk flushes don't rebuild grain keys or re-hit
-        // the grain factory's lookup table.
-        var capacity = physicalShards.Count;
-        var buffers = new Dictionary<int, List<KeyValuePair<string, byte[]>>>(capacity);
-        var inFlight = new Dictionary<int, Task>(capacity);
-        var chunkCounters = new Dictionary<int, int>(capacity);
-        var shards = new Dictionary<int, IShardRootGrain>(capacity);
+        // One slot object per physical shard, holding everything the flush loop
+        // needs: the pending buffer, the previous flush's task, the chunk
+        // counter, and the cached grain proxy. The prior form kept those four
+        // fields in four parallel Dictionary<int, ...> maps keyed by the same
+        // physical shard index, so a single buffered entry hashed that index
+        // once and a single chunk flush hashed it six more times. The index
+        // lives in a tiny dense domain (one entry per shard root, typically
+        // 1-16), so a shard-indexed array answers the same question with an
+        // array read and the hashing disappears entirely; a hand-built map
+        // carrying a negative or pathologically large physical index still
+        // falls back to a hash map inside ShardSlots. Proxies are cached once
+        // so repeated chunk flushes don't rebuild grain keys or re-hit the
+        // grain factory's lookup table.
+        var slots = new ShardSlots<BulkLoadShardSlot>(physicalShards);
         var batchId = Guid.NewGuid().ToString("N");
         foreach (var idx in physicalShards)
         {
-            buffers[idx] = new(chunkSize);
-            inFlight[idx] = Task.CompletedTask;
-            chunkCounters[idx] = 0;
-            shards[idx] = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{idx}");
+            slots.Set(idx, new BulkLoadShardSlot(
+                new List<KeyValuePair<string, byte[]>>(chunkSize),
+                grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{idx}")));
         }
 
         await foreach (var entry in sortedEntries.WithCancellation(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var shardIdx = shardMap.Resolve(entry.Key);
-            var buffer = buffers[shardIdx];
+            var slot = slots.Get(shardIdx)!;
+            var buffer = slot.Buffer;
             buffer.Add(entry);
 
             if (buffer.Count >= chunkSize)
             {
                 // Wait for the previous flush to this shard to complete (preserves ordering).
-                await inFlight[shardIdx];
+                await slot.InFlight;
 
-                var opId = $"{batchId}-{shardIdx}-{chunkCounters[shardIdx]++}";
-                inFlight[shardIdx] = shards[shardIdx].BulkAppendAsync(opId, buffer);
-                buffers[shardIdx] = new(chunkSize);
+                var opId = $"{batchId}-{shardIdx}-{slot.ChunkCounter++}";
+                slot.InFlight = slot.Shard.BulkAppendAsync(opId, buffer);
+                slot.Buffer = new List<KeyValuePair<string, byte[]>>(chunkSize);
             }
         }
 
         // Flush remaining buffers.
-        var finalTasks = new List<Task>(capacity);
-        foreach (var idx in physicalShards)
+        var finalTasks = new List<Task>(slots.Count);
+        foreach (var (idx, slot) in slots)
         {
-            if (buffers[idx].Count > 0)
+            if (slot.Buffer.Count > 0)
             {
                 // Wait for previous in-flight for this shard, then flush.
-                await inFlight[idx];
-                var opId = $"{batchId}-{idx}-{chunkCounters[idx]++}";
-                finalTasks.Add(shards[idx].BulkAppendAsync(opId, buffers[idx]));
+                await slot.InFlight;
+                var opId = $"{batchId}-{idx}-{slot.ChunkCounter++}";
+                finalTasks.Add(slot.Shard.BulkAppendAsync(opId, slot.Buffer));
             }
             else
             {
-                finalTasks.Add(inFlight[idx]);
+                finalTasks.Add(slot.InFlight);
             }
         }
 
         await Task.WhenAll(finalTasks);
+    }
+
+    /// <summary>
+    /// The per-physical-shard state a streaming bulk load carries: the pending
+    /// chunk buffer, the previous chunk's in-flight flush, the chunk counter
+    /// that makes each flush's operation id unique and replay-safe, and the
+    /// cached shard grain proxy.
+    /// </summary>
+    private sealed class BulkLoadShardSlot(
+        List<KeyValuePair<string, byte[]>> buffer,
+        IShardRootGrain shard)
+    {
+        internal List<KeyValuePair<string, byte[]>> Buffer { get; set; } = buffer;
+
+        internal Task InFlight { get; set; } = Task.CompletedTask;
+
+        internal int ChunkCounter { get; set; }
+
+        internal IShardRootGrain Shard { get; } = shard;
     }
 
     /// <summary>

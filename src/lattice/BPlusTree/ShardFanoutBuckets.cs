@@ -151,6 +151,65 @@ internal static class ShardFanout
     }
 
     /// <summary>
+    /// Buckets the <em>input indices</em> of <paramref name="items"/> by the
+    /// physical shard owning each item's key, as projected by
+    /// <paramref name="keySelector"/>.
+    /// </summary>
+    /// <remarks>
+    /// The bucketed element is the caller's own index into
+    /// <paramref name="items"/>, which is what a fan-out needs when it must
+    /// scatter each shard's reply back into a result array in input order. It
+    /// is also the narrowest possible element: an <c>int</c> bucket costs a
+    /// quarter of a <c>(string, int)</c> bucket and, unlike a projected tuple,
+    /// captures no second reference to the key. Pass a <c>static</c> lambda for
+    /// <paramref name="keySelector"/> so the delegate is cached rather than
+    /// allocated per call.
+    /// </remarks>
+    internal static ShardFanoutBuckets<int> BucketIndices<T>(
+        IReadOnlyList<T> items,
+        Func<T, string> keySelector,
+        ShardMap shardMap,
+        IReadOnlyList<int> physicalShards,
+        int bucketCapacity)
+    {
+        if (TryGetDenseLength(physicalShards, out var length))
+        {
+            var dense = new List<int>?[length];
+            var distinct = 0;
+            for (var i = 0; i < items.Count; i++)
+            {
+                var idx = shardMap.Resolve(keySelector(items[i]));
+                var bucket = dense[idx];
+                if (bucket is null)
+                {
+                    bucket = new List<int>(bucketCapacity);
+                    dense[idx] = bucket;
+                    distinct++;
+                }
+
+                bucket.Add(i);
+            }
+
+            return new ShardFanoutBuckets<int>(dense, distinct);
+        }
+
+        var sparse = new Dictionary<int, List<int>>(physicalShards.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var idx = shardMap.Resolve(keySelector(items[i]));
+            if (!sparse.TryGetValue(idx, out var bucket))
+            {
+                bucket = new List<int>(bucketCapacity);
+                sparse[idx] = bucket;
+            }
+
+            bucket.Add(i);
+        }
+
+        return new ShardFanoutBuckets<int>(sparse);
+    }
+
+    /// <summary>
     /// Computes the shard-fair per-bucket capacity for a batch of
     /// <paramref name="itemCount"/> items spread over
     /// <paramref name="physicalShardCount"/> shards, floored at 4 and capped
@@ -158,6 +217,138 @@ internal static class ShardFanout
     /// </summary>
     internal static int BucketCapacity(int itemCount, int physicalShardCount)
         => Math.Min(Math.Max(4, itemCount / Math.Max(1, physicalShardCount)), 256);
+}
+
+/// <summary>
+/// One mutable slot per physical shard, addressed by physical shard index.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="ShardFanoutBuckets{T}"/> answers "partition this batch by owning
+/// shard" in a single pass over a materialised list. This type answers the
+/// other half of the same question: a fan-out that <em>accumulates</em> per
+/// shard - because its source is a stream with no length known up front, or
+/// because each shard's slot is richer than a single list - needs to look the
+/// slot up once per item, and would otherwise keep a
+/// <c>Dictionary&lt;int, T&gt;</c> (or several parallel ones) hashed on the
+/// same tiny dense key.
+/// </para>
+/// <para>
+/// The dense/sparse choice, and the invariant that justifies it, is exactly
+/// <see cref="ShardFanout.TryGetDenseLength"/>'s: physical shard indices form a
+/// small non-negative dense domain, so a bounds-checked array read replaces the
+/// hash. A hand-constructed map carrying a negative or pathologically large
+/// physical index falls back to the hash map, so no input regresses.
+/// </para>
+/// </remarks>
+/// <typeparam name="T">The per-shard slot type.</typeparam>
+internal sealed class ShardSlots<T>
+    where T : class
+{
+    private readonly T?[]? _dense;
+    private readonly Dictionary<int, T>? _sparse;
+    private int _denseCount;
+
+    /// <summary>
+    /// Creates an empty slot map over <paramref name="physicalShards"/>.
+    /// </summary>
+    internal ShardSlots(IReadOnlyList<int> physicalShards)
+    {
+        if (ShardFanout.TryGetDenseLength(physicalShards, out var length))
+        {
+            _dense = new T?[length];
+        }
+        else
+        {
+            _sparse = new Dictionary<int, T>(physicalShards.Count);
+        }
+    }
+
+    /// <summary>Gets the number of occupied slots.</summary>
+    public int Count => _dense is not null ? _denseCount : _sparse!.Count;
+
+    /// <summary>
+    /// Gets the slot owned by <paramref name="shardIndex"/>, or <see langword="null"/>
+    /// when it has not been filled yet.
+    /// </summary>
+    public T? Get(int shardIndex)
+    {
+        var dense = _dense;
+        return dense is not null
+            ? dense[shardIndex]
+            : _sparse!.GetValueOrDefault(shardIndex);
+    }
+
+    /// <summary>
+    /// Fills (or replaces) the slot owned by <paramref name="shardIndex"/>.
+    /// </summary>
+    public void Set(int shardIndex, T value)
+    {
+        var dense = _dense;
+        if (dense is not null)
+        {
+            if (dense[shardIndex] is null)
+                _denseCount++;
+
+            dense[shardIndex] = value;
+            return;
+        }
+
+        _sparse![shardIndex] = value;
+    }
+
+    /// <summary>Gets an enumerator over the occupied slots.</summary>
+    public Enumerator GetEnumerator() => new(_dense, _sparse);
+
+    /// <summary>Enumerates the occupied <c>(shardIndex, slot)</c> pairs.</summary>
+    public struct Enumerator
+    {
+        private readonly T?[]? _dense;
+        private Dictionary<int, T>.Enumerator _sparse;
+        private int _index;
+
+        internal Enumerator(T?[]? dense, Dictionary<int, T>? sparse)
+        {
+            _dense = dense;
+            _sparse = dense is null ? sparse!.GetEnumerator() : default;
+            _index = -1;
+            Current = default;
+        }
+
+        /// <summary>Gets the current slot and the physical shard index owning it.</summary>
+        public (int ShardIndex, T Slot) Current { get; private set; }
+
+        /// <summary>Advances to the next occupied slot.</summary>
+        public bool MoveNext()
+        {
+            var dense = _dense;
+            if (dense is not null)
+            {
+                for (var i = _index + 1; i < dense.Length; i++)
+                {
+                    var slot = dense[i];
+                    if (slot is null)
+                        continue;
+
+                    _index = i;
+                    Current = (i, slot);
+                    return true;
+                }
+
+                _index = dense.Length;
+                return false;
+            }
+
+            if (_sparse.MoveNext())
+            {
+                var pair = _sparse.Current;
+                Current = (pair.Key, pair.Value);
+                return true;
+            }
+
+            return false;
+        }
+    }
 }
 
 /// <summary>
