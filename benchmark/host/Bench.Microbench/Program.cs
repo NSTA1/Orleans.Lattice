@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -288,6 +288,13 @@ if (string.Equals(suite, "batchfolds", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> batchfolds (FanoutSnapshotAndWalBatchBenchmarks)");
     var batchFoldsSummary = BenchmarkRunner.Run<FanoutSnapshotAndWalBatchBenchmarks>(config);
     return batchFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "slotgroupfolds", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> slotgroupfolds (SlotGroupingAndBulkFanoutBenchmarks)");
+    var slotGroupFoldsSummary = BenchmarkRunner.Run<SlotGroupingAndBulkFanoutBenchmarks>(config);
+    return slotGroupFoldsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);

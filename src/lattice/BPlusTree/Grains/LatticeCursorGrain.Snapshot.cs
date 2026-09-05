@@ -77,29 +77,16 @@ internal sealed partial class LatticeCursorGrain
 
     /// <summary>
     /// Partitions a pinned shard map's slot array into per-shard ascending
-    /// owned-slot lists. The forward scan over <paramref name="slots"/>
-    /// produces each shard's list already sorted ascending, so the snapshot
+    /// owned-slot lists. Delegates to <see cref="LatticeGrain.BuildOwnedSlotMap(int[])"/>,
+    /// which answers exactly this question with an owner-indexed counting
+    /// pass instead of two hash probes per virtual slot - the slot array is
+    /// sized to the virtual shard count (4096 by default) while the owners it
+    /// holds live in the tiny physical shard domain. The forward scan
+    /// produces each shard's array already sorted ascending, so the snapshot
     /// leaf can binary-search it.
     /// </summary>
     private static Dictionary<int, int[]> BuildOwnedSlotsByShard(int[] slots)
-    {
-        var lists = new Dictionary<int, List<int>>();
-        for (var slot = 0; slot < slots.Length; slot++)
-        {
-            var shard = slots[slot];
-            if (!lists.TryGetValue(shard, out var list))
-            {
-                list = new List<int>();
-                lists[shard] = list;
-            }
-            list.Add(slot);
-        }
-
-        var result = new Dictionary<int, int[]>(lists.Count);
-        foreach (var (shard, list) in lists)
-            result[shard] = list.ToArray();
-        return result;
-    }
+        => LatticeGrain.BuildOwnedSlotMap(slots);
     /// <inheritdoc />
     public async Task OpenSnapshotAsync(string treeId, LatticeCursorSpec spec, LatticeSnapshotCoordinate coordinate)
     {
