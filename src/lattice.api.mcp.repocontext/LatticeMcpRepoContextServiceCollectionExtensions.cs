@@ -64,6 +64,16 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     /// symbolic link). When <see langword="null"/> or empty, a disabled guard is
     /// registered that permits any path (the single-repository default). Ignored
     /// unless a host registers no guard of its own first.
+    /// <para>
+    /// <b>Required by workspace mode.</b> A disabled guard admits every path, so
+    /// <c>repocontext_add_repo</c> - whose path comes from the wire - refuses at
+    /// invocation unless the effective guard is enforcing. Supply a root here, or
+    /// register an enforcing <c>RepoContextWorkspaceGuard</c> before this call,
+    /// whenever <paramref name="workspaceMode"/> is <see langword="true"/>. The
+    /// disabled guard remains the intended shape for the single-repository
+    /// <c>repocontext_bootstrap</c> surface, where the path is host configuration
+    /// rather than caller input.
+    /// </para>
     /// </param>
     /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddRepoContextTools(
@@ -74,10 +84,6 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(
-                new RepoContextToolGroup(enableWrites, workspaceMode)));
-
         // Register the workspace guard. A supplied root produces a fail-closed
         // guard that rejects any add-repo path escaping it; an absent root produces
         // a disabled guard that permits any path (the single-repository default).
@@ -86,6 +92,16 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         var roots = string.IsNullOrWhiteSpace(workspaceRoot)
             ? Array.Empty<string>()
             : new[] { workspaceRoot };
+
+        // Advertisement must match enforcement: workspace mode without a root
+        // cannot honour repocontext_add_repo's promised boundary, so the tool is
+        // not offered at all. The handler re-checks the *effective* DI-resolved
+        // guard at invocation, which is what covers a host that registered its own
+        // non-enforcing guard here despite passing a root.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(
+                new RepoContextToolGroup(enableWrites, workspaceMode, workspaceGuarded: roots.Length != 0)));
+
         services.TryAddSingleton(new RepoContextWorkspaceGuard(roots));
 
         // Wire the bootstrap-time vectorisation seam to the real embed-and-store

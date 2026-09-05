@@ -234,10 +234,13 @@ public sealed class RepoContextToolHandlerDispatchTests
     {
         // The counterpart guarantee for the derivation helper: an ordinary path
         // does yield an id, and the onboarding proceeds far enough to fail on
-        // the (absent) directory rather than on the id.
+        // the (absent) directory rather than on the id. The guard is rooted at the
+        // workspace because add_repo now refuses outright when the workspace
+        // boundary is unconfigured, so an enforcing guard is what lets the call
+        // reach the directory check at all.
         var workspace = NewWorkspace();
         var missing = Path.Combine(workspace, "not-created");
-        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([])));
+        var context = await ContextWith(s => s.AddSingleton(new RepoContextWorkspaceGuard([workspace])));
 
         Assert.That(
             () => RepoContextToolHandlers.AddRepoAsync(context, missing),

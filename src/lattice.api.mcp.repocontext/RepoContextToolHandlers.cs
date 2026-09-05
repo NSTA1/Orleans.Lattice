@@ -661,8 +661,9 @@ internal static class RepoContextToolHandlers
     /// that look binary (a NUL byte in their leading bytes) are dropped so compiled
     /// artefacts, images, and other blobs are not ingested.</param>
     /// <returns>The progress snapshot at acceptance, with the job running.</returns>
-    /// <exception cref="McpException">The path is missing, resolves outside the
-    /// workspace, does not exist, or yields no repository id (caller errors).</exception>
+    /// <exception cref="McpException">The workspace boundary is not configured, or
+    /// the path is missing, resolves outside the workspace, does not exist, or
+    /// yields no repository id (caller errors).</exception>
     public static Task<RepoIndexProgress> AddRepoAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("Path to the repository to register, under the mounted workspace root (for example '/workspace/my-repo'). Resolved against the workspace boundary; a path outside it is rejected.")]
@@ -688,6 +689,30 @@ internal static class RepoContextToolHandlers
         {
             throw new McpException(
                 "A repository id could not be derived from the path; supply the 'repoId' parameter explicitly.");
+        }
+
+        // Fail closed: repocontext_add_repo takes its path from the wire, and its
+        // whole contract is that the path resolves under the mounted workspace
+        // root. A guard with no configured root admits every path, so honouring
+        // the call would turn a caller-supplied string into an arbitrary local
+        // filesystem read whose contents are then served straight back by the
+        // retrieval tools. The inert guard is the deliberate opt-out for the
+        // single-repository bootstrap surface, where the path is host
+        // configuration rather than caller input - it is not a shape this tool
+        // can safely run under, so refuse rather than index. The registration
+        // extension also withholds the tool entirely in this case; this check is
+        // what covers a host that registered its own non-enforcing guard. It runs
+        // after argument validation so a malformed call still reports the
+        // parameter problem, and before any ingest work so nothing is read.
+        var addRepoServices = context.Services
+            ?? throw new InvalidOperationException(
+                "The MCP request has no service provider; the onboarding tool cannot resolve its collaborators.");
+        if (!addRepoServices.GetRequiredService<RepoContextWorkspaceGuard>().IsEnforcing)
+        {
+            throw new McpException(
+                "The repository-context workspace boundary is not configured, so 'repocontext_add_repo' is "
+                + "refused. The host must supply a workspace root (AddRepoContextTools(workspaceRoot: ...)) "
+                + "before repositories can be added at runtime.");
         }
 
         return StartIndexAsync(context, path, resolvedId, includeGlobs, excludeGlobs, respectGitignore, excludeBinary);

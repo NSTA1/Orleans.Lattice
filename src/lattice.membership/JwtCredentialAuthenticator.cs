@@ -296,11 +296,118 @@ public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator
             // Pin the accepted signature algorithms so the validator refuses a
             // token whose header advertises an algorithm outside the configured
             // allow-list, closing the algorithm-confusion gap (CWE-347) that an
-            // unbounded ValidAlgorithms leaves open. Empty leaves the set
-            // unrestricted (the permissive default).
+            // unbounded ValidAlgorithms leaves open.
             parameters.ValidAlgorithms = options.Algorithms.ToArray();
+        }
+        else
+        {
+            // No explicit pin. An empty ValidAlgorithms is treated as "no
+            // restriction" by the token validator, which leaves the
+            // algorithm-confusion gap open: a token whose header advertises a
+            // symmetric alg can be checked against a symmetric key the host
+            // configured for some other purpose. Rather than deny-all - which
+            // would break every host relying on the documented permissive
+            // default - constrain acceptance to the key FAMILIES the host
+            // actually pinned, so an RSA-only or EC-only deployment can never be
+            // talked into HMAC. A host that pinned a mixed key set, or whose keys
+            // yield no recognisable family, keeps the historical unrestricted
+            // behaviour and can pin explicitly through
+            // JwtAuthenticatorOptions.Algorithms or supply a verbatim
+            // JwtAuthenticatorOptions.ValidationParameters.
+            var derived = DeriveAlgorithmsFromKeys(options.SigningKeys);
+            if (derived is not null)
+            {
+                parameters.ValidAlgorithms = derived;
+            }
         }
 
         return parameters;
+    }
+
+    /// <summary>
+    /// Derives the signature-algorithm allow-list implied by the configured
+    /// signing keys: the asymmetric algorithms for an RSA-only or EC-only key set,
+    /// the HMAC algorithms for a symmetric-only one. Returns <see langword="null"/>
+    /// when the key set is empty, mixes families, or contains a key whose family
+    /// cannot be established - in which case no restriction is applied and the
+    /// caller keeps the historical permissive behaviour rather than locking out a
+    /// working host.
+    /// </summary>
+    /// <param name="keys">The host's configured issuer signing keys.</param>
+    /// <returns>The derived algorithm allow-list, or <see langword="null"/> to leave it unrestricted.</returns>
+    private static string[]? DeriveAlgorithmsFromKeys(IList<SecurityKey> keys)
+    {
+        if (keys.Count == 0)
+        {
+            return null;
+        }
+
+        var rsa = false;
+        var ecdsa = false;
+        var symmetric = false;
+        for (var i = 0; i < keys.Count; i++)
+        {
+            switch (keys[i])
+            {
+                case RsaSecurityKey:
+                case X509SecurityKey:
+                    rsa = true;
+                    break;
+                case ECDsaSecurityKey:
+                    ecdsa = true;
+                    break;
+                case SymmetricSecurityKey:
+                    symmetric = true;
+                    break;
+                default:
+                    // An unrecognised key type (a JsonWebKey, a custom key, a
+                    // subclass): the family cannot be established, so fail open to
+                    // the historical behaviour rather than lock a working host out.
+                    return null;
+            }
+        }
+
+        if (symmetric && (rsa || ecdsa))
+        {
+            // A mixed key set is exactly the shape the derivation cannot narrow
+            // safely, because both families are legitimately in use.
+            return null;
+        }
+
+        if (symmetric)
+        {
+            return
+            [
+                SecurityAlgorithms.HmacSha256,
+                SecurityAlgorithms.HmacSha384,
+                SecurityAlgorithms.HmacSha512,
+            ];
+        }
+
+        var derived = new List<string>(9);
+        if (rsa)
+        {
+            derived.AddRange(
+            [
+                SecurityAlgorithms.RsaSha256,
+                SecurityAlgorithms.RsaSha384,
+                SecurityAlgorithms.RsaSha512,
+                SecurityAlgorithms.RsaSsaPssSha256,
+                SecurityAlgorithms.RsaSsaPssSha384,
+                SecurityAlgorithms.RsaSsaPssSha512,
+            ]);
+        }
+
+        if (ecdsa)
+        {
+            derived.AddRange(
+            [
+                SecurityAlgorithms.EcdsaSha256,
+                SecurityAlgorithms.EcdsaSha384,
+                SecurityAlgorithms.EcdsaSha512,
+            ]);
+        }
+
+        return derived.ToArray();
     }
 }
