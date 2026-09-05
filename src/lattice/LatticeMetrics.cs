@@ -1136,7 +1136,8 @@ public static class LatticeMetrics
     /// the configured <see cref="LatticeOptions.MaxLeafReplayEntries"/> budget (or
     /// past <see cref="LatticeOptions.LeafProjectionRetention"/>) while the
     /// write-ahead log still covered the whole needed window. Tagged with
-    /// <see cref="TagTree"/>.
+    /// <see cref="TagTree"/> and <see cref="TagPartition"/> (the WAL partition
+    /// ordinal, bounded by <see cref="LatticeOptions.WalPartitions"/>).
     /// <para>
     /// These replays converge correctly - they are simply longer than the budget
     /// anticipated - so the condition is a capacity signal, not a fault. A tree
@@ -1147,10 +1148,18 @@ public static class LatticeMetrics
     /// longer activation. Before issue #1738 this condition was fatal and bricked
     /// the tree, so this counter also measures how often that would have fired.
     /// </para>
+    /// <para>
+    /// The counter is deliberately <b>not</b> tagged by leaf: the leaf count is
+    /// unbounded, so it cannot be a time-series dimension. It therefore measures
+    /// the rate only, and cannot on its own distinguish many leaves each
+    /// replaying once from one leaf replaying forever. That distinction is made
+    /// from the accompanying warning log, which names the leaf and its
+    /// persisted checkpoint (issue #2023).
+    /// </para>
     /// </summary>
     public static readonly Counter<long> LeafActivationOverBudgetReplays =
         Meter.CreateCounter<long>("orleans.lattice.leaf.activation_replays_over_budget", unit: "{replay}",
-            description: "Activation-time leaf replays that exceeded the configured replay budget with an intact WAL, tagged by tree.");
+            description: "Activation-time leaf replays that exceeded the configured replay budget with an intact WAL, tagged by tree and WAL partition.");
 
     /// <summary>
     /// Counter of activation-time eager cursor-publish failures, emitted by

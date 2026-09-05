@@ -424,6 +424,24 @@ the first is fatal:
 > by `WalReplayMaxRecordsPerTurn` (which yields between turns) and
 > `WalMaterialiserMaxConcurrentReplays`.
 
+> **Reading the over-budget warning (issue #2023).** The warning names the
+> tree, the **leaf grain id**, and the **WAL partition ordinal**, and it
+> states its own fault criterion: a persisted checkpoint that does not
+> advance across repeats is a fault, not a slow replay. That comparison is
+> only valid between lines naming the **same leaf and the same partition**.
+> `partition` is iterated `[0, WalPartitions)` inside *every* leaf's
+> activation, so it does not identify a leaf; before the leaf id was added,
+> consecutive lines were one-per-minute samples of arbitrary different
+> leaves, and their checkpoints appearing to repeat or move backwards was an
+> artifact of that sampling rather than a stalled replay. The log is
+> throttled to one line per (tree, leaf, partition) per minute, so a leaf
+> that is genuinely stuck reports about once a minute with an unchanging
+> checkpoint. The
+> `orleans.lattice.leaf.activation_replays_over_budget` counter is tagged
+> `tree` and `partition` only - leaf count is unbounded, so it cannot be a
+> metric dimension - which means the counter measures the rate and the log
+> makes the per-leaf call.
+
 On the healthy multi-partition path every partition's classifier
 returns `TailReplay`, and the leaf executes a two-pass replay across
 all partitions (per-partition Set / Delete absorption with
