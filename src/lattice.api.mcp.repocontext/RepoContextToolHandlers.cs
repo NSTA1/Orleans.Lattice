@@ -834,6 +834,21 @@ internal static class RepoContextToolHandlers
                 "The MCP request has no service provider; the onboarding tool cannot resolve its collaborators.");
 
         var guard = services.GetRequiredService<RepoContextWorkspaceGuard>();
+
+        // Mount-versus-git mutual exclusion, enforced at the one seam that registers
+        // a mounted path. A repository whose truth is declared to live in a git
+        // remote must never also be indexed from whatever a caller happened to mount,
+        // because the two sources would race to define the same path space and the
+        // commit anchor would stop naming what is actually served.
+        var sourceGate = services.GetService<RepoContextIndexSourceGate>();
+        if (sourceGate is not null && sourceGate.IsGitSourced(repoId))
+        {
+            throw new McpException(
+                $"The repository '{repoId}' is configured with a git source, so it cannot also be "
+                + "registered from a mounted path. Its index tracks the configured git ref and "
+                + "refreshes on its own; remove the git source configuration to mount it instead.");
+        }
+
         string resolvedRoot;
         try
         {

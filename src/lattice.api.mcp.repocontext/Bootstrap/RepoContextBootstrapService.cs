@@ -63,6 +63,7 @@ internal sealed class RepoContextBootstrapService
     private readonly TimeProvider _timeProvider;
     private readonly RepoContextIndexingOptions _options;
     private readonly ILogger<RepoContextBootstrapService> _logger;
+    private readonly IRepoContextSourceScanner? _sourceScanner;
 
     /// <summary>
     /// The per-repository cross-walk pruning cache, keyed by repository id. Each entry
@@ -105,6 +106,12 @@ internal sealed class RepoContextBootstrapService
     /// in-place content edit can be before a full sweep catches it. Must not be
     /// <see langword="null"/>.</param>
     /// <param name="logger">The logger. Must not be <see langword="null"/>.</param>
+    /// <param name="sourceScanner">An optional source strategy that supplies the
+    /// run's scan set instead of the filesystem walk. A git-ref-sourced run uses it
+    /// to enumerate the resolved commit's tree, which makes the reconcile's
+    /// add / modify / delete changeset exact rather than inferred from absence on
+    /// disk. <see langword="null"/> (the default) means every run walks the tree,
+    /// which is the mounted-workspace behaviour.</param>
     public RepoContextBootstrapService(
         IGrainFactory grainFactory,
         Serializer<FileNode> fileNodeSerializer,
@@ -116,7 +123,8 @@ internal sealed class RepoContextBootstrapService
         RepoContextWorkspaceGuard workspaceGuard,
         TimeProvider timeProvider,
         RepoContextIndexingOptions options,
-        ILogger<RepoContextBootstrapService> logger)
+        ILogger<RepoContextBootstrapService> logger,
+        IRepoContextSourceScanner? sourceScanner = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(fileNodeSerializer);
@@ -141,6 +149,7 @@ internal sealed class RepoContextBootstrapService
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
+        _sourceScanner = sourceScanner;
     }
 
     /// <summary>
@@ -212,6 +221,10 @@ internal sealed class RepoContextBootstrapService
             // full-walk interval has elapsed since the last one, so an in-place
             // content edit - which does not bump a directory's modification time and
             // is invisible to pruning - is still caught within that bound.
+            // Note the interval must be configured strictly wider than the reconcile
+            // spacing (see RepoContextIndexingOptions.PruningCanEngage) or the last
+            // clause below is true on every reconcile and pruning never engages at
+            // all: the snapshot is written each run and read for nothing.
             var nowTicks = _timeProvider.GetUtcNow().UtcTicks;
             _pruneCache.TryGetValue(repoId, out var priorPrune);
             var lastFullSweepTicks = priorPrune?.LastFullSweepTicks ?? 0;
@@ -231,7 +244,21 @@ internal sealed class RepoContextBootstrapService
             // so FilesScanned climbs during the walk instead of staying frozen at
             // zero, and reports never reorder or pile up.
             IReadOnlyList<RepoFileEntry> scanned;
-            if (progress is null)
+            var commitScan = _sourceScanner?.TryScan(request, cancellationToken);
+            if (commitScan is not null)
+            {
+                // A git-ref-sourced run: the scan set is the resolved commit's tree,
+                // read from the object database. Nothing is stat-ed, nothing is
+                // pruned, and "stored but not scanned" means "deleted in this commit"
+                // rather than "missing from the mount right now", which is what makes
+                // the delta exact and the removal non-destructive.
+                scanned = commitScan;
+                await ReportAsync(
+                    progress,
+                    new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Walking, FilesScanned = scanned.Count },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else if (progress is null)
             {
                 scanned = RepoTreeWalker.Walk(
                     repoRoot, request.IncludeGlobs, request.ExcludeGlobs,
@@ -268,9 +295,11 @@ internal sealed class RepoContextBootstrapService
                 forceFull ? nowTicks : lastFullSweepTicks);
 
             _logger.LogInformation(
-                "Repo {RepoId}: walk complete - {Scanned} files in {Elapsed} ms ({Mode}; pruned {PrunedDirs} dir(s), {PrunedFiles} file(s)).",
+                "Repo {RepoId}: scan complete - {Scanned} files in {Elapsed} ms ({Mode}; pruned {PrunedDirs} dir(s), {PrunedFiles} file(s)).",
                 repoId, scanned.Count, stopwatch.ElapsedMilliseconds,
-                forceFull ? "full sweep" : "pruned",
+                commitScan is not null
+                    ? "commit " + request.CommitSha
+                    : forceFull ? "full sweep" : "pruned",
                 pruning.PrunedDirectoryCount, pruning.PrunedFileCount);
 
             phase = RepoIndexPhase.Reconciling;
@@ -421,11 +450,28 @@ internal sealed class RepoContextBootstrapService
                 crossReferencedPaths.UnionWith(symbolProcessedPaths);
 
                 await ApplyPlanAsync(
-                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, crossReferencedPaths, contentResult.TokenCountsByPath, storedMeta, progress, cancellationToken)
+                    tree, repoId, plan, backfill, declaredEncoded, symbolProcessedPaths, contentProcessedPaths, crossReferencedPaths, contentResult.TokenCountsByPath, storedMeta, request.CommitSha, progress, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
             {
+                // A git-ref-sourced generation stamps its commit even when the plan is
+                // a no-op, so the anchor an operator (and every spoke) reads always
+                // names the revision actually served - a commit that only touched
+                // filtered-out paths still moves the anchor forward.
+                if (!string.IsNullOrWhiteSpace(request.CommitSha))
+                {
+                    await tree.SetAsync(
+                        RepoContextKeys.Repo(repoId),
+                        BuildRepoNode(
+                            repoId,
+                            plan.LiveFileCount,
+                            DateTimeOffset.UtcNow.ToString("O"),
+                            request.CommitSha,
+                            HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 await ReportAsync(
                     progress,
                     new RepoIndexProgressUpdate { FilesUnchanged = unchangedCount },
@@ -945,6 +991,7 @@ internal sealed class RepoContextBootstrapService
         IReadOnlySet<string> crossReferencedPaths,
         IReadOnlyDictionary<string, int> tokenCountsByPath,
         IReadOnlyDictionary<string, StoredFileMeta> storedMeta,
+        string? commitSha,
         IRepoIndexProgressSink? progress,
         CancellationToken cancellationToken)
     {
@@ -959,7 +1006,7 @@ internal sealed class RepoContextBootstrapService
         // report it without a per-call subtree scan.
         clock = HybridLogicalClock.Tick(clock);
         upserts.Add(new KeyValuePair<string, byte[]>(
-            RepoContextKeys.Repo(repoId), BuildRepoNode(repoId, plan.LiveFileCount, ingestToken, clock)));
+            RepoContextKeys.Repo(repoId), BuildRepoNode(repoId, plan.LiveFileCount, ingestToken, commitSha, clock)));
 
         foreach (var entry in plan.Added)
         {
@@ -1245,13 +1292,20 @@ internal sealed class RepoContextBootstrapService
         }
     }
 
-    private byte[] BuildRepoNode(string repoId, int liveFileCount, string ingestToken, HybridLogicalClock clock)
+    private byte[] BuildRepoNode(
+        string repoId, int liveFileCount, string ingestToken, string? commitSha, HybridLogicalClock clock)
     {
         var node = new RepoNode
         {
             RepoId = repoId,
             LastIngested = RepoContextValues.Lww(ingestToken, clock),
             FileCount = RepoContextValues.Lww(liveFileCount, clock),
+
+            // Left unset for a mounted-workspace run: a mount has no verifiable
+            // revision, and writing a placeholder would make the anchor a lie.
+            IndexedCommit = string.IsNullOrWhiteSpace(commitSha)
+                ? new BoundedRegister()
+                : RepoContextValues.Lww(commitSha, clock),
         };
         return _repoNodeSerializer.SerializeToArray(node);
     }

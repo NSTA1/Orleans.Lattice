@@ -81,8 +81,36 @@ internal sealed class RepoContextIndexingOptions
     /// prune cache and stat every file, so an in-place content edit (which does not bump a
     /// directory's modification time and is therefore invisible to pruning) is picked up
     /// within this bound. The first walk after a process start is always a full one.
+    /// <para>
+    /// <b>This must exceed <see cref="ReconcileInterval"/> plus
+    /// <see cref="ReconcileIntervalJitter"/> for pruning to engage at all.</b> A reconcile
+    /// forces a full sweep when at least this long has elapsed since the last one, so a
+    /// value at or below the maximum spacing between two reconciles makes every reconcile
+    /// a full sweep and leaves <see cref="RepoWalkPruning"/> inert - the prune snapshot is
+    /// written on every run and never acted on. The default is deliberately several
+    /// reconciles wide so roughly three in four reconciles prune, which is the whole point
+    /// of maintaining the snapshot.
+    /// </para>
+    /// <para>
+    /// Because this bound is only reached on the first reconcile at or after it elapses,
+    /// the true worst-case detection latency for a pure in-place content edit is this
+    /// interval plus up to one further reconcile spacing.
+    /// </para>
     /// </summary>
-    public TimeSpan FullWalkInterval { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeSpan FullWalkInterval { get; init; } = TimeSpan.FromMinutes(60);
+
+    /// <summary>
+    /// Whether the directory-modification-time prune cache can ever be acted on under
+    /// this configuration. A reconcile prunes only while less than
+    /// <see cref="FullWalkInterval"/> has elapsed since the last full sweep, and two
+    /// reconciles are never closer together than <see cref="ReconcileInterval"/> (plus up
+    /// to <see cref="ReconcileIntervalJitter"/>). So unless the full-walk interval is
+    /// strictly wider than that maximum spacing, every reconcile forces a full sweep and
+    /// <see cref="RepoWalkPruning"/> is inert: its snapshot is written on every run and
+    /// never read for the benefit it exists to provide.
+    /// </summary>
+    public bool PruningCanEngage =>
+        FullWalkInterval > ReconcileInterval + ReconcileIntervalJitter;
 
     /// <summary>
     /// How long a warm decoded-vector candidate set is trusted in the

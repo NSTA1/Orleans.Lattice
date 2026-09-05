@@ -939,6 +939,7 @@ internal sealed class RepoContextStore
     {
         string? lastIngested = null;
         long? fileCount = null;
+        string? indexedCommit = null;
 
         var markerBytes = await structural
             .GetAsync(RepoContextKeys.Repo(repoId), cancellationToken)
@@ -948,6 +949,7 @@ internal sealed class RepoContextStore
             var node = _serializer.Deserialize<RepoNode>(markerBytes);
             lastIngested = RepoContextValues.ReadString(node.LastIngested);
             fileCount = RepoContextValues.ReadInt64(node.FileCount);
+            indexedCommit = RepoContextValues.ReadString(node.IndexedCommit);
         }
 
         var embeddedVectorCount = await ReadEmbeddedVectorCountAsync(repoId, cancellationToken)
@@ -960,6 +962,7 @@ internal sealed class RepoContextStore
             FileCount = fileCount,
             EmbeddedVectorCount = embeddedVectorCount.Count,
             EmbeddedVectorCountPending = embeddedVectorCount.Pending,
+            IndexedCommit = indexedCommit,
         };
     }
 

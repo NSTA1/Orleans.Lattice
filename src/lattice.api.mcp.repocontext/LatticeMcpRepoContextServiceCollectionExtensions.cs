@@ -84,14 +84,32 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // Resolve the git-source configuration once, before the workspace guard is
+        // built: a git-sourced repository's staging work tree lives outside the
+        // mounted workspace, so the guard must admit the staging root for the
+        // reconcile path (repocontext_changed) to reach a staged tree at all. The
+        // registry is empty unless the operator opted the feature in, in which case
+        // nothing below changes behaviour and the mount remains the only source.
+        var gitRegistry = RepoContextGitSourceRegistry.FromEnvironment();
+
         // Register the workspace guard. A supplied root produces a fail-closed
         // guard that rejects any add-repo path escaping it; an absent root produces
         // a disabled guard that permits any path (the single-repository default).
         // TryAdd means a host (or test harness) that registered its own guard
         // first wins, so the boundary can always be overridden for testing.
-        var roots = string.IsNullOrWhiteSpace(workspaceRoot)
-            ? Array.Empty<string>()
-            : new[] { workspaceRoot };
+        var roots = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(workspaceRoot))
+        {
+            roots.Add(workspaceRoot);
+
+            // Only widen the boundary when it is actually a boundary: with no
+            // workspace root the guard is disabled and permits any path anyway, so
+            // adding the staging root there would be dead security configuration.
+            if (!gitRegistry.IsEmpty)
+            {
+                roots.Add(gitRegistry.StagingRoot);
+            }
+        }
 
         // Advertisement must match enforcement: workspace mode without a root
         // cannot honour repocontext_add_repo's promised boundary, so the tool is
@@ -100,9 +118,29 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         // non-enforcing guard here despite passing a root.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILatticeApiMcpToolGroup>(
-                new RepoContextToolGroup(enableWrites, workspaceMode, workspaceGuarded: roots.Length != 0)));
+                new RepoContextToolGroup(enableWrites, workspaceMode, workspaceGuarded: roots.Count != 0)));
 
-        services.TryAddSingleton(new RepoContextWorkspaceGuard(roots));
+        services.TryAddSingleton(new RepoContextWorkspaceGuard(roots.ToArray()));
+
+        // The source-strategy seam. The mounted workspace walk is the default and is
+        // always registered; the git source is inert unless the operator configured
+        // at least one repository, and is gated to the Hub role by the gate itself.
+        services.TryAddSingleton(gitRegistry);
+        services.TryAddSingleton<IRepoContextGitCredentialProvider>(
+            _ => RepoContextEnvironmentGitCredentialProvider.FromEnvironment(gitRegistry));
+        services.TryAddSingleton<IRepoContextGitFetcher, LibGit2SharpRepoContextGitFetcher>();
+        services.TryAddSingleton<MountedWorkspaceSource>();
+        services.TryAddSingleton<GitRemoteSource>();
+        services.TryAddSingleton<RepoContextIndexSourceGate>();
+        services.TryAddSingleton<IRepoContextSourceScanner, RepoContextCommitSourceScanner>();
+
+        if (!gitRegistry.IsEmpty)
+        {
+            // A git source is declared in configuration, not registered by a tool
+            // call, so something has to arm its refresh loop. Registered only when
+            // the feature is on, so a default deployment gains no background service.
+            services.AddHostedService<RepoContextGitSourceArmingService>();
+        }
 
         // Wire the bootstrap-time vectorisation seam to the real embed-and-store
         // ingestor (replacing the deferred no-op): a bootstrap run now embeds the

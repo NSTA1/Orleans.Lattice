@@ -39,6 +39,7 @@ internal sealed class RepoContextSelfIndexGrain(
     TimeProvider timeProvider,
     RepoContextIndexingOptions options,
     RepoContextAnnIndexScheduler annIndexScheduler,
+    RepoContextIndexSourceGate sourceGate,
     ILogger<RepoContextSelfIndexGrain> logger,
     [PersistentState("repoContextSelfIndex", global::Orleans.Lattice.LatticeOptions.StorageProviderName)]
     IPersistentState<RepoContextSelfIndexState> state) : IRepoContextSelfIndexGrain, IRemindable, IGrainBase
@@ -92,8 +93,11 @@ internal sealed class RepoContextSelfIndexGrain(
         // snapshot. This is the single onboarding entry point: the runner funnels
         // every run - onboarding, resume, and self-index recovery - through one
         // credential-stamped, single-flight background pass, so this call is exactly
-        // the run the self-index scan would otherwise re-drive.
-        var progress = await runner.StartIndexAsync(request).ConfigureAwait(true);
+        // the run the self-index scan would otherwise re-drive. The source strategy
+        // decides what content that pass sees: the mounted tree as configured, or -
+        // for a git-sourced repository - the staged commit the configured ref
+        // resolves to.
+        var progress = await StartFromSourceAsync(request).ConfigureAwait(true);
 
         // Arm the approximate index's durable build coordinator for this repository
         // as soon as it has vectors worth indexing. The startup sweep would pick it
@@ -235,8 +239,7 @@ internal sealed class RepoContextSelfIndexGrain(
         // polls for the prior run rather than recursing.
         if (!continuing && nowTicks >= state.State.NextReconcileAfterTicks)
         {
-            var triggered = await grainFactory
-                .GetGrain<IRepoIndexJobGrain>(RepoId).EnsureIndexedAsync().ConfigureAwait(true);
+            var triggered = await TriggerReconcileAsync(cancellationToken).ConfigureAwait(true);
             if (triggered)
             {
                 logger.LogInformation(
@@ -331,9 +334,91 @@ internal sealed class RepoContextSelfIndexGrain(
     private void ScheduleNextReconcile(long nowTicks)
     {
         // Space the next content reconcile by the base interval plus a random jitter
-        // so many repositories' reconciles stay desynchronised in steady state.
+        // so many repositories' reconciles stay desynchronised in steady state. A
+        // git-sourced repository uses its own refresh cadence: its reconcile is an
+        // outbound fetch against a git host, so it is paced by the source's
+        // configured interval rather than the shared mounted-walk interval.
+        var interval = sourceGate.RefreshIntervalFor(RepoId, options.ReconcileInterval);
         var jitterTicks = (long)(Random.Shared.NextDouble() * options.ReconcileIntervalJitter.Ticks);
-        state.State.NextReconcileAfterTicks = nowTicks + options.ReconcileInterval.Ticks + jitterTicks;
+        state.State.NextReconcileAfterTicks = nowTicks + interval.Ticks + jitterTicks;
+    }
+
+    /// <summary>
+    /// Re-drives one idempotent reconcile through whichever source strategy owns the
+    /// repository. A mounted repository re-drives from its persisted request exactly
+    /// as before; a git-sourced repository first re-fetches its configured ref, and
+    /// only starts a run when the ref resolved to a commit it has not already
+    /// indexed. A fetch that fails, or a ref that has not moved, triggers nothing, so
+    /// the last-good index keeps serving untouched.
+    /// </summary>
+    private async Task<bool> TriggerReconcileAsync(CancellationToken cancellationToken)
+    {
+        var job = grainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
+        if (!sourceGate.IsGitSourced(RepoId))
+        {
+            return await job.EnsureIndexedAsync().ConfigureAwait(true);
+        }
+
+        var persisted = await job.GetRequestAsync().ConfigureAwait(true);
+        var seed = persisted ?? sourceGate.SeedRequestFor(RepoId);
+        if (seed is null)
+        {
+            return false;
+        }
+
+        var preparation = await PrepareAsync(job, seed, cancellationToken).ConfigureAwait(true);
+        if (preparation.Outcome != RepoContextSourceOutcome.Proceed)
+        {
+            return false;
+        }
+
+        await runner.StartIndexAsync(preparation.Request!).ConfigureAwait(true);
+        return true;
+    }
+
+    /// <summary>
+    /// Starts an index pass for <paramref name="request"/> through its source
+    /// strategy. A preparation that is up to date or fails closed starts nothing and
+    /// returns the repository's current snapshot, so the last-good index keeps
+    /// serving and the caller sees the truth rather than a fabricated success.
+    /// </summary>
+    private async Task<RepoIndexProgress> StartFromSourceAsync(RepoIndexJobRequest request)
+    {
+        var job = grainFactory.GetGrain<IRepoIndexJobGrain>(RepoId);
+        var preparation = await PrepareAsync(job, request, CancellationToken.None).ConfigureAwait(true);
+        if (preparation.Outcome == RepoContextSourceOutcome.Proceed)
+        {
+            return await runner.StartIndexAsync(preparation.Request!).ConfigureAwait(true);
+        }
+
+        logger.LogInformation(
+            "Repo {RepoId}: source preparation returned {Outcome} ({Reason}); no index pass was started.",
+            RepoId, preparation.Outcome, preparation.FailureReason ?? preparation.CommitSha ?? "none");
+        return await job.GetProgressAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Asks the source gate to prepare content for the next generation, supplying the
+    /// commit SHA of the last generation that actually completed. Reading the anchor
+    /// from a completed run - rather than from a separate persisted counter - is what
+    /// makes a partial or failed run safe to repeat: its commit is never treated as
+    /// indexed, so the next refresh re-stages and re-applies it.
+    /// </summary>
+    private async Task<RepoContextSourcePreparation> PrepareAsync(
+        IRepoIndexJobGrain job, RepoIndexJobRequest request, CancellationToken cancellationToken)
+    {
+        string? lastIndexedCommitSha = null;
+        if (sourceGate.IsGitSourced(RepoId))
+        {
+            var progress = await job.GetProgressAsync().ConfigureAwait(true);
+            if (progress.Status == RepoIndexStatus.Completed)
+            {
+                var persisted = await job.GetRequestAsync().ConfigureAwait(true);
+                lastIndexedCommitSha = persisted?.CommitSha;
+            }
+        }
+
+        return await sourceGate.PrepareAsync(request, lastIndexedCommitSha, cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>

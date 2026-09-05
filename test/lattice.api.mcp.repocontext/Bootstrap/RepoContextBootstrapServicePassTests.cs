@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Bootstrap;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class RepoContextBootstrapServicePassTests
+public sealed partial class RepoContextBootstrapServicePassTests
 {
     private const string RepoId = "acme";
 
@@ -414,7 +414,7 @@ public sealed class RepoContextBootstrapServicePassTests
         private readonly Serializer<FileNode> _fileNodes =
             SerializerServices.GetRequiredService<Serializer<FileNode>>();
 
-        internal BootstrapHarness()
+        internal BootstrapHarness(TimeProvider? timeProvider = null)
         {
             RepoRoot = Path.Combine(Path.GetTempPath(), "lattice-rcbootstrap-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(RepoRoot);
@@ -494,7 +494,7 @@ public sealed class RepoContextBootstrapServicePassTests
                 // No allowed roots, so the guard is inert and the throwaway tree
                 // resolves unchanged; the guard has its own tests.
                 new RepoContextWorkspaceGuard([]),
-                TimeProvider.System,
+                timeProvider ?? TimeProvider.System,
                 new RepoContextIndexingOptions(),
                 NullLogger<RepoContextBootstrapService>.Instance);
         }

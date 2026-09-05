@@ -61,4 +61,13 @@ internal sealed class RepoContextBootstrapRequest
     /// an explicit onboarding or re-bootstrap always runs a full, exact walk.
     /// </summary>
     public bool AllowPrune { get; init; }
+
+    /// <summary>
+    /// The resolved commit SHA this run indexes, when the repository is git-sourced.
+    /// It switches the run's scan set from a filesystem walk to the commit's tree
+    /// (see <see cref="IRepoContextSourceScanner"/>) and is stamped onto the
+    /// repository node so the generation is reproducible. <see langword="null"/> for
+    /// a mounted-workspace run, which walks the tree exactly as before.
+    /// </summary>
+    public string? CommitSha { get; init; }
 }

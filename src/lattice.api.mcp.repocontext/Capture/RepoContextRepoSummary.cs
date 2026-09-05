@@ -58,4 +58,13 @@ public sealed record RepoContextRepoSummary
     /// exact figure.
     /// </summary>
     public bool EmbeddedVectorCountPending { get; init; }
+
+    /// <summary>
+    /// The commit SHA the repository's index generation was built from, or
+    /// <see langword="null"/> when the repository is indexed from a mounted
+    /// workspace (which has no commit anchor). For a git-ref-sourced repository this
+    /// is the verifiable answer to "which revision is this index serving", and it is
+    /// the same value a spoke reports for its replicated copy.
+    /// </summary>
+    public string? IndexedCommit { get; init; }
 }
