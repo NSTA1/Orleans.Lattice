@@ -31,10 +31,16 @@ public sealed class GrainIndexStartupValidatorTests
                 static cfg => cfg.WithName("users").Include(x => x.Age))
             .AddGrainIndex<ITestGuidKeyedGrain, TestGrainState>(
                 static cfg => cfg.WithName("orders").Include(x => x.Country)));
+        var optionsMonitor = new RecordingOptionsMonitor(
+            provider.GetRequiredService<IOptionsMonitor<GrainIndexOptions>>());
 
-        await ValidatorFrom(provider).StartAsync(CancellationToken.None);
+        await new GrainIndexStartupValidator(
+            provider.GetRequiredService<IOptions<GrainIndexDeclarationOptions>>(),
+            optionsMonitor)
+            .StartAsync(CancellationToken.None);
 
-        Assert.Pass("Starting a host with valid declarations must not fail.");
+        Assert.That(optionsMonitor.RequestedNames, Is.EqualTo(new[] { "users", "orders" }),
+            "Starting a host with valid declarations must resolve every named index option.");
     }
 
     [Test]
@@ -76,12 +82,21 @@ public sealed class GrainIndexStartupValidatorTests
         services.AddOptions();
         await using var bare = services.BuildServiceProvider();
 
-        await new GrainIndexStartupValidator(
+        var optionsMonitor = new RecordingOptionsMonitor(
+            bare.GetRequiredService<IOptionsMonitor<GrainIndexOptions>>());
+        var task = new GrainIndexStartupValidator(
             bare.GetRequiredService<IOptions<GrainIndexDeclarationOptions>>(),
-            bare.GetRequiredService<IOptionsMonitor<GrainIndexOptions>>())
+            optionsMonitor)
             .StartAsync(CancellationToken.None);
 
-        Assert.Pass("A silo that declares no grain index must still start.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(task.IsCompletedSuccessfully, Is.True,
+                "With no declared indexes, startup should complete without asynchronous work.");
+            Assert.That(optionsMonitor.RequestedNames, Is.Empty,
+                "A silo that declares no grain index must not resolve any named index options.");
+        });
+        await task;
     }
 
     [Test]
@@ -91,8 +106,28 @@ public sealed class GrainIndexStartupValidatorTests
             builder.AddGrainIndex<ITestStringKeyedGrain, TestGrainState>(
                 static cfg => cfg.WithName("users").Include(x => x.Age)));
 
-        await ValidatorFrom(provider).StopAsync(CancellationToken.None);
+        var task = ValidatorFrom(provider).StopAsync(CancellationToken.None);
 
-        Assert.Pass("The validator holds no resources, so stopping it does nothing.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "The validator holds no resources, so stopping it should complete synchronously.");
+        await task;
+    }
+
+    private sealed class RecordingOptionsMonitor(IOptionsMonitor<GrainIndexOptions> inner)
+        : IOptionsMonitor<GrainIndexOptions>
+    {
+        private readonly List<string> _requestedNames = [];
+
+        public GrainIndexOptions CurrentValue => inner.CurrentValue;
+
+        public IReadOnlyList<string> RequestedNames => _requestedNames;
+
+        public GrainIndexOptions Get(string? name)
+        {
+            _requestedNames.Add(name ?? Options.DefaultName);
+            return inner.Get(name);
+        }
+
+        public IDisposable? OnChange(Action<GrainIndexOptions, string?> listener) => inner.OnChange(listener);
     }
 }

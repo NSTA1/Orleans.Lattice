@@ -95,11 +95,17 @@ public partial class PublicReplicationApiContractTests
                 treeId,
                 sourceClusterId: PublicReplicationApiClusterFixture.SiteAClusterId);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+        catch (InvalidOperationException ex)
         {
             // The bootstrap coordinator's idempotency contract may
             // reject a re-issued request; the surface claim is the
             // call-shape, not the always-honour outcome.
+            //
+            // Only that documented rejection is tolerated. A TimeoutException
+            // is deliberately NOT caught here: NUnit scores an inconclusive
+            // result as neither passed nor failed, so swallowing a wedged
+            // coordinator would leave this test silently green while proving
+            // nothing at all.
             Assert.Inconclusive($"Coordinator rejected the request: {ex.Message}");
             return;
         }
@@ -143,11 +149,21 @@ public partial class PublicReplicationApiContractTests
         var report = await seeder.SeedFromTreeAsync(treeId);
 
         Assert.That(report.TreeName, Is.EqualTo(treeId));
+
         // SeedApplied may be true (replicated tree) or false (no
-        // ReplicatedTrees opt-in for arbitrary tree ids); either
-        // way EntriesScanned >= 0 and Frontier follows SeedApplied.
-        Assert.That(report.EntriesScanned, Is.GreaterThanOrEqualTo(0));
-        if (!report.SeedApplied)
+        // ReplicatedTrees opt-in for arbitrary tree ids). Assert the
+        // documented relationship on BOTH outcomes rather than a bound no
+        // value of a long count can violate: a seed that applied walked the
+        // leaves and pinned a frontier, and one that did not short-circuits
+        // before any walk.
+        if (report.SeedApplied)
+        {
+            Assert.That(report.EntriesScanned, Is.GreaterThan(0),
+                "a seed that applied walked the leaves, so it must have scanned the entry this test wrote");
+            Assert.That(report.Frontier, Is.Not.Null,
+                "a seed that applied pins the frontier it computed");
+        }
+        else
         {
             Assert.That(report.Frontier, Is.Null);
             Assert.That(report.EntriesScanned, Is.Zero);

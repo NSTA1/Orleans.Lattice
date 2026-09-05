@@ -18,7 +18,10 @@ public class NoOpReplogSinkTests
     public async Task WriteAsync_accepts_empty_tree_id()
     {
         IReplogSink sink = new NoOpReplogSink();
-        await sink.WriteAsync(string.Empty, CancellationToken.None);
-        Assert.Pass();
+        var task = sink.WriteAsync(string.Empty, CancellationToken.None);
+
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "The no-op sink should accept an empty tree id without asynchronous work.");
+        await task;
     }
 }

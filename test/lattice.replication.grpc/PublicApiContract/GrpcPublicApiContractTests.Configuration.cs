@@ -68,9 +68,10 @@ public partial class GrpcPublicApiContractTests
         });
 
         // Sanity: the callback the fixture installed is the same one that
-        // gets dispatched on the first channel construction.
+        // gets dispatched on the first channel construction, and resolving
+        // the transport alone must not construct that channel eagerly.
         _ = sender.GetRequiredService<IReplicationTransport>();
-        Assert.That(callbackInvocations, Is.GreaterThanOrEqualTo(0),
-            "Callback dispatch is lazy until the first SendAsync to a peer; this assertion just guards against an early dispatch regression.");
+        Assert.That(callbackInvocations, Is.Zero,
+            "Callback dispatch is lazy until the first SendAsync to a peer.");
     }
 }

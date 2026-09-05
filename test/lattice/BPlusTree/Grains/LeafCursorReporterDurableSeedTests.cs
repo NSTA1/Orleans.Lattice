@@ -80,12 +80,16 @@ public sealed class LeafCursorReporterDurableSeedTests
     {
         // Pre-WAL host / bare IServiceProvider: there is no durable store for
         // the block pin to land in, so the birth path must simply continue.
-        var reporter = new LeafCursorReporter(Substitute.For<IWalCursorRegistry>());
+        var registry = Substitute.For<IWalCursorRegistry>();
+        var reporter = new LeafCursorReporter(registry);
 
-        await reporter.SeedDurableMaterialiserBlockAsync(
+        var task = reporter.SeedDurableMaterialiserBlockAsync(
             Tree, Consumer, HybridLogicalClock.Zero, CancellationToken.None);
 
-        Assert.Pass("A reporter with no grain factory must not fault the leaf's birth path.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "A reporter with no grain factory should no-op synchronously on the leaf's birth path.");
+        await task;
+        Assert.That(registry.ReceivedCalls(), Is.Empty);
     }
 
     [Test]
@@ -201,12 +205,16 @@ public sealed class LeafCursorReporterDurableSeedTests
     [Test]
     public async Task Seed_many_without_a_grain_factory_is_a_noop()
     {
-        var reporter = new LeafCursorReporter(Substitute.For<IWalCursorRegistry>());
+        var registry = Substitute.For<IWalCursorRegistry>();
+        var reporter = new LeafCursorReporter(registry);
 
-        await reporter.SeedDurableMaterialiserBlockManyAsync(
+        var task = reporter.SeedDurableMaterialiserBlockManyAsync(
             Tree, Reports((Consumer, HybridLogicalClock.Zero)), CancellationToken.None);
 
-        Assert.Pass("A reporter with no durable backing must no-op rather than fault.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "A reporter with no durable backing should no-op synchronously.");
+        await task;
+        Assert.That(registry.ReceivedCalls(), Is.Empty);
     }
 
     [Test]
@@ -233,12 +241,16 @@ public sealed class LeafCursorReporterDurableSeedTests
     [Test]
     public async Task Flush_without_a_grain_factory_is_a_noop()
     {
-        var reporter = new LeafCursorReporter(Substitute.For<IWalCursorRegistry>());
+        var registry = Substitute.For<IWalCursorRegistry>();
+        var reporter = new LeafCursorReporter(registry);
 
-        await reporter.FlushDurableMaterialiserFrontierAsync(
+        var task = reporter.FlushDurableMaterialiserFrontierAsync(
             Tree, Reports((Consumer, Hlc(10))), CancellationToken.None);
 
-        Assert.Pass("A reporter with no durable backing must no-op rather than fault.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "A reporter with no durable backing should no-op synchronously.");
+        await task;
+        Assert.That(registry.ReceivedCalls(), Is.Empty);
     }
 
     [Test]

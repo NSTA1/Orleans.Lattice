@@ -42,7 +42,16 @@ public partial class PublicReplicationApiContractTests
         {
             Assert.That(report.TreeName, Is.EqualTo(treeId));
             Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1));
-            Assert.That(report.EntriesTrimmed, Is.GreaterThanOrEqualTo(0));
+            // `EntriesTrimmed >= 0` could never fail: the field is a count.
+            // The falsifiable claim on this path is the documented one - with
+            // no reported consumer cursor and no retention ceiling there is no
+            // trim floor, so the pass must find nothing eligible.
+            Assert.That(report.TtlCeilingHlc, Is.Null,
+                "the fixture leaves WalRetention unset, so no TTL ceiling can create a trim floor");
+            Assert.That(report.MinCursor, Is.Null,
+                "a data-capable leaf seeds a Zero materialiser pin at birth, holding the trim floor at null");
+            Assert.That(report.EntriesTrimmed, Is.Zero,
+                "a pass with no trim floor must not identify any entry as eligible");
         });
     }
 

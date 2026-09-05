@@ -101,11 +101,13 @@ public sealed class SinkGuardTests
     public async Task StartAsync_single_cluster_no_op_seam_with_in_cluster_sink_passes()
     {
         var sink = new InClusterLatticeBackupSink(Substitute.For<IGrainFactory>());
-        var validator = CreateValidator(sink, new NoReplicatedTreeMembership());
+        var probe = new FakeSharingProbe(Report(BackupSinkSharingStatus.NotShared, "region-b"));
+        var validator = CreateValidator(sink, new NoReplicatedTreeMembership(), probe);
 
         await validator.StartAsync(CancellationToken.None);
 
-        Assert.Pass("A single-cluster deployment (nothing replicated) accepts the in-cluster sink.");
+        Assert.That(probe.Calls, Is.Zero,
+            "A single-cluster deployment with nothing replicated must accept the in-cluster sink without probing peers.");
     }
 
     [Test]
@@ -193,9 +195,11 @@ public sealed class SinkGuardTests
     {
         var validator = CreateValidator(Substitute.For<ILatticeBackupSink>(), new NoReplicatedTreeMembership());
 
-        await validator.StopAsync(CancellationToken.None);
+        var task = validator.StopAsync(CancellationToken.None);
 
-        Assert.Pass("The guard holds no resources to release.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "The guard holds no resources, so StopAsync should complete synchronously.");
+        await task;
     }
 
     [Test]

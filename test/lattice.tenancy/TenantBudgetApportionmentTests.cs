@@ -121,9 +121,11 @@ public sealed class TenantBudgetApportionmentTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(low, Is.GreaterThanOrEqualTo(0));
+            Assert.That(low, Is.EqualTo(500),
+                "reserve fractions below zero clamp to zero, leaving a pure demand-proportional split");
             Assert.That(low, Is.LessThanOrEqualTo(1000));
-            Assert.That(high, Is.GreaterThanOrEqualTo(0));
+            Assert.That(high, Is.EqualTo(500),
+                "reserve fractions above one clamp to one, leaving the static-even reserve split");
             Assert.That(high, Is.LessThanOrEqualTo(1000));
         });
     }

@@ -254,10 +254,15 @@ public sealed class RepoIndexRunnerTests
     public async Task CancelAndWaitAsync_returns_immediately_when_no_run_is_in_flight()
     {
         using var harness = new RepoIndexRunnerHarness();
+        var runner = harness.CreateRunner();
 
-        await harness.CreateRunner().CancelAndWaitAsync(RepoIndexRunnerHarness.RepoId);
+        var task = runner.CancelAndWaitAsync(RepoIndexRunnerHarness.RepoId);
 
-        Assert.Pass("A run that already removed itself has passed its last write, so there is nothing to drain.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "With no run in flight, CancelAndWaitAsync should return synchronously.");
+        await task;
+        Assert.That(runner.Cancel(RepoIndexRunnerHarness.RepoId), Is.False,
+            "No live run should be registered after a no-op drain.");
     }
 
     [Test]
@@ -330,7 +335,8 @@ public sealed class RepoIndexRunnerTests
         harness.Release();
         await runner.CancelAndWaitAsync(RepoIndexRunnerHarness.RepoId);
 
-        Assert.Pass("The drain returned rather than propagating the lost-race disposal.");
+        Assert.That(runner.Cancel(RepoIndexRunnerHarness.RepoId), Is.False,
+            "The drain must wait until the lost-race run has deregistered.");
     }
 
     /// <summary>

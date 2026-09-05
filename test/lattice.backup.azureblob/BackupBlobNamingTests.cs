@@ -225,7 +225,9 @@ public class BackupBlobNamingTests
         }
         catch (ArgumentException)
         {
-            Assert.Pass("The hostile id was rejected before it could be used to address a blob.");
+            Assert.That(manifestName, Is.Null,
+                "The hostile id must be rejected before it can be used to address a blob.");
+            return;
         }
 
         var resolved = new UriBuilder("https://account.blob.core.windows.net/container/" + manifestName).Uri;
@@ -269,14 +271,15 @@ public class BackupBlobNamingTests
     [TestCaseSource(nameof(AlternativeDotSpellings))]
     public void An_alternative_dot_spelling_still_resolves_beneath_its_prefix(string candidate)
     {
-        string manifestName;
+        string? manifestName = null;
         try
         {
             manifestName = BackupBlobNaming.ManifestBlobName(candidate);
         }
         catch (ArgumentException)
         {
-            Assert.Pass("The id was rejected before it could be used to address a blob.");
+            Assert.That(manifestName, Is.Null,
+                "A rejected id must not produce a blob name.");
             return;
         }
 

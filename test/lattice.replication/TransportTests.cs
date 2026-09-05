@@ -92,8 +92,13 @@ public class NoOpReplicationTransportTests
     public async Task SendAsync_accepts_empty_payload()
     {
         var transport = new NoOpReplicationTransport();
-        await transport.SendAsync(MakeBatch(), CancellationToken.None);
-        Assert.Pass();
+        var ack = await transport.SendAsync(MakeBatch(), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ack.Accepted, Is.False);
+            Assert.That(ack.HighestAppliedHlc, Is.EqualTo(default(HybridLogicalClock)));
+        });
     }
 }
 

@@ -201,21 +201,15 @@ public sealed partial class LatticeValueTransformEvaluatorTests
         // so a kind this node cannot map must abort the pass rather than replace
         // the member's existing value with a null indistinguishable from an
         // explicit LatticeConstantKind.Null constant.
-        byte[] output;
-        try
-        {
-            output = LatticeValueTransformEvaluation.Evaluate(Utf8("{\"tier\":\"gold\"}"), UnknownConstantTransform());
-        }
-        catch (InvalidOperationException)
-        {
-            Assert.Pass("The transform failed closed, so no value was overwritten.");
-            return;
-        }
+        var input = Utf8("{\"tier\":\"gold\"}");
 
         Assert.That(
-            JsonDocument.Parse(output).RootElement.GetProperty("tier").ValueKind,
-            Is.Not.EqualTo(JsonValueKind.Null),
-            "The member's existing value must not be silently nulled by a constant kind this node cannot map.");
+            () => LatticeValueTransformEvaluation.Evaluate(input, UnknownConstantTransform()),
+            Throws.InvalidOperationException);
+
+        using var document = JsonDocument.Parse(input);
+        Assert.That(document.RootElement.GetProperty("tier").GetString(), Is.EqualTo("gold"),
+            "The transform failed closed, so no value was overwritten.");
     }
 
     private static LatticeValueTransform UnknownConstantTransform() =>
