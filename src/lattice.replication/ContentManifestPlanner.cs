@@ -38,7 +38,29 @@ internal static class ContentManifestPlanner
     {
         ArgumentNullException.ThrowIfNull(batch);
 
-        List<ContentManifestEntry>? manifest = null;
+        // Pre-count the eligible entries so the manifest is allocated at its
+        // exact final size. IsManifestEligible is four field compares and no
+        // allocation, so the extra pass is free next to the per-entry content
+        // hashing the second pass does - and unlike a batch.Count hint it can
+        // never over-allocate on a delete-heavy or saga-heavy batch. Growing
+        // from empty previously walked the 4/8/16/.../1024 doubling chain and
+        // abandoned every intermediate backing array.
+        var eligible = 0;
+        for (var i = 0; i < batch.Count; i++)
+        {
+            var probe = batch[i];
+            if (IsManifestEligible(in probe))
+            {
+                eligible++;
+            }
+        }
+
+        if (eligible == 0)
+        {
+            return Array.Empty<ContentManifestEntry>();
+        }
+
+        var manifest = new List<ContentManifestEntry>(eligible);
         for (var i = 0; i < batch.Count; i++)
         {
             var record = batch[i];
@@ -47,7 +69,7 @@ internal static class ContentManifestPlanner
                 continue;
             }
 
-            (manifest ??= new List<ContentManifestEntry>()).Add(new ContentManifestEntry
+            manifest.Add(new ContentManifestEntry
             {
                 EntryIndex = i,
                 Key = record.Key ?? string.Empty,
@@ -56,7 +78,7 @@ internal static class ContentManifestPlanner
             });
         }
 
-        return manifest ?? (IReadOnlyList<ContentManifestEntry>)Array.Empty<ContentManifestEntry>();
+        return manifest;
     }
 
     /// <summary>
@@ -128,7 +150,13 @@ internal static class ContentManifestPlanner
             ? null
             : new HashSet<int>(missingEntryIndices);
 
-        var elided = new HashSet<int>();
+        // Every manifested index the receiver did not ask for lands in the
+        // result, so `manifest.Count - missing.Count` is its exact size in the
+        // steady state (nothing missing) and a sound lower bound otherwise.
+        // The subtraction is clamped because `missingEntryIndices` arrives over
+        // the wire and is not trusted to be a subset of the manifest.
+        var capacity = manifest.Count - (missing?.Count ?? 0);
+        var elided = new HashSet<int>(capacity < 0 ? 0 : capacity);
         for (var i = 0; i < manifest.Count; i++)
         {
             var index = manifest[i].EntryIndex;

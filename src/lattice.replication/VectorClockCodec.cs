@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
@@ -48,18 +49,18 @@ internal static class VectorClockCodec
     /// </param>
     public static VersionVector EncodeAbsolute(VersionVector? current)
     {
-        var result = new VersionVector();
         if (current is null)
         {
-            return result;
+            return new VersionVector();
         }
 
-        foreach (var (id, clock) in current.Entries)
-        {
-            result.Entries[id] = clock;
-        }
-
-        return result;
+        // VersionVector.Clone hands the source map straight to the dictionary
+        // copy constructor, which presizes to Entries.Count exactly and
+        // bulk-copies the buckets. The per-entry copy loop this replaces grew
+        // the result from empty, so every frontier wider than three origins
+        // walked the 3/7/17/37/71/... rehash chain and abandoned each
+        // intermediate bucket+entry array on the way.
+        return current.Clone();
     }
 
     /// <summary>
@@ -84,11 +85,19 @@ internal static class VectorClockCodec
     /// <param name="predecessor">The reference frontier from which to compute the diff.</param>
     public static VersionVector EncodeDelta(VersionVector? current, VersionVector? predecessor)
     {
-        var delta = new VersionVector();
         if (current is null)
         {
-            return delta;
+            return new VersionVector();
         }
+
+        // The delta is a filter of `current`, so the source frontier's width is
+        // a sound upper bound on the result: presizing to it removes the
+        // doubling chain outright and can never over-allocate past a map the
+        // caller already holds.
+        var delta = new VersionVector
+        {
+            Entries = new Dictionary<string, HybridLogicalClock>(current.Entries.Count),
+        };
 
         foreach (var (id, clock) in current.Entries)
         {
@@ -133,18 +142,26 @@ internal static class VectorClockCodec
             return result;
         }
 
-        foreach (var (id, clock) in delta.Entries)
+        var entries = result.Entries;
+        var deltaEntries = delta.Entries;
+        if (deltaEntries.Count > 0)
         {
-            if (result.Entries.TryGetValue(id, out var existing))
+            // The merge adds at most one origin per delta entry. Reserving that
+            // headroom once collapses the rehash chain the pointwise max would
+            // otherwise walk as the restored frontier widens.
+            entries.EnsureCapacity(entries.Count + deltaEntries.Count);
+        }
+
+        foreach (var (id, clock) in deltaEntries)
+        {
+            // Single-probe pointwise max. The absent branch assigned the delta
+            // clock unconditionally, so the ref-add is exactly equivalent to
+            // the TryGetValue-then-indexer pair it replaces - and halves the
+            // hashing on every origin the predecessor already carried.
+            ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(entries, id, out var existed);
+            if (!existed || clock > slot)
             {
-                if (clock > existing)
-                {
-                    result.Entries[id] = clock;
-                }
-            }
-            else
-            {
-                result.Entries[id] = clock;
+                slot = clock;
             }
         }
 
