@@ -3207,6 +3207,16 @@ internal sealed partial class LatticeGrain(
     /// to route per-slot count requests through the authoritative map.
     /// </summary>
     internal static Dictionary<int, int[]> BuildOwnedSlotMap(ShardMap map)
+        => BuildOwnedSlotMap(map.Slots);
+
+    /// <summary>
+    /// Partitions <paramref name="slots"/> - a shard map's raw virtual-slot
+    /// array - by owning physical shard, returning a dictionary mapping
+    /// physical shard index to its ascending owned-slot array. Shared by the
+    /// count-routing paths and by the snapshot cursor's per-shard ownership
+    /// filter, which need the identical partition of the identical input.
+    /// </summary>
+    internal static Dictionary<int, int[]> BuildOwnedSlotMap(int[] slots)
     {
         // Each per-owner array is emitted in ascending slot order, so no
         // secondary Array.Sort is needed.
@@ -3221,7 +3231,6 @@ internal sealed partial class LatticeGrain(
         // intermediate Dictionary<int, int> instances. This mirrors the
         // bool-bitmap dedup ShardMap.GetPhysicalShardIndices already applies
         // over the very same value domain.
-        var slots = map.Slots;
         if (slots.Length == 0) return new Dictionary<int, int[]>();
 
         var maxOwner = -1;
@@ -3312,31 +3321,115 @@ internal sealed partial class LatticeGrain(
 
     /// <summary>
     /// Groups <paramref name="slots"/> by their owning physical shard per
-    /// <paramref name="map"/>. Out-of-range slots are silently dropped.
+    /// <paramref name="map"/>, emitting each owner's slots as an ascending
+    /// array ready for the per-slot shard RPC. Out-of-range slots are
+    /// silently dropped.
     /// </summary>
-    internal static Dictionary<int, List<int>> GroupSlotsByOwner(HashSet<int> slots, ShardMap map)
+    /// <remarks>
+    /// Owners are <em>physical</em> shard indices - small, dense and
+    /// non-negative (typically 1..16) - so a counting pass into an
+    /// owner-indexed <c>int[]</c> replaces two dictionary hash probes per
+    /// requested slot. Counting first also sizes every bucket exactly, which
+    /// drops the <c>List&lt;int&gt;</c> growth chain and the separate
+    /// copy-then-sort step the callers previously performed on each bucket.
+    /// The same dense-versus-sparse guard as
+    /// <see cref="BuildOwnedSlotMap(int[])"/> keeps hand-seeded maps with
+    /// negative or pathologically sparse owners on the hashing fallback.
+    /// </remarks>
+    internal static Dictionary<int, int[]> GroupSlotsByOwner(HashSet<int> slots, ShardMap map)
     {
-        var byOwner = new Dictionary<int, List<int>>();
+        var mapSlots = map.Slots;
+        if (slots.Count == 0 || mapSlots.Length == 0)
+            return [];
+
+        var maxOwner = -1;
+        var dense = true;
         foreach (var s in slots)
         {
-            if ((uint)s >= (uint)map.Slots.Length) continue;
-            var owner = map.Slots[s];
-            if (!byOwner.TryGetValue(owner, out var list))
-            {
-                list = [];
-                byOwner[owner] = list;
-            }
-            list.Add(s);
+            if ((uint)s >= (uint)mapSlots.Length) continue;
+            var owner = mapSlots[s];
+            if (owner < 0) { dense = false; break; }
+            if (owner > maxOwner) maxOwner = owner;
         }
-        return byOwner;
+
+        // Every requested slot fell outside the map's slot array.
+        if (dense && maxOwner < 0)
+            return [];
+
+        if (!dense || maxOwner >= mapSlots.Length)
+            return GroupSlotsByOwnerSparse(slots, mapSlots);
+
+        var width = maxOwner + 1;
+        var counts = new int[width];
+        foreach (var s in slots)
+        {
+            if ((uint)s >= (uint)mapSlots.Length) continue;
+            counts[mapSlots[s]]++;
+        }
+
+        var distinct = 0;
+        for (int o = 0; o < width; o++)
+        {
+            if (counts[o] != 0) distinct++;
+        }
+
+        var result = new Dictionary<int, int[]>(distinct);
+        var buckets = new int[width][];
+        for (int o = 0; o < width; o++)
+        {
+            var n = counts[o];
+            if (n == 0) continue;
+            var bucket = new int[n];
+            buckets[o] = bucket;
+            result[o] = bucket;
+            // `counts` is reused below as the per-owner write cursor.
+            counts[o] = 0;
+        }
+
+        foreach (var s in slots)
+        {
+            if ((uint)s >= (uint)mapSlots.Length) continue;
+            var owner = mapSlots[s];
+            buckets[owner]![counts[owner]++] = s;
+        }
+
+        // HashSet<int> enumeration order is unspecified, so each bucket is
+        // sorted in place. Sorting the exact-size buckets costs at most as
+        // much as one sort of the whole set and needs no intermediate copy.
+        for (int o = 0; o < width; o++)
+        {
+            var bucket = buckets[o];
+            if (bucket is not null && bucket.Length > 1)
+                Array.Sort(bucket);
+        }
+
+        return result;
     }
 
-    /// <summary>Copies <paramref name="list"/> into a new sorted array.</summary>
-    internal static int[] ToSortedArray(List<int> list)
+    /// <summary>
+    /// Owner-groups <paramref name="slots"/> through hashed dictionaries.
+    /// Fallback for the (non-production) maps whose physical indices are
+    /// negative or too sparse for <see cref="GroupSlotsByOwner"/>'s dense
+    /// buckets; produces an identical result for any input.
+    /// </summary>
+    private static Dictionary<int, int[]> GroupSlotsByOwnerSparse(HashSet<int> slots, int[] mapSlots)
     {
-        var arr = list.ToArray();
-        Array.Sort(arr);
-        return arr;
+        var lists = new Dictionary<int, List<int>>();
+        foreach (var s in slots)
+        {
+            if ((uint)s >= (uint)mapSlots.Length) continue;
+            ref var list = ref CollectionsMarshal.GetValueRefOrAddDefault(lists, mapSlots[s], out _);
+            (list ??= []).Add(s);
+        }
+
+        var result = new Dictionary<int, int[]>(lists.Count);
+        foreach (var (owner, list) in lists)
+        {
+            var arr = list.ToArray();
+            Array.Sort(arr);
+            result[owner] = arr;
+        }
+        return result;
     }
 
     /// <summary>

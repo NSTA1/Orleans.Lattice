@@ -382,9 +382,8 @@ internal sealed partial class LatticeGrain
         // re-surfacing it now would emit it behind already-yielded keys.
         var suppressBehindFrontier = predicate is not null && frontier is not null;
         var byOwner = GroupSlotsByOwner(needSlots, shardMapNow);
-        foreach (var (owner, slotList) in byOwner)
+        foreach (var (owner, sortedSlots) in byOwner)
         {
-            var sortedSlots = ToSortedArray(slotList);
             var shard = GetShardGrainByIndex(physicalTreeId, owner);
             string? continuation = null;
             string? resumeFrom = null;

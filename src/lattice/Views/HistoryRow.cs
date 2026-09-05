@@ -95,4 +95,57 @@ public readonly record struct HistoryRow
     /// for point revisions.
     /// </summary>
     [Id(10)] public string? EndKey { get; init; }
+
+    /// <summary>
+    /// Compares two rows by value: every scalar field plus the <see cref="Value"/>
+    /// and <see cref="Delta"/> bytes compared by content. The compiler-generated
+    /// record-struct equality compares those arrays with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for a <see cref="byte"/>
+    /// array is reference equality, so two structurally identical rows - and a row
+    /// that round-trips through serialization versus its pre-serialization self -
+    /// would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The row to compare against.</param>
+    public bool Equals(HistoryRow other) =>
+        Timestamp.Equals(other.Timestamp)
+        && Kind == other.Kind
+        && string.Equals(SourceKey, other.SourceKey, StringComparison.Ordinal)
+        && string.Equals(OriginClusterId, other.OriginClusterId, StringComparison.Ordinal)
+        && ValueHash == other.ValueHash
+        && ValueLength == other.ValueLength
+        && Mode == other.Mode
+        && RetentionShape == other.RetentionShape
+        && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value)
+        && BytesEqual(Delta, other.Delta);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Timestamp);
+        hash.Add(Kind);
+        hash.Add(SourceKey, StringComparer.Ordinal);
+        hash.Add(OriginClusterId, StringComparer.Ordinal);
+        hash.Add(ValueHash);
+        hash.Add(ValueLength);
+        hash.Add(Mode);
+        hash.Add(RetentionShape);
+        hash.Add(EndKey, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        if (Delta is { } delta)
+        {
+            hash.AddBytes(delta);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

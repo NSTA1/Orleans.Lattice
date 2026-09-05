@@ -300,6 +300,8 @@ Raising it drains faster at the cost of longer individual turns; setting it to `
 
 The tombstone compactor and the shard consolidator keep their own long-standing per-pass leaf caps ([`CompactionLeafBatchSize`](#compactionleafbatchsize) and `ConsolidationDrainLeavesPerPass`) and inherit only the wall-clock net from [`BackgroundDrainMaxDuration`](#backgrounddrainmaxduration).
 
+Alongside its per-pass leaf cap, the shard consolidator bounds how many donor **entries** it accumulates into a single merge call to the survivor shard during drain: `ConsolidationDrainBatchSize` (default: **1024 entries**; the options validator rejects a value below `1`). Larger values reduce per-call overhead; smaller values bound peak memory on the coordinator silo and the size of the Orleans grain message. The drain is idempotent under any chunking - re-running converges by CRDT last-writer-wins - so this is purely a cost knob and never a correctness input.
+
 ```csharp verify
 // Yield more often on a tree whose coordinators must stay responsive to
 // progress queries and cancellation while a large shard drains.

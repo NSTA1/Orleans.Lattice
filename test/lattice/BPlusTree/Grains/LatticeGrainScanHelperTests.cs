@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit tests for the helper methods on <see cref="LatticeGrain"/>:
-/// <c>GroupSlotsByOwner</c>, <c>ToSortedArray</c>, <c>ComputeOwnerDiff</c>, and
+/// <c>GroupSlotsByOwner</c>, <c>ComputeOwnerDiff</c>, and
 /// <c>BuildOwnedSlotMap</c>. These pure functions underpin the
 /// strongly-consistent scan reconciliation and the per-slot count routing.
 /// </summary>
@@ -61,31 +61,97 @@ public class LatticeGrainScanHelperTests
     }
 
     // ============================================================================
-    // ToSortedArray
+    // GroupSlotsByOwner - fused ascending ordering
+    //
+    // The callers feed each bucket straight to GetSortedKeysBatchForSlotsAsync /
+    // GetSortedEntriesBatchForSlotsAsync, which require ascending slots. The
+    // grouping pass emits that order itself, so these tests pin the guarantee
+    // that the removed copy-then-sort step used to provide.
     // ============================================================================
 
     [Test]
-    public void ToSortedArray_returns_empty_when_input_empty()
+    public void GroupSlotsByOwner_emits_each_owner_bucket_in_ascending_slot_order()
     {
-        Assert.That(LatticeGrain.ToSortedArray([]), Is.Empty);
+        // Every slot lands on shard 0, so the single bucket must carry the
+        // whole set ascending regardless of HashSet enumeration order.
+        var map = new ShardMap { Slots = [0, 0, 0, 0, 0, 0, 0, 0] };
+
+        var result = LatticeGrain.GroupSlotsByOwner([5, 2, 7, 1, 4], map);
+
+        Assert.That(result[0], Is.EqualTo(new[] { 1, 2, 4, 5, 7 }));
     }
 
     [Test]
-    public void ToSortedArray_returns_ascending_copy_of_input()
+    public void GroupSlotsByOwner_emits_ascending_buckets_on_the_sparse_fallback()
     {
-        var input = new List<int> { 5, 2, 8, 1, 4 };
-        var result = LatticeGrain.ToSortedArray(input);
+        // Owner 9 is beyond the slot array length, forcing the hashing
+        // fallback; it must produce the same ascending order as the dense arm.
+        var map = new ShardMap { Slots = [9, 9, 9, 9] };
 
-        Assert.That(result, Is.EqualTo(new[] { 1, 2, 4, 5, 8 }));
-        // Must be a copy - input is unchanged.
-        Assert.That(input, Is.EqualTo(new List<int> { 5, 2, 8, 1, 4 }));
+        var result = LatticeGrain.GroupSlotsByOwner([3, 0, 2, 1], map);
+
+        Assert.That(result[9], Is.EqualTo(new[] { 0, 1, 2, 3 }));
     }
 
     [Test]
-    public void ToSortedArray_preserves_duplicates()
+    public void GroupSlotsByOwner_emits_ascending_buckets_for_negative_owners()
     {
-        var result = LatticeGrain.ToSortedArray([3, 1, 3, 1, 2]);
-        Assert.That(result, Is.EqualTo(new[] { 1, 1, 2, 3, 3 }));
+        // A negative owner also routes to the hashing fallback.
+        var map = new ShardMap { Slots = [-1, 0, -1, 0] };
+
+        var result = LatticeGrain.GroupSlotsByOwner([3, 2, 1, 0], map);
+
+        Assert.That(result[-1], Is.EqualTo(new[] { 0, 2 }));
+        Assert.That(result[0], Is.EqualTo(new[] { 1, 3 }));
+    }
+
+    [Test]
+    public void GroupSlotsByOwner_matches_the_group_then_sort_shape_it_replaced()
+    {
+        // Differential test: the fused pass must agree with the original
+        // "group into lists, then copy-and-sort each list" shape on the same
+        // input, which is what makes the change output-identical.
+        var map = ShardMap.CreateDefault(64, 5);
+        var rng = new Random(20260905);
+        var slots = new HashSet<int>();
+        for (var i = 0; i < 200; i++)
+            slots.Add(rng.Next(-10, 80));
+
+        var actual = LatticeGrain.GroupSlotsByOwner(slots, map);
+        var expected = GroupThenSortReference(slots, map);
+
+        Assert.That(actual.Keys, Is.EquivalentTo(expected.Keys));
+        foreach (var (owner, bucket) in expected)
+            Assert.That(actual[owner], Is.EqualTo(bucket), $"owner {owner}");
+    }
+
+    /// <summary>
+    /// The pre-optimisation shape: group into per-owner lists through a
+    /// dictionary, then copy each list into a sorted array.
+    /// </summary>
+    private static Dictionary<int, int[]> GroupThenSortReference(HashSet<int> slots, ShardMap map)
+    {
+        var byOwner = new Dictionary<int, List<int>>();
+        foreach (var s in slots)
+        {
+            if ((uint)s >= (uint)map.Slots.Length) continue;
+            var owner = map.Slots[s];
+            if (!byOwner.TryGetValue(owner, out var list))
+            {
+                list = [];
+                byOwner[owner] = list;
+            }
+            list.Add(s);
+        }
+
+        var result = new Dictionary<int, int[]>(byOwner.Count);
+        foreach (var (owner, list) in byOwner)
+        {
+            var arr = list.ToArray();
+            Array.Sort(arr);
+            result[owner] = arr;
+        }
+        return result;
     }
 
     // ============================================================================
@@ -266,5 +332,74 @@ public class LatticeGrainScanHelperTests
 
         seen.Sort();
         Assert.That(seen, Is.EqualTo(Enumerable.Range(0, 4096).ToArray()));
+    }
+
+    // ============================================================================
+    // BuildOwnedSlotMap(int[]) - the overload the snapshot cursor reuses
+    // ============================================================================
+
+    [Test]
+    public void BuildOwnedSlotMap_slot_array_overload_agrees_with_the_shard_map_overload()
+    {
+        var map = ShardMap.CreateDefault(4096, 16);
+
+        var fromMap = LatticeGrain.BuildOwnedSlotMap(map);
+        var fromSlots = LatticeGrain.BuildOwnedSlotMap(map.Slots);
+
+        Assert.That(fromSlots.Keys, Is.EquivalentTo(fromMap.Keys));
+        foreach (var (owner, owned) in fromMap)
+            Assert.That(fromSlots[owner], Is.EqualTo(owned), $"shard {owner}");
+    }
+
+    [Test]
+    public void BuildOwnedSlotMap_slot_array_overload_matches_the_cursor_shape_it_replaced()
+    {
+        // Differential test: the snapshot cursor's own per-shard ownership
+        // partition previously grew a Dictionary<int, List<int>> and copied
+        // each list out. The shared dense pass must agree with it exactly,
+        // including on the sparse and negative-owner fallbacks.
+        int[][] cases =
+        [
+            [],
+            [0, 0, 0, 0],
+            [9, 9, 9, 9],
+            [0, -1, 0, -1, 1],
+            ShardMap.CreateDefault(4096, 16).Slots,
+            ShardMap.CreateDefault(64, 5).Slots,
+        ];
+
+        foreach (var slots in cases)
+        {
+            var actual = LatticeGrain.BuildOwnedSlotMap(slots);
+            var expected = CursorOwnedSlotsReference(slots);
+
+            Assert.That(actual.Keys, Is.EquivalentTo(expected.Keys));
+            foreach (var (shard, owned) in expected)
+                Assert.That(actual[shard], Is.EqualTo(owned), $"shard {shard}");
+        }
+    }
+
+    /// <summary>
+    /// The pre-optimisation shape from <c>LatticeCursorGrain.Snapshot</c>:
+    /// a forward scan into per-shard lists, then a copy of each list.
+    /// </summary>
+    private static Dictionary<int, int[]> CursorOwnedSlotsReference(int[] slots)
+    {
+        var lists = new Dictionary<int, List<int>>();
+        for (var slot = 0; slot < slots.Length; slot++)
+        {
+            var shard = slots[slot];
+            if (!lists.TryGetValue(shard, out var list))
+            {
+                list = new List<int>();
+                lists[shard] = list;
+            }
+            list.Add(slot);
+        }
+
+        var result = new Dictionary<int, int[]>(lists.Count);
+        foreach (var (shard, list) in lists)
+            result[shard] = list.ToArray();
+        return result;
     }
 }

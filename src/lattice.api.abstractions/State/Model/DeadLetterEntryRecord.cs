@@ -47,4 +47,45 @@ public sealed record DeadLetterEntryRecord
     /// preview length).
     /// </summary>
     [Id(6)] public bool PreviewTruncated { get; init; }
+
+    /// <summary>
+    /// Compares two records by value, with <see cref="ValuePreview"/> compared by
+    /// content. The compiler-generated record equality compares the
+    /// <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical records - and, in
+    /// particular, a record and its post-serialization self - would otherwise
+    /// never compare equal.
+    /// </summary>
+    /// <param name="other">The record to compare against.</param>
+    public bool Equals(DeadLetterEntryRecord? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && ValueByteLength == other.ValueByteLength
+        && string.Equals(Reason, other.Reason, StringComparison.Ordinal)
+        && Source == other.Source
+        && TimestampUtc == other.TimestampUtc
+        && PreviewTruncated == other.PreviewTruncated
+        && BytesEqual(ValuePreview, other.ValuePreview);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        hash.Add(ValueByteLength);
+        hash.Add(Reason, StringComparer.Ordinal);
+        hash.Add(Source);
+        hash.Add(TimestampUtc);
+        hash.Add(PreviewTruncated);
+        if (ValuePreview is { } preview)
+        {
+            hash.AddBytes(preview);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

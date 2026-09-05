@@ -63,6 +63,47 @@ public readonly record struct ViewWrite
     [Id(6)] public string? SourceKey { get; init; }
 
     /// <summary>
+    /// Compares two writes by value: every scalar field plus the
+    /// <see cref="Value"/> bytes compared by content. The compiler-generated
+    /// record-struct equality compares that array with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for a <see cref="byte"/>
+    /// array is reference equality, so two structurally identical writes - and a
+    /// write that round-trips through serialization versus its pre-serialization
+    /// self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The write to compare against.</param>
+    public bool Equals(ViewWrite other) =>
+        Kind == other.Kind
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && ExpiresAtTicks == other.ExpiresAtTicks
+        && Timestamp.Equals(other.Timestamp)
+        && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
+        && string.Equals(SourceKey, other.SourceKey, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Kind);
+        hash.Add(Key, StringComparer.Ordinal);
+        hash.Add(ExpiresAtTicks);
+        hash.Add(Timestamp);
+        hash.Add(EndKey, StringComparer.Ordinal);
+        hash.Add(SourceKey, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
+
+    /// <summary>
     /// Creates an <see cref="ViewWriteKind.Upsert"/> write.
     /// </summary>
     /// <param name="key">The view-tree key. Must not be <see langword="null"/>.</param>
