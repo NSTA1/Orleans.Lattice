@@ -215,9 +215,12 @@ internal sealed class RepoContextBootstrapService
             var nowTicks = _timeProvider.GetUtcNow().UtcTicks;
             _pruneCache.TryGetValue(repoId, out var priorPrune);
             var lastFullSweepTicks = priorPrune?.LastFullSweepTicks ?? 0;
-            var forceFull = !request.AllowPrune
-                || priorPrune?.DirectoryMtimes is not { Count: > 0 }
-                || nowTicks - lastFullSweepTicks >= _options.FullWalkInterval.Ticks;
+            var forceFull = RepoWalkPruning.ShouldForceFullSweep(
+                request.AllowPrune,
+                priorPrune?.DirectoryMtimes is { Count: > 0 },
+                nowTicks,
+                lastFullSweepTicks,
+                _options.FullWalkInterval);
             var pruning = new RepoWalkPruning
             {
                 PreviousDirectoryMtimes = priorPrune?.DirectoryMtimes,

@@ -77,12 +77,32 @@ internal sealed class RepoContextIndexingOptions
     public TimeSpan ReconcileIntervalJitter { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// The longest possible gap between two consecutive reconciles, being the base
+    /// <see cref="ReconcileInterval"/> plus the full <see cref="ReconcileIntervalJitter"/>.
+    /// <see cref="FullWalkInterval"/> must stay strictly greater than this or the
+    /// directory-modification-time prune cache can never engage (every reconcile lands at
+    /// least a full-walk interval after the previous full sweep, forcing another full
+    /// sweep).
+    /// </summary>
+    public TimeSpan MaxReconcileSpacing => ReconcileInterval + ReconcileIntervalJitter;
+
+    /// <summary>
     /// How often the reconcile walk is forced to ignore the directory-modification-time
     /// prune cache and stat every file, so an in-place content edit (which does not bump a
     /// directory's modification time and is therefore invisible to pruning) is picked up
     /// within this bound. The first walk after a process start is always a full one.
+    /// <para>
+    /// The default must stay longer than the maximum reconcile spacing
+    /// (<see cref="ReconcileInterval"/> + <see cref="ReconcileIntervalJitter"/>), otherwise
+    /// every reconcile is at least a full-walk interval apart from the last full sweep and
+    /// the prune cache never engages - the optimisation is inert and every reconcile stats
+    /// every file. At the default 60 minutes against a 15-to-20-minute reconcile spacing a
+    /// full sweep becomes periodic rather than universal, so most reconciles prune. The
+    /// trade is that the worst-case detection latency for a pure in-place content edit rises
+    /// to this interval plus one reconcile spacing.
+    /// </para>
     /// </summary>
-    public TimeSpan FullWalkInterval { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeSpan FullWalkInterval { get; init; } = TimeSpan.FromMinutes(60);
 
     /// <summary>
     /// How long a warm decoded-vector candidate set is trusted in the

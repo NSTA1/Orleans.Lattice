@@ -205,4 +205,44 @@ public readonly record struct AggregationContribution
             Timestamp = timestamp,
         };
     }
+
+    /// <summary>
+    /// Compares two contributions by value: every scalar field plus the
+    /// <see cref="Value"/> bytes compared by content. The compiler-generated
+    /// record-struct equality compares <see cref="Value"/> with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for a <see cref="byte"/>
+    /// array is reference equality, so two structurally identical fold
+    /// contributions - including a contribution and its post-serialization self -
+    /// would otherwise never compare equal, silently defeating any dedup, cache
+    /// lookup, or round-trip check framed as record equality.
+    /// </summary>
+    /// <param name="other">The contribution to compare against.</param>
+    public bool Equals(AggregationContribution other) =>
+        Kind == other.Kind
+        && string.Equals(GroupKey, other.GroupKey, StringComparison.Ordinal)
+        && string.Equals(SourceKey, other.SourceKey, StringComparison.Ordinal)
+        && Numeric.Equals(other.Numeric)
+        && string.Equals(Member, other.Member, StringComparison.Ordinal)
+        && Timestamp.Equals(other.Timestamp)
+        && string.Equals(EndKey, other.EndKey, StringComparison.Ordinal)
+        && (Value is null ? other.Value is null : other.Value is not null && Value.AsSpan().SequenceEqual(other.Value));
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Kind);
+        hash.Add(GroupKey, StringComparer.Ordinal);
+        hash.Add(SourceKey, StringComparer.Ordinal);
+        hash.Add(Numeric);
+        hash.Add(Member, StringComparer.Ordinal);
+        hash.Add(Timestamp);
+        hash.Add(EndKey, StringComparer.Ordinal);
+        if (Value is { } bytes)
+        {
+            hash.AddBytes(bytes);
+        }
+
+        return hash.ToHashCode();
+    }
 }

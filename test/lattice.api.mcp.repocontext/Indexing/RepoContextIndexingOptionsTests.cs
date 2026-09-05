@@ -45,6 +45,28 @@ public sealed class RepoContextIndexingOptionsTests
     }
 
     [Test]
+    public void Default_full_walk_interval_exceeds_the_maximum_reconcile_spacing_so_pruning_can_engage()
+    {
+        // Regression guard for #2042: at the shipped defaults the full-walk interval must
+        // stay strictly longer than the longest possible gap between two reconciles
+        // (ReconcileInterval + ReconcileIntervalJitter). If it is not, every reconcile
+        // lands at least a full-walk interval after the previous full sweep, so
+        // RepoWalkPruning.ShouldForceFullSweep forces a full sweep every time and the
+        // directory-modification-time prune cache is dead - the optimisation the class
+        // exists to provide never engages, and every reconcile stats every file.
+        var defaults = new RepoContextIndexingOptions();
+
+        Assert.That(
+            defaults.MaxReconcileSpacing,
+            Is.EqualTo(defaults.ReconcileInterval + defaults.ReconcileIntervalJitter),
+            "MaxReconcileSpacing is the base reconcile interval plus the full jitter.");
+        Assert.That(
+            defaults.FullWalkInterval,
+            Is.GreaterThan(defaults.MaxReconcileSpacing),
+            "FullWalkInterval must exceed ReconcileInterval + ReconcileIntervalJitter or pruning can never engage at the shipped defaults.");
+    }
+
+    [Test]
     public void FromEnvironment_reads_each_variable_in_seconds()
     {
         Environment.SetEnvironmentVariable(RepoContextIndexingOptions.TickIntervalSecondsKey, "5");

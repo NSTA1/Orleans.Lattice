@@ -55,4 +55,35 @@ internal sealed class RepoWalkPruning
 
     /// <summary>The number of files carried forward without a stat this walk (diagnostics).</summary>
     public int PrunedFileCount { get; set; }
+
+    /// <summary>
+    /// Decides whether a reconcile walk must ignore the prune cache and stat every file
+    /// (a full sweep), or may prune unchanged directories. A full sweep is forced when
+    /// pruning is not allowed for this run (an explicit onboarding or re-bootstrap, which
+    /// must be exact), when there is no prior directory-modification-time snapshot to prune
+    /// against (a cold walk, including the first walk after a process restart), or when the
+    /// configured <paramref name="fullWalkInterval"/> has elapsed since the last full sweep.
+    /// Otherwise the walk prunes.
+    /// <para>
+    /// Extracted as a pure function so the coherence of the shipped defaults - that the
+    /// full-walk interval is long enough for a mid-interval reconcile to actually prune
+    /// rather than being forced to a full sweep every time - is directly testable without a
+    /// live cluster.
+    /// </para>
+    /// </summary>
+    /// <param name="allowPrune">Whether this run may prune at all; only the background reconcile enables it.</param>
+    /// <param name="hasPriorSnapshot">Whether a non-empty prior directory-modification-time snapshot exists.</param>
+    /// <param name="nowTicks">The current instant, in UTC ticks.</param>
+    /// <param name="lastFullSweepTicks">The UTC tick at which the last full sweep ran (<c>0</c> when none has).</param>
+    /// <param name="fullWalkInterval">How long may elapse between forced full sweeps.</param>
+    /// <returns><see langword="true"/> to force a full sweep; <see langword="false"/> to prune.</returns>
+    public static bool ShouldForceFullSweep(
+        bool allowPrune,
+        bool hasPriorSnapshot,
+        long nowTicks,
+        long lastFullSweepTicks,
+        TimeSpan fullWalkInterval)
+        => !allowPrune
+            || !hasPriorSnapshot
+            || nowTicks - lastFullSweepTicks >= fullWalkInterval.Ticks;
 }
