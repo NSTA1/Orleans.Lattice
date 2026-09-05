@@ -165,6 +165,83 @@ public sealed class ReceiverAppliedContentIndexTests
     }
 
     [Test]
+    public void RecordSet_at_capacity_files_the_admitted_key_under_its_own_hash()
+    {
+        // Guards the recycled-node path: admitting a key into a full partition
+        // reuses the evicted key's linked-list node, so a mis-ordered update
+        // would leave the new key carrying the evicted key's digest.
+        var index = new ReceiverAppliedContentIndex();
+        index.RecordSet("tree", "k1", 111UL, 2);
+        index.RecordSet("tree", "k2", 222UL, 2);
+        index.RecordSet("tree", "k3", 333UL, 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(index.TryGetContentHash("tree", "k3", out var recycled), Is.True);
+            Assert.That(recycled, Is.EqualTo(333UL));
+            Assert.That(index.TryGetContentHash("tree", "k1", out _), Is.False);
+            Assert.That(index.CountForTree("tree"), Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void RecordSet_retains_exactly_the_most_recent_keys_across_many_evictions()
+    {
+        // Cycles a working set three times the partition bound so every
+        // admission after the fill goes through evict-and-recycle, then asserts
+        // the survivor set and every survivor's digest are exactly what a
+        // fresh-node-per-admission LRU would have left behind.
+        const int capacity = 4;
+        const int keys = 12;
+        var index = new ReceiverAppliedContentIndex();
+        for (var i = 0; i < keys; i++)
+        {
+            index.RecordSet("tree", "k" + i, (ulong)(1000 + i), capacity);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(index.CountForTree("tree"), Is.EqualTo(capacity));
+            for (var i = 0; i < keys - capacity; i++)
+            {
+                Assert.That(index.TryGetContentHash("tree", "k" + i, out _), Is.False,
+                    $"k{i} should have been evicted");
+            }
+
+            for (var i = keys - capacity; i < keys; i++)
+            {
+                Assert.That(index.TryGetContentHash("tree", "k" + i, out var hash), Is.True,
+                    $"k{i} should have been retained");
+                Assert.That(hash, Is.EqualTo((ulong)(1000 + i)));
+            }
+        });
+    }
+
+    [Test]
+    public void RecordSet_trims_to_a_capacity_that_shrank_between_calls()
+    {
+        // The recycle path leaves the partition at its old size, so the trim
+        // pass must still run to honour a capacity that shrank.
+        var index = new ReceiverAppliedContentIndex();
+        for (var i = 0; i < 8; i++)
+        {
+            index.RecordSet("tree", "k" + i, (ulong)i, 8);
+        }
+
+        index.RecordSet("tree", "k8", 8UL, 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(index.CountForTree("tree"), Is.EqualTo(3));
+            Assert.That(index.TryGetContentHash("tree", "k8", out var newest), Is.True);
+            Assert.That(newest, Is.EqualTo(8UL));
+            Assert.That(index.TryGetContentHash("tree", "k7", out _), Is.True);
+            Assert.That(index.TryGetContentHash("tree", "k6", out _), Is.True);
+            Assert.That(index.TryGetContentHash("tree", "k5", out _), Is.False);
+        });
+    }
+
+    [Test]
     public void CountForTree_returns_zero_for_unknown_tree()
     {
         var index = new ReceiverAppliedContentIndex();

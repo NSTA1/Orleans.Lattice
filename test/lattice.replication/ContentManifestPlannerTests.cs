@@ -321,4 +321,38 @@ public sealed class ContentManifestPlannerTests
                 "HWM advances to the newest elided duplicate clock");
         });
     }
+
+    [Test]
+    public void ComputeElidedIndices_ignores_wire_indices_outside_the_manifest()
+    {
+        // The missing set arrives over the wire and is not trusted to be a
+        // subset of the manifest, so a peer that names more (or out-of-range)
+        // indices than the manifest holds must not corrupt the elision plan.
+        var batch = new List<WalRecord>
+        {
+            Set("a", [1], Hlc(1)),
+            Set("b", [2], Hlc(2)),
+        };
+        var manifest = ContentManifestPlanner.BuildManifest(batch);
+
+        var elided = ContentManifestPlanner.ComputeElidedIndices(manifest, [0, 1, 7, -3, 99]);
+
+        Assert.That(elided, Is.Empty);
+    }
+
+    [Test]
+    public void ComputeElidedIndices_elides_every_entry_when_nothing_is_missing()
+    {
+        var batch = new List<WalRecord>
+        {
+            Set("a", [1], Hlc(1)),
+            Set("b", [2], Hlc(2)),
+            Set("c", [3], Hlc(3)),
+        };
+        var manifest = ContentManifestPlanner.BuildManifest(batch);
+
+        var elided = ContentManifestPlanner.ComputeElidedIndices(manifest, []);
+
+        Assert.That(elided, Is.EquivalentTo(new[] { 0, 1, 2 }));
+    }
 }

@@ -174,13 +174,45 @@ internal sealed class ReceiverAppliedContentIndex
                 existing.Value = new KeyHash(key, contentHash);
                 _order.Remove(existing);
                 _order.AddLast(existing);
+                // A hit never grows the partition, so only a capacity that
+                // shrank between calls can leave it over its bound.
+                Trim(capacity);
+                return;
+            }
+
+            // Miss. Once the partition is at its bound, admitting a key must
+            // evict one - so detach the least-recently-used node and re-file it
+            // under the incoming key rather than allocating a replacement and
+            // letting the evicted node become garbage. On a warm partition
+            // sitting at capacity (the steady state on the receiver apply path)
+            // this removes the per-miss LinkedListNode allocation outright. The
+            // survivor set is unchanged: the recycled node is re-attached at
+            // most-recently-used, exactly where a freshly allocated one landed,
+            // and Trim still evicts from the least-recently-used end.
+            if (_order.Count >= capacity && _order.First is { } lru)
+            {
+                _index.Remove(lru.Value.Key);
+                _order.Remove(lru);
+                lru.Value = new KeyHash(key, contentHash);
+                _order.AddLast(lru);
+                _index[key] = lru;
             }
             else
             {
-                var node = _order.AddLast(new KeyHash(key, contentHash));
-                _index[key] = node;
+                _index[key] = _order.AddLast(new KeyHash(key, contentHash));
             }
 
+            Trim(capacity);
+        }
+
+        /// <summary>
+        /// Evicts from the least-recently-used end until the partition is
+        /// within <paramref name="capacity"/>. A no-op in the steady state;
+        /// it does real work only when the configured capacity shrank between
+        /// calls.
+        /// </summary>
+        private void Trim(int capacity)
+        {
             while (_order.Count > capacity)
             {
                 var lru = _order.First!;

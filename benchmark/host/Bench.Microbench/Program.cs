@@ -80,7 +80,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots.
+// Recognised suites: observer, authdecision, hotpath, hashalloc, rowcodec, ordedup, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims.
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -302,6 +302,13 @@ if (string.Equals(suite, "fanoutslots", StringComparison.OrdinalIgnoreCase))
     Console.WriteLine("[microbench] suite   -> fanoutslots (SagaPrepareAndRestoreFanoutBenchmarks)");
     var fanoutSlotsSummary = BenchmarkRunner.Run<SagaPrepareAndRestoreFanoutBenchmarks>(config);
     return fanoutSlotsSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
+if (string.Equals(suite, "replicationtrims", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> replicationtrims (ReplicationShipApplyTrimBenchmarks)");
+    var replicationTrimsSummary = BenchmarkRunner.Run<ReplicationShipApplyTrimBenchmarks>(config);
+    return replicationTrimsSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
 var summary = BenchmarkRunner.Run<LatticeMicroBenchmarks>(config);
