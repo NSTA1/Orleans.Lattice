@@ -2,7 +2,18 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # `main` is the release target. The second pattern covers epic integration
+    # branches (`<type>/epic/<slug>`) and anything nested under one, so a
+    # sub-issue pull request into an epic branch is validated instead of
+    # running no checks whatsoever. `*` stops at a path separator and `**`
+    # crosses it, so `*/epic/**` matches `feat/epic/backlog-mechanism` and
+    # `feat/epic/backlog-mechanism/o6-branch-convention` but not `main`.
+    #
+    # Epic branches deliberately carry no branch protection: CI *running* is
+    # what gives a sub-PR feedback, whereas a `strict` required check is what
+    # serialises pull requests. See the epic-branch rules in
+    # .github/copilot-instructions.md before changing either half.
+    branches: [main, '*/epic/**']
 
 # Least-privilege: this workflow only reads source code.
 permissions:
@@ -63,6 +74,13 @@ jobs:
           # A type prefix, then a description. The set below is the one the
           # repository actually uses; extend it here rather than working around
           # it with an off-convention branch.
+          #
+          # The trailing `(/...)*` group permitting further path segments is
+          # load-bearing, not incidental: it is what lets an epic integration
+          # branch (`<type>/epic/<slug>`) and its per-item sub-branches
+          # (`<type>/epic/<slug>/<item>`) pass with no `epic` prefix added
+          # here. Do not tighten it to a single segment, and do not add `epic`
+          # to the alternation - a bare `epic/<slug>` is not the convention.
           prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
 
           if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
