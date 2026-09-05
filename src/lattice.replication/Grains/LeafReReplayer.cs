@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Orleans.Lattice;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -199,17 +200,28 @@ internal static class LeafReReplayer
             if (e.AtomicBatchSize > 0 && e.TransactionId != Guid.Empty)
             {
                 batches ??= [];
-                if (!batches.TryGetValue(e.TransactionId, out var list))
+                // One hash per member instead of two: the miss branch assigns
+                // unconditionally, so the probe-then-store pair folds onto a
+                // single slot reference. Legal here because ApplyCaps is a
+                // synchronous static - ref locals are illegal in async methods
+                // - and safe because the loop never mutates `batches` while the
+                // ref is live. The member list is sized from the batch's own
+                // declared width, which is its exact final size, so it never
+                // walks the 4/8/16 doubling chain.
+                ref var slot = ref CollectionsMarshal.GetValueRefOrAddDefault(
+                    batches, e.TransactionId, out var existed);
+                if (!existed)
                 {
-                    list = [];
-                    batches[e.TransactionId] = list;
+                    slot = new List<WalRecord>(e.AtomicBatchSize);
                 }
-                list.Add(e);
+                slot!.Add(e);
             }
         }
 
         var result = new List<WalRecord>(chosen.Count);
-        HashSet<Guid>? emittedTx = batches is null ? null : [];
+        // Sized from the number of distinct transactions, which is an exact
+        // upper bound on the set's final population.
+        HashSet<Guid>? emittedTx = batches is null ? null : new HashSet<Guid>(batches.Count);
         long bytes = 0;
         foreach (var e in chosen)
         {
