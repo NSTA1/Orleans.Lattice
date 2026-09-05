@@ -578,139 +578,31 @@ public partial class BPlusLeafGrainTests
     /// </summary>
     private static long _ledgerAllocationProbeSink;
 
-    /// <summary>
-    /// Escape hatch for the battery test's deliberately-allocating loop.
-    /// <b>Load-bearing: do not remove, and do not "simplify" the assignment
-    /// away.</b> Storing the allocated reference into a static field is what
-    /// makes the allocation genuinely escape, which is the only thing that
-    /// forces the JIT to put it on the heap. See
-    /// <see cref="Allocation_probe_detects_a_deliberately_allocating_loop"/>.
-    /// </summary>
-    private static object? _escapingAllocationSink;
-
-    /// <summary>
-    /// Runs the loop built by <paramref name="prepare"/> at
-    /// <paramref name="baseIterations"/> and at twice that, and returns how many
-    /// more bytes the larger loop allocated. Zero means the loop body is
-    /// allocation-free; a body allocating <c>k</c> bytes per iteration grows by
-    /// <c>baseIterations * k</c>, which no amount of ambient noise can hide.
-    /// <para>
-    /// This differential form is what makes an allocation probe safe in a
-    /// shared test host, and an absolute <c>Is.Zero</c> against the counter is
-    /// not. Tiered JIT can compile - or on-stack-replace - the measured loop
-    /// partway through the measured window, and the counter attributes that
-    /// one-off runtime cost to the loop; whether it lands inside the window
-    /// depends on what the host has already compiled, so an unrelated fixture
-    /// in the same batch can flip the result. Any such constant appears in both
-    /// measurements and cancels in the difference.
-    /// </para>
-    /// <para>
-    /// <paramref name="prepare"/> returns a ready-to-run closure so per-size
-    /// setup (building a ledger to resolve, say) happens outside the measured
-    /// window. The measurement is repeated and the smallest growth kept, then
-    /// clamped at zero: allocation noise is strictly additive, so the minimum is
-    /// the closest observation to the true cost, and a negative difference can
-    /// only mean the smaller loop absorbed more noise than the larger one.
-    /// Growth is measured on the per-thread counter, which is exact for these
-    /// synchronous loops - unlike the process-wide counter, it cannot pick up
-    /// another thread's allocation.
-    /// </para>
-    /// </summary>
-    private static long AllocationGrowthBetweenLoopSizes(
-        Func<int, Action> prepare,
-        int baseIterations,
-        int attempts = 5)
-    {
-        // Warm up at the LARGER size so tiering and on-stack replacement have
-        // both settled before either measured window, whatever the surrounding
-        // batch happened to compile first.
-        prepare(baseIterations * 2)();
-
-        var smallestGrowth = long.MaxValue;
-        for (var attempt = 0; attempt < attempts; attempt++)
-        {
-            var smallLoop = prepare(baseIterations);
-            var largeLoop = prepare(baseIterations * 2);
-
-            var mark = GC.GetAllocatedBytesForCurrentThread();
-            smallLoop();
-            var small = GC.GetAllocatedBytesForCurrentThread() - mark;
-
-            mark = GC.GetAllocatedBytesForCurrentThread();
-            largeLoop();
-            var large = GC.GetAllocatedBytesForCurrentThread() - mark;
-
-            var growth = large - small;
-            if (growth < smallestGrowth)
-                smallestGrowth = growth;
-        }
-
-        // Every attempt is kept rather than short-circuiting on the first
-        // non-positive difference: a single noisy attempt on a loop that DOES
-        // allocate would otherwise be reported as allocation-free, which is the
-        // false negative the battery test exists to catch.
-        return smallestGrowth > 0 ? smallestGrowth : 0;
-    }
-
-    [Test]
-    public void Allocation_probe_detects_a_deliberately_allocating_loop()
-    {
-        // Smoke-detector battery test for AllocationGrowthBetweenLoopSizes
-        // itself, in the spirit of the mojibake gate's own self-check. A
-        // differential allocation probe that could never fail would silently
-        // approve a regression, so prove it reports growth for a loop that
-        // genuinely allocates once per iteration.
-        //
-        // THE ESCAPE IS LOAD-BEARING. Storing each allocation into the static
-        // _escapingAllocationSink is the whole point: it is what makes the
-        // reference outlive the iteration, and only an escaping allocation is
-        // guaranteed to land on the heap. A non-escaping allocation of constant
-        // size - `new long[1].Length`, say - is precisely what .NET 10's tier-1
-        // escape analysis is designed to stack-allocate or elide outright, so
-        // the loop would allocate nothing, this probe would truthfully report
-        // zero growth, and the battery test would become the very false
-        // negative it exists to prevent. That is not hypothetical: it is how
-        // this test first failed, and it is the mirror image of the tiering
-        // effect the differential probe above was written to survive (tier-1
-        // ADDING a one-off cost inside the window, versus tier-1 REMOVING the
-        // allocation under test). Do not replace this with a cheaper-looking
-        // allocation that does not escape.
-        var growth = AllocationGrowthBetweenLoopSizes(
-            iterations => () =>
-            {
-                for (var i = 0; i < iterations; i++)
-                    _escapingAllocationSink = new object();
-            },
-            baseIterations: 2048);
-
-        Assert.That(_escapingAllocationSink, Is.Not.Null,
-            "the measured loop must have run and stored an escaping allocation");
-        Assert.That(growth, Is.GreaterThan(0L),
-            "the probe must report growth for a loop that allocates per iteration, "
-            + "or it cannot catch a real per-record regression");
-    }
-
     [Test]
     public void Ledger_min_unresolved_does_not_allocate_per_query()
     {
         // The replay hot path queries the clamp once per slice and, for a
         // non-deferred record, does nothing else with the ledger. Neither may
         // allocate, or a long replay pays for the clamp per record. See
-        // AllocationGrowthBetweenLoopSizes for why the assertion compares two
-        // loop sizes rather than asserting an absolute zero.
+        // AllocationProbe for why the assertion compares two loop sizes rather
+        // than asserting an absolute zero.
         var ledger = new BPlusLeafGrain.DeferredOffsetLedger(8);
         for (var i = 0; i < 8; i++)
             ledger.Add(i, i + 1);
 
-        var growth = AllocationGrowthBetweenLoopSizes(
-            iterations => () =>
+        // The ledger is queried, never mutated, so the same instance serves
+        // every window; `prepare` only has to hand it to the measured body.
+        var growth = AllocationProbe.Growth(
+            _ => ledger,
+            static (probed, iterations) =>
             {
                 long sink = 0;
                 for (var i = 0; i < iterations; i++)
-                    sink += ledger.MinUnresolved(i & 7);
+                    sink += probed.MinUnresolved(i & 7);
                 _ledgerAllocationProbeSink = sink;
             },
-            baseIterations: 50_000);
+            smallSize: 50_000,
+            largeSize: 100_000);
 
         Assert.That(_ledgerAllocationProbeSink, Is.GreaterThan(0L),
             "guard against the measured loop being optimised away");
@@ -761,21 +653,25 @@ public partial class BPlusLeafGrainTests
     {
         // Pass 2 strikes one offset off per drained terminal, so the drain loop
         // must not allocate for the bookkeeping. The ledger is rebuilt by
-        // prepare(), outside the measured window, so only Resolve is measured.
-        var growth = AllocationGrowthBetweenLoopSizes(
-            iterations =>
+        // prepare(), outside the measured window, so only Resolve is measured -
+        // building it inside the window would charge the fixture's own O(n)
+        // buffer growth to Resolve and report it as a regression.
+        var growth = AllocationProbe.Growth(
+            static iterations =>
             {
                 var ledger = new BPlusLeafGrain.DeferredOffsetLedger(1);
                 for (var i = 0; i < iterations; i++)
                     ledger.Add(0, i);
-                return () =>
-                {
-                    for (var i = 0; i < iterations; i++)
-                        ledger.Resolve(0, i);
-                    _ledgerAllocationProbeSink = ledger.MinUnresolved(0);
-                };
+                return ledger;
             },
-            baseIterations: 2048);
+            static (ledger, iterations) =>
+            {
+                for (var i = 0; i < iterations; i++)
+                    ledger.Resolve(0, i);
+                _ledgerAllocationProbeSink = ledger.MinUnresolved(0);
+            },
+            smallSize: 2_048,
+            largeSize: 4_096);
 
         Assert.That(_ledgerAllocationProbeSink, Is.EqualTo(long.MaxValue),
             "the measured loop must have resolved every offset");
