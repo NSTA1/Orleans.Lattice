@@ -234,9 +234,11 @@ internal static class RepoContextToolHandlers
     /// <param name="addLinks">Optional knowledge-linking edges to add (relation to target keys).</param>
     /// <param name="removeLinks">Optional knowledge-linking edges to remove (relation to target keys).</param>
     /// <param name="ttlSeconds">An optional explicit time-to-live in seconds.</param>
+    /// <param name="fencingToken">The fencing token from repocontext_claim, when writing under a claim.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
     /// <exception cref="McpException">A required argument is missing, the kind is unknown, the TTL is not positive, or a link target is malformed.</exception>
+    /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextRememberResult> RememberAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The repository identifier the entry belongs to.")]
@@ -263,6 +265,8 @@ internal static class RepoContextToolHandlers
         IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks = null,
         [Description("An optional explicit time-to-live in seconds. When omitted, a newly created entry uses the repository's default memory TTL (if configured), otherwise it is durable.")]
         long? ttlSeconds = null,
+        [Description("The fencing token returned by repocontext_claim, presented as proof of the caller's claim on this entry. Required when the entry is claimed: a write carrying no token, or a token the entry has already moved past, is refused rather than silently merged. Omit it for an unclaimed entry.")]
+        long? fencingToken = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(repoId))
@@ -287,7 +291,7 @@ internal static class RepoContextToolHandlers
 
         return ResolveStore(context).RememberAsync(
             repoId, topic, id, memoryKind, title, body, author, provenance, tags,
-            addLinks, removeLinks, ttlSeconds, cancellationToken);
+            addLinks, removeLinks, ttlSeconds, fencingToken, cancellationToken);
     }
 
     /// <summary>
@@ -301,9 +305,11 @@ internal static class RepoContextToolHandlers
     /// <param name="removeTags">Tags to remove from the record.</param>
     /// <param name="addLinks">Knowledge-linking edges to add (relation to target keys). Memory records only.</param>
     /// <param name="removeLinks">Knowledge-linking edges to remove (relation to target keys). Memory records only.</param>
+    /// <param name="fencingToken">The fencing token from repocontext_claim, when patching under a claim.</param>
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
     /// <exception cref="McpException">The key is missing or malformed, no record exists, a field is invalid, or a link target is malformed.</exception>
+    /// <exception cref="RepoContextClaimConflictException">The record is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextUpdateResult> UpdateAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The full repository-context key of the record to patch, for example 'repo/{repoId}/file/{path}'.")]
@@ -318,6 +324,8 @@ internal static class RepoContextToolHandlers
         IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks = null,
         [Description("Knowledge-linking edges to remove, as a map from relation name to the target keys to unlink. Memory records only.")]
         IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks = null,
+        [Description("The fencing token returned by repocontext_claim, presented as proof of the caller's claim on this record. Required when the record is claimed: a patch carrying no token, or a token the record has already moved past, is refused rather than silently merged. Memory records only.")]
+        long? fencingToken = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(key))
@@ -326,7 +334,7 @@ internal static class RepoContextToolHandlers
         }
 
         return ResolveStore(context).UpdateAsync(
-            key, fields, addTags, removeTags, addLinks, removeLinks, cancellationToken);
+            key, fields, addTags, removeTags, addLinks, removeLinks, fencingToken, cancellationToken);
     }
 
     /// <summary>
@@ -370,9 +378,11 @@ internal static class RepoContextToolHandlers
     /// <param name="key">The full repository-context key of the entry to forget.</param>
     /// <param name="lapse">When true, soft-lapse via a short TTL; otherwise hard delete immediately.</param>
     /// <param name="lapseSeconds">The lapse window in seconds; defaults to 60 when lapsing.</param>
+    /// <param name="fencingToken">The fencing token from repocontext_claim, when forgetting under a claim.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The forget outcome.</returns>
     /// <exception cref="McpException">The key is missing or malformed, or the lapse window is not positive.</exception>
+    /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
     public static Task<RepoContextForgetResult> ForgetAsync(
         RequestContext<CallToolRequestParams> context,
         [Description("The full repository-context key of the entry to forget.")]
@@ -381,6 +391,8 @@ internal static class RepoContextToolHandlers
         bool lapse = false,
         [Description("The lapse window in seconds when 'lapse' is true; defaults to 60. Ignored for a hard delete.")]
         long? lapseSeconds = null,
+        [Description("The fencing token returned by repocontext_claim, presented as proof of the caller's claim on this entry. Required when the entry is claimed: forgetting a claimed entry without a valid token is refused. Memory entries only.")]
+        long? fencingToken = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(key))
@@ -388,7 +400,122 @@ internal static class RepoContextToolHandlers
             throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
         }
 
-        return ResolveStore(context).ForgetAsync(key, lapse, lapseSeconds, cancellationToken);
+        return ResolveStore(context).ForgetAsync(key, lapse, lapseSeconds, fencingToken, cancellationToken);
+    }
+
+    /// <summary>
+    /// Claims a memory record for exclusive authorship, returning the fencing token
+    /// every later write under the claim must present.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the memory record to claim.</param>
+    /// <param name="owner">The claiming agent identity.</param>
+    /// <param name="leaseSeconds">The lease length to request, or null for the configured default.</param>
+    /// <param name="maxWaitSeconds">How long to queue for the claim, or null to fail fast under contention.</param>
+    /// <param name="cancellationToken">Cancels the claim.</param>
+    /// <returns>The claim outcome.</returns>
+    /// <exception cref="McpException">The key or owner is missing, the key does not address a memory record, or a duration is not positive.</exception>
+    public static Task<RepoContextClaimResult> ClaimAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the memory record to claim, for example 'repo/{repoId}/mem/{topic}/{id}'. Claims are supported on memory records only.")]
+        string key,
+        [Description("The claiming agent's identity, recorded on the record so a later reader can see who holds the claim. Prefer a stable session or agent id.")]
+        string owner,
+        [Description("The lease length to request in seconds. Omit to use the cluster's configured default; the lock clamps any request to the configured maximum, and the granted length is reported back in 'leaseSeconds'.")]
+        long? leaseSeconds = null,
+        [Description("How long to wait in the lock's first-in-first-out queue for the claim, in seconds. Omit to fail immediately when the record is already claimed, which is what a work-stealing agent wants.")]
+        long? maxWaitSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        if (string.IsNullOrWhiteSpace(owner))
+        {
+            throw new McpException("The 'owner' parameter is required and must be a non-empty identity.");
+        }
+
+        return ResolveStore(context).ClaimAsync(key, owner, leaseSeconds, maxWaitSeconds, cancellationToken);
+    }
+
+    /// <summary>
+    /// Extends the lease on a claim the caller already holds, without changing its
+    /// fencing token.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the claimed memory record.</param>
+    /// <param name="fencingToken">The token from the original grant.</param>
+    /// <param name="leaseSeconds">The lease length to request, or null for the configured default.</param>
+    /// <param name="cancellationToken">Cancels the renew.</param>
+    /// <returns>The renew outcome; not granted means the claim was superseded.</returns>
+    /// <exception cref="McpException">The key is missing, does not address a memory record, or a duration is not positive.</exception>
+    public static Task<RepoContextClaimResult> RenewClaimAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the claimed memory record.")]
+        string key,
+        [Description("The fencing token returned by the repocontext_claim call that took this claim.")]
+        long fencingToken,
+        [Description("The lease length to request in seconds. Omit to use the cluster's configured default; the lock clamps any request to the configured maximum.")]
+        long? leaseSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).RenewClaimAsync(key, fencingToken, leaseSeconds, cancellationToken);
+    }
+
+    /// <summary>
+    /// Releases a claim, handing the record to the next waiter and admitting
+    /// unfenced writes again.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the claimed memory record.</param>
+    /// <param name="fencingToken">The token from the grant being released.</param>
+    /// <param name="cancellationToken">Cancels the release.</param>
+    /// <returns>The release outcome.</returns>
+    /// <exception cref="McpException">The key is missing or does not address a memory record.</exception>
+    public static Task<RepoContextReleaseClaimResult> ReleaseClaimAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the claimed memory record.")]
+        string key,
+        [Description("The fencing token returned by the repocontext_claim call that took this claim.")]
+        long fencingToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).ReleaseClaimAsync(key, fencingToken, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reports the claim recorded on a memory record alongside the live status of
+    /// the lock that grants it. Read-only.
+    /// </summary>
+    /// <param name="context">The MCP request context, used to resolve the store.</param>
+    /// <param name="key">The full repository-context key of the memory record.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The claim status.</returns>
+    /// <exception cref="McpException">The key is missing or does not address a memory record.</exception>
+    public static Task<RepoContextClaimStatusResult> ClaimStatusAsync(
+        RequestContext<CallToolRequestParams> context,
+        [Description("The full repository-context key of the memory record whose claim to inspect.")]
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            throw new McpException("The 'key' parameter is required and must be a non-empty repository-context key.");
+        }
+
+        return ResolveStore(context).ClaimStatusAsync(key, cancellationToken);
     }
 
     /// <summary>

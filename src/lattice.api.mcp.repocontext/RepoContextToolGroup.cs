@@ -20,10 +20,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// <c>repocontext_search</c>, <c>repocontext_index_status</c>,
 /// <c>repocontext_neighbors</c>, and the structural-graph trio
 /// <c>repocontext_outline</c>, <c>repocontext_changed</c>, and
-/// <c>repocontext_related</c>) and - when the
+/// <c>repocontext_related</c>, plus the read-only
+/// <c>repocontext_claim_status</c>) and - when the
 /// host opts writes in - the mutating onboarding tool <c>repocontext_bootstrap</c>
-/// together with <c>repocontext_remember</c>, <c>repocontext_update</c>, and
-/// <c>repocontext_forget</c>. In workspace mode the read-only
+/// together with <c>repocontext_remember</c>, <c>repocontext_update</c>,
+/// <c>repocontext_forget</c>, and the claim trio <c>repocontext_claim</c>,
+/// <c>repocontext_renew_claim</c>, and <c>repocontext_release_claim</c>. In
+/// workspace mode the read-only
 /// <c>repocontext_list_repos</c> is added and the single-repository
 /// <c>repocontext_bootstrap</c> is replaced by the mutating
 /// <c>repocontext_add_repo</c> and <c>repocontext_remove_repo</c>.
@@ -73,9 +76,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
         bool workspaceGuarded = true)
     {
         var offerAddRepo = workspaceMode && workspaceGuarded;
-        var capacity = 12
+        var capacity = 13
             + (workspaceMode ? 1 : 0)
-            + (enableWrites ? (workspaceMode ? (offerAddRepo ? 5 : 4) : 4) : 0);
+            + (enableWrites ? (workspaceMode ? (offerAddRepo ? 8 : 7) : 7) : 0);
         var tools = new List<McpServerTool>(capacity)
         {
             McpServerTool.Create(
@@ -105,6 +108,7 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             BuildRelatedTool(),
             BuildContextTool(),
             BuildStatsTool(),
+            BuildClaimStatusTool(),
         };
 
         if (workspaceMode)
@@ -131,6 +135,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
             tools.Add(BuildRememberTool());
             tools.Add(BuildUpdateTool());
             tools.Add(BuildForgetTool());
+            tools.Add(BuildClaimTool());
+            tools.Add(BuildRenewClaimTool());
+            tools.Add(BuildReleaseClaimTool());
         }
 
         // Bracket every tool call with a timestamped start / completion line. The
@@ -160,6 +167,9 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
         "repocontext_remember",
         "repocontext_update",
         "repocontext_forget",
+        "repocontext_claim",
+        "repocontext_renew_claim",
+        "repocontext_release_claim",
         "repocontext_add_repo",
         "repocontext_remove_repo",
         "repocontext_bootstrap",
@@ -615,6 +625,100 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
                     + "Destructive.",
                 ReadOnly = false,
                 Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildClaimTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ClaimAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_claim",
+                Title = "Claim a repository-context memory record",
+                Description =
+                    "Claims a memory record for exclusive authorship and returns the fencing token that every "
+                    + "later write under the claim must present, so two agents working the same backlog cannot "
+                    + "both believe they own an item. It introduces no locking scheme of its own: mutual "
+                    + "exclusion, first-in-first-out fairness, the bounded lease, expiry reclaim, and the "
+                    + "strictly increasing fencing token all come from the cluster's distributed lock, and this "
+                    + "tool records the granted token on the record as a fencing high-water mark. Losing a race "
+                    + "is reported, not thrown: the result carries 'granted=false' with a 'reason' of "
+                    + "'contended' (already claimed and no wait was requested), 'timeout' (the wait elapsed "
+                    + "while queued), or 'missing' (no such record). Omit 'maxWaitSeconds' to fail fast, which "
+                    + "is what a work-stealing agent wants; supply it to queue. The granted lease is clamped to "
+                    + "the cluster's configured maximum, so honour the returned 'leaseSeconds' and "
+                    + "'leaseExpiresAtUtc' rather than the length you asked for, and renew before it lapses - "
+                    + "an expired lease is reclaimed and the next claimant is granted a strictly higher token "
+                    + "that fences your writes out. Claims are supported on memory records only, because the "
+                    + "fencing check is enforced on the memory record's own write path. Fails closed: offered "
+                    + "only to a caller who cleared the authorization gate and for whom the host opted writes "
+                    + "in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildRenewClaimTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.RenewClaimAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_renew_claim",
+                Title = "Renew a repository-context claim",
+                Description =
+                    "Extends the lease on a claim the caller already holds, without changing its fencing token, "
+                    + "so a long-running agent keeps its claim alive rather than having it reclaimed mid-task. "
+                    + "A renew presenting a token that no longer holds the lock returns 'granted=false' with "
+                    + "reason 'superseded' rather than throwing: that is the authoritative signal the holder was "
+                    + "fenced out - typically because its lease lapsed and the next waiter was granted a higher "
+                    + "token - and it must stop writing and re-claim rather than continue. Fails closed: offered "
+                    + "only to a caller who cleared the authorization gate and for whom the host opted writes "
+                    + "in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildReleaseClaimTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ReleaseClaimAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_release_claim",
+                Title = "Release a repository-context claim",
+                Description =
+                    "Releases a claim, handing the record to the next waiter in the lock's queue and marking "
+                    + "the record's claim as no longer live so unfenced writes are admitted again. It never "
+                    + "lowers the fencing high-water mark, so a released token stays refused: write every result "
+                    + "you owe the record BEFORE releasing, because a write presenting a released token is "
+                    + "rejected. Idempotent and safe to retry - releasing a token that no longer holds the lock "
+                    + "is a no-op reported as 'released=false' with reason 'stale' or 'missing', never an error. "
+                    + "Fails closed: offered only to a caller who cleared the authorization gate and for whom "
+                    + "the host opted writes in. Destructive.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool BuildClaimStatusTool()
+        => McpServerTool.Create(
+            RepoContextToolHandlers.ClaimStatusAsync,
+            new McpServerToolCreateOptions
+            {
+                Name = "repocontext_claim_status",
+                Title = "Inspect a repository-context claim",
+                Description =
+                    "Reports the claim recorded on a memory record - whether a claim is live, its fencing "
+                    + "token, the highest released token, and the owner and region that took it - alongside the "
+                    + "live status of the distributed lock that grants it ('isHeld', 'lockFencingToken', "
+                    + "'leaseExpiresAtUtc', and the number of agents queued behind it). Use it to see who holds "
+                    + "an item and how deep the queue is before deciding to wait. The answer is a point-in-time "
+                    + "observation, never an entitlement: 'authoritative' is always false, because a claim can "
+                    + "lapse or be superseded between this read and your next write. Only "
+                    + "'repocontext_claim' grants the right to write, and only the fencing check on the write "
+                    + "path enforces it - never gate a write on this tool's answer. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
                 UseStructuredContent = true,
             });
 }

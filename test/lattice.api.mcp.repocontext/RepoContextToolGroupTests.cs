@@ -19,10 +19,14 @@ public sealed class RepoContextToolGroupTests
             "repocontext_list_topics", "repocontext_search", "repocontext_index_status",
             "repocontext_neighbors", "repocontext_outline", "repocontext_changed",
             "repocontext_related", "repocontext_context", "repocontext_stats",
+            "repocontext_claim_status",
         ];
 
     private static readonly string[] WriteToolNames =
-        ["repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget"];
+        [
+            "repocontext_bootstrap", "repocontext_remember", "repocontext_update", "repocontext_forget",
+            "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
+        ];
 
     private static readonly string[] WorkspaceReadToolNames =
         [
@@ -30,10 +34,15 @@ public sealed class RepoContextToolGroupTests
             "repocontext_list_topics", "repocontext_search", "repocontext_index_status",
             "repocontext_neighbors", "repocontext_outline", "repocontext_changed",
             "repocontext_related", "repocontext_context", "repocontext_stats", "repocontext_list_repos",
+            "repocontext_claim_status",
         ];
 
     private static readonly string[] WorkspaceWriteToolNames =
-        ["repocontext_add_repo", "repocontext_remove_repo", "repocontext_remember", "repocontext_update", "repocontext_forget"];
+        [
+            "repocontext_add_repo", "repocontext_remove_repo", "repocontext_remember",
+            "repocontext_update", "repocontext_forget",
+            "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
+        ];
 
     [Test]
     public void Group_is_repo_context()
@@ -191,13 +200,14 @@ public sealed class RepoContextToolGroupTests
         [
             "repocontext_remember", "repocontext_update", "repocontext_forget",
             "repocontext_add_repo", "repocontext_remove_repo", "repocontext_bootstrap",
+            "repocontext_claim", "repocontext_renew_claim", "repocontext_release_claim",
         ];
 
     private static readonly string[] NonMutatingToolNames =
         [
             "repocontext_health", "repocontext_recall", "repocontext_scan",
             "repocontext_search", "repocontext_context", "repocontext_outline",
-            "repocontext_related", "repocontext_list_repos",
+            "repocontext_related", "repocontext_list_repos", "repocontext_claim_status",
         ];
 
     [Test]
