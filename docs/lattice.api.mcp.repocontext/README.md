@@ -10,6 +10,7 @@ The repository-context module plugs into the `Orleans.Lattice.Api.Mcp` binding's
 - **Working memory.** `repocontext_remember`, `repocontext_update`, and `repocontext_forget` capture agent-authored notes and decisions under topics, with an optional per-entry time-to-live for memory that lapses on its own.
 - **Retrieval.** `repocontext_recall`, `repocontext_scan`, and `repocontext_list_topics` read the context back; `repocontext_search` adds meaning-based retrieval when an embedding provider is bound, degrading fail-closed to a deterministic keyword scan when it is not. The keyword scan ranks over file **content** (via a per-file content projection), not just filenames and identifiers, so it stays useful even with no embedder bound. Every search hit carries a deterministic `reasons` list explaining why it ranked.
 - **Graph navigation.** `repocontext_outline` returns a file's declared-symbol skeleton without reading its body, `repocontext_related` resolves a file's structural neighbourhood (references, dependents, and covering tests) from a reverse cross-reference projection, and `repocontext_changed` reports how the workspace has drifted from the index and the blast radius of those edits - all bounded reads that never re-scan the whole repository.
+- **Exclusive claims.** `repocontext_claim`, `repocontext_renew_claim`, `repocontext_release_claim`, and `repocontext_claim_status` take a leased, fenced claim over a single memory record, so several agents can drain one shared work queue without colliding. The lease bounds a crashed holder and the monotonic fencing token is enforced on every subsequent write, so a superseded holder is refused rather than trusted. See [The agent-operated backlog](backlog.md).
 - **Token economics.** `repocontext_context` packs a ranked, explained bundle of source for a task under a hard token ceiling in one call, with reuse economics so an agent never pays twice for context it already holds; `repocontext_stats` reports aggregate token savings over a bounded recent window. See [Retrieval and token economics](retrieval-economics.md).
 - **Health.** `repocontext_health` proves the surface is registered and reachable for the authenticated caller.
 
@@ -17,7 +18,7 @@ Every record is stored as a CRDT value on a named Lattice tree, so concurrent up
 
 ## Fail-closed and permission-scoped
 
-The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding one of the data-plane operations that makes the built-in data group usable, and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`; a reader-only caller never sees them.
+The module adds no authorization path of its own. The permission-aware discovery core advertises its tools only to a caller holding one of the data-plane operations that makes the built-in data group usable, and the fail-closed gate enforces the verdict at both advertisement and invocation. The mutating tools (`bootstrap`, `remember`, `update`, `forget`, and the claim trio `claim`, `renew_claim`, `release_claim`) are contributed only when the host opts writes in via `AddRepoContextTools(enableWrites: true)`; a reader-only caller never sees them. `repocontext_claim_status` is a read and is always contributed.
 
 ## Quick Start
 
@@ -42,6 +43,7 @@ For a ready-to-run, restart-durable local deployment - "codebase memory in a box
 - [Tools](tools.md) - the full `repocontext_*` tool catalogue and each tool's contract.
 - [Retrieval and token economics](retrieval-economics.md) - explainable search, the graph-navigation tools, the budgeted context bundle, reuse economics, usage accounting, and the shared token counter.
 - [Memory and TTL](memory-and-ttl.md) - agent memory, topics, and per-repository time-to-live policy.
+- [The agent-operated backlog](backlog.md) - leased, fenced claims over memory records, and the backlog they make safe for concurrent agent workers.
 - [Semantic search](semantic-search.md) - the embedding seam, the exact-kNN index and its warm vector cache, keyword search over file content, and fail-closed degradation.
 - [Container quickstart](container.md) - running the module as a single durable local container.
 

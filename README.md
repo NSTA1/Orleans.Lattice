@@ -298,6 +298,12 @@ at once, and does so without a line of bespoke storage code:
   turns the same store into a multi-cluster one by choosing a per-tree merge
   mode, which is the [deployment journey](#the-deployment-journey) applied to a
   real application.
+- The core's [distributed lock](docs/lattice/distributed-lock.md) is what makes
+  RepoContext's [agent-operated backlog](docs/lattice.api.mcp.repocontext/backlog.md)
+  safe for several agents to drain at once: a claim over a memory record borrows
+  the lock's fencing token and bounded lease wholesale, and the token is then
+  enforced on the record's own write path, so a superseded agent is refused
+  rather than trusted. No new coordination primitive was written for it.
 
 **RepoContext demonstrates Orleans.Lattice. It does not define it.** It is one
 application category among many, and nothing in the platform is shaped around

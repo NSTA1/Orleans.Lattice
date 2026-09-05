@@ -70,6 +70,8 @@ This file is the entry point for AI agents and LLM tooling. Documentation lives 
 - [MCP server](docs/lattice.api.mcp/README.md): Model Context Protocol server exposing the state, data, backup, and auth facades as fail-closed, permission-scoped tools an AI agent can discover and call over streamable HTTP (`Orleans.Lattice.Api.Mcp`).
 - [MCP telemetry tools](docs/lattice.api.mcp.telemetry/README.md): Opt-in companion exposing read-only cluster OpenTelemetry metrics over MCP behind a distinct `Telemetry` grant and a Prometheus/PromQL proxy (`Orleans.Lattice.Api.Mcp.Telemetry`).
 - [MCP telemetry Azure token auth](docs/lattice.api.mcp.telemetry.azure/README.md): Azure managed-identity backend-token provider that lets the telemetry proxy query an Azure Monitor managed-Prometheus workspace with a rotating Entra token (`Orleans.Lattice.Api.Mcp.Telemetry.Azure`).
+- [Repo-context MCP](docs/lattice.api.mcp.repocontext/README.md): Opt-in companion giving an AI agent durable, conflict-free context and memory about a codebase - structural and symbol recall, agent memory with optional TTL, explainable semantic search, graph navigation, and a budgeted context bundle with reuse economics (`Orleans.Lattice.Api.Mcp.RepoContext`).
+- [The agent-operated backlog](docs/lattice.api.mcp.repocontext/backlog.md): Leased, fenced claims over repository-context memory records, and the agent-drained backlog they make safe - why a claim needs a fence rather than a flag, how the fence is enforced on the write path, and how groupings share one epic branch.
 
 ## Working on this repository
 
