@@ -16,7 +16,14 @@ name: Docs
 #                     packages' unreleased docs, since every tag in a wave points
 #                     at the same release-line commit (see docs/RELEASING.md).
 #   workflow_dispatch Manual deploy, so a docs-only fix does not have to wait for
-#                     a release.
+#                     the next wave. Dispatch it on a `release/<X.Y>` line branch,
+#                     never on `main`: the site documents what users can actually
+#                     install, and `main` carries unreleased work. Cherry-pick the
+#                     fix onto the line first, exactly as a package hotfix is
+#                     cherry-picked (see docs/RELEASING.md). The `github-pages`
+#                     environment enforces this - its deployment branch policy
+#                     admits the tag `lattice-v*` and the branch `release/*`, and
+#                     deliberately does not admit `main`.
 
 on:
   pull_request:
