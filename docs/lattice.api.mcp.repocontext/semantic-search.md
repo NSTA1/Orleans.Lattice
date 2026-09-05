@@ -33,6 +33,36 @@ The semantic path range-scans all vector metadata and decodes every vector paylo
 
 Embedding is provided by an `IEmbeddingProvider` the host binds (for example the Onyx embedding companion). The provider is fail-closed by contract: it never throws, and reports its own availability, so a missing or unhealthy embedder degrades search to keyword recall instead of erroring. The bundled container points its default embedding provider at a separate embedding companion container, keeping the MCP host a single-listener surface.
 
+### Binding and configuring the bundled provider
+
+`AddOnyxEmbeddingProvider` binds the client for the companion model-server container as the singleton `IEmbeddingProvider`. The registration is `TryAdd`, so a host that has already bound its own provider (OpenAI, Azure OpenAI, a self-hosted endpoint) keeps it, and a host that wants a different provider simply does not call this method.
+
+```csharp verify
+using Orleans.Lattice.Api.Mcp.RepoContext;
+using Microsoft.Extensions.DependencyInjection;
+
+var services = new ServiceCollection();
+services.AddOnyxEmbeddingProvider(o =>
+{
+    o.BaseAddress = new Uri("http://embedding:9000");
+    o.ModelName = OnyxEmbeddingOptions.DefaultModelName;
+    o.Dimension = OnyxEmbeddingOptions.DefaultDimension;
+});
+```
+
+The optional callback populates `OnyxEmbeddingOptions`. Every default matches the model and endpoint baked into the shipped `apps/embedding` image, so an unconfigured host targets the companion container as-is:
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `BaseAddress` | `Uri` | `http://localhost:9000` | Base address of the companion model-server container. The health probe is issued against `api/health` and embeds against `encoder/bi-encoder-embed`, both relative to this address. Point it at the managed or external endpoint in a cloud deployment. |
+| `ModelName` | `string` | `nomic-ai/nomic-embed-text-v1` | The HuggingFace model id the server embeds with. Must match a model baked into (or mounted into) the container. |
+| `Dimension` | `int` | 768 | The vector dimension `ModelName` produces. Used to build the provider's embedding space and to fail-closed-reject any response whose vectors are a different length. |
+| `MaxContextLength` | `int` | 512 | The maximum context length, in tokens, sent with each embed request. Longer inputs are truncated by the model server. |
+| `NormalizeEmbeddings` | `bool` | `true` | Whether the server L2-normalizes the returned vectors. Reflected in the provider's embedding space. |
+| `RequestTimeout` | `TimeSpan?` | (unset) | Optional per-request timeout on the underlying HTTP client. When unset the ambient `HttpClient` default applies. A timeout elapsing is a fail-closed failure, not an exception surfaced to the caller. |
+
+Changing `ModelName`, `Dimension`, or `NormalizeEmbeddings` selects a **new embedding space** and must be paired with the matching model in the container - see [Embedding-space safety](#embedding-space-safety) below.
+
 ## Where vectors come from
 
 Vectors are produced by the indexing path. When the host has enabled writes, `AddRepoContextTools` wires the embed-and-store ingestor in place of the deferred no-op, so an onboarding run embeds the files it added or updated and lands their vectors on the reserved vector trees. A later search then finds them by meaning. If no embedder is bound at onboarding time, no vectors are written and search stays on the keyword path until vectors exist.
