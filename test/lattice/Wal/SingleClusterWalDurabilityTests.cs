@@ -160,10 +160,12 @@ public sealed class SingleClusterWalDurabilityTests
         {
             Assert.That(report.TreeName, Is.EqualTo(treeId));
             Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1));
-            Assert.That(report.EntriesTrimmed, Is.GreaterThanOrEqualTo(0));
             // The metric must agree with the report. When the run
             // trimmed zero entries the counter records zero, so the
             // assertion is the equality rather than a strict-positive.
+            // That equality is also the only non-vacuous claim available
+            // about EntriesTrimmed, which is a count and so can never be
+            // negative in the first place.
             Assert.That(trimmed, Is.EqualTo(report.EntriesTrimmed),
                 "orleans.lattice.wal.entries_trimmed must record the count reported by RunOnceAsync.");
         });
@@ -350,8 +352,11 @@ public sealed class SingleClusterWalDurabilityTests
         Assert.Multiple(() =>
         {
             Assert.That(report.TreeName, Is.EqualTo(treeId));
-            Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1));
-            Assert.That(report.EntriesTrimmed, Is.GreaterThanOrEqualTo(0),
+            // A completed pass over the shards IS the "not wedged" evidence, so
+            // the message belongs on this assertion. The previous bound on
+            // EntriesTrimmed was a tautology (a count is never negative) and so
+            // could not have detected the wedge its message described.
+            Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1),
                 "after the burst the WAL GC must complete a pass against the sharded pin floor rather than wedging.");
         });
     }

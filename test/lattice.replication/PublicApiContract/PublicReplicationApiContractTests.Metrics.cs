@@ -86,7 +86,14 @@ public partial class PublicReplicationApiContractTests
         {
             Assert.That(matched.Tree, Is.EqualTo(treeId));
             Assert.That(matched.Peer, Is.EqualTo(PublicReplicationApiClusterFixture.SiteBClusterId));
+            // Deliberately loose: the comment on the convergence wait above
+            // documents that an error tick can legitimately precede (and
+            // follow) the success that stamps LastContactTimestamp, so a
+            // healthy row can still carry a non-zero consecutive-error count.
+            // Tightening this to Is.Zero makes the fixture flaky.
             Assert.That(matched.ConsecutiveErrors, Is.GreaterThanOrEqualTo(0));
+            // Not vacuous: LastContactSeconds is double.NaN until a success is
+            // recorded, and NaN fails an ordered comparison.
             Assert.That(matched.LastContactSeconds, Is.GreaterThanOrEqualTo(0d));
         });
     }

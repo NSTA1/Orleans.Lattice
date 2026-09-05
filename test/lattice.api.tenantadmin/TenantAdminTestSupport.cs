@@ -22,9 +22,16 @@ internal static class TenantAdminTestSupport
 
         public FixedGate(bool allow) => _allow = allow;
 
+        /// <summary>How many times the gate was consulted, so a test can prove the
+        /// authorizer reached it (or, for the system-origin bypass, did not).</summary>
+        public int Calls { get; private set; }
+
         public ValueTask<LatticeAccessDecision> AuthorizeAsync(
             in LatticeAccessRequest request, CancellationToken cancellationToken = default)
-            => new(_allow ? LatticeAccessDecision.Allow() : LatticeAccessDecision.Deny("denied by test"));
+        {
+            Calls++;
+            return new(_allow ? LatticeAccessDecision.Allow() : LatticeAccessDecision.Deny("denied by test"));
+        }
     }
 
     /// <summary>A gate that allows but narrows the allow with a key filter, to prove the fail-closed partial-allow rejection.</summary>

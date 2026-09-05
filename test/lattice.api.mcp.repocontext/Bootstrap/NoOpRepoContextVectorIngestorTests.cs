@@ -58,10 +58,12 @@ public sealed class NoOpRepoContextVectorIngestorTests
 
         // The default seam never stored a vector, so retiring a removed file is
         // inert: it completes without throwing and touches no store.
-        await ingestor.RetireAsync(
+        var task = ingestor.RetireAsync(
             "repo", new[] { "gone.cs" }, TestContext.CurrentContext.CancellationToken);
 
-        Assert.Pass("The no-op retire completed without touching any store.");
+        Assert.That(task.IsCompletedSuccessfully, Is.True,
+            "The no-op retire should complete synchronously because it owns no store.");
+        await task;
     }
 
     [Test]

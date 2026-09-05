@@ -66,7 +66,13 @@ public sealed class StrictConsistencyFenceIntegrationTests
             await _fixture.LatticeB(AuthReplicationClusterFixture.StrictTree).SetAsync("k-eventual", Bytes("v"));
         }
 
-        Assert.Pass("the eventual path accepts the write");
+        using (AuthReplicationClusterFixture.AsSubject(AuthReplicationClusterFixture.BootstrapAdmin))
+        {
+            Assert.That(
+                await _fixture.LatticeB(AuthReplicationClusterFixture.StrictTree).GetAsync("k-eventual"),
+                Is.EqualTo(Bytes("v")),
+                "the eventual path accepts and persists the write");
+        }
     }
 
     [Test]
@@ -91,7 +97,13 @@ public sealed class StrictConsistencyFenceIntegrationTests
             await _fixture.LatticeB(AuthReplicationClusterFixture.StrictTree).SetAsync("k-met", Bytes("v"));
         }
 
-        Assert.Pass("a floor the local epoch has already met does not fence");
+        using (AuthReplicationClusterFixture.AsSubject(AuthReplicationClusterFixture.BootstrapAdmin))
+        {
+            Assert.That(
+                await _fixture.LatticeB(AuthReplicationClusterFixture.StrictTree).GetAsync("k-met"),
+                Is.EqualTo(Bytes("v")),
+                "a floor the local epoch has already met does not fence the write");
+        }
     }
 
     [Test]
@@ -103,7 +115,13 @@ public sealed class StrictConsistencyFenceIntegrationTests
             await _fixture.LatticeB("loose-app").SetAsync("k-loose", Bytes("v"));
         }
 
-        Assert.Pass("the fence is per-tree: a non-strict tree is never fenced");
+        using (AuthReplicationClusterFixture.AsSubject(AuthReplicationClusterFixture.BootstrapAdmin))
+        {
+            Assert.That(
+                await _fixture.LatticeB("loose-app").GetAsync("k-loose"),
+                Is.EqualTo(Bytes("v")),
+                "the fence is per-tree: a non-strict tree is never fenced");
+        }
     }
 
     [Test]

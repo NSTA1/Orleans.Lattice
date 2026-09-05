@@ -268,7 +268,7 @@ public sealed class LatticeBackupSetCaptureIntegrationTests
         await _fixture.GrainFactory.GetGrain<ILattice>("m2").SetAsync("k", Bytes("v"));
 
         var fenceSelections = 0;
-        var drainWaitRecorded = false;
+        var drainWaitMeasurements = new System.Collections.Concurrent.ConcurrentBag<double>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
@@ -284,11 +284,11 @@ public sealed class LatticeBackupSetCaptureIntegrationTests
                 Interlocked.Add(ref fenceSelections, (int)measurement);
             }
         });
-        listener.SetMeasurementEventCallback<double>((instrument, _, _, _) =>
+        listener.SetMeasurementEventCallback<double>((instrument, measurement, _, _) =>
         {
             if (instrument.Name == "orleans.lattice.backup.cross_tree_fence.drain_wait")
             {
-                drainWaitRecorded = true;
+                drainWaitMeasurements.Add(measurement);
             }
         });
         listener.Start();
@@ -306,9 +306,14 @@ public sealed class LatticeBackupSetCaptureIntegrationTests
             Assert.That(result.SetManifest.Fence, Is.Not.Null);
             Assert.That(result.SetManifest.Fence!.HlcTimestamp, Is.GreaterThan(0));
             Assert.That(result.SetManifest.Fence.Attempts, Is.GreaterThanOrEqualTo(1));
-            Assert.That(result.SetManifest.Fence.DrainWaitMilliseconds, Is.GreaterThanOrEqualTo(0));
             Assert.That(fenceSelections, Is.GreaterThanOrEqualTo(1));
-            Assert.That(drainWaitRecorded, Is.True);
+            // The fence may retry (Attempts is not pinned to 1 above), so the
+            // count is bounded below rather than fixed; the falsifiable claim
+            // is that the wait persisted in the manifest is one the meter
+            // actually observed, not merely that some measurement occurred.
+            Assert.That(drainWaitMeasurements, Is.Not.Empty);
+            Assert.That(drainWaitMeasurements, Does.Contain(result.SetManifest.Fence.DrainWaitMilliseconds),
+                "the drain-wait metric must record the fence wait persisted in the set manifest");
         });
     }
 

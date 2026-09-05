@@ -23,11 +23,13 @@ public sealed class TenantAdminAccessAuthorizerTests
     [Test]
     public async Task AuthorizeTenantAdminAsync_allows_when_the_gate_allows()
     {
-        var authorizer = new TenantAdminAccessAuthorizer(new FixedGate(allow: true));
+        var gate = new FixedGate(allow: true);
+        var authorizer = new TenantAdminAccessAuthorizer(gate);
 
         await authorizer.AuthorizeTenantAdminAsync();
 
-        Assert.Pass("An allowing gate authorizes without throwing.");
+        Assert.That(gate.Calls, Is.EqualTo(1),
+            "the allow must come from consulting the gate, not from skipping it");
     }
 
     [Test]
@@ -122,20 +124,28 @@ public sealed class TenantAdminAccessAuthorizerTests
 
         await authorizer.AuthorizeTenantAdminAsync();
 
-        Assert.Pass("A platform operator granted on the policy tree is authorized under DefaultEffect=Allow.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.Calls, Is.EqualTo(1),
+                "the allow must be a matched grant from the gate, not a skipped check");
+            Assert.That(gate.LastScope, Is.EqualTo(Orleans.Lattice.Auth.LatticeAuthReservedTrees.PolicyTreeId),
+                "the grant must be evaluated over the control-plane-isolated policy tree");
+        });
     }
 
     [Test]
     public async Task AuthorizeTenantAdminAsync_bypasses_the_gate_under_system_origin()
     {
-        var authorizer = new TenantAdminAccessAuthorizer(new FixedGate(allow: false));
+        var gate = new FixedGate(allow: false);
+        var authorizer = new TenantAdminAccessAuthorizer(gate);
 
         using (LatticeSystemOrigin.Enter())
         {
             await authorizer.AuthorizeTenantAdminAsync();
         }
 
-        Assert.Pass("System origin bypasses the gate, so even a denying gate authorizes.");
+        Assert.That(gate.Calls, Is.Zero,
+            "system origin short-circuits to allow before the gate is consulted at all");
     }
 
     // ----- Subject-resolving authorization (delegates the allow/deny decision to

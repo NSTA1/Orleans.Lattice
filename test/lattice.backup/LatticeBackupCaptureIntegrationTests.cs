@@ -230,8 +230,10 @@ public sealed class LatticeBackupCaptureIntegrationTests
             Assert.That(catalogued.StructuralDigest, Is.Not.Empty);
             Assert.That(catalogued.Topology.ShardCount, Is.GreaterThan(0));
             Assert.That(catalogued.Topology.ShardRootDigests, Has.Count.EqualTo(catalogued.Topology.ShardCount));
-            Assert.That(catalogued.ConsistencyCut.HlcTimestamp, Is.GreaterThanOrEqualTo(0));
-            Assert.That(catalogued.ConsistencyCut.WalSequence, Is.GreaterThanOrEqualTo(0));
+            Assert.That(catalogued.ConsistencyCut.HlcTimestamp, Is.EqualTo(result.Manifest.ConsistencyCut.HlcTimestamp),
+                "the catalogued row must preserve the manifest HLC cut");
+            Assert.That(catalogued.ConsistencyCut.WalSequence, Is.EqualTo(result.Manifest.ConsistencyCut.WalSequence),
+                "the catalogued row must preserve the manifest WAL cut");
             // Local-only tree: single-origin, so no per-origin provenance.
             Assert.That(catalogued.Provenance, Is.Empty);
             Assert.That(catalogued.CompressionDictionary, Is.Null);

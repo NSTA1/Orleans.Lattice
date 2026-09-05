@@ -65,7 +65,8 @@ public partial class PublicApiContractTests
         {
             Assert.That(report.TreeName, Is.EqualTo(treeId));
             Assert.That(report.ShardsScanned, Is.GreaterThanOrEqualTo(1));
-            Assert.That(report.EntriesTrimmed, Is.GreaterThanOrEqualTo(0));
+            Assert.That(report.EntriesTrimmed, Is.Zero,
+                "without a positive consumer cursor or retention TTL, the default GC pass must be a no-op");
         });
     }
 

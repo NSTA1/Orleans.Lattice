@@ -38,13 +38,23 @@ public sealed class LatticeStructureIntegrationTests
     private static void AssertWellFormed(NodeStateSummary node, int expectedDepth)
     {
         Assert.That(node.Depth, Is.EqualTo(expectedDepth), $"node {node.NodeId} depth");
-        Assert.That(node.SubtreeKeyCount, Is.GreaterThanOrEqualTo(0));
-        Assert.That(node.SubtreeTombstoneCount, Is.GreaterThanOrEqualTo(0));
 
         if (node.Kind == NodeKind.Leaf)
         {
             Assert.That(node.ChildCount, Is.EqualTo(0), "leaves have no children");
             Assert.That(node.Children, Is.Empty);
+        }
+        else
+        {
+            Assert.That(node.Children, Has.Count.EqualTo(node.ChildCount),
+                "a fully-expanded internal node must include every immediate child");
+            Assert.Multiple(() =>
+            {
+                Assert.That(node.SubtreeKeyCount, Is.EqualTo(node.Children.Sum(c => c.SubtreeKeyCount)),
+                    "an internal node's live-key aggregate must equal the sum of its immediate children");
+                Assert.That(node.SubtreeTombstoneCount, Is.EqualTo(node.Children.Sum(c => c.SubtreeTombstoneCount)),
+                    "an internal node's tombstone aggregate must equal the sum of its immediate children");
+            });
         }
 
         // Children are returned in ascending key-range-low order.
@@ -73,7 +83,8 @@ public sealed class LatticeStructureIntegrationTests
     [Test]
     public async Task GetTreeStructure_matches_diagnostic_totals()
     {
-        var tree = await _fixture.CreatePopulatedTreeAsync("struct-totals", keyCount: 60, shardCount: 2);
+        const int keyCount = 60;
+        var tree = await _fixture.CreatePopulatedTreeAsync("struct-totals", keyCount, shardCount: 2);
         var report = await tree.DiagnoseAsync(deep: true);
 
         var result = await _fixture.Query.GetTreeStructureAsync(new StructureRequest
@@ -90,6 +101,10 @@ public sealed class LatticeStructureIntegrationTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(totalLive, Is.EqualTo(keyCount),
+                "the fixture writes exactly the requested live keys");
+            Assert.That(totalTombstones, Is.Zero,
+                "the fixture writes no tombstones");
             Assert.That(totalLive, Is.EqualTo(report.TotalLiveKeys),
                 "structure live-key total must match the diagnostic report");
             Assert.That(totalTombstones, Is.EqualTo(report.TotalTombstones),
