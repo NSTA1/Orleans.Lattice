@@ -1275,6 +1275,15 @@ internal sealed class ReplicationShipperGrain(
             return true;
         }
 
+        // Cross-cluster blocked-floor propagation. Republish the
+        // receiver's pin BEFORE the cursor advance below, so the local
+        // WAL GC can never observe the advanced cursor without the pin
+        // that constrains it. Published on the rejected path too: a
+        // receiver that defers a batch behind its inbound receive fence
+        // still stamps its pin, and that is precisely the window in
+        // which the producer must not trim.
+        await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+
         if (!ack.Accepted)
         {
             // Receiver rejected the batch; treat as transient (the
@@ -2138,6 +2147,10 @@ internal sealed class ReplicationShipperGrain(
             ApplyBackoff(options, ex, "transport");
             return false;
         }
+
+        // Same cross-cluster blocked-floor propagation as the serial
+        // leg, ahead of the pipelined cursor advance below.
+        await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
 
         if (!ack.Accepted)
         {
@@ -3254,6 +3267,14 @@ internal sealed class ReplicationShipperGrain(
             return;
         }
 
+        // An idle link still carries the receiver's blocked-floor pin:
+        // the probe is the only ack an all-caught-up shipper sees, so
+        // it is what re-arms a newly-raised pin and, just as
+        // importantly, clears a stale one once the receiver's staging
+        // buffer drains. Without this the pin would freeze at its last
+        // shipped value for as long as the link stays quiet.
+        await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+
         if (!ack.Accepted)
         {
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
@@ -4084,7 +4105,7 @@ internal sealed class ReplicationShipperGrain(
     /// <summary>
     /// Publishes <paramref name="receiverPin"/> (the value of
     /// <see cref="ReplicationAck.BlockedAtHlc"/> on the most recent
-    /// successful ack) into the local cursor registry under the
+    /// ack, accepted or not) into the local cursor registry under the
     /// peer-specific consumer id, skipping when the pin has not
     /// changed. Failures are logged at Warning level and swallowed:
     /// a registry outage does not unwind the cursor advance the
