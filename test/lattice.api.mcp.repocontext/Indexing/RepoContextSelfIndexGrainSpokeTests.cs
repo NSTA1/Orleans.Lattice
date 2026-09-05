@@ -62,6 +62,7 @@ public sealed class RepoContextSelfIndexGrainSpokeTests
             options,
             new RepoContextAnnIndexScheduler(
                 grainFactory, options, NullLogger<RepoContextAnnIndexScheduler>.Instance),
+            RepoContextSourceTestDoubles.MountedOnlyGate(),
             NullLogger<RepoContextSelfIndexGrain>.Instance,
             state);
     }

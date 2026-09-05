@@ -121,6 +121,7 @@ internal static class RepoContextEntryProjection
         AddString(fields, "displayName", node.DisplayName);
         AddString(fields, "defaultBranch", node.DefaultBranch);
         AddString(fields, "lastIngested", node.LastIngested);
+        AddString(fields, "indexedCommit", node.IndexedCommit);
         AddTags(tags, node.Tags);
     }
 
