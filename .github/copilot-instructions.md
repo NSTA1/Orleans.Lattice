@@ -190,6 +190,51 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   further `/` separators (for example `feat/wal-shard-batching`). Anything else -
   a bare description with no prefix, an upper-case segment, or a name containing
   the author's GitHub login - fails CI.
+- **An epic shares one long-lived integration branch, named by nesting rather
+  than by a new prefix.** When an epic fans out into several sub-issues, the
+  epic gets one branch `<type>/epic/<epic-slug>`, each sub-issue branches off it
+  as `<type>/epic/<epic-slug>/<item-slug>`, sub-issue pull requests target the
+  epic branch, and the epic reaches `main` as a single fully-gated pull request
+  once its integration item passes. Nesting is deliberate: the guard's regex
+  already permits further `/` segments, so both shapes pass the branch-name
+  check unchanged, no `epic` prefix is added to the list above, and the epic's
+  own type stays visible (a documentation epic is `docs/epic/<epic-slug>`). A
+  bare `epic/<epic-slug>` is **not** the convention and fails CI.
+  - **CI runs on epic-targeted pull requests.** `.github/workflows/ci.yml`
+    triggers on `pull_request: branches: [main, '*/epic/**']`, and the advisory
+    `explorer-ci.yml` and `ui-tests.yml` lanes mirror that branch list behind
+    their own `paths:` filters. Without the second pattern a pull request into
+    an epic branch would run no checks at all, which trades serialisation for
+    no validation - keep it when editing any of those triggers. (`docs.yml` has
+    no `branches:` filter and so already covers every base; `coverage.yml` and
+    `publish.yml` are push-triggered and unaffected.)
+  - **An epic branch must never carry branch protection, and in particular
+    never a required status check with `strict` (require branches to be up to
+    date before merging).** That setting on `main` is precisely what serialises
+    pull requests: every merge invalidates every other open pull request, which
+    must then update and re-run the full suite, so N concurrent sub-issues cost
+    O(N^2) CI cycles. Removing that cost is the entire reason the epic branch
+    exists, so sub-issue pull requests merge in any order without invalidating
+    each other. CI *running* is what gives feedback; `strict` protection is what
+    serialises - do not conflate the two, and do not "harden" an epic branch by
+    adding protection to it. Because the epic branch has no required checks,
+    `build-and-test` on a sub-issue pull request is advisory: it runs and
+    reports, and never blocks or hangs waiting for a check that will not run.
+    Merge a sub-issue pull request only when that check is green.
+  - **The epic owner keeps the branch current with `main`.** Merge `main` into
+    the epic branch whenever `main` moves under it, and at least weekly on a
+    long-running epic; the integration item merges `main` once more immediately
+    before raising the epic's pull request. Managing drift is not optional -
+    deferring it only means the integration item pays the whole cost at once,
+    late, when it is hardest to attribute.
+  - **Review has to happen on the sub-issue pull requests.** The epic-to-`main`
+    pull request is large by construction, so review deferred to it turns N
+    reviewable pull requests into one unreviewable one. Review each sub-issue
+    pull request into the epic branch to the same bar as one into `main`.
+  - **Do not apply this ceremonially.** An epic of two or three genuinely
+    independent items is better served by ordinary pull requests straight into
+    `main`. The epic branch earns its overhead only once the fan-out is wide
+    enough that mutually-invalidating pull requests would dominate wall-clock.
 - When a PR fully implements an issue, add a `Closes XXX` line to the PR body.
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.
