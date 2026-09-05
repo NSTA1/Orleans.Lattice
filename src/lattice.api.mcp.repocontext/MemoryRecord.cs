@@ -95,6 +95,45 @@ internal sealed record MemoryRecord
     public OrMap<string, BoundedRegister> LinkDigests { get; init; } = new();
 
     /// <summary>
+    /// The record's fencing high-water mark: the highest
+    /// <see cref="LockToken.FencingToken"/> any claim on this record has been
+    /// granted, encoded by <see cref="RepoContextClaimFence.Encode"/> as both the
+    /// register's value and its total-order key. Because
+    /// <see cref="BoundedRegister"/> is a monotone max-register, that encoding makes
+    /// the fence a lattice maximum over tokens: a lower token can never displace a
+    /// higher one, through a direct write or a concurrent merge. The write path
+    /// refuses any write presenting a token below it.
+    /// </summary>
+    [Id(13)]
+    public BoundedRegister ClaimFence { get; init; } = new();
+
+    /// <summary>
+    /// The identity that took the claim owning <see cref="ClaimFence"/>, written
+    /// under the same order key so the owner always describes the current fence
+    /// rather than drifting independently.
+    /// </summary>
+    [Id(14)]
+    public BoundedRegister ClaimOwner { get; init; } = new();
+
+    /// <summary>
+    /// The region the claim owning <see cref="ClaimFence"/> was taken in, written
+    /// under the same order key. Claims are cluster-scoped, so a write served from
+    /// a different region than the recorded one fails closed rather than racing a
+    /// claim it cannot observe.
+    /// </summary>
+    [Id(15)]
+    public BoundedRegister ClaimRegion { get; init; } = new();
+
+    /// <summary>
+    /// The highest fencing token whose claim has been released. A claim is live
+    /// while <see cref="ClaimFence"/> exceeds this mark; once released, the record
+    /// admits unfenced writes again, so releasing a claim returns the record to its
+    /// pre-claim behaviour without ever lowering the fence.
+    /// </summary>
+    [Id(16)]
+    public BoundedRegister ClaimReleasedFence { get; init; } = new();
+
+    /// <summary>
     /// Lattice merge of two replicas of the same memory record. Identity and the
     /// immutable <see cref="Kind"/> are preserved from <paramref name="left"/>
     /// (falling back to <paramref name="right"/> only when the left side is
@@ -122,6 +161,10 @@ internal sealed record MemoryRecord
             Links = OrMap<string, OrSet>.Merge(left.Links, right.Links),
             Revisions = GSet.Merge(left.Revisions, right.Revisions),
             LinkDigests = OrMap<string, BoundedRegister>.Merge(left.LinkDigests, right.LinkDigests),
+            ClaimFence = BoundedRegister.Merge(left.ClaimFence, right.ClaimFence),
+            ClaimOwner = BoundedRegister.Merge(left.ClaimOwner, right.ClaimOwner),
+            ClaimRegion = BoundedRegister.Merge(left.ClaimRegion, right.ClaimRegion),
+            ClaimReleasedFence = BoundedRegister.Merge(left.ClaimReleasedFence, right.ClaimReleasedFence),
         };
     }
 }
