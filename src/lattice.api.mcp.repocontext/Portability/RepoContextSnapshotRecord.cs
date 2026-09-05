@@ -52,4 +52,43 @@ internal sealed record RepoContextSnapshotRecord
     /// </summary>
     [Id(3)]
     public string? EmbeddingSpace { get; init; }
+
+    /// <summary>
+    /// Compares two records by value, with <see cref="Value"/> and
+    /// <see cref="Vector"/> compared by content. The compiler-generated record
+    /// equality compares the <see cref="byte"/> arrays with
+    /// <see cref="EqualityComparer{T}.Default"/> (reference equality), so two
+    /// structurally identical records - and, in particular, a record and its
+    /// post-serialization self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The record to compare against.</param>
+    public bool Equals(RepoContextSnapshotRecord? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && string.Equals(EmbeddingSpace, other.EmbeddingSpace, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value)
+        && BytesEqual(Vector, other.Vector);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        if (Vector is { } vector)
+        {
+            hash.AddBytes(vector);
+        }
+
+        hash.Add(EmbeddingSpace, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

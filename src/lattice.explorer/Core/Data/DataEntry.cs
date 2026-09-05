@@ -77,4 +77,81 @@ public sealed record DataEntry
 
         return mapped;
     }
+
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> compared by content
+    /// and <see cref="CurrentMembers"/> compared element by element. The
+    /// compiler-generated record equality compares the <see cref="byte"/> array and
+    /// the member list with <see cref="EqualityComparer{T}.Default"/> (reference
+    /// equality), so two structurally identical entries - and, in particular, an
+    /// entry and its post-serialization self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(DataEntry? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && ValueLength == other.ValueLength
+        && Truncated == other.Truncated
+        && Hlc.Equals(other.Hlc)
+        && IsTombstone == other.IsTombstone
+        && ExpiresAtTicks == other.ExpiresAtTicks
+        && string.Equals(CrdtShape, other.CrdtShape, StringComparison.Ordinal)
+        && BytesEqual(Value, other.Value)
+        && MembersEqual(CurrentMembers, other.CurrentMembers);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        hash.Add(ValueLength);
+        hash.Add(Truncated);
+        hash.Add(Hlc);
+        hash.Add(IsTombstone);
+        hash.Add(ExpiresAtTicks);
+        hash.Add(CrdtShape, StringComparer.Ordinal);
+        if (CurrentMembers is { } members)
+        {
+            foreach (var member in members)
+            {
+                hash.Add(member);
+            }
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool MembersEqual(
+        IReadOnlyList<DataCrdtMember>? left,
+        IReadOnlyList<DataCrdtMember>? right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Count; i++)
+        {
+            if (!left[i].Equals(right[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

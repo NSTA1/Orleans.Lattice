@@ -55,4 +55,44 @@ public sealed record DeadLetterEntry
         DeadLetterSourceKind.LocalRejected => DeadLetterSource.LocalRejected,
         _ => DeadLetterSource.Unknown,
     };
+
+    /// <summary>
+    /// Compares two entries by value, with <see cref="Value"/> compared by content.
+    /// The compiler-generated record equality compares the <see cref="byte"/> array
+    /// with <see cref="EqualityComparer{T}.Default"/> (reference equality), so two
+    /// structurally identical entries - and, in particular, an entry and its
+    /// post-serialization self - would otherwise never compare equal.
+    /// </summary>
+    /// <param name="other">The entry to compare against.</param>
+    public bool Equals(DeadLetterEntry? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && ValueByteLength == other.ValueByteLength
+        && Truncated == other.Truncated
+        && string.Equals(Reason, other.Reason, StringComparison.Ordinal)
+        && Source == other.Source
+        && TimestampUtc == other.TimestampUtc
+        && BytesEqual(Value, other.Value);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Key, StringComparer.Ordinal);
+        hash.Add(ValueByteLength);
+        hash.Add(Truncated);
+        hash.Add(Reason, StringComparer.Ordinal);
+        hash.Add(Source);
+        hash.Add(TimestampUtc);
+        if (Value is { } value)
+        {
+            hash.AddBytes(value);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
