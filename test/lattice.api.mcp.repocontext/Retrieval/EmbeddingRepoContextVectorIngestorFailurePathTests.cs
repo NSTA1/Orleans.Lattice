@@ -111,8 +111,8 @@ public sealed class EmbeddingRepoContextVectorIngestorFailurePathTests
         // The whitespace-only file has no embeddable passage, so the arm tries to
         // write a "contentless" marker. That write faults, but the pass must not
         // throw - the marker is recomputed next reconcile.
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         var writer = harness.Services.GetRequiredService<RepoContextVectorWriter>();
         var sourceKey = RepoContextKeys.File(RepoId, "empty.cs");
@@ -140,8 +140,8 @@ public sealed class EmbeddingRepoContextVectorIngestorFailurePathTests
         // skipped and nothing lands, so the file falls back to keyword recall.
         var ingestor = Ingestor(harness, new FakeEmbeddingProvider { FailEmbeds = true });
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         var aEmbedded = await IsEmbeddedAsync(harness, "a.cs", Ct);
         Assert.Multiple(() =>
@@ -166,8 +166,8 @@ public sealed class EmbeddingRepoContextVectorIngestorFailurePathTests
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
         var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { present, missing }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { present, missing }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         var presentEmbedded = await IsEmbeddedAsync(harness, "present.cs", Ct);
         var goneEmbedded = await IsEmbeddedAsync(harness, "gone.cs", Ct);
@@ -196,8 +196,8 @@ public sealed class EmbeddingRepoContextVectorIngestorFailurePathTests
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
         var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { present, directoryEntry }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { present, directoryEntry }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         var presentEmbedded = await IsEmbeddedAsync(harness, "present.cs", Ct);
         var dirEmbedded = await IsEmbeddedAsync(harness, "adir.cs", Ct);

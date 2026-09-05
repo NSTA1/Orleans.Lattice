@@ -384,7 +384,7 @@ public sealed class RepoContextBootstrapToolTests
 
         public int Invocations => _invocations;
 
-        public ValueTask<int> IngestAsync(
+        public ValueTask<RepoFileVectorIngestOutcome> IngestAsync(
             string repoId,
             string repoRoot,
             IReadOnlyList<RepoFileEntry> changedFiles,
@@ -398,7 +398,7 @@ public sealed class RepoContextBootstrapToolTests
                 throw new InvalidOperationException("Simulated interruption during vectorisation.");
             }
 
-            return ValueTask.FromResult(0);
+            return ValueTask.FromResult(RepoFileVectorIngestOutcome.None);
         }
 
         public Task RetireAsync(
@@ -437,7 +437,7 @@ public sealed class RepoContextBootstrapToolTests
 
         public int MemoryArmRuns => Volatile.Read(ref _memoryArmRuns);
 
-        public ValueTask<int> IngestAsync(
+        public ValueTask<RepoFileVectorIngestOutcome> IngestAsync(
             string repoId,
             string repoRoot,
             IReadOnlyList<RepoFileEntry> changedFiles,
@@ -448,7 +448,7 @@ public sealed class RepoContextBootstrapToolTests
             Interlocked.Increment(ref _fileArmRuns);
             return failingArm == "file"
                 ? throw new InvalidOperationException("Simulated file arm fault.")
-                : ValueTask.FromResult(0);
+                : ValueTask.FromResult(RepoFileVectorIngestOutcome.None);
         }
 
         public Task RetireAsync(

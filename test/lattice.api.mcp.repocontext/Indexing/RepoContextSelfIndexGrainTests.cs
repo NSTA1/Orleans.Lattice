@@ -309,7 +309,7 @@ public sealed class RepoContextSelfIndexGrainTests
     {
         private int _invocations;
 
-        public ValueTask<int> IngestAsync(
+        public ValueTask<RepoFileVectorIngestOutcome> IngestAsync(
             string repoId,
             string repoRoot,
             IReadOnlyList<RepoFileEntry> changedFiles,
@@ -322,7 +322,7 @@ public sealed class RepoContextSelfIndexGrainTests
                 throw new InvalidOperationException("Simulated vectorisation failure on the first run.");
             }
 
-            return ValueTask.FromResult(0);
+            return ValueTask.FromResult(RepoFileVectorIngestOutcome.None);
         }
 
         public Task RetireAsync(

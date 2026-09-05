@@ -88,8 +88,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
         var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { a, b }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { a, b }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         Assert.Multiple(() =>
         {
@@ -115,8 +115,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         // Re-offer the same files as unchanged: both already have a live vector, so
         // the back-fill embeds nothing. This is the convergence that proves the
         // presence check is a fixed point, not an endless re-embed.
-        var second = await ingestor.IngestAsync(
-            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { a, b }, onProgress: null, Ct);
+        var second = (await ingestor.IngestAsync(
+            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { a, b }, onProgress: null, Ct)).FilesEmbedded;
 
         Assert.That(second, Is.EqualTo(0), "Every unchanged file already has a live embedding, so nothing re-embeds.");
     }
@@ -135,8 +135,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         // Embed only A. Then a run offers A and B both as unchanged (the durability
         // gap: B's structural record was committed but its embedding never landed).
         await ingestor.IngestAsync(RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
-        var backfilled = await ingestor.IngestAsync(
-            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { a, b }, onProgress: null, Ct);
+        var backfilled = (await ingestor.IngestAsync(
+            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { a, b }, onProgress: null, Ct)).FilesEmbedded;
 
         Assert.Multiple(() =>
         {
@@ -156,8 +156,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
             new RepoContextMcpHarnessOptions { Posture = RepoContextMcpAuthPosture.Writer }, Ct);
         var ingestor = Ingestor(harness, provider: null);
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         Assert.Multiple(() =>
         {
@@ -177,8 +177,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var provider = new FakeEmbeddingProvider { Available = false };
         var ingestor = Ingestor(harness, provider);
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         Assert.That(embedded, Is.EqualTo(0), "An unavailable provider degrades to keyword recall: nothing is embedded.");
     }
@@ -198,8 +198,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var provider = new FakeEmbeddingProvider { RejectEmptyStrings = true };
         var ingestor = Ingestor(harness, provider);
 
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { real, empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { real, empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         Assert.Multiple(() =>
         {
@@ -243,7 +243,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
 
         var progress = new List<int>();
-        var embedded = await ingestor.IngestAsync(
+        var embedded = (await ingestor.IngestAsync(
             RepoId,
             root,
             files,
@@ -253,7 +253,7 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
                 progress.Add(count);
                 return ValueTask.CompletedTask;
             },
-            Ct);
+            Ct)).FilesEmbedded;
 
         Assert.Multiple(() =>
         {
@@ -276,13 +276,13 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
 
         // First pass: the whitespace-only file carries no passage, so nothing embeds,
         // but it is recorded as a "considered, no passages" marker.
-        var first = await ingestor.IngestAsync(
-            RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var first = (await ingestor.IngestAsync(
+            RepoId, root, new[] { empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         // Second pass offers it as unchanged (the reconcile the bug looped on). Because
         // it is now covered by the marker, it is not re-selected and nothing re-reads it.
-        var second = await ingestor.IngestAsync(
-            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { empty }, onProgress: null, Ct);
+        var second = (await ingestor.IngestAsync(
+            RepoId, root, Array.Empty<RepoFileEntry>(), new[] { empty }, onProgress: null, Ct)).FilesEmbedded;
 
         var coverage = await writer.LoadCoverageAsync(RepoId, Ct);
         var sourceId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "empty.cs"));
@@ -341,8 +341,8 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         // The file gains content and is re-offered as changed: it now embeds for real,
         // and the stale marker is cleared so the real embedding - not the marker - covers it.
         var grown = Write(root, "grows.cs", "class Grows { void Now() {} }");
-        var embedded = await ingestor.IngestAsync(
-            RepoId, root, new[] { grown }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
+        var embedded = (await ingestor.IngestAsync(
+            RepoId, root, new[] { grown }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
         var sourceId = VectorCodec.SourceId(RepoContextKeys.File(RepoId, "grows.cs"));
         var coverage = await writer.LoadCoverageAsync(RepoId, Ct);

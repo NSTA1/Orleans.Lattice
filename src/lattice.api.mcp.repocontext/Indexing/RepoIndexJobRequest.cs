@@ -86,4 +86,17 @@ public sealed record RepoIndexJobRequest
     /// </summary>
     [Id(7)]
     public string? CommitSha { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, this pass must re-probe the whole
+    /// content-unchanged set for embedding gaps rather than honouring the periodic
+    /// gap-scan cadence. It is set only by the self-index grain's out-of-band paged
+    /// sweep, which re-drives the job precisely because it found a file whose vector
+    /// is missing: without it the re-drive would run a pass that skips the scan and
+    /// heals nothing, and the sweep would keep re-driving. A persisted job that
+    /// predates this field deserialises it as <see langword="false"/>, which is the
+    /// cadence-honouring default.
+    /// </summary>
+    [Id(8)]
+    public bool ForceEmbeddingGapScan { get; init; }
 }

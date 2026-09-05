@@ -63,6 +63,18 @@ internal sealed class RepoContextBootstrapRequest
     public bool AllowPrune { get; init; }
 
     /// <summary>
+    /// When <see langword="true"/>, the vectorisation arm re-probes the whole
+    /// content-unchanged set for embedding gaps regardless of the periodic gap-scan
+    /// cadence (<see cref="RepoContextIndexingOptions.PassesPerEmbeddingGapScan"/>).
+    /// It is set by the re-drive the self-index grain's out-of-band paged gap sweep
+    /// triggers, which knows a vector is genuinely missing, so the healing pass runs
+    /// immediately instead of waiting for the cadence. Defaults to
+    /// <see langword="false"/>; a run with <see cref="AllowPrune"/> false (an explicit
+    /// onboarding or re-bootstrap) always scans anyway.
+    /// </summary>
+    public bool ForceEmbeddingGapScan { get; init; }
+
+    /// <summary>
     /// The resolved commit SHA this run indexes, when the repository is git-sourced.
     /// It switches the run's scan set from a filesystem walk to the commit's tree
     /// (see <see cref="IRepoContextSourceScanner"/>) and is stamped onto the

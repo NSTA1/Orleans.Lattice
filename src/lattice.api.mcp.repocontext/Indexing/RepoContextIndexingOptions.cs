@@ -33,6 +33,9 @@ internal sealed class RepoContextIndexingOptions
     /// <summary>Environment variable overriding <see cref="FullWalkInterval"/> (in seconds).</summary>
     public const string FullWalkIntervalSecondsKey = "LATTICE_FULL_WALK_INTERVAL_SECONDS";
 
+    /// <summary>Environment variable overriding <see cref="EmbeddingGapScanInterval"/> (in seconds).</summary>
+    public const string EmbeddingGapScanIntervalSecondsKey = "LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS";
+
     /// <summary>Environment variable overriding <see cref="VectorCacheTtl"/> (in seconds).</summary>
     public const string VectorCacheTtlSecondsKey = "LATTICE_VECTOR_CACHE_TTL_SECONDS";
 
@@ -83,34 +86,99 @@ internal sealed class RepoContextIndexingOptions
     /// within this bound. The first walk after a process start is always a full one.
     /// <para>
     /// <b>This must exceed <see cref="ReconcileInterval"/> plus
-    /// <see cref="ReconcileIntervalJitter"/> for pruning to engage at all.</b> A reconcile
-    /// forces a full sweep when at least this long has elapsed since the last one, so a
-    /// value at or below the maximum spacing between two reconciles makes every reconcile
-    /// a full sweep and leaves <see cref="RepoWalkPruning"/> inert - the prune snapshot is
-    /// written on every run and never acted on. The default is deliberately several
-    /// reconciles wide so roughly three in four reconciles prune, which is the whole point
-    /// of maintaining the snapshot.
+    /// <see cref="ReconcileIntervalJitter"/> for pruning to engage at all</b> (see
+    /// <see cref="PruningCanEngage"/>). It is an operator-facing wall-clock expression of
+    /// the deadline; what the reconcile actually counts is
+    /// <see cref="PassesPerFullWalk"/>, the number of reconciles this interval is worth at
+    /// the configured spacing. Counting passes rather than wall clock is what makes the
+    /// bound hold on a repository whose pass takes longer than the configured spacing: the
+    /// reconcile is single-flight, so the real gap between two walks is the larger of the
+    /// configured spacing and the previous pass's duration, and a wall-clock deadline read
+    /// against that gap is always already past.
     /// </para>
     /// <para>
-    /// Because this bound is only reached on the first reconcile at or after it elapses,
-    /// the true worst-case detection latency for a pure in-place content edit is this
-    /// interval plus up to one further reconcile spacing.
+    /// Because the deadline is only reached on the first reconcile at or after it elapses,
+    /// the true worst-case detection latency for a pure in-place content edit is
+    /// <see cref="PassesPerFullWalk"/> reconciles, which is this interval or longer in wall
+    /// clock whenever passes run slower than the configured spacing.
     /// </para>
     /// </summary>
     public TimeSpan FullWalkInterval { get; init; } = TimeSpan.FromMinutes(60);
 
     /// <summary>
-    /// Whether the directory-modification-time prune cache can ever be acted on under
-    /// this configuration. A reconcile prunes only while less than
-    /// <see cref="FullWalkInterval"/> has elapsed since the last full sweep, and two
-    /// reconciles are never closer together than <see cref="ReconcileInterval"/> (plus up
-    /// to <see cref="ReconcileIntervalJitter"/>). So unless the full-walk interval is
-    /// strictly wider than that maximum spacing, every reconcile forces a full sweep and
-    /// <see cref="RepoWalkPruning"/> is inert: its snapshot is written on every run and
-    /// never read for the benefit it exists to provide.
+    /// How often a reconcile re-probes the whole content-unchanged set for embedding gaps -
+    /// files whose structural record is committed but whose vector never landed. Expressed
+    /// as wall clock; what the reconcile counts is <see cref="PassesPerEmbeddingGapScan"/>.
+    /// <para>
+    /// The probe costs two membership reads per indexed source, so on a converged
+    /// repository it is by far the most expensive part of a pass while finding nothing.
+    /// Spacing it out does not delay healing: the self-index grain runs a continuous,
+    /// bounded, paged gap sweep out of band and forces an immediate in-pass scan the moment
+    /// it finds a gap, and a repository that has not yet been observed clean is re-probed
+    /// on every pass until it is.
+    /// </para>
     /// </summary>
-    public bool PruningCanEngage =>
-        FullWalkInterval > ReconcileInterval + ReconcileIntervalJitter;
+    public TimeSpan EmbeddingGapScanInterval { get; init; } = TimeSpan.FromHours(4);
+
+    /// <summary>
+    /// The widest spacing two consecutive reconciles can be scheduled at:
+    /// <see cref="ReconcileInterval"/> plus the whole of <see cref="ReconcileIntervalJitter"/>.
+    /// This is the scheduling floor a wall-clock interval is converted into passes against;
+    /// the observed spacing can be wider when a pass outruns it.
+    /// </summary>
+    public TimeSpan MaximumReconcileSpacing => ReconcileInterval + ReconcileIntervalJitter;
+
+    /// <summary>
+    /// <see cref="FullWalkInterval"/> expressed as a number of reconciles, which is the
+    /// deadline the reconcile actually enforces. A reconcile forces a full (unpruned) sweep
+    /// once this many consented passes have run since the last one, so the bound holds
+    /// however long an individual pass takes. Never less than one.
+    /// </summary>
+    public int PassesPerFullWalk => PassesPerInterval(FullWalkInterval);
+
+    /// <summary>
+    /// <see cref="EmbeddingGapScanInterval"/> expressed as a number of reconciles, which is
+    /// the cadence the reconcile actually enforces for the whole-repository embedding gap
+    /// probe. Never less than one, so a value at or below the reconcile spacing simply
+    /// scans on every pass, exactly as it did before the cadence existed.
+    /// </summary>
+    public int PassesPerEmbeddingGapScan => PassesPerInterval(EmbeddingGapScanInterval);
+
+    /// <summary>
+    /// Whether the directory-modification-time prune cache can ever be acted on under
+    /// this configuration - that is, whether <see cref="PassesPerFullWalk"/> is at least
+    /// two, so at least one reconcile in every cycle prunes. When it is one, every
+    /// reconcile forces a full sweep and <see cref="RepoWalkPruning"/> is inert: its
+    /// snapshot is written on every run and never read for the benefit it exists to
+    /// provide.
+    /// <para>
+    /// This is both necessary and sufficient. The deadline is counted in passes, not wall
+    /// clock, so a configuration that satisfies it prunes even when a pass takes far longer
+    /// than <see cref="MaximumReconcileSpacing"/> - the case that silently defeated the
+    /// wall-clock deadline this replaced.
+    /// </para>
+    /// </summary>
+    public bool PruningCanEngage => PassesPerFullWalk >= 2;
+
+    /// <summary>
+    /// Converts a wall-clock interval into the number of reconciles it is worth at the
+    /// configured scheduling spacing, rounded up and clamped to at least one. A
+    /// non-positive interval or spacing degenerates to one pass, which reproduces the
+    /// "every pass" behaviour rather than disabling the deadline.
+    /// </summary>
+    /// <param name="interval">The wall-clock interval to convert.</param>
+    /// <returns>The equivalent number of reconciles, at least one.</returns>
+    private int PassesPerInterval(TimeSpan interval)
+    {
+        var spacing = MaximumReconcileSpacing;
+        if (interval <= TimeSpan.Zero || spacing <= TimeSpan.Zero)
+        {
+            return 1;
+        }
+
+        var passes = Math.Ceiling(interval.Ticks / (double)spacing.Ticks);
+        return passes >= int.MaxValue ? int.MaxValue : Math.Max(1, (int)passes);
+    }
 
     /// <summary>
     /// How long a warm decoded-vector candidate set is trusted in the
@@ -237,6 +305,8 @@ internal sealed class RepoContextIndexingOptions
             ReconcileInterval = ReadSeconds(ReconcileIntervalSecondsKey, defaults.ReconcileInterval),
             ReconcileIntervalJitter = ReadSeconds(ReconcileJitterSecondsKey, defaults.ReconcileIntervalJitter),
             FullWalkInterval = ReadSeconds(FullWalkIntervalSecondsKey, defaults.FullWalkInterval),
+            EmbeddingGapScanInterval = ReadSeconds(
+                EmbeddingGapScanIntervalSecondsKey, defaults.EmbeddingGapScanInterval),
             VectorCacheTtl = ReadSeconds(VectorCacheTtlSecondsKey, defaults.VectorCacheTtl),
             TokenizerProfile = ReadTokenizerProfile(TokenizerProfileKey, defaults.TokenizerProfile),
             Role = ReadIndexingRole(IndexingRoleKey, defaults.Role),

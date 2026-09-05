@@ -414,7 +414,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
         private readonly Serializer<FileNode> _fileNodes =
             SerializerServices.GetRequiredService<Serializer<FileNode>>();
 
-        internal BootstrapHarness(TimeProvider? timeProvider = null)
+        internal BootstrapHarness(TimeProvider? timeProvider = null, RepoContextIndexingOptions? options = null)
         {
             RepoRoot = Path.Combine(Path.GetTempPath(), "lattice-rcbootstrap-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(RepoRoot);
@@ -462,11 +462,20 @@ public sealed partial class RepoContextBootstrapServicePassTests
                 .Returns(call =>
                 {
                     ChangedOfferedToIngestor = call.ArgAt<IReadOnlyList<RepoFileEntry>>(2);
+                    UnchangedOfferedToIngestor = call.ArgAt<IReadOnlyList<RepoFileEntry>>(3);
+                    IngestCalls++;
                     var report = call.ArgAt<Func<int, CancellationToken, ValueTask>>(4);
                     var ct = call.ArgAt<CancellationToken>(5);
-                    return OnIngest is null
-                        ? new ValueTask<int>(0)
-                        : new ValueTask<int>(OnIngest(report, ct));
+                    var outcome = IngestOutcome;
+                    if (OnIngest is null)
+                    {
+                        return new ValueTask<RepoFileVectorIngestOutcome>(outcome);
+                    }
+
+                    // The hook still reports an embedded count; the harness supplies the
+                    // coverage facts around it so a test can drive convergence.
+                    var pending = OnIngest(report, ct);
+                    return new ValueTask<RepoFileVectorIngestOutcome>(AwaitAsync(pending, outcome));
                 });
             VectorIngestor.IngestMemoryAsync(
                 Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
@@ -495,7 +504,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
                 // resolves unchanged; the guard has its own tests.
                 new RepoContextWorkspaceGuard([]),
                 timeProvider ?? TimeProvider.System,
-                new RepoContextIndexingOptions(),
+                options ?? new RepoContextIndexingOptions(),
                 NullLogger<RepoContextBootstrapService>.Instance);
         }
 
@@ -521,6 +530,17 @@ public sealed partial class RepoContextBootstrapServicePassTests
 
         internal IReadOnlyList<RepoFileEntry> ChangedOfferedToIngestor { get; private set; } = [];
 
+        internal IReadOnlyList<RepoFileEntry> UnchangedOfferedToIngestor { get; private set; } = [];
+
+        internal int IngestCalls { get; private set; }
+
+        /// <summary>
+        /// The coverage facts the fake ingestor reports. Defaults to a converged
+        /// probe (coverage established, no gaps) so a pass that is not explicitly
+        /// exercising the gap-scan cadence settles after its first run.
+        /// </summary>
+        internal RepoFileVectorIngestOutcome IngestOutcome { get; set; } = new(0, 0, true);
+
         internal Func<Func<int, CancellationToken, ValueTask>, CancellationToken, Task<int>>? OnIngest { get; set; }
 
         internal int MemoryIngestResult { get; set; }
@@ -528,6 +548,13 @@ public sealed partial class RepoContextBootstrapServicePassTests
         internal Exception? MemoryIngestFault { get; set; }
 
         internal RepoContextBootstrapRequest Request() => new() { RepoRoot = RepoRoot, RepoId = RepoId };
+
+        private static async Task<RepoFileVectorIngestOutcome> AwaitAsync(
+            Task<int> pending, RepoFileVectorIngestOutcome outcome)
+        {
+            var embedded = await pending.ConfigureAwait(false);
+            return outcome with { FilesEmbedded = embedded };
+        }
 
         internal void WriteFile(string relativePath, string body)
         {

@@ -15,13 +15,20 @@ public sealed class NoOpRepoContextVectorIngestorTests
         var changed = new[] { new RepoFileEntry("a.cs", "d", 1, "csharp") };
         var unchanged = new[] { new RepoFileEntry("b.cs", "e", 2, "csharp") };
 
-        var embedded = await ingestor.IngestAsync(
+        var outcome = await ingestor.IngestAsync(
             "repo", "/root", changed, unchanged, onProgress: null, TestContext.CurrentContext.CancellationToken);
 
         // A no-op that embeds nothing is the whole contract: it reports zero files
         // embedded and reaching here without throwing proves the seam is inert -
-        // it ignores both the changed and the unchanged offering.
-        Assert.That(embedded, Is.EqualTo(0));
+        // it ignores both the changed and the unchanged offering. It also establishes
+        // no coverage, so a coordinator can never read its silence as convergence.
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome.FilesEmbedded, Is.EqualTo(0));
+            Assert.That(outcome.GapsSelected, Is.EqualTo(0));
+            Assert.That(outcome.CoverageEstablished, Is.False);
+            Assert.That(outcome.Converged, Is.False);
+        });
     }
 
     [Test]
@@ -40,7 +47,7 @@ public sealed class NoOpRepoContextVectorIngestorTests
         Assert.Multiple(() =>
         {
             Assert.That(task.IsCompletedSuccessfully, Is.True);
-            Assert.That(task.Result, Is.EqualTo(0));
+            Assert.That(task.Result, Is.EqualTo(RepoFileVectorIngestOutcome.None));
         });
     }
 

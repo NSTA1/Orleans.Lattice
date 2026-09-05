@@ -112,11 +112,23 @@ services:
       # reconcile cheap, so edits and deletions are picked up within seconds. The
       # full-walk interval bounds how long an in-place content edit (which does not
       # bump a directory's modification time and is invisible to pruning) can go
-      # unnoticed before a forced full sweep re-stats every file.
+      # unnoticed before a forced full sweep re-stats every file. Both periodic
+      # deadlines below are declared in wall clock but counted in reconcile passes
+      # (interval / (reconcile interval + jitter), rounded up, minimum one), so they
+      # still hold when a pass takes longer than its own scheduled spacing - which
+      # is the normal case on a large repository, and which silently defeated the
+      # previous wall-clock deadlines. Here that is 24 passes to a full walk and
+      # 60 to an embedding gap scan.
       LATTICE_SELFINDEX_TICK_SECONDS: "5"
       LATTICE_RECONCILE_INTERVAL_SECONDS: "5"
       LATTICE_RECONCILE_JITTER_SECONDS: "0"
       LATTICE_FULL_WALK_INTERVAL_SECONDS: "120"
+      # How often a pass re-probes every unchanged file for a missing vector. The
+      # probe is two membership reads per indexed source, so it dominates a pass on
+      # a converged repository. Spacing it costs no healing latency: the self-index
+      # grain's out-of-band paged sweep forces an immediate in-pass scan whenever it
+      # actually finds a gap.
+      LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS: "300"
     ports:
       # The MCP streamable-HTTP endpoint (and the health probes) on the host.
       #

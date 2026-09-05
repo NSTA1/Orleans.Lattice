@@ -53,6 +53,17 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     internal const int EmbedBatchSize = 32;
 
     /// <summary>
+    /// How many <i>consecutive</i> batch record failures the arm tolerates before it
+    /// gives the remaining batches up for this pass. A single failure is unlucky and
+    /// the batches after it are worth attempting; a run of them means the vector
+    /// plane is saturated - characteristically a batched CRDT apply timing out - and
+    /// every further batch adds load to a store that is already failing while landing
+    /// nothing. Stopping early costs nothing durable: a deferred source is simply left
+    /// unmarked and the next reconcile re-embeds it idempotently.
+    /// </summary>
+    internal const int MaxConsecutiveBatchFailures = 3;
+
+    /// <summary>
     /// The recorded-marker set used when the real one could not be read, so a
     /// failed read degrades to "no marker evidence this pass" rather than failing
     /// the arm. Shared and immutable because it is only ever read.
@@ -92,7 +103,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     }
 
     /// <inheritdoc />
-    public async ValueTask<int> IngestAsync(
+    public async ValueTask<RepoFileVectorIngestOutcome> IngestAsync(
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,
@@ -110,7 +121,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // unchanged file is never falsely flagged as missing an embedding.
         if (_embeddingProvider is null || (changedFiles.Count == 0 && unchangedFiles.Count == 0))
         {
-            return 0;
+            return RepoFileVectorIngestOutcome.None;
         }
 
         if (!await _embeddingProvider.IsAvailableAsync(cancellationToken).ConfigureAwait(false))
@@ -118,7 +129,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
             _logger.LogInformation(
                 "Skipping bootstrap vectorisation for repository {RepoId}: the embedding provider is unavailable. Search will use keyword recall.",
                 repoId);
-            return 0;
+            return RepoFileVectorIngestOutcome.None;
         }
 
         // Probe coverage for exactly the candidate files (changed + unchanged) with a
@@ -150,6 +161,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         // happened on the live deployment once the symbol arm was fixed.
         RepoContextEmbeddingCoverage coverage;
         var coverageProbeFailed = false;
+        var gapsSelected = 0;
         try
         {
             coverage = await _writer.ProbeCoverageAsync(repoId, candidateKeys, cancellationToken)
@@ -170,10 +182,10 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
 
         var toEmbed = coverageProbeFailed
             ? new List<RepoFileEntry>(changedFiles)
-            : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles);
+            : SelectFilesToEmbed(repoId, coverage, changedFiles, unchangedFiles, out gapsSelected);
         if (toEmbed.Count == 0)
         {
-            return 0;
+            return new RepoFileVectorIngestOutcome(0, gapsSelected, !coverageProbeFailed);
         }
 
         var sources = new List<EmbeddingSource>(toEmbed.Count);
@@ -263,7 +275,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 repoId);
         }
 
-        return embedded;
+        return new RepoFileVectorIngestOutcome(embedded, gapsSelected, !coverageProbeFailed);
     }
 
     /// <inheritdoc />
@@ -802,6 +814,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var embedded = 0;
         var batchEmbedded = 0;
         var failedBatches = 0;
+        var consecutiveBatchFailures = 0;
         Exception? firstBatchFailure = null;
         var pendingMembers = new List<string>();
         for (var start = 0; start < unitTexts.Count; start += EmbedBatchSize)
@@ -871,6 +884,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 embedded += batchEmbedded;
+                consecutiveBatchFailures = 0;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -881,6 +895,7 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 // convenient.
                 firstBatchFailure ??= ex;
                 failedBatches++;
+                consecutiveBatchFailures++;
                 pendingMembers.Clear();
                 _logger.LogWarning(
                     ex,
@@ -888,6 +903,26 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                     + "and are retried on the next reconcile. Continuing with the remaining batches.",
                     repoId,
                     count);
+
+                // Consecutive record failures mean the vector plane is saturated, not
+                // that one batch was unlucky. Driving the remaining batches into it
+                // adds load to a store that is already timing out and lands nothing,
+                // so stop the arm here and let the next reconcile retry from a
+                // quieter store. Whatever already landed is kept, and every deferred
+                // source is simply unmarked, so the next pass picks it up.
+                if (consecutiveBatchFailures >= MaxConsecutiveBatchFailures)
+                {
+                    var deferred = unitTexts.Count - (start + count);
+                    _logger.LogWarning(
+                        "Repo {RepoId}: {Failures} consecutive batches failed to record; the vector plane looks "
+                        + "saturated, so deferring the remaining {Deferred} passage(s) to the next reconcile "
+                        + "rather than adding load.",
+                        repoId,
+                        consecutiveBatchFailures,
+                        deferred < 0 ? 0 : deferred);
+                    break;
+                }
+
                 continue;
             }
             finally
@@ -976,17 +1011,20 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         string repoId,
         RepoContextEmbeddingCoverage coverage,
         IReadOnlyList<RepoFileEntry> changedFiles,
-        IReadOnlyList<RepoFileEntry> unchangedFiles)
+        IReadOnlyList<RepoFileEntry> unchangedFiles,
+        out int gapsSelected)
     {
         var toEmbed = new List<RepoFileEntry>(changedFiles.Count + unchangedFiles.Count);
         toEmbed.AddRange(changedFiles);
 
+        gapsSelected = 0;
         foreach (var file in unchangedFiles)
         {
             var sourceId = VectorCodec.SourceId(RepoContextKeys.File(repoId, file.RelativePath));
             if (!coverage.IsCovered(sourceId))
             {
                 toEmbed.Add(file);
+                gapsSelected++;
             }
         }
 
