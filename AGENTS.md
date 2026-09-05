@@ -140,8 +140,11 @@ required `build-and-test` check:
 
 ## Pull requests
 
-- Never push to `main`; all changes go through a branch and PR. Branch names use
-  a type prefix (`feat/`, `docs/`, `fix/`, ...), never a username.
+- Never push to `main`; all changes go through a branch and PR. Branch names are
+  `<type>/<kebab-case-description>` and never contain a username, and commits
+  carry no `Co-authored-by` / `Copilot-Session` trailers. Both are enforced by a
+  fail-fast CI guard; the allowed branch types are enumerated in
+  `.github/copilot-instructions.md`, which is the single source of truth.
 - Label the PR so release notes categorize it: `enhancement`, `bug`,
   `documentation`, `ci`, `dependencies`, or `breaking`.
 - Do not commit, push, or open PRs unless explicitly asked.

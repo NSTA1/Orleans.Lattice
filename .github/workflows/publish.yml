@@ -162,6 +162,41 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The release-line guard below walks history to prove the tagged commit
+          # sits on a release/* branch, which the default depth-1 clone cannot do.
+          fetch-depth: 0
+
+      - name: Guard - the tag must sit on a release line
+        run: |
+          set -euo pipefail
+
+          # Per docs/RELEASING.md a wave never ships from main: the chore PR's
+          # merge commit is pinned by the family anchor tag and by a
+          # release/<X.Y> line branch, and every package tag is cut from that
+          # branch. This guard enforces it, because nothing else does - the
+          # csproj version check below compares the packed <Version> against the
+          # tag's version, so a tag cut from a drifted main whose <Version> was
+          # never touched passes it cleanly and ships the wrong tree.
+          git fetch --quiet origin '+refs/heads/release/*:refs/remotes/origin/release/*'
+          lines="$(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*')"
+
+          if [ -z "${lines}" ]; then
+            echo "::error::No release/* branch exists on origin, so ${GITHUB_REF_NAME} cannot have been cut from one. Create release/<X.Y> at the release commit (docs/RELEASING.md step 3) and re-push this tag."
+            exit 1
+          fi
+
+          for line in ${lines}; do
+            if git merge-base --is-ancestor HEAD "${line}"; then
+              echo "OK: ${GITHUB_REF_NAME} ($(git rev-parse --short HEAD)) is contained in ${line}."
+              exit 0
+            fi
+          done
+
+          echo "::error::${GITHUB_REF_NAME} points at $(git rev-parse --short HEAD), which is not contained in any release line branch. Cut release/<X.Y> at the chore PR's merge commit and cut every package tag from it (docs/RELEASING.md steps 1-3, or the Hotfixes section for a patch)."
+          echo "Release lines currently on origin:"
+          echo "${lines}"
+          exit 1
 
       - name: Parse tag -> package + version
         id: parse

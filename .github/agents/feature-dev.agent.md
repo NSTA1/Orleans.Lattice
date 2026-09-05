@@ -265,7 +265,7 @@ The combination of `New-TemporaryFile` + `[System.IO.File]::WriteAllText` + non-
 
 ### Phase 9 - Release (when shipping NuGet packages)
 
-When the user explicitly asks to release one or more packages by tagging `main`:
+When the user explicitly asks to release one or more packages:
 
 1. **Run the docs agent protocol** (`.github/agents/docs.agent.md`) end-to-end across the markdown corpus. The release must not ship documentation drift introduced since the last cut. Apply every fix the docs agent surfaces, in its own commit(s) on a separate docs branch / PR if the corrections are non-trivial, before proceeding to step 2. Do not skip this step on the grounds that "the last feature PR already updated the docs" - the docs agent verifies the whole corpus against the current code, not just the diff of the most recent feature.
 
@@ -279,16 +279,14 @@ When the user explicitly asks to release one or more packages by tagging `main`:
    - PR body: list each package being bumped and its old/new version, and link the `[YYYY-MM-DD]` changelog section as the source of truth for what's in the release.
    - **Do not proceed to step 4 until this PR is merged into `main`.** Tagging before the chore PR merges will publish packages whose `CHANGELOG.md` says `Unreleased` and whose assembly versions don't match the tag - the worst of both worlds.
 
-4. **Confirm the PR has merged before tagging.** Check out `main` and pull (`git checkout main && git pull origin main`) so the tag points at the squash-merge commit on `main`, never at the feature branch.
-5. **Tag each package independently.** The publish workflow's per-tag trigger glob (`<package>-v*`) fires on **`push` events to a single tag ref**. A bulk push (`git push origin tag1 tag2 tag3 tag4`) sends all four refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Push tags **one at a time**:
+4. **Hand off to the release protocol in [`docs/RELEASING.md`](../../docs/RELEASING.md).** That document is the single source of truth for tag-and-publish; follow its numbered steps rather than any copy of them. In outline, so you know what you are committing to:
 
-   ```powershell
-   git push origin <package>-v<X.Y.Z>
-   ```
+   - The wave never ships from `main`. Capture the chore PR's merge commit, push the inert family anchor tag `v<X.Y.Z>` at it, and cut the release line branch `release/<X.Y>` from the same commit. Every per-package tag is cut from that branch, so `main` moving mid-wave cannot change what ships.
+   - Push per-package tags **one at a time**, polling `gh run list` for the matching `Publish` run between each - GitHub coalesces a bulk tag push into one event, so all but one tag would silently ship nothing.
+   - Verify every publish run reaches `completed/success`.
+   - A **patch** is a cherry-pick onto the existing `release/<X.Y>` line, never a tag on `main`. A **held-back** package is patched from its own older line branch.
 
-   After each push, poll `gh run list` for a matching `event=push, headBranch=<tag>, name=Publish` run before pushing the next tag. A "no run detected within 2 min" result means the workflow trigger glob did not match - fix the trigger or the tag spelling before pushing further tags.
-6. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
-7. **Recovery for an accidental bulk push.** Delete the trailing remote tags (`git push origin --delete <tag>`) and re-push them individually. Local tags can stay in place; only the remote refs need the delete-and-re-push.
+   Do not re-resolve `main` part-way through a wave; that silently ships a different tree under the same family version, and the publish workflow's version guard will not catch it.
 
 ## Important rules
 
