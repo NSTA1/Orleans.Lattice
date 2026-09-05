@@ -50,9 +50,15 @@ public sealed class BackupInventoryRegistryTests
         // Do NOT call RecordCaptureSuccess - pruned manifest was never tracked.
         _registry.RecordPruned(manifest);
 
-        // BytesReclaimed should reflect the manifest's descriptor byte lengths
-        // (which BackupManifestModelTests.Sample fills with a non-zero descriptor).
-        Assert.That(_registry.BytesReclaimed, Is.GreaterThanOrEqualTo(0));
+        // BytesReclaimed must reflect the manifest's descriptor byte lengths. The
+        // expectation is summed from the manifest rather than hard-coded so the
+        // assertion stays exact if the shared sample gains another descriptor,
+        // and it still fails if the else branch stops adding anything at all.
+        var expected = manifest.ContentDescriptors.Sum(d => d.ByteLength);
+        Assert.That(expected, Is.GreaterThan(0),
+            "the sample manifest must carry a non-zero descriptor or this test cannot distinguish "
+            + "the else branch from a no-op");
+        Assert.That(_registry.BytesReclaimed, Is.EqualTo(expected));
     }
 
     // ---- Chain-depth walk (lines 165-167) -------------------------------------------------

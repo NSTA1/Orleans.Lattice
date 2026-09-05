@@ -156,11 +156,22 @@ public class LatticeTenantAdminAuthorizerTests
     [Test]
     public async Task AuthorizeAsync_allow_does_not_throw()
     {
-        var authorizer = Authorizer(new FakeGate(_ => LatticeAccessDecision.Allow()));
+        var gate = new FakeGate(_ => LatticeAccessDecision.Allow());
+        var authorizer = Authorizer(gate);
 
         await authorizer.AuthorizeAsync(LatticeTenantAdminScope.ForTenant(Acme), Admin);
 
-        Assert.Pass();
+        // Not throwing is only half the claim: an authorizer that stopped
+        // consulting the gate would also not throw, and would silently fail
+        // open. Assert that the allow was actually asked for, on the scope's
+        // own tree, so the pass is evidence the gate ran.
+        Assert.Multiple(() =>
+        {
+            Assert.That(gate.CallCount, Is.EqualTo(1),
+                "the allow path must consult the gate exactly once");
+            Assert.That(gate.LastRequest.Operation, Is.EqualTo(LatticeOperation.Admin));
+            Assert.That(gate.LastRequest.TreeId, Is.EqualTo(LatticeTenantAdminScope.ForTenant(Acme).TreeScope));
+        });
     }
 
     [Test]

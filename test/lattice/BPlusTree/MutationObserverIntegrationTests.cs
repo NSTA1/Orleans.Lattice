@@ -52,6 +52,83 @@ public sealed partial class MutationObserverIntegrationTests
         throw new InvalidOperationException("unreachable");
     }
 
+    /// <summary>
+    /// Snapshots every captured mutation matching <paramref name="predicate"/>,
+    /// in capture order. The sink is a <c>ConcurrentQueue</c>, so enumeration is
+    /// safe while publishes are still arriving.
+    /// </summary>
+    private static List<LatticeMutation> Matching(Func<LatticeMutation, bool> predicate) =>
+        MutationObserverClusterFixture.Captured.Where(predicate).ToList();
+
+    /// <summary>
+    /// Waits until at least <paramref name="atLeast"/> captured mutations match
+    /// <paramref name="predicate"/> and returns them in capture order, failing
+    /// with the full observed set when the deadline passes first.
+    /// </summary>
+    /// <remarks>
+    /// Replaces the hand-rolled <c>while (DateTime.UtcNow &lt; deadline)</c>
+    /// loops that fell through on timeout into a bare count assertion, which
+    /// reported "expected 3 but was 1" with no indication of what the pipeline
+    /// actually published.
+    /// </remarks>
+    private static async Task<List<LatticeMutation>> WaitForAtLeastAsync(
+        Func<LatticeMutation, bool> predicate,
+        int atLeast,
+        TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        List<LatticeMutation> matched;
+        while (true)
+        {
+            matched = Matching(predicate);
+            if (matched.Count >= atLeast) return matched;
+            if (DateTime.UtcNow >= deadline) break;
+            await Task.Delay(25);
+        }
+
+        Assert.Fail(
+            $"Timed out waiting for {atLeast} matching mutation(s); saw {matched.Count}. Observed: " +
+            string.Join(", ", MutationObserverClusterFixture.Captured.Select(m => $"{m.Kind}:{m.TreeId}:{m.Key}")));
+        throw new InvalidOperationException("unreachable");
+    }
+
+    /// <summary>
+    /// Waits for at least <paramref name="atLeast"/> matching mutations and then
+    /// for the matching set to stop growing, so an upper-bound or
+    /// all-emits-agree assertion sees the complete per-shard fan-out.
+    /// </summary>
+    /// <remarks>
+    /// Supersedes the fixed <c>Task.Delay(250)</c> tail drains. A fixed sleep is
+    /// wrong in both directions: on a loaded agent a late shard publish lands
+    /// after the window and is silently excluded (so an "every emit agrees"
+    /// assertion can pass without ever seeing the disagreeing emit - a false
+    /// green), while on an idle agent the full 250 ms is paid even though the
+    /// fan-out completed in a few milliseconds. Quiescence is the property those
+    /// assertions actually depend on, so it is what is waited for.
+    /// </remarks>
+    private static async Task<List<LatticeMutation>> WaitForFanOutToSettleAsync(
+        Func<LatticeMutation, bool> predicate,
+        int atLeast,
+        TimeSpan? timeout = null)
+    {
+        var settled = await WaitForAtLeastAsync(predicate, atLeast, timeout);
+
+        // Quiet period at least as long as the sleep it replaces, so the tail
+        // window is never narrower than before - only adaptive.
+        var quietPolls = 10;
+        var stable = 0;
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        while (stable < quietPolls && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+            var next = Matching(predicate);
+            stable = next.Count == settled.Count ? stable + 1 : 0;
+            settled = next;
+        }
+
+        return settled;
+    }
+
     [Test]
     public async Task SetAsync_publishes_set_mutation_through_the_full_pipeline()
     {
@@ -106,26 +183,12 @@ public sealed partial class MutationObserverIntegrationTests
         // tree, we expect between 1 and ShardCount identical-payload events,
         // all with the same Key / EndExclusiveKey - this is the documented
         // per-shard fan-out contract that replication consumers dedup on.
-        LatticeMutation[] ranges = [];
-        var deadline = DateTime.UtcNow.AddSeconds(3);
-        while (DateTime.UtcNow < deadline)
-        {
-            ranges = MutationObserverClusterFixture.Captured
-                .Where(m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-range-populated")
-                .ToArray();
-            if (ranges.Length >= 1) break;
-            await Task.Delay(25);
-        }
+        var ranges = await WaitForFanOutToSettleAsync(
+            m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-range-populated",
+            atLeast: 1);
 
-        // Drain remaining shards for another brief window so the upper-bound
-        // assertion sees every publish that would arrive.
-        await Task.Delay(250);
-        ranges = MutationObserverClusterFixture.Captured
-            .Where(m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-range-populated")
-            .ToArray();
-
-        Assert.That(ranges.Length, Is.GreaterThanOrEqualTo(1));
-        Assert.That(ranges.Length, Is.LessThanOrEqualTo(MutationObserverClusterFixture.TestShardCount));
+        Assert.That(ranges, Has.Count.GreaterThanOrEqualTo(1));
+        Assert.That(ranges, Has.Count.LessThanOrEqualTo(MutationObserverClusterFixture.TestShardCount));
         Assert.That(ranges.All(r => r.Key == "a"), Is.True);
         Assert.That(ranges.All(r => r.EndExclusiveKey == "b"), Is.True);
         Assert.That(ranges.All(r => r.IsTombstone), Is.True);
@@ -138,16 +201,9 @@ public sealed partial class MutationObserverIntegrationTests
         await tree.SetAsync("k", [1]);
         await tree.SetAsync("k", [2]);
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        List<LatticeMutation> mine;
-        while (true)
-        {
-            mine = MutationObserverClusterFixture.Captured
-                .Where(m => m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-hlc")
-                .ToList();
-            if (mine.Count >= 2 || DateTime.UtcNow >= deadline) break;
-            await Task.Delay(25);
-        }
+        var mine = await WaitForAtLeastAsync(
+            m => m.Kind == MutationKind.Set && m.Key == "k" && m.TreeId == "obs-e2e-hlc",
+            atLeast: 2);
 
         Assert.That(mine, Has.Count.EqualTo(2));
         Assert.That(
@@ -259,22 +315,13 @@ public sealed partial class MutationObserverIntegrationTests
         var deleted = await tree.DeleteRangeAsync("a", "b");
         Assert.That(deleted, Is.EqualTo(2));
 
-        // Wait for at least one range emit and then drain a brief tail
-        // window so we capture every per-shard fan-out.
-        LatticeMutation[] ranges = [];
-        var deadline = DateTime.UtcNow.AddSeconds(3);
-        while (DateTime.UtcNow < deadline)
-        {
-            ranges = MutationObserverClusterFixture.Captured
-                .Where(m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-tx-range")
-                .ToArray();
-            if (ranges.Length >= 1) break;
-            await Task.Delay(25);
-        }
-        await Task.Delay(250);
-        ranges = MutationObserverClusterFixture.Captured
-            .Where(m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-tx-range")
-            .ToArray();
+        // Wait for at least one range emit and then for the per-shard fan-out
+        // to settle, so the "every emit shares one id" assertion below is made
+        // against the complete set rather than whichever shards happened to
+        // land inside a fixed window.
+        var ranges = await WaitForFanOutToSettleAsync(
+            m => m.Kind == MutationKind.DeleteRange && m.TreeId == "obs-e2e-tx-range",
+            atLeast: 1);
 
         Assert.That(ranges, Is.Not.Empty);
         var first = ranges[0].TransactionId;
@@ -297,16 +344,9 @@ public sealed partial class MutationObserverIntegrationTests
         await tree.SetManyAtomicAsync(entries);
 
         // Wait until all three Set events are captured.
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        List<LatticeMutation> mine;
-        while (true)
-        {
-            mine = MutationObserverClusterFixture.Captured
-                .Where(m => m.Kind == MutationKind.Set && m.TreeId == "obs-e2e-tx-saga")
-                .ToList();
-            if (mine.Count >= 3 || DateTime.UtcNow >= deadline) break;
-            await Task.Delay(25);
-        }
+        var mine = await WaitForAtLeastAsync(
+            m => m.Kind == MutationKind.Set && m.TreeId == "obs-e2e-tx-saga",
+            atLeast: 3);
 
         Assert.That(mine, Has.Count.EqualTo(3));
         var first = mine[0].TransactionId;
@@ -328,16 +368,9 @@ public sealed partial class MutationObserverIntegrationTests
         };
         await tree.SetManyAsync(entries);
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        List<LatticeMutation> mine;
-        while (true)
-        {
-            mine = MutationObserverClusterFixture.Captured
-                .Where(m => m.Kind == MutationKind.Set && m.TreeId == "obs-e2e-tx-many")
-                .ToList();
-            if (mine.Count >= 3 || DateTime.UtcNow >= deadline) break;
-            await Task.Delay(25);
-        }
+        var mine = await WaitForAtLeastAsync(
+            m => m.Kind == MutationKind.Set && m.TreeId == "obs-e2e-tx-many",
+            atLeast: 3);
 
         Assert.That(mine, Has.Count.EqualTo(3));
         var first = mine[0].TransactionId;

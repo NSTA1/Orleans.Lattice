@@ -13,11 +13,18 @@ public sealed class TelemetryAccessAuthorizerTests
     [Test]
     public async Task AuthorizeClusterTelemetryAsync_allows_a_caller_granted_telemetry()
     {
-        var authorizer = new TelemetryAccessAuthorizer(StubAccessGate.TelemetryOnly());
+        var gate = StubAccessGate.TelemetryOnly();
+        var authorizer = new TelemetryAccessAuthorizer(gate);
 
         await authorizer.AuthorizeClusterTelemetryAsync();
 
-        Assert.Pass();
+        // Returning without throwing is not on its own evidence of an allow:
+        // an authorizer that stopped consulting the gate would also return
+        // quietly, and would fail open for every caller. Assert the gate was
+        // actually asked, so this test can only pass when the grant is what
+        // admitted the call.
+        Assert.That(gate.AuthorizedTrees, Has.Count.EqualTo(1),
+            "the allow path must consult the gate exactly once rather than short-circuit it");
     }
 
     [Test]
@@ -72,9 +79,18 @@ public sealed class TelemetryAccessAuthorizerTests
     [Test]
     public async Task AuthorizeClusterTelemetryAsync_admits_when_no_gate_is_registered()
     {
-        await new TelemetryAccessAuthorizer().AuthorizeClusterTelemetryAsync();
+        var admit = new TelemetryAccessAuthorizer().AuthorizeClusterTelemetryAsync();
 
-        Assert.Pass("An authorization-off cluster stays byte-for-byte unchanged.");
+        // "Byte-for-byte unchanged" is a claim about cost, not just outcome:
+        // with no gate the authorizer returns before its first await, so the
+        // ValueTask is already complete. A regression that resolved a subject
+        // or consulted a default gate would still admit the caller but would
+        // no longer complete synchronously, and this is what catches it.
+        Assert.That(admit.IsCompletedSuccessfully, Is.True,
+            "an authorization-off cluster must short-circuit before the first await, "
+            + "so the admit costs nothing");
+
+        await admit;
     }
 
     [Test]

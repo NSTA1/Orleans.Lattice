@@ -23,11 +23,17 @@ public sealed class ReplicationAccessAuthorizerTests
     [Test]
     public async Task AuthorizeAsync_allows_when_gate_grants()
     {
-        var authorizer = new ReplicationAccessAuthorizer(new AllowingAccessGate());
+        var gate = new AllowingAccessGate();
+        var authorizer = new ReplicationAccessAuthorizer(gate);
 
         await authorizer.AuthorizeAsync(Tree);
 
-        Assert.Pass();
+        // Not throwing is not by itself evidence of an allow - an authorizer
+        // that stopped consulting the gate would also not throw, and would
+        // fail open. Assert that the whole tree was actually asked about, so
+        // the grant is what admitted the call.
+        Assert.That(gate.AuthorizedTrees, Is.EqualTo(new[] { Tree }),
+            "the allow path must consult the gate once, on the tree it is authorizing");
     }
 
     [Test]

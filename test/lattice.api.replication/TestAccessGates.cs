@@ -10,10 +10,16 @@ namespace Orleans.Lattice.Api.Replication.Tests;
 /// </summary>
 internal sealed class AllowingAccessGate : ILatticeAccessGate
 {
+    /// <summary>Every tree id the gate was asked about, in call order.</summary>
+    public List<string> AuthorizedTrees { get; } = [];
+
     public ValueTask<LatticeAccessDecision> AuthorizeAsync(
         in LatticeAccessRequest request,
-        CancellationToken cancellationToken = default) =>
-        new(LatticeAccessDecision.Allow());
+        CancellationToken cancellationToken = default)
+    {
+        AuthorizedTrees.Add(request.TreeId);
+        return new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow());
+    }
 }
 
 /// <summary>

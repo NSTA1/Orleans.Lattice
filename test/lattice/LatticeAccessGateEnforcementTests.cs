@@ -61,11 +61,19 @@ public class LatticeAccessGateEnforcementTests
     // ---- EnforcePointAsync ----------------------------------------------
 
     [Test]
-    public async Task EnforcePointAsync_nullGate_doesNotThrowOrConsult()
+    public void EnforcePointAsync_nullGate_doesNotThrowOrConsult()
     {
-        await LatticeAccessGateEnforcement.EnforcePointAsync(
+        // The "does not consult" half of the name is what makes the null-gate
+        // path zero-cost, and it is only observable as synchronous completion:
+        // the enforcement primitive short-circuits before its first await when
+        // the gate is the null gate, so the ValueTask is already complete. A
+        // regression that resolved a subject or called the gate would still not
+        // throw here, but would no longer complete synchronously.
+        var enforce = LatticeAccessGateEnforcement.EnforcePointAsync(
             new NullLatticeAccessGate(), membership: null, Tree, LatticeOperation.Write, "k", default);
-        Assert.Pass();
+
+        Assert.That(enforce.IsCompletedSuccessfully, Is.True,
+            "a null gate must be short-circuited before the first await, so nothing is consulted");
     }
 
     [Test]
@@ -111,9 +119,14 @@ public class LatticeAccessGateEnforcementTests
     [Test]
     public async Task EnforcePointAsync_filteredIncludesKey_doesNotThrow()
     {
+        var gate = Filtering(k => k == "k");
         await LatticeAccessGateEnforcement.EnforcePointAsync(
-            Filtering(k => k == "k"), membership: null, Tree, LatticeOperation.Write, "k", default);
-        Assert.Pass();
+            gate, membership: null, Tree, LatticeOperation.Write, "k", default);
+
+        // Without this the test also passes when enforcement is skipped
+        // entirely, which is exactly the fail-open regression it exists to
+        // catch: the filter must have been consulted and admitted the key.
+        Assert.That(gate.CallCount, Is.EqualTo(1));
     }
 
     // ---- EnforceManyPointsAsync -----------------------------------------
@@ -153,9 +166,12 @@ public class LatticeAccessGateEnforcementTests
     [Test]
     public async Task EnforceRangeDeleteAsync_uniformAllow_doesNotThrow()
     {
+        var gate = Allowing();
         await LatticeAccessGateEnforcement.EnforceRangeDeleteAsync(
-            Allowing(), membership: null, Tree, "a", "z", default);
-        Assert.Pass();
+            gate, membership: null, Tree, "a", "z", default);
+
+        Assert.That(gate.CallCount, Is.EqualTo(1),
+            "a uniform allow must still have been asked for - a skipped enforcement fails open");
     }
 
     [Test]
@@ -181,9 +197,12 @@ public class LatticeAccessGateEnforcementTests
     [Test]
     public async Task EnforceWholeTreeAsync_allow_doesNotThrow()
     {
+        var gate = Allowing();
         await LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
-            Allowing(), membership: null, Tree, LatticeOperation.Admin, default);
-        Assert.Pass();
+            gate, membership: null, Tree, LatticeOperation.Admin, default);
+
+        Assert.That(gate.CallCount, Is.EqualTo(1),
+            "a whole-tree allow must still have been asked for - a skipped enforcement fails open");
     }
 
     [Test]
@@ -209,9 +228,12 @@ public class LatticeAccessGateEnforcementTests
     [Test]
     public async Task EnforceUniformRangeReadAsync_allow_doesNotThrow()
     {
+        var gate = Allowing();
         await LatticeAccessGateEnforcement.EnforceUniformRangeReadAsync(
-            Allowing(), membership: null, Tree, "a", "z", default);
-        Assert.Pass();
+            gate, membership: null, Tree, "a", "z", default);
+
+        Assert.That(gate.CallCount, Is.EqualTo(1),
+            "a uniform range-read allow must still have been asked for - a skipped enforcement fails open");
     }
 
     [Test]

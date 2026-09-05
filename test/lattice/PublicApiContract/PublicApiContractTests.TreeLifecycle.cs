@@ -89,7 +89,14 @@ public partial class PublicApiContractTests
         await tree.SetAsync("k", Bytes("v"));
         await tree.DeleteTreeAsync();
         await tree.DeleteTreeAsync();
-        Assert.Pass();
+
+        // Idempotent means the repeat delete left the tree deleted, not merely
+        // that it did not throw: a second delete that silently resurrected the
+        // tree would also pass a bare not-throws check.
+        Assert.That(
+            async () => await tree.SetAsync("k2", Bytes("v2")),
+            Throws.InstanceOf<InvalidOperationException>(),
+            "a twice-deleted tree must stay deleted");
     }
 
     [Test]
