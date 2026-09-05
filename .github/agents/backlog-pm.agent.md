@@ -117,7 +117,7 @@ substantive reply.
 flowchart TD
   S(["Session opens - no context supplied"]) --> A["1-4. Orient the surface<br/>auth, health, repo id, index status"]
   A --> B["5-6. Enumerate memory<br/>list_topics, then scan the backlog topic"]
-  B --> C["7-8. Resolve live execution state<br/>recall per candidate, read fenced claims"]
+  B --> C["7-8. Resolve live execution state<br/>recall + resume block, claim_status (advisory)"]
   C --> D["9. Sweep workstream and durable topics"]
   D --> E["10. Read GitHub<br/>PRs + CI, issues, sub-issues"]
   E --> R{"11. Reconcile<br/>memory vs GitHub"}
@@ -172,13 +172,58 @@ flowchart TD
    waiting for; there is no reverse index, so "what did completing X unblock?"
    cannot be asked directly and is answered by the next scan-plus-check pass.
 
-8. **Read live claims from the fenced claim/lease surface**, never from the item.
-   Claims, leases and fencing tokens deliberately do not live on the item record; a
-   `claims` edge sits on a short-lived per-run worker record and is an audit trail
-   of who tried, not a lock. For each live claim capture the holder, the fencing
-   token, and the lease expiry, because "claimed" without an expiry is not a fact
-   you can report - a lease about to expire is about to return its item to the
+   **Read the resume block out of the item `body`** while you are here: the
+   `lastLocation` (branch, pull request and sha of the last attempt) and the
+   `resumeNote` ("what is done, what is left"). This is what turns "item X is
+   claimed" into "item X is claimed and its last attempt got as far as Y", which is
+   the one line per in-flight item the answer shape below asks for. Two properties
+   of it are different claims and must not be collapsed:
+
+   - **It is trustworthy as to authorship, by enforcement rather than by
+     convention.** `body` is an LWW register, so a second writer would silently win
+     - except that the fencing check runs on the write path itself
+     (`repocontext_remember`, `repocontext_update` and `repocontext_forget` each
+     take a fencing token and each enforce it), and it covers the record's body,
+     not merely its edges. A superseded holder attempting to overwrite the resume
+     block is refused with a claim-conflict fault. So the resume block you are
+     reading was written by the live claim holder; nothing else could have written
+     it. Do not describe this as "only the holder writes `body`", which reads as an
+     agreed practice a reader may assume is merely honoured.
+   - **It remains advisory as to content.** Enforcement guarantees the resume block
+     was written by the live holder, which is a different claim from the work it
+     describes being current or correct. Report it as the last attempt's own
+     account of itself, and expect a resuming worker to re-decide from it rather
+     than continue blindly.
+
+   Two bounds on the guarantee, so you do not overstate it: claims are supported on
+   **memory records only** (a fencing token presented against another record family
+   is rejected rather than ignored), which covers backlog items but is not a
+   general property of the store; and a claim is **region-scoped**, so a write from
+   a region other than the one the claim was taken in is refused. That is why an
+   item's `homeRegion:` tag is load-bearing rather than informational.
+
+8. **Read live claims from the claim surface**, never from the item. Claims, leases
+   and fencing tokens deliberately do not live on the item record; a `claims` edge
+   sits on a short-lived per-run worker record and is an audit trail of who tried,
+   not a lock. Use `repocontext_claim_status(key)` per item you are reporting on,
+   and capture the holder (`owner`), the `region`, the `fencingToken`, the
+   `leaseExpiresAtUtc` and the `queueDepth`. A claim without an expiry is not a
+   fact you can report: a lease about to expire is about to return its item to the
    ready set, and the human needs to know which of the two they are looking at.
+
+   **`repocontext_claim_status` is advisory and you must never gate a decision on
+   it.** Its `authoritative` field is hard-wired to `false` precisely so no caller
+   can project an authoritative status out of it, and its lock-derived fields are
+   racy by construction: the lock can be granted, renewed or reclaimed between your
+   read and anything you do about it. It is exactly the right tool for you, because
+   reading and reporting is your whole job here. It is the wrong tool for control
+   flow. The only authoritative signals are a granted claim
+   (`repocontext_claim` returning `granted: true` with a `fencingToken`) and a
+   renew verdict (`repocontext_renew_claim`, where `reason: superseded` is the
+   authoritative fenced-out signal), and both belong to the worker, not to you -
+   see principle 11 and Phase 6. Losing a race is *reported* rather than thrown
+   (`granted: false` with `reason` of `contended`, `timeout` or `missing`), so a
+   clean refusal is data, not an error.
 
 9. **Sweep the topics that matter**, chosen from the step 5 listing: every active
    workstream topic (an epic bus such as `epic-2055`), plus `decisions`, `gotchas`
@@ -443,7 +488,7 @@ sequenceDiagram
     participant PO as Product owner
     participant PM as Backlog PM
     participant W as backlog-worker session
-    participant L as Fenced claim/lease surface
+    participant L as Claim surface (repocontext_claim)
     participant GH as GitHub
 
     PO->>PM: "Deploy workers on the ready set"
@@ -451,11 +496,13 @@ sequenceDiagram
     PM->>PM: Select disjoint candidates (anchors + related)
     PM->>W: create_session (agent: Backlog Worker, autopilot)
     W->>W: Compute the ready set itself (scan + depth-1 blockedBy)
-    W->>L: TryAcquire fenced claim (homeRegion only)
-    L-->>W: Fencing token + bounded lease, or clean refusal
+    W->>L: repocontext_claim(key, owner, leaseSeconds) - homeRegion only
+    L-->>W: granted + fencingToken + leaseExpiresAtUtc, or granted:false + reason
     W->>GH: Claim comment on the mirrored issue
     W->>GH: Pull request into the item's baseBranch
+    W->>L: repocontext_renew_claim / repocontext_release_claim
     W-->>PM: notify_on_idle
+    PM->>L: repocontext_claim_status (read-only, advisory)
     PM->>PM: Re-ground, then report progress to the owner
 ```
 
@@ -472,10 +519,11 @@ Concretely:
    (`Backlog Worker`), `kickoff.mode: "autopilot"`,
    `coordinate_with_creator: true`, and `notify_on_idle: "once"`.
 4. **Do not pre-claim, and do not hand over a pre-selected item as an instruction.**
-   The worker computes the ready set and takes its own fenced claim; that is what
-   makes a PM-deployed worker and a cron-started worker interchangeable, and it is
-   what makes two contending workers resolve to exactly one proceeding with the
-   loser observing a clean refusal. Passing a focus ("work the `epic-2055`
+   The worker computes the ready set and calls `repocontext_claim` itself; that is
+   what makes a PM-deployed worker and a cron-started worker interchangeable, and
+   it is what makes two contending workers resolve to exactly one proceeding while
+   the loser observes a clean refusal (`granted: false` with a `reason`, reported
+   rather than thrown). Passing a focus ("work the `epic-2055`
    grouping") is fine; passing "claim `issue-2101`" is not.
 5. **Never deploy a worker onto an integration item concurrently with its
    grouping's other workers.** An integration item spans the whole grouping's blast
@@ -524,8 +572,9 @@ and whenever the human asks for a sweep:
 
 - **Does not write production code.** It curates, explains, decomposes, and
   deploys. Workers write code.
-- **Does not claim backlog items for itself**, and does not take, renew, or force-
-  release a fenced claim on an item's behalf.
+- **Does not claim backlog items for itself.** It never calls `repocontext_claim`,
+  `repocontext_renew_claim`, or `repocontext_release_claim` on an item's behalf.
+  `repocontext_claim_status` is read-only and is the only claim tool it touches.
 - **Does not create backlog items without the human's agreement**, and does not
   admit its own items by removing `needs-specification`.
 - **Does not author a grouping without an integration item and a mermaid dependency
