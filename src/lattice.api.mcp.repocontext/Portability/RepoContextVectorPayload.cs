@@ -28,4 +28,35 @@ internal readonly record struct RepoContextVectorPayload
 
     /// <summary>The optional embedding-space tag, or <see langword="null"/>.</summary>
     public string? EmbeddingSpace { get; }
+
+    /// <summary>
+    /// Compares two payloads by value, with <see cref="Vector"/> compared by
+    /// content. The compiler-generated record-struct equality compares
+    /// <see cref="Vector"/> with <see cref="EqualityComparer{T}.Default"/>, which
+    /// for a <see cref="byte"/> array is reference equality, so two payloads
+    /// carrying structurally identical vector bytes would otherwise never compare
+    /// equal - mirroring the sibling <see cref="RepoContextSnapshotRecord"/>, whose
+    /// opaque byte payloads are likewise compared by content.
+    /// </summary>
+    /// <param name="other">The payload to compare against.</param>
+    public bool Equals(RepoContextVectorPayload other) =>
+        string.Equals(EmbeddingSpace, other.EmbeddingSpace, StringComparison.Ordinal)
+        && BytesEqual(Vector, other.Vector);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        if (Vector is { } vector)
+        {
+            hash.AddBytes(vector);
+        }
+
+        hash.Add(EmbeddingSpace, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
