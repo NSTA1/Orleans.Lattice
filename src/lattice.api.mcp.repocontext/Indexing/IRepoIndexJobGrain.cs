@@ -30,8 +30,13 @@ internal interface IRepoIndexJobGrain : IGrainWithStringKey
     /// otherwise it starts a run from the persisted request and returns
     /// <see langword="true"/>.
     /// </summary>
+    /// <param name="forceEmbeddingGapScan">When <see langword="true"/>, the triggered
+    /// pass re-probes the whole content-unchanged set for embedding gaps instead of
+    /// honouring the periodic gap-scan cadence. Set it when the caller already knows a
+    /// vector is missing (the out-of-band paged gap sweep), so the healing pass runs
+    /// now rather than at the next scheduled scan.</param>
     /// <returns><see langword="true"/> if a run was triggered; otherwise <see langword="false"/>.</returns>
-    Task<bool> EnsureIndexedAsync();
+    Task<bool> EnsureIndexedAsync(bool forceEmbeddingGapScan = false);
 
     /// <summary>Returns the current progress snapshot for the repository's job.</summary>
     /// <returns>The point-in-time progress, or an empty snapshot when no job has ever run.</returns>

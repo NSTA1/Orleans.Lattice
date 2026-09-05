@@ -178,6 +178,35 @@ public sealed class RepoIndexJobGrainTests
     }
 
     [Test]
+    public async Task EnsureIndexedAsync_defaults_to_leaving_the_embedding_gap_scan_on_its_cadence()
+    {
+        var harness = new RepoIndexJobGrainHarness();
+        harness.State.State.Request = RepoIndexJobGrainHarness.Request();
+        harness.State.State.Status = RepoIndexStatus.Completed;
+
+        await harness.CreateGrain().EnsureIndexedAsync();
+
+        harness.Runner.Received(1).Enqueue(Arg.Is<RepoIndexJobRequest>(r => !r.ForceEmbeddingGapScan));
+    }
+
+    [Test]
+    public async Task EnsureIndexedAsync_forwards_a_forced_embedding_gap_scan_to_the_run()
+    {
+        // The out-of-band paged sweep found a real gap. Unless that fact reaches the
+        // run, the re-drive it triggers heals nothing while the in-pass scan is on
+        // its cadence, so the sweep re-triggers every cooldown forever.
+        var harness = new RepoIndexJobGrainHarness();
+        harness.State.State.Request = RepoIndexJobGrainHarness.Request();
+        harness.State.State.Status = RepoIndexStatus.Completed;
+
+        var started = await harness.CreateGrain().EnsureIndexedAsync(forceEmbeddingGapScan: true);
+
+        Assert.That(started, Is.True);
+        harness.Runner.Received(1).Enqueue(
+            Arg.Is<RepoIndexJobRequest>(r => r.AllowPrune && r.ForceEmbeddingGapScan));
+    }
+
+    [Test]
     public async Task GetProgressAsync_and_GetRequestAsync_project_the_persisted_state()
     {
         var harness = new RepoIndexJobGrainHarness();

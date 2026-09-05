@@ -75,6 +75,14 @@ internal sealed class RepoContextBootstrapService
     private readonly ConcurrentDictionary<string, PruneCacheEntry> _pruneCache = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Repositories already told, once each, that their full sweeps are paced by pass
+    /// count rather than by the wall clock the operator configured (issue #2048). Logging
+    /// it every pass would drown the useful signal, and the condition is a standing
+    /// property of the deployment rather than an event.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _fullWalkPacingReported = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Creates the bootstrap coordinator.
     /// </summary>
     /// <param name="grainFactory">The grain factory used to reach the structural
@@ -217,25 +225,48 @@ internal sealed class RepoContextBootstrapService
             // walk. When pruning is allowed and a prior directory-modification-time
             // snapshot exists (and a full sweep is not due), the walk skips the
             // per-file stat of unchanged directories. Even then a full sweep is
-            // forced when the repository is cold (no snapshot) or the configured
-            // full-walk interval has elapsed since the last one, so an in-place
-            // content edit - which does not bump a directory's modification time and
-            // is invisible to pruning - is still caught within that bound.
-            // Note the interval must be configured strictly wider than the reconcile
-            // spacing (see RepoContextIndexingOptions.PruningCanEngage) or the last
-            // clause below is true on every reconcile and pruning never engages at
-            // all: the snapshot is written each run and read for nothing.
+            // forced when the repository is cold (no snapshot) or the full-walk
+            // deadline has arrived, so an in-place content edit - which does not bump
+            // a directory's modification time and is invisible to pruning - is still
+            // caught within that bound.
+            //
+            // The deadline is counted in PASSES, not wall clock (issue #2048). The
+            // reconcile is single-flight, so the real spacing between two walks is the
+            // larger of the configured spacing and the previous pass's duration. On a
+            // repository whose pass outruns the configured spacing - the ordinary case
+            // once it is large enough to want pruning at all - a wall-clock deadline is
+            // therefore already past on arrival at every single pass, so every pass
+            // forced a full sweep and the prune snapshot was written each run and read
+            // for nothing. Counting passes makes RepoContextIndexingOptions.PruningCanEngage
+            // genuinely sufficient rather than merely necessary: the deadline no longer
+            // depends on how long a pass takes.
             var nowTicks = _timeProvider.GetUtcNow().UtcTicks;
             _pruneCache.TryGetValue(repoId, out var priorPrune);
             var lastFullSweepTicks = priorPrune?.LastFullSweepTicks ?? 0;
+            var passesSinceFullSweep = priorPrune?.PassesSinceFullSweep ?? 0;
             var forceFull = !request.AllowPrune
                 || priorPrune?.DirectoryMtimes is not { Count: > 0 }
-                || nowTicks - lastFullSweepTicks >= _options.FullWalkInterval.Ticks;
+                || passesSinceFullSweep + 1 >= _options.PassesPerFullWalk;
             var pruning = new RepoWalkPruning
             {
                 PreviousDirectoryMtimes = priorPrune?.DirectoryMtimes,
                 ForceFull = forceFull,
             };
+
+            // The embedding-gap scan cadence (issue #2049). Re-probing the whole
+            // content-unchanged set costs two membership reads per indexed source, so
+            // on a converged repository it dominates the pass while finding nothing.
+            // Scan when the run is an explicit onboarding, when the caller knows a
+            // vector is missing, while the repository has not yet been observed
+            // converged, or when the periodic cadence is due. A converged repository
+            // still heals promptly: the self-index grain's out-of-band paged sweep
+            // sets ForceEmbeddingGapScan the moment it finds a real gap.
+            var coverageConverged = priorPrune?.CoverageConverged ?? false;
+            var passesSinceGapScan = priorPrune?.PassesSinceGapScan ?? 0;
+            var gapScanDue = !request.AllowPrune
+                || request.ForceEmbeddingGapScan
+                || !coverageConverged
+                || passesSinceGapScan + 1 >= _options.PassesPerEmbeddingGapScan;
 
             // The walk is synchronous, so a run with a progress sink drives a
             // concurrent pump that samples the running processed-file count and
@@ -289,10 +320,37 @@ internal sealed class RepoContextBootstrapService
             // Store the snapshot this walk observed for the next run. The walk records a
             // modification time for every directory it visits, pruned or not, so the
             // snapshot is always complete and self-heals as the tree changes. Advance the
-            // last-full-sweep marker only when this run actually forced a full sweep.
+            // last-full-sweep marker, and reset the pass counter, only when this run
+            // actually forced a full sweep.
             var updatedSnapshot = new PruneCacheEntry(
                 pruning.CurrentDirectoryMtimes,
-                forceFull ? nowTicks : lastFullSweepTicks);
+                forceFull ? nowTicks : lastFullSweepTicks,
+                forceFull ? 0 : passesSinceFullSweep + 1,
+                gapScanDue ? 0 : passesSinceGapScan + 1,
+                coverageConverged);
+
+            // A full sweep whose wall clock overran the operator's configured interval
+            // is the observable symptom of issue #2048: passes are slower than the
+            // spacing the interval was written against, so the wall-clock reading of
+            // FullWalkInterval cannot be honoured and the pass count is what holds the
+            // bound. Say so once per repository rather than silently diverging from
+            // what the configuration reads like.
+            if (forceFull
+                && _options.PruningCanEngage
+                && lastFullSweepTicks > 0
+                && nowTicks - lastFullSweepTicks > _options.FullWalkInterval.Ticks
+                && _fullWalkPacingReported.TryAdd(repoId, 0))
+            {
+                _logger.LogInformation(
+                    "Repo {RepoId}: full sweeps are paced by pass count, not wall clock - {Passes} pass(es) took "
+                    + "{Elapsed} ms against a configured full-walk interval of {Configured} ms. Pruning still "
+                    + "engages on the intervening passes; widen LATTICE_RECONCILE_INTERVAL_SECONDS or "
+                    + "LATTICE_FULL_WALK_INTERVAL_SECONDS if the wall-clock bound matters more than the pass count.",
+                    repoId,
+                    passesSinceFullSweep + 1,
+                    (nowTicks - lastFullSweepTicks) / TimeSpan.TicksPerMillisecond,
+                    (long)_options.FullWalkInterval.TotalMilliseconds);
+            }
 
             _logger.LogInformation(
                 "Repo {RepoId}: scan complete - {Scanned} files in {Elapsed} ms ({Mode}; pruned {PrunedDirs} dir(s), {PrunedFiles} file(s)).",
@@ -488,11 +546,33 @@ internal sealed class RepoContextBootstrapService
             var changed = new List<RepoFileEntry>(plan.Added.Count + plan.Updated.Count);
             changed.AddRange(plan.Added);
             changed.AddRange(plan.Updated);
+
+            // Offer the unchanged set only when a gap scan is due. When it is not, the
+            // changed files still embed - they are re-embedded whatever their coverage
+            // says - and the whole-corpus coverage probe is simply not paid for.
+            var unchangedOffered = gapScanDue
+                ? unchangedForBackfill
+                : (IReadOnlyList<RepoFileEntry>)Array.Empty<RepoFileEntry>();
             await ReportAsync(progress, new RepoIndexProgressUpdate { Phase = RepoIndexPhase.Vectorising }, cancellationToken)
                 .ConfigureAwait(false);
-            _logger.LogInformation(
-                "Repo {RepoId}: vectorising {Changed} changed file(s); scanning {Unchanged} unchanged for embedding gaps.",
-                repoId, changed.Count, unchangedForBackfill.Count);
+            if (gapScanDue)
+            {
+                _logger.LogInformation(
+                    "Repo {RepoId}: vectorising {Changed} changed file(s); scanning {Unchanged} unchanged for embedding gaps.",
+                    repoId, changed.Count, unchangedForBackfill.Count);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Repo {RepoId}: vectorising {Changed} changed file(s); skipping the embedding-gap scan over "
+                    + "{Unchanged} unchanged file(s) - coverage was last observed complete and the next scheduled "
+                    + "scan is {Remaining} pass(es) away.",
+                    repoId,
+                    changed.Count,
+                    unchangedForBackfill.Count,
+                    Math.Max(0, _options.PassesPerEmbeddingGapScan - (passesSinceGapScan + 1)));
+            }
+
             var lastVectorisingHeartbeat = 0;
 
             // Failures are collected rather than swallowed. The first is rethrown
@@ -503,13 +583,14 @@ internal sealed class RepoContextBootstrapService
             Exception? armFailure = null;
 
             var embedded = 0;
+            var fileIngest = RepoFileVectorIngestOutcome.None;
             try
             {
-                embedded = await _vectorIngestor.IngestAsync(
+                fileIngest = await _vectorIngestor.IngestAsync(
                     repoId,
                     repoRoot,
                     changed,
-                    unchangedForBackfill,
+                    unchangedOffered,
                     (count, ct) =>
                     {
                         if (count - lastVectorisingHeartbeat >= VectorisingHeartbeatInterval)
@@ -533,6 +614,29 @@ internal sealed class RepoContextBootstrapService
                     "Repo {RepoId}: file vectorisation did not complete this pass; continuing with the "
                     + "remaining embedding arms and retrying it on the next reconcile.",
                     repoId);
+            }
+
+            embedded = fileIngest.FilesEmbedded;
+
+            // Convergence is only ever asserted from a pass that actually looked. A
+            // deferred scan carries the previous verdict forward unchanged; a failed
+            // arm, a failed coverage probe, or any gap found clears it, so the next
+            // pass scans again until the repository is observed clean once more.
+            if (gapScanDue)
+            {
+                var converged = armFailure is null && fileIngest.Converged;
+                updatedSnapshot = updatedSnapshot with { CoverageConverged = converged };
+                if (converged != coverageConverged)
+                {
+                    _logger.LogInformation(
+                        converged
+                            ? "Repo {RepoId}: embedding coverage is complete; the gap scan now runs every "
+                              + "{Passes} pass(es) unless a gap is detected out of band."
+                            : "Repo {RepoId}: embedding coverage is incomplete; the gap scan runs on every pass "
+                              + "until it is clean (cadence would otherwise be {Passes} pass(es)).",
+                        repoId,
+                        _options.PassesPerEmbeddingGapScan);
+                }
             }
 
             await ReportAsync(progress, new RepoIndexProgressUpdate { FilesEmbedded = embedded }, cancellationToken)
@@ -672,15 +776,31 @@ internal sealed class RepoContextBootstrapService
 
     /// <summary>
     /// One repository's cross-walk pruning baseline: the directory-modification-time
-    /// snapshot the last successful walk observed, and the wall-clock tick of the last
-    /// full (unpruned) sweep so the periodic force-full backstop can be scheduled.
+    /// snapshot the last successful walk observed, the wall-clock tick of the last full
+    /// (unpruned) sweep, and the pass counters that pace the periodic full sweep and the
+    /// periodic embedding-gap scan.
     /// </summary>
     /// <param name="DirectoryMtimes">The repository-relative directory to modification-time
     /// snapshot from the last successful walk.</param>
-    /// <param name="LastFullSweepTicks">The UTC tick at which the last full sweep ran.</param>
+    /// <param name="LastFullSweepTicks">The UTC tick at which the last full sweep ran. Kept
+    /// for diagnostics only: the deadline itself is counted in passes, because pass
+    /// duration - not the configured interval - sets the real spacing between two walks
+    /// (issue #2048).</param>
+    /// <param name="PassesSinceFullSweep">How many consented passes have completed since
+    /// the last full sweep. The next pass forces a full sweep once this reaches
+    /// <see cref="RepoContextIndexingOptions.PassesPerFullWalk"/> minus one.</param>
+    /// <param name="PassesSinceGapScan">How many consented passes have completed since the
+    /// last whole-repository embedding-gap scan, pacing it against
+    /// <see cref="RepoContextIndexingOptions.PassesPerEmbeddingGapScan"/>.</param>
+    /// <param name="CoverageConverged">Whether the last gap scan that actually ran proved
+    /// every content-unchanged file has a live vector. While false the scan runs on every
+    /// pass, so a repository still filling in its embeddings is never throttled.</param>
     private sealed record PruneCacheEntry(
         IReadOnlyDictionary<string, long> DirectoryMtimes,
-        long LastFullSweepTicks);
+        long LastFullSweepTicks,
+        int PassesSinceFullSweep,
+        int PassesSinceGapScan,
+        bool CoverageConverged);
 
     /// <summary>
     /// Selects the symbol back-fill candidates from the content-unchanged set: files

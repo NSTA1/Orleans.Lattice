@@ -36,10 +36,13 @@ internal interface IRepoContextVectorIngestor
     /// vectors is stored, with the running count of files embedded so far, so a long
     /// vectorisation pass can report incremental progress. May be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancels the ingest.</param>
-    /// <returns>The number of files whose vectors were embedded and stored. The
-    /// no-op binding returns zero, and a real binding returns fewer than the
-    /// offered count when it fails closed or skips contentless files.</returns>
-    ValueTask<int> IngestAsync(
+    /// <returns>What the pass did: the number of files whose vectors were embedded
+    /// and stored, how many offered unchanged files were found to be missing a vector,
+    /// and whether coverage over the unchanged set was established at all. The no-op
+    /// binding returns <see cref="RepoFileVectorIngestOutcome.None"/>, and a real
+    /// binding embeds fewer than the offered count when it fails closed or skips
+    /// contentless files.</returns>
+    ValueTask<RepoFileVectorIngestOutcome> IngestAsync(
         string repoId,
         string repoRoot,
         IReadOnlyList<RepoFileEntry> changedFiles,

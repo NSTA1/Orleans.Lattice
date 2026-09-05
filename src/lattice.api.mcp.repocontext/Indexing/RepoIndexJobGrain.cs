@@ -91,7 +91,7 @@ internal sealed class RepoIndexJobGrain(
     }
 
     /// <inheritdoc />
-    public async Task<bool> EnsureIndexedAsync()
+    public async Task<bool> EnsureIndexedAsync(bool forceEmbeddingGapScan = false)
     {
         // Never bootstrapped: there is no persisted request to re-drive, so the
         // self-heal sweep has nothing to do for this repository.
@@ -113,7 +113,17 @@ internal sealed class RepoIndexJobGrain(
         // in-place edits pruning cannot see. An explicit onboarding or re-bootstrap
         // comes through StartAsync with the request as built at the tool seam
         // (AllowPrune left false), so it stays a full, exact walk.
-        await StartAsync(state.State.Request with { AllowPrune = true }).ConfigureAwait(true);
+        //
+        // A re-drive raised by the out-of-band gap sweep additionally forces the
+        // in-pass embedding gap scan, because that sweep re-drives precisely because
+        // a vector is missing. Without the flag the pass would honour the periodic
+        // scan cadence, heal nothing, and be re-driven again on the sweep's next
+        // cycle - so the flag is what keeps the two gap detectors from livelocking.
+        await StartAsync(state.State.Request with
+        {
+            AllowPrune = true,
+            ForceEmbeddingGapScan = forceEmbeddingGapScan,
+        }).ConfigureAwait(true);
         return true;
     }
 
