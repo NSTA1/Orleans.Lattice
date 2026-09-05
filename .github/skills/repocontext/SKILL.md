@@ -1,6 +1,6 @@
 ---
 name: repocontext
-description: Orleans.Lattice repository-context (repocontext) MCP server usage. Use it as the primary mechanism for searching, scanning, and recalling the indexed codebase, and for capturing durable cross-session agent memory (decisions, gotchas, conventions) via remember/update/forget. Use whenever you are about to search or explore the repo, look something up you may have learned before, or record a decision or gotcha for a future session - and to know how to read search `mode`/freshness, the key/topic conventions, and when to fall back to grep.
+description: Orleans.Lattice repository-context (repocontext) MCP server usage. Use it as the primary mechanism for searching, scanning, and recalling the indexed codebase, and for capturing durable cross-session agent memory (decisions, gotchas, conventions) via remember/update/forget. Use whenever you are about to search or explore the repo, look something up you may have learned before, or record a decision or gotcha for a future session - and to know how to read search `mode`/freshness, the key/topic conventions, and when to fall back to grep. Also covers the agent-operated backlog: the work-item schema, its relation vocabulary, how a ready set is computed, and how items mirror to GitHub issues.
 ---
 
 # Repository-context MCP (repocontext)
@@ -46,6 +46,13 @@ to drift. It covers:
   (`addLinks` / `removeLinks` with a small `broader` / `narrower` / `related` /
   `partOf` relation vocabulary), TTL and CRDT-merge semantics, and what is and
   is not worth capturing.
+- **The agent-operated backlog** - how work items themselves live in memory:
+  the item schema (what is a scalar, what is an attribute tag, and what is
+  derived rather than stored), the three-phase grouping model, the five
+  relations that extend the base link vocabulary (`blockedBy`, `anchoredTo`,
+  `claims`, `integrates`, `informs`), how a ready set is computed without a
+  reverse index, how items mirror to GitHub issues for human oversight, and
+  the entry gating that keeps items well-formed.
 - **Safety and health** - write tools are destructive and fail-closed;
   `repocontext_health` and `repocontext_index_status`; and what a `keyword` /
   `Failed` degraded state means.
@@ -75,6 +82,13 @@ disagree with the master file, the master file wins.
   workstream, `author` set to the session identity, and a **one-week TTL**
   (`ttlSeconds: 604800`) on handoffs - promote anything durable to
   `gotchas` / `conventions` / `decisions` (no TTL) when the workstream closes.
+- **Working the backlog?** Work items are memory entries under the `backlog`
+  topic, mirrored one-to-one onto GitHub issues (the issue number *is* the
+  item id). Contended state lives in **edges**, not scalar fields, because
+  links are add-wins and fields are last-writer-wins. A ready set is a topic
+  scan plus a depth-1 `blockedBy` check per candidate - never one graph query,
+  because `neighbors` walks outbound edges only and there is no reverse index.
+  The master file has the schema, the relations, and the gating rules.
 - **Reach for it first.** When the `repocontext_*` tools are present, lead with
   `search` / `scan` / `recall` *before* `grep` / `glob` - both for finding code
   and for recalling what past sessions captured. If the tools are absent (or
