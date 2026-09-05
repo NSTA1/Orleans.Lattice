@@ -78,4 +78,48 @@ internal readonly record struct ChildDigestSnapshot
 
     /// <summary>Number of immediate children: <c>0</c> for a leaf, <c>Children.Count</c> for an internal node. Structural-only.</summary>
     [Id(9)] public int ChildFanout { get; init; }
+
+    /// <summary>
+    /// Compares two snapshots by value: every scalar field plus the
+    /// <see cref="Hash"/> bytes compared by content. The compiler-generated
+    /// record-struct equality compares <see cref="Hash"/> with
+    /// <see cref="EqualityComparer{T}.Default"/>, which for a <see cref="byte"/>
+    /// array is reference equality, so two structurally identical snapshots would
+    /// otherwise never compare equal - and a snapshot that round-trips through
+    /// serialization would never equal its pre-serialization self, defeating the
+    /// content-digest comparison this type exists for.
+    /// </summary>
+    /// <param name="other">The snapshot to compare against.</param>
+    public bool Equals(ChildDigestSnapshot other) =>
+        EntryCount == other.EntryCount
+        && CheckpointOffset == other.CheckpointOffset
+        && PublishSequence == other.PublishSequence
+        && string.Equals(LowKeyInclusive, other.LowKeyInclusive, StringComparison.Ordinal)
+        && string.Equals(HighKeyExclusive, other.HighKeyExclusive, StringComparison.Ordinal)
+        && LiveCount == other.LiveCount
+        && TombstoneCount == other.TombstoneCount
+        && SubtreeDepth == other.SubtreeDepth
+        && ChildFanout == other.ChildFanout
+        && (Hash is null ? other.Hash is null : other.Hash is not null && Hash.AsSpan().SequenceEqual(other.Hash));
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(EntryCount);
+        hash.Add(CheckpointOffset);
+        hash.Add(PublishSequence);
+        hash.Add(LowKeyInclusive, StringComparer.Ordinal);
+        hash.Add(HighKeyExclusive, StringComparer.Ordinal);
+        hash.Add(LiveCount);
+        hash.Add(TombstoneCount);
+        hash.Add(SubtreeDepth);
+        hash.Add(ChildFanout);
+        if (Hash is { } bytes)
+        {
+            hash.AddBytes(bytes);
+        }
+
+        return hash.ToHashCode();
+    }
 }
