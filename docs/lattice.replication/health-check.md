@@ -69,7 +69,7 @@ A transient degraded blip (one or two probes) is usually noise; a sustained degr
 - The escalation timer starts on the transition from `Healthy` to `Degraded`.
 - It is **reset to null** the moment the peer drops back below every soft bound. A subsequent re-degradation starts a fresh timer.
 - A peer that hits the hard (`Unhealthy`) bound on any signal **always** reports `Unhealthy` immediately and drops any prior degraded-since record, so a future recovery starts cleanly.
-- Setting `UnhealthyAfter = TimeSpan.Zero` disables the grace window; the only escalation path is then the hard bound itself.
+- A **non-positive** `UnhealthyAfter` (`TimeSpan.Zero`, `Timeout.InfiniteTimeSpan`, or any negative) disables sustained-degraded escalation entirely - it does not mean "escalate immediately" - leaving a hard (unhealthy) bound on some signal as the only path to `Unhealthy`. For the strictest gating, use a small positive value: escalation then fires on the first probe after the one that entered the degraded tier.
 
 Default is 60 seconds, sized to absorb one or two probe-cadence blips while escalating within an interactive operator-response window.
 

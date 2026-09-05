@@ -56,11 +56,17 @@ public sealed class LatticeReplicationHealthCheckOptions
     /// <summary>
     /// Duration a peer must remain in the <c>Degraded</c> tier before its
     /// contribution to the aggregate verdict escalates to <c>Unhealthy</c>.
-    /// Resets to <c>null</c> the moment the peer drops back below the
-    /// soft (degraded) bound on every signal. Defaults to
-    /// <see cref="DefaultUnhealthyAfter"/>; set to
-    /// <see cref="TimeSpan.Zero"/> to disable the grace window and treat
-    /// every degraded sample as unhealthy on the next probe.
+    /// The per-peer timer starts when the peer first classifies
+    /// <c>Degraded</c> and is cleared when it either recovers below every soft
+    /// bound or trips a hard bound; a later re-degradation starts a fresh
+    /// timer. Defaults to <see cref="DefaultUnhealthyAfter"/>.
+    /// <b>A non-positive value (<see cref="TimeSpan.Zero"/>,
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, or any
+    /// negative) disables sustained-degraded escalation entirely - it does not
+    /// mean "escalate immediately"</b> - leaving a hard (unhealthy) bound on
+    /// some signal as the only path to <c>Unhealthy</c>. For the strictest
+    /// gating, use a small positive value: escalation then fires on the first
+    /// probe after the one that entered the degraded tier.
     /// </summary>
     public TimeSpan UnhealthyAfter { get; set; } = DefaultUnhealthyAfter;
 

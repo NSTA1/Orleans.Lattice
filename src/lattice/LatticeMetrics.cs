@@ -1045,18 +1045,78 @@ public static class LatticeMetrics
             description: "Durable writes to the leaf-materialiser pin store, tagged by birth/coalesced outcome.");
 
     /// <summary>
-    /// Histogram of leaf-materialiser drain lag, in milliseconds, sampled by the
-    /// per-tree WAL GC pass as <c>now - slowest durable materialiser checkpoint</c>.
-    /// A rising drain lag is the back-pressure signal (issue #1030): when it
-    /// exceeds <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
+    /// Histogram of <b>caller-observed</b> durable leaf-materialiser pin write
+    /// duration, in milliseconds, recorded by <c>LeafCursorReporter</c> around
+    /// each pin grain call whose duration reached
+    /// <see cref="LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold"/>
+    /// (or which faulted). Tagged with <see cref="TagTree"/>.
+    /// <para>
+    /// This is the durable-storage counterpart to
+    /// <see cref="MaterialiserDrainLag"/>, which is derived from the in-memory
+    /// cursor registry and therefore cannot observe a stalled pin store (issue
+    /// #2015). Measured at the call site so it includes the time a report spent
+    /// queued ahead of the shard's non-reentrant activation - what the reporting
+    /// leaf actually experiences. Only emitted when the input is enabled; the
+    /// option defaults to <c>null</c>.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> MaterialiserPinDurableWriteLatency =
+        Meter.CreateHistogram<double>("orleans.lattice.materialiser.pin.durable_write_latency", unit: "ms",
+            description: "Caller-observed durable leaf-materialiser pin write duration, tagged by tree.");
+
+    /// <summary>
+    /// Counter of coalescible leaf-materialiser pin reports shed by
+    /// <c>LeafCursorReporter</c> because the target shard's most recent durable
+    /// write demonstrated the store is not keeping up. Tagged with
+    /// <see cref="TagTree"/>.
+    /// <para>
+    /// Shedding is always safe - a shed report leaves the durable pin staler,
+    /// which only ever retains more WAL - and it is the caller-side half of the
+    /// issue #2012 fix: declining to enqueue removes queueing delay that a
+    /// grain-side refusal could not, because a refusal still has to reach the
+    /// front of the non-reentrancy queue before it can be issued. A sustained
+    /// non-zero rate means the pin store is the bottleneck; pair it with
+    /// <see cref="MaterialiserPinDurableWriteLatency"/> and consider raising
+    /// <see cref="LatticeOptions.WalMaterialiserPinBuckets"/>.
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> MaterialiserPinReportsShed =
+        Meter.CreateCounter<long>("orleans.lattice.materialiser.pin.reports_shed", unit: "{report}",
+            description: "Coalescible leaf-materialiser pin reports shed under durable pin-store pressure, tagged by tree.");
+
+    /// <summary>
+    /// Histogram of leaf-materialiser drain lag, in milliseconds, recorded by the
+    /// WAL saturation sampler on every tick
+    /// (<see cref="LatticeOptions.WalSaturationSampleInterval"/>, default 200 ms)
+    /// while the drain-lag input is enabled. Measured live from in-memory state as
+    /// the WAL head wall-clock timestamp minus the slowest leaf-materialiser cursor
+    /// frontier (the cursor-registry minimum), clamped at zero, so a caught-up tree
+    /// reads zero rather than the full head age. Recorded for every checked tree,
+    /// not only the over-threshold ones, so the histogram carries the whole
+    /// distribution leading up to a trip; a tree with no materialiser frontier yet
+    /// records a zero rather than being skipped.
+    /// <para>
+    /// A rising drain lag is the back-pressure signal (issue #1030): when it stays
+    /// at or above <see cref="LatticeOptions.WalSaturationMaterialiserLagThreshold"/>
     /// for <see cref="LatticeOptions.WalSaturationMaterialiserLagSampleWindows"/>
-    /// consecutive passes the tree escalates to Saturated. Tagged with
-    /// <see cref="TagTree"/>. Only emitted when a non-zero materialiser frontier
-    /// exists (a never-checkpointed tree produces no measurement).
+    /// consecutive sampler windows the tree is held at
+    /// <see cref="WalSaturationState.Throttled"/>. Unlike the dispatch-timeout,
+    /// provider-failure, and flush-latency inputs, this one never escalates to
+    /// <see cref="WalSaturationState.Saturated"/>: it paces callers without ever
+    /// tripping the writer admission gate's fast-fail path.
+    /// </para>
+    /// <para>
+    /// Measures the <b>in-memory</b> cursor, so it does not observe the durable
+    /// materialiser pin store that actually sets the WAL retention floor. A stalled
+    /// pin store therefore reads as healthy drain lag (issue #2015); pair this with
+    /// <see cref="MaterialiserPinDurableWriteLatency"/>, which measures the durable
+    /// write directly and is the input that closes that gap.
+    /// </para>
+    /// Tagged with <see cref="TagTree"/>.
     /// </summary>
     public static readonly Histogram<double> MaterialiserDrainLag =
         Meter.CreateHistogram<double>("orleans.lattice.materialiser.drain_lag", unit: "ms",
-            description: "Leaf-materialiser drain lag sampled by the WAL GC pass, tagged by tree.");
+            description: "Leaf-materialiser drain lag sampled by the WAL saturation sampler, tagged by tree.");
 
     /// <summary>
     /// Counter of activation-time leaf materialiser replays started, emitted by
@@ -2308,6 +2368,15 @@ public static class LatticeMetrics
     /// saturation episode).
     /// </summary>
     public const string TagWalSaturationPreviousState = "previous_state";
+
+    /// <summary>
+    /// Tag naming which sampler input a WAL saturation transition was
+    /// attributed to (the lowercased <see cref="WalSaturationCause"/>). Several
+    /// inputs map to the same state, so the state tag alone does not identify
+    /// the subsystem under pressure. Carried on
+    /// <see cref="WalSaturationTransitions"/>.
+    /// </summary>
+    public const string TagWalSaturationCause = "cause";
 
     /// <summary>
     /// Counter incremented once per per-tree WAL saturation-state

@@ -55,4 +55,16 @@ public readonly record struct WalSaturationStateChange
     /// </summary>
     [Id(5)]
     public DateTimeOffset ObservedAt { get; init; }
+
+    /// <summary>
+    /// Which sampler input the transition was attributed to. Several inputs map
+    /// to the same <see cref="WalSaturationState"/>, so the state alone does not
+    /// identify the subsystem under pressure; this names it. Best-effort and
+    /// single-valued: when several inputs cross in the same window the first
+    /// evaluated is reported. <see cref="WalSaturationCause.None"/> on every
+    /// transition back to <see cref="WalSaturationState.Healthy"/>, and on any
+    /// transition published by a host predating cause attribution.
+    /// </summary>
+    [Id(6)]
+    public WalSaturationCause Cause { get; init; }
 }

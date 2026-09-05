@@ -122,13 +122,21 @@ public class LatticeOptionsResolverPropagationGuardTests
             "WalSaturationFlushLatencySampleWindows",
             "WalSaturationMaterialiserLagThreshold",
             "WalSaturationMaterialiserLagSampleWindows",
+            // Durable pin-latency input (issue #2015): read alongside the rest
+            // of the saturation family from the silo-wide unkeyed options in
+            // WalSaturationSampler.SampleOnceAsync, and (for the threshold)
+            // in LeafCursorReporter.ResolvePinLatencyThresholdMs.
+            "WalSaturationMaterialiserPinLatencyThreshold",
+            "WalSaturationMaterialiserPinLatencySampleWindows",
             // Durable leaf-materialiser pin store knobs: the pin grain and the
             // LeafCursorReporter read these directly via
             // IOptionsMonitor.Get(...) (the flush cadence is a silo-wide grain
             // timer interval; the shard count is a cluster-wide structural
-            // fan-out). Neither is a per-tree gate routed through the
-            // ResolvedLatticeOptions hot path.
+            // fan-out, and the bucket count is a cluster-wide durable-state
+            // layout that every activation of a shard must agree on). None is a
+            // per-tree gate routed through the ResolvedLatticeOptions hot path.
             "WalMaterialiserPinShards",
+            "WalMaterialiserPinBuckets",
             "WalMaterialiserPinFlushIntervalMs",
             // WAL replay throttles (issue #1030): the per-silo concurrent-leaf-
             // replay ceiling is a process-wide semaphore bound, and the per-turn

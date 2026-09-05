@@ -89,6 +89,15 @@ services:
       # directory and the SQLite database file.
       LATTICE_DATA_ROOT: /data
       LATTICE_MCP_PORT: "8080"
+      # WAL materialiser pin buckets: how many persisted slots the retention-floor
+      # pin state is split across, so an advancing floor rewrites a fraction of the
+      # blob instead of all of it. The library default is 1 (the legacy write path,
+      # kept so upgrading an existing deployment changes nothing); this box opts in
+      # because its measured pin blobs reached ~1.4 MB rewritten tens of thousands
+      # of times. Widening self-migrates on activation and the legacy slot is
+      # retained, so setting this back to "1" and restarting is a safe rollback
+      # that over-retains WAL rather than over-trimming it.
+      LATTICE_WAL_PIN_BUCKETS: "8"
       # The read-only workspace root. Repositories are registered at runtime by
       # the client through the repocontext_add_repo tool, and every added path
       # must resolve under this root - a path escaping it (via `..` or a symlink)

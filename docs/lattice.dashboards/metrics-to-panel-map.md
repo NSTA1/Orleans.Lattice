@@ -116,6 +116,8 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.leaf.activation_replays_over_budget` | counter | `tree` | CommitPath | Over-budget cold replay against an intact WAL (issue #1738) |
 | `orleans.lattice.leaf.activation_cursor_publish_failures` | counter | `tree` | CommitPath | Leaf-materialiser durable pin path (issue #1030) |
 | `orleans.lattice.materialiser.drain_lag` | histogram (ms) | `tree` | CommitPath | Leaf-materialiser drain lag p50/p95 (issue #1030 back-pressure) |
+| `orleans.lattice.materialiser.pin.durable_write_latency` | histogram (ms) | `tree` | CommitPath | Durable pin-write latency: the only materialiser instrument that observes the retention floor rather than in-memory progress (issue #2015) |
+| `orleans.lattice.materialiser.pin.reports_shed` | counter | `tree` | CommitPath | Steady-state pin reports dropped to protect a pin store that is not keeping up (issue #2014) |
 | `orleans.lattice.snapshot.replay.entries` | counter | `tree` | Overview | Snapshot replay throughput |
 | `orleans.lattice.snapshot.replay.duration` | histogram (ms) | `tree` | Overview | Snapshot replay duration p50/p95/p99 |
 | `orleans.lattice.snapshot.pins` | up/down counter | `tree` | Overview | Snapshot pins (current) |

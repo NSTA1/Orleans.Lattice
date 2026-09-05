@@ -136,6 +136,178 @@ internal static class WalMaterialiserPinRouting
                 : key;
     }
 
+    /// <summary>
+    /// Parses the shard ordinal out of a pin grain key written under either
+    /// separator, returning <c>0</c> for the legacy unsuffixed key (which is
+    /// also the key used when the shard count is one). Used for per-shard
+    /// attribution on the saturation signal.
+    /// </summary>
+    /// <param name="key">The pin grain key.</param>
+    /// <returns>The shard ordinal the key addresses.</returns>
+    public static int ShardIndexFromKey(string? key)
+    {
+        if (string.IsNullOrEmpty(key))
+        {
+            return 0;
+        }
+
+        return TryParseShard(key, ShardSeparator, out var shard)
+            || TryParseShard(key, LegacyShardSeparator, out shard)
+                ? shard
+                : 0;
+    }
+
+    private static bool TryParseShard(string key, string separator, out int shard)
+    {
+        var idx = key.LastIndexOf(separator, StringComparison.Ordinal);
+        if (idx >= 0)
+        {
+            var suffix = key.AsSpan(idx + separator.Length);
+            if (IsAllDigits(suffix) && int.TryParse(suffix, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out shard))
+            {
+                return true;
+            }
+        }
+
+        shard = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Separates a durable pin <b>bucket</b> slot name from its ordinal. Bucket
+    /// slots are grain-state names rather than grain keys, so they are not
+    /// subject to the grain-key character restrictions that motivated
+    /// <see cref="ShardSeparator"/>; the same spelling is reused for symmetry.
+    /// </summary>
+    public const string BucketSeparator = "~b";
+
+    /// <summary>
+    /// Resolves the configured durable pin bucket count from the global
+    /// (unkeyed) options, clamped to at least one. Read the same way as
+    /// <see cref="ResolveShardCount"/>.
+    /// </summary>
+    /// <param name="options">The options monitor, or <c>null</c>.</param>
+    /// <returns>The effective bucket count.</returns>
+    public static int ResolveBucketCount(IOptionsMonitor<LatticeOptions>? options)
+    {
+        if (options is null)
+        {
+            return 1;
+        }
+
+        return Math.Max(1, options.Get(string.Empty).WalMaterialiserPinBuckets);
+    }
+
+    /// <summary>
+    /// Returns the durable grain-state slot name holding
+    /// <paramref name="consumerId"/>'s pin for a shard configured with
+    /// <paramref name="bucketCount"/> buckets.
+    /// <para>
+    /// A bucket count of one returns
+    /// <see cref="WalMaterialiserPinState.StateName"/> unchanged, so a host that
+    /// leaves the option at its default persists to byte-for-byte the same
+    /// single slot as every build before bucketing existed. Only a host that
+    /// explicitly raises the count writes suffixed slots.
+    /// </para>
+    /// </summary>
+    /// <param name="consumerId">The leaf-materialiser consumer id.</param>
+    /// <param name="bucketCount">The configured bucket count.</param>
+    /// <returns>The durable state slot name to persist the pin under.</returns>
+    public static string BucketStateName(string consumerId, int bucketCount)
+    {
+        if (bucketCount <= 1)
+        {
+            return WalMaterialiserPinState.StateName;
+        }
+
+        return BucketStateName(BucketOf(consumerId, bucketCount));
+    }
+
+    /// <summary>
+    /// Resolves the bucket ordinal owning <paramref name="consumerId"/> under
+    /// <paramref name="bucketCount"/>. Deterministic and process-independent, so
+    /// a consumer lands in the same bucket in every process and after every
+    /// restart.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bucket hash is deliberately <b>decorrelated</b> from the shard hash
+    /// rather than reusing it. Shard routing takes
+    /// <c>StableHash(consumerId) % shardCount</c>; taking the bucket from the
+    /// same value would make the two selections functionally dependent, and for
+    /// the natural configuration - a bucket count equal to (or a multiple or
+    /// divisor of) the shard count, both typically powers of two - it collapses
+    /// entirely: every consumer routed to shard <c>N</c> satisfies
+    /// <c>hash % 8 == N</c>, so with eight buckets it can only ever land in
+    /// bucket <c>N</c>. The shard's whole pin map would then occupy a single
+    /// bucket and bucketing would degenerate into renaming the slot, delivering
+    /// none of the write reduction it exists for. This was observed on a live
+    /// deployment: with eight shards and eight buckets one bucket held the full
+    /// 1.08 MB blob and the other seven were empty.
+    /// </para>
+    /// <para>
+    /// Applying an avalanche finaliser first makes every output bit depend on
+    /// every input bit, so the low bits used for the bucket modulo carry no
+    /// information about the low bits used for the shard modulo and consumers
+    /// spread evenly across buckets whatever the two counts are. Reassigning a
+    /// consumer to a different bucket is always safe: an activation reads every
+    /// bucket and merges monotonic-max, so a stale copy left in the old bucket
+    /// loses to the newer one and can only ever over-retain WAL.
+    /// </para>
+    /// </remarks>
+    /// <param name="consumerId">The leaf-materialiser consumer id.</param>
+    /// <param name="bucketCount">The configured bucket count.</param>
+    /// <returns>The bucket ordinal, or zero when bucketing is disabled.</returns>
+    public static int BucketOf(string consumerId, int bucketCount)
+        => bucketCount <= 1 ? 0 : (int)(Avalanche(StableHash(consumerId)) % (uint)bucketCount);
+
+    /// <summary>
+    /// Returns the durable grain-state slot name for bucket
+    /// <paramref name="bucket"/>.
+    /// </summary>
+    /// <param name="bucket">The bucket ordinal.</param>
+    /// <returns>The durable state slot name.</returns>
+    public static string BucketStateName(int bucket)
+        => string.Concat(
+            WalMaterialiserPinState.StateName,
+            BucketSeparator,
+            bucket.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// Enumerates every durable state slot a pin shard activation must read to
+    /// reconstruct its full pin map: each bucket slot plus the legacy
+    /// unsuffixed slot.
+    /// <para>
+    /// Reading the legacy slot unconditionally is what makes raising the bucket
+    /// count self-healing, on exactly the reasoning
+    /// <see cref="EnumerateReadKeys"/> already applies to the shard dimension. A
+    /// pin written before bucketing was enabled keeps counting toward the trim
+    /// floor - it is merged into memory on activation and re-persisted into its
+    /// bucket on the next advance - so no WAL segment is stranded and no
+    /// operator migration step is required.
+    /// </para>
+    /// </summary>
+    /// <param name="bucketCount">The configured bucket count.</param>
+    /// <returns>The durable state slot names to read.</returns>
+    public static IReadOnlyList<string> EnumerateBucketStateNames(int bucketCount)
+    {
+        if (bucketCount <= 1)
+        {
+            return new[] { WalMaterialiserPinState.StateName };
+        }
+
+        var names = new string[bucketCount + 1];
+        for (var bucket = 0; bucket < bucketCount; bucket++)
+        {
+            names[bucket] = BucketStateName(bucket);
+        }
+
+        // Legacy slot last so a pre-bucketing pin participates in the union.
+        names[bucketCount] = WalMaterialiserPinState.StateName;
+        return names;
+    }
+
     private static bool TryStrip(string key, string separator, out string treeName)
     {
         // Anchored at the last occurrence: the suffix is appended, so an earlier
@@ -193,6 +365,22 @@ internal static class WalMaterialiserPinRouting
             hash *= prime;
         }
 
+        return hash;
+    }
+
+    /// <summary>
+    /// The MurmurHash3 32-bit finaliser: an avalanche mix that makes every
+    /// output bit depend on every input bit. Applied to <see cref="StableHash"/>
+    /// before the bucket modulo so bucket selection is statistically independent
+    /// of shard selection, which takes its modulo from the unmixed value.
+    /// </summary>
+    private static uint Avalanche(uint hash)
+    {
+        hash ^= hash >> 16;
+        hash *= 0x85ebca6b;
+        hash ^= hash >> 13;
+        hash *= 0xc2b2ae35;
+        hash ^= hash >> 16;
         return hash;
     }
 }

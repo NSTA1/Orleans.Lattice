@@ -195,6 +195,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalGcStartupDelay`](#walgcstartupdelay) | `TimeSpan` | 30 seconds | No (global; read at silo start) |
 | [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) | `int` | `0` (auto = `Environment.ProcessorCount`) | Yes |
 | [`WalMaterialiserPinFlushIntervalMs`](#walmaterialiserpinflushintervalms) | `int` | 250 | Yes |
+| [`WalMaterialiserPinBuckets`](#walmaterialiserpinbuckets) | `int` | 1 (disabled) | No (durable-store migration; see below) |
 | [`WalMaterialiserPinShards`](#walmaterialiserpinshards) | `int` | 8 | No (durable-store migration; see below) |
 | [`WalMaxPendingBatches`](#walmaxpendingbatches) | `int` | 16 | Yes |
 | [`WalMaxRetainedBytes`](#walmaxretainedbytes) | `long?` | `null` (disabled) | Yes |
@@ -206,6 +207,8 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalSaturationFlushLatencyThreshold`](#walsaturationflushlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationMaterialiserLagSampleWindows`](#walsaturationmaterialiserlagsamplewindows) | `int` | 3 | Yes |
 | [`WalSaturationMaterialiserLagThreshold`](#walsaturationmaterialiserlagthreshold) | `TimeSpan?` | 30 seconds | Yes |
+| [`WalSaturationMaterialiserPinLatencySampleWindows`](#walsaturationmaterialiserpinlatencysamplewindows) | `int` | 3 | Yes |
+| [`WalSaturationMaterialiserPinLatencyThreshold`](#walsaturationmaterialiserpinlatencythreshold) | `TimeSpan?` | `null` (disabled) | Yes |
 | [`WalSaturationProviderFailureRateThreshold`](#walsaturationproviderfailureratethreshold) | `int` | 1 | Yes |
 | [`WalSaturationRecoveryWindow`](#walsaturationrecoverywindow) | `TimeSpan` | 1 second | Yes |
 | [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes |
@@ -1361,6 +1364,27 @@ Set lower (minimum 1) to make the input more sensitive at the cost of more trans
 
 This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 
+### `WalSaturationMaterialiserPinLatencyThreshold`
+
+Duration at or above which a **durable** leaf-materialiser pin write counts as a saturation pressure trip (default: `null`, which disables the input entirely). The reporting leaf measures each pin write at its own call site and counts a trip when the call reaches this threshold or faults. When trips occur in `WalSaturationMaterialiserPinLatencySampleWindows` consecutive sampler windows the tree is held at `WalSaturationState.Throttled`.
+
+Closes the **durable-floor blind spot** (issue #2015). Every other saturation input, the drain-lag input included, is derived from in-memory state: drain lag measures the WAL head against the in-memory cursor registry, which keeps advancing perfectly well while the durable pin store is stalled. But the floor the WAL garbage collector actually trims against is the durable one, so a stalled pin store leaves the WAL growing without bound while every existing input reads `Healthy` - which is exactly what happened in issue #2012. This input measures the durable write itself, so that condition becomes observable and actionable.
+
+Like the drain-lag input, it holds the tree at `Throttled` and **never** escalates to `Saturated`. That is deliberate: a stalled pin store is a retention-floor maintenance problem, not an inability to accept writes. Escalating would engage the writer admission gate's `LatticeSaturatedException` fast-fail and convert slow WAL trimming into user-visible write failures, making the very incident it detects worse. Slowing producers is the correct response - it gives the pin store room to drain.
+
+Measured at the call site, so the reading includes time a report spent queued ahead of the shard's non-reentrant activation, which is what the reporting leaf actually experiences and what a saturation signal should reflect. Sizing guidance: pick a threshold a few times your steady-state pin write duration (visible on `orleans.lattice.materialiser.pin.durable_write_latency`) so healthy traffic stays quiet.
+
+The input is purely additive. Leaving it at its default `null` is a zero-cost no-op: nothing is recorded, the sampler's map stays empty, and the classifier behaves exactly as before. Must be positive when set; the validator rejects `TimeSpan.Zero` and any negative value.
+
+This option can be changed freely at any time. The new value takes effect on the next pin report.
+
+### `WalSaturationMaterialiserPinLatencySampleWindows`
+
+Number of consecutive saturation-sampler windows that must each observe at least one durable pin-write latency trip before the classifier holds the tree at `WalSaturationState.Throttled` (default: 3). Acts as the noise floor for the pin-latency input, mirroring `WalSaturationFlushLatencySampleWindows`, so a single slow write cannot flip the regime.
+
+Set lower (minimum 1) to make the input more sensitive at the cost of more transient classifier flaps; set higher to lengthen the sustained-slow regime the classifier requires before flagging. Has no effect when `WalSaturationMaterialiserPinLatencyThreshold` is left at its default `null`. The validator rejects values less than 1.
+
+This option can be changed freely at any time. The new value takes effect on the next sampler tick.
 ### `WalSaturationRecoveryWindow`
 
 Window after the most-recently observed `WalSaturationState.Saturated` transition during which the classifier holds a tree at or above `Throttled` even if the current sampler tick's per-partition depth observation would otherwise classify it as `Healthy` (default: 1 second). Defends against bursty per-partition WAL drain where one partition fills to cap, drains entirely in the next tick, and the next partition fills - the per-tick `max(depth_ratio)` across partitions oscillates between `~1.0` and `~0.0` within a single sampler period and the classifier would otherwise flap `Healthy <-> Saturated` at the sampler cadence with `Throttled` never observed as a stable state. With the window in effect, callers see `Throttled` persist as the natural lead-up and fall-back regime around saturation episodes; the canonical TCP / queue ingest reader pattern can take the advisory `Throttled` action (yield-per-line, lower-priority dispatch) for measurable durations rather than seeing only the binary pause-or-go pattern.
@@ -1427,6 +1451,15 @@ Number of durable-pin grain activations the per-tree leaf-materialiser checkpoin
 
 Set to `1` to restore the historical single-activation shape. Changing this value is a **durable-store migration**: pins written under the previous shard count remain readable because the GC dual-reads every shard activation plus the legacy unsharded key during the transition, but a deliberate rollout (drain, change, redeploy) is recommended rather than flipping it on a hot cluster. Must be `>= 1`; the validator rejects values below 1.
 
+### `WalMaterialiserPinBuckets`
+
+Number of durable state slots a single pin shard's blob is split across (default: `1`, which is the historical single-slot layout and is byte-for-byte what every pre-bucketing build wrote). Orleans persists grain state as one whole blob, so a shard holding `N` consumer pins rewrites all `N` of them to record one leaf's advance. On a large tree that is a multi-megabyte write per flush, which is what made the pin store the bottleneck in issue #2012. Bucketing splits the persistence of one shard across several slots and rewrites only the slots whose contents changed, turning an `O(consumers on the shard)` write into an `O(consumers in the bucket)` one.
+
+Buckets are the **write** dimension; [`WalMaterialiserPinShards`](#walmaterialiserpinshards) is the **read** dimension. They are orthogonal, and that is the point of having both. Raising the shard count also shrinks each blob, but it widens the WAL garbage collector's per-pass grain fan-in by the same factor, because the collector must read every shard to compute the trim floor. Raising the bucket count shrinks the blob without touching that fan-in at all: one activation still answers for the whole shard and unions its buckets in memory, so `GetPinsAsync` still costs one grain call per shard. Reach for buckets when pin writes are slow, and for shards when pin calls are queueing.
+
+Changing this value is a **durable-store migration**, and both directions are safe. Raising it: existing pins stay in the legacy slot, which every activation keeps reading, and each consumer's pin moves to its bucket the next time that consumer reports. Lowering it: an activation reads the wider layout it finds recorded in bucket zero, merges it, and immediately consolidates into the narrower one, so no pin is stranded. The legacy slot is never cleared except on tree deletion, so a rollback to a pre-bucketing build still finds the pins it wrote before the upgrade; those pins are stale, which retains more WAL, which is safe. As with the shard count, a deliberate rollout (drain, change, redeploy) is still preferable to flipping it on a hot cluster. Must be `>= 1`; the validator rejects values below 1.
+
+Pair with `orleans.lattice.materialiser.pin.durable_write_latency` and `orleans.lattice.materialiser.pin.reports_shed` when sizing: a sustained non-zero shed rate means the pin store is the bottleneck and the bucket count is the knob for it.
 ### `WalMaterialiserPinFlushIntervalMs`
 
 Debounce window, in milliseconds, over which a shard's durable pin writes are coalesced behind a grain-timer flush (default: 250 ms). Within the window the shard advances its in-memory monotonic-max frontier on every advancing report but persists at most one durable `WriteStateAsync`, collapsing a report burst into one durable write per shard per window. The coalescing only ever retains **more** WAL than an immediate write would (the persisted floor lags the in-memory floor by at most one window), so it is always GC-safe.

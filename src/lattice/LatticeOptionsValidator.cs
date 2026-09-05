@@ -364,6 +364,28 @@ if (options.WalSaturationMaterialiserLagSampleWindows < 1)
         + "(the number of consecutive saturation-sampler windows the tree's drain-lag level must exceed the threshold "
         + "before the classifier holds the tree at Throttled via the drain-lag branch).");
 }
+if (options.WalSaturationMaterialiserPinLatencyThreshold is { } materialiserPinLatencyThreshold
+    && materialiserPinLatencyThreshold <= TimeSpan.Zero)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationMaterialiserPinLatencyThreshold)} must be positive when set "
+        + "(null disables the durable materialiser-pin latency classifier input entirely; a positive value sets the "
+        + "caller-observed durable pin write duration above which the per-(tree, shard) trip counter is incremented).");
+}
+if (options.WalSaturationMaterialiserPinLatencySampleWindows < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalSaturationMaterialiserPinLatencySampleWindows)} must be greater than or equal to 1 "
+        + "(the number of consecutive saturation-sampler windows the tree's durable pin latency trip delta must be "
+        + "non-zero before the classifier holds the tree at Throttled via the pin-latency branch).");
+}
+if (options.WalMaterialiserPinBuckets < 1)
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.WalMaterialiserPinBuckets)} must be greater than or equal to 1 "
+        + "(one persists the whole shard to the single legacy wal-materialiser-pins slot; a higher value splits it "
+        + "across that many independently-written durable slots so a pin advance rewrites only its own bucket).");
+}
 if (options.WalMaterialiserMaxConcurrentReplays < 0)
 {
     return ValidateOptionsResult.Fail(

@@ -437,8 +437,42 @@ internal sealed class LeafCursorReporter(
     /// retention flush). Either way a rejection caused by a stopping silo falls
     /// back to the direct durable write below.
     /// </summary>
-    private async Task SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket, bool writeThrough)
+    /// <returns>
+    /// <see langword="true"/> when the write was attempted (whether or not it
+    /// then faulted), <see langword="false"/> when it was shed by the
+    /// caller-side pressure gate. A shed report has <b>not</b> landed, so a
+    /// caller holding debounce state must roll it back rather than record it as
+    /// written - shedding is deferral, never loss.
+    /// </returns>
+    private async Task<bool> SeedShardAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket, bool writeThrough, bool sheddable = false)
     {
+        // Caller-side shed (issue #2014). A steady-state per-checkpoint retention
+        // report routed to a shard whose last durable write demonstrated it is
+        // not keeping up is dropped rather than enqueued: it could not have been
+        // serviced any sooner for having been enqueued, and enqueuing it
+        // lengthens the non-reentrancy queue every other reporting leaf is
+        // already waiting behind. Safe by the same argument the whole debounce
+        // rests on - a skipped report leaves the durable pin staler, which
+        // retains more WAL.
+        //
+        // Only that steady-state path opts in. The birth block-pin seed and the
+        // deactivation flush are both last-chance writes: when a leaf's first
+        // real frontier is produced by the deactivation flush, dropping it leaves
+        // no durable floor at all, which is the cold-restart
+        // LeafProjectionStaleException of issue #1464.
+        if (sheddable && WalMaterialiserPinPressure.ShouldShed(grainKey))
+        {
+            var shedTreeId = WalMaterialiserPinRouting.TreeNameFromKey(grainKey);
+            LatticeMetrics.MaterialiserPinReportsShed.Add(
+                bucket.Count,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, shedTreeId),
+                LatticeTenantLabel.ForTree(shedTreeId));
+            return false;
+        }
+
+        var latencyThresholdMs = ResolvePinLatencyThresholdMs();
+        var startedTickMs = Environment.TickCount64;
+        var faulted = false;
         try
         {
             var pin = grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey);
@@ -461,7 +495,37 @@ internal sealed class LeafCursorReporter(
             // swallowing-and-logging it for re-flush on the next checkpoint.
             await DirectStorePinAsync(grainKey, bucket).ConfigureAwait(false);
         }
+        catch
+        {
+            // Measure the fault as pressure before letting it propagate: a pin
+            // write that throws is at least as strong a signal that the durable
+            // store is unhealthy as one that merely runs long.
+            faulted = true;
+            throw;
+        }
+        finally
+        {
+            WalMaterialiserPinPressure.RecordWrite(
+                grainKey,
+                Environment.TickCount64 - startedTickMs,
+                faulted,
+                latencyThresholdMs);
+        }
+
+        return true;
     }
+
+    /// <summary>
+    /// Reads the configured durable pin latency threshold in milliseconds, or
+    /// <see langword="null"/> when the saturation input is disabled (the
+    /// default). Gating the increment site on the option mirrors how the
+    /// writer-side flush-latency counter is gated, so a host that has not opted
+    /// in records nothing at all.
+    /// </summary>
+    private long? ResolvePinLatencyThresholdMs()
+        => options?.Get(string.Empty).WalSaturationMaterialiserPinLatencyThreshold is { } threshold
+            ? (long)threshold.TotalMilliseconds
+            : null;
 
     /// <summary>
     /// Teardown fallback for <see cref="SeedShardAsync"/>: writes
@@ -475,46 +539,128 @@ internal sealed class LeafCursorReporter(
     private async Task DirectStorePinAsync(string grainKey, IReadOnlyList<MaterialiserPinReport> bucket)
     {
         var grainId = ResolvePinGrainId(grainKey);
+        var bucketCount = WalMaterialiserPinRouting.ResolveBucketCount(options);
         var gate = _directStoreLocks.GetOrAdd(grainKey, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var grainState = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
-            await pinStorage!.ReadStateAsync(WalMaterialiserPinState.StateName, grainId, grainState)
-                .ConfigureAwait(false);
-
-            var state = grainState.State ??= new WalMaterialiserPinState();
-            var pins = state.Pins;
-            var offsets = state.Offsets;
-            var changed = false;
-            for (var i = 0; i < bucket.Count; i++)
+            // Group by destination slot so each durable blob is read-modified-
+            // written once. At the default bucket count of one this yields a
+            // single group under the legacy slot name, so the write is
+            // byte-for-byte what every pre-bucketing build performed.
+            var grouped = GroupByBucketSlot(bucket, bucketCount);
+            foreach (var group in grouped)
             {
-                var report = bucket[i];
-                // Monotonic-max merge, identical to WalMaterialiserPinGrain.Merge:
-                // a report at or below the stored frontier/offset is coalesced,
-                // and each axis advances independently.
-                if (!pins.TryGetValue(report.ConsumerId, out var existing) || report.Frontier > existing)
-                {
-                    pins[report.ConsumerId] = report.Frontier;
-                    changed = true;
-                }
-
-                if (!offsets.TryGetValue(report.ConsumerId, out var existingOffset) || report.CheckpointOffset > existingOffset)
-                {
-                    offsets[report.ConsumerId] = report.CheckpointOffset;
-                    changed = true;
-                }
+                await DirectStoreSlotAsync(group.Key, grainId, group.Value, bucketCount).ConfigureAwait(false);
             }
 
-            if (changed)
+            // Bucket zero is the only slot an activation probes to learn the
+            // persisted layout width, so it must carry the stamp even when no
+            // torn-down leaf hashed into it. The call is a read plus a write
+            // only when the stamp is missing, so on a shard that already
+            // records the width it costs one read and nothing else.
+            if (bucketCount > 1)
             {
-                await pinStorage!.WriteStateAsync(WalMaterialiserPinState.StateName, grainId, grainState)
-                    .ConfigureAwait(false);
+                var widthSlot = WalMaterialiserPinRouting.BucketStateName(0);
+                if (!grouped.ContainsKey(widthSlot))
+                {
+                    await DirectStoreSlotAsync(widthSlot, grainId, EmptyReports, bucketCount).ConfigureAwait(false);
+                }
             }
         }
         finally
         {
             gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Buckets <paramref name="reports"/> by the durable slot name each one
+    /// persists to. Returns a single legacy-slot group when
+    /// <paramref name="bucketCount"/> is one.
+    /// </summary>
+    private static Dictionary<string, List<MaterialiserPinReport>> GroupByBucketSlot(
+        IReadOnlyList<MaterialiserPinReport> reports,
+        int bucketCount)
+    {
+        var grouped = new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var report = reports[i];
+            var slot = WalMaterialiserPinRouting.BucketStateName(report.ConsumerId, bucketCount);
+            if (!grouped.TryGetValue(slot, out var list))
+            {
+                list = new List<MaterialiserPinReport>();
+                grouped[slot] = list;
+            }
+
+            list.Add(report);
+        }
+
+        return grouped;
+    }
+
+    /// <summary>
+    /// Empty report list used to touch bucket zero purely to record the layout
+    /// width during the teardown fallback.
+    /// </summary>
+    private static readonly List<MaterialiserPinReport> EmptyReports = new();
+
+    /// <summary>
+    /// Read-modify-writes one durable pin slot, replicating the grain's
+    /// monotonic-max merge.
+    /// </summary>
+    private async Task DirectStoreSlotAsync(
+        string stateName,
+        GrainId grainId,
+        List<MaterialiserPinReport> reports,
+        int bucketCount)
+    {
+        var grainState = new GrainState<WalMaterialiserPinState>(new WalMaterialiserPinState());
+        await pinStorage!.ReadStateAsync(stateName, grainId, grainState)
+            .ConfigureAwait(false);
+
+        var state = grainState.State ??= new WalMaterialiserPinState();
+        var pins = state.Pins;
+        var offsets = state.Offsets;
+        var changed = false;
+
+        // Stamp the layout width this write was produced under, exactly as the
+        // grain does. Without it a teardown write could be the only writer a
+        // slot ever sees, leaving the recorded width at zero; if the bucket
+        // count were then lowered, the next activation would read only the
+        // narrower range and strand the pins in the now out-of-range slots.
+        // A stranded pin is invisible to the trim floor, which is the one
+        // direction that is genuinely unsafe.
+        if (bucketCount > 1 && state.PersistedBucketCount < bucketCount)
+        {
+            state.PersistedBucketCount = bucketCount;
+            changed = true;
+        }
+
+        for (var i = 0; i < reports.Count; i++)
+        {
+            var report = reports[i];
+            // Monotonic-max merge, identical to WalMaterialiserPinGrain.Merge:
+            // a report at or below the stored frontier/offset is coalesced,
+            // and each axis advances independently.
+            if (!pins.TryGetValue(report.ConsumerId, out var existing) || report.Frontier > existing)
+            {
+                pins[report.ConsumerId] = report.Frontier;
+                changed = true;
+            }
+
+            if (!offsets.TryGetValue(report.ConsumerId, out var existingOffset) || report.CheckpointOffset > existingOffset)
+            {
+                offsets[report.ConsumerId] = report.CheckpointOffset;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await pinStorage!.WriteStateAsync(stateName, grainId, grainState)
+                .ConfigureAwait(false);
         }
     }
 
@@ -591,9 +737,32 @@ internal sealed class LeafCursorReporter(
     {
         try
         {
-            await PinGrain(treeName, consumerId)
-                .ReportManyAsync(new[] { new MaterialiserPinReport(consumerId, frontier, checkpointOffset) })
+            // Route through the shared shard write so this path - the highest
+            // rate durable pin writer there is, one call per leaf checkpoint -
+            // is covered by the caller-side shed gate and the durable-write
+            // latency measurement (issues #2014 and #2015). The grain call it
+            // ends up making is the same ReportManyAsync as before.
+            var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+            var grainKey = WalMaterialiserPinRouting.ShardKey(treeName, consumerId, shardCount);
+            var written = await SeedShardAsync(
+                    grainKey,
+                    new[] { new MaterialiserPinReport(consumerId, frontier, checkpointOffset) },
+                    writeThrough: false,
+                    sheddable: true)
                 .ConfigureAwait(false);
+
+            if (!written)
+            {
+                // Shed, not written. Roll the debounce back for the same reason a
+                // fault does: this frontier has not reached the durable store, so
+                // recording it as landed would let the next report be coalesced
+                // away and leave the pin behind until some later advance happens
+                // to clear the spacing debounce. Rolling back makes shedding a
+                // pure deferral - each checkpoint re-attempts at the cost of one
+                // dictionary lookup, and the first checkpoint after the window
+                // closes lands the pin.
+                _durableDebounce.TryRemove((treeName, consumerId), out _);
+            }
         }
         catch (Exception ex)
         {
