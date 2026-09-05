@@ -221,6 +221,10 @@ internal sealed class RepoContextBootstrapService
             // full-walk interval has elapsed since the last one, so an in-place
             // content edit - which does not bump a directory's modification time and
             // is invisible to pruning - is still caught within that bound.
+            // Note the interval must be configured strictly wider than the reconcile
+            // spacing (see RepoContextIndexingOptions.PruningCanEngage) or the last
+            // clause below is true on every reconcile and pruning never engages at
+            // all: the snapshot is written each run and read for nothing.
             var nowTicks = _timeProvider.GetUtcNow().UtcTicks;
             _pruneCache.TryGetValue(repoId, out var priorPrune);
             var lastFullSweepTicks = priorPrune?.LastFullSweepTicks ?? 0;

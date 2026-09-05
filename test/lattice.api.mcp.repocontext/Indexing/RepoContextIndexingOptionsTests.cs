@@ -193,4 +193,40 @@ public sealed class RepoContextIndexingOptionsTests
 
         Assert.That(options.TokenizerProfile, Is.EqualTo(RepoContextIndexingOptions.TokenizerProfileO200k));
     }
+
+    [Test]
+    public void The_shipped_defaults_leave_room_for_pruning_to_engage()
+    {
+        // A reconcile prunes only while less than FullWalkInterval has elapsed
+        // since the last full sweep, and consecutive reconciles are never closer
+        // together than ReconcileInterval plus up to ReconcileIntervalJitter. If
+        // the full-walk interval does not strictly exceed that spacing, every
+        // reconcile is forced full and the prune cache is written but never acted
+        // on - a silent, whole-feature regression with no other symptom.
+        var defaults = new RepoContextIndexingOptions();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                defaults.FullWalkInterval,
+                Is.GreaterThan(defaults.ReconcileInterval + defaults.ReconcileIntervalJitter),
+                "the default full-walk interval must exceed the widest reconcile spacing");
+            Assert.That(defaults.PruningCanEngage, Is.True);
+        });
+    }
+
+    [Test]
+    public void PruningCanEngage_is_false_when_the_full_walk_interval_cannot_be_outlived()
+    {
+        var options = new RepoContextIndexingOptions
+        {
+            ReconcileInterval = TimeSpan.FromMinutes(15),
+            ReconcileIntervalJitter = TimeSpan.FromMinutes(5),
+            FullWalkInterval = TimeSpan.FromMinutes(20),
+        };
+
+        // Exactly equal is still dead: the elapsed-since-full-sweep comparison is
+        // inclusive, so a reconcile landing at the boundary forces a full sweep.
+        Assert.That(options.PruningCanEngage, Is.False);
+    }
 }
