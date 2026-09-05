@@ -144,17 +144,80 @@ The publish workflow's per-tag trigger globs match these tag shapes:
 | `Orleans.Lattice.GrainIndex` | `lattice.grainindex-v<X.Y.Z>` |
 | `Orleans.Lattice.Vector` | `lattice.vector-v<X.Y.Z>` |
 
-For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reserved for "the whole family at this version". When the family moves in lockstep, push **both** the family tag *and* each per-package tag - the publish workflow keys off the per-package tags.
+The `v<X.Y.Z>` family tag (e.g. `v9.6.0`) names "the whole family at this version". It is deliberately **not** a publish trigger: the `Publish` workflow keys exclusively off the per-package `<package>-v*` globs and carries no bare `v*` glob, so pushing it starts no run. That inertness is exactly what makes it useful as the release **anchor** - it pins the commit a wave ships from without any side effect.
+
+## Release lines
+
+A release wave is long. It pushes one tag per package, serially, waiting for each publish run before the next; a 40-package family takes over two hours end to end. `main` does not hold still for that - it takes automated performance, testing and dependency PRs continuously. So the protocol never releases "from `main`". It releases from a **pinned commit**, named two ways:
+
+- **The family anchor tag `v<X.Y.Z>`** - immutable. It records the exact tree the wave shipped. Cut once, at the moment the release chore PR merges.
+- **The release line branch `release/<X.Y>`** - mutable, and the only place fixes for that line ever land. Cut from the same commit as the anchor tag.
+
+Every per-package tag in a wave is cut from the release line branch, never from `main`. Once the branch exists, `main` is free to move: it cannot change what the wave ships.
+
+The branch is named for the **minor line**, not for a point version - one `release/9.6` carries `9.6.0`, then `9.6.1`, then `9.6.2`. Naming it `release/9.6.0` would strand the next patch on a differently-named branch and defeat the purpose.
+
+Release line branches are **never merged back into `main`**; they diverge by design. Anything on a line that `main` also needs - the fix itself, a changelog entry, a `<Version>` bump - reaches `main` through its own ordinary PR.
+
+### Hotfixes
+
+A patch release is a cherry-pick onto the release line, never a tag on `main`:
+
+1. `git switch release/<X.Y>` (fetch it first if this is a fresh clone).
+2. `git cherry-pick <fix-commit-from-main>`.
+3. Bump the `<Version>` slot of **only** the packages being patched, and add the dated `CHANGELOG.md` section.
+4. Tag and push per package exactly as a full wave does (steps 4 onward below).
+
+This is what keeps a patch a patch. Tagging `main` instead would publish everything that landed since the last wave under a patch digit. That is why `9.5.1` was cut from its release line rather than trunk: `main` was already carrying additive public API queued for the next minor, and a patch tag would have shipped a minor's worth of surface.
+
+Reconcile `main` afterwards with a small separate PR carrying the changelog entry and the `<Version>` bump, so trunk's history records the patch.
+
+### Held-back packages
+
+A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGES.md), the ship/no-ship authority). It then sits on an **older** line than the rest of the family while `main` moves on beneath it, so `main` is not a valid base for patching it. Hence the invariant:
+
+> **Every shipped package must have a live release line branch containing the tree it shipped from.**
+
+Concretely: while the Explorer family is held at `9.4.x` and the rest of the family ships `9.6.0`, both `release/9.4` and `release/9.6` stay alive. An Explorer patch is cut from `release/9.4`, because `main`'s Explorer sources have since absorbed the console rewrite ([#1790](https://github.com/NSTA1/Orleans.Lattice/issues/1790)) and cutting from trunk would drag that rewrite into a patch release.
+
+Retire a release line branch only once no shipped package still points at it.
 
 ## Release protocol
 
-1. **Confirm the PR has merged.** Check out `main` and pull (`git checkout main && git pull origin main`) so the tag points at the squash-merge commit on `main`, never at the feature branch.
+1. **Confirm the PR has merged, and capture its merge commit.** The wave ships from that commit and nothing else:
 
-2. **Verify the working tree's `<Version>` slot.** For each package being released, `Get-Content src/<package>/<package>.csproj | Select-String "<Version>"` must show the version you intend to ship. The `<Version>` slot is authoritative - the publish workflow reads it to set the NuGet package version.
+   ```powershell
+   git checkout main
+   git pull origin main
+   $sha = git rev-parse HEAD
+   ```
 
-3. **Confirm CI was green on the PR before it merged.** CI (the `build-and-test` job) runs only on `pull_request` events, **not** on `push` to `main`. So there is no CI run on the squash-merge commit itself, and that commit's combined status reads `pending` with zero checks - this is expected, not a failure, so do not go hunting for a push-to-main run, check-suites, or check-runs on the merge commit. The green gate is the merged PR's final CI run: `gh pr checks <pr-number>` (or `gh run list --branch <feature-branch> --limit 5`) must show the `build-and-test` run `completed/success`. Because a squash merge replays the already-reviewed tree onto `main`, that PR run is the authoritative signal that the commit you are tagging is green.
+   Record `$sha` - every later step derives from it. **Do not re-resolve `main` later in the wave.** If the release is interrupted and resumed, `main` will have moved, and re-resolving it silently ships a different tree under the same family version. Nothing downstream catches that: the publish workflow's version guard compares the packed `<Version>` against the tag's version, so a drifted commit whose `<Version>` is untouched passes cleanly.
 
-4. **Tag each package independently.** The publish workflow's per-tag trigger globs fire on `push` events to a **single tag ref**. A bulk push (`git push origin tag1 tag2 tag3`) sends all the refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Push tags **one at a time**:
+2. **Push the family anchor tag** at that commit. It fires no workflow; it exists to pin the wave:
+
+   ```powershell
+   git tag v<X.Y.Z> $sha
+   git push origin v<X.Y.Z>
+   ```
+
+3. **Cut the release line branch** at the same commit, and switch to it. Every per-package tag below is cut from here:
+
+   ```powershell
+   git branch release/<X.Y> $sha
+   git push origin release/<X.Y>
+   git switch release/<X.Y>
+   ```
+
+   For a **patch** wave the line branch already exists: skip the create, `git switch` to it, and cherry-pick the fix onto it instead (see [Hotfixes](#hotfixes)). For a wave that includes a **held-back** package, that package's tags are cut from *its* line branch, not this one (see [Held-back packages](#held-back-packages)). The rest of the protocol is identical either way.
+
+   This step is enforced, not merely documented: the publish workflow refuses to build a tag whose commit is not contained in some `release/*` branch, and fails before anything is pushed to NuGet. If you see that error, you skipped this step.
+
+4. **Verify the working tree's `<Version>` slot.** For each package being released, `Get-Content src/<package>/<package>.csproj | Select-String "<Version>"` must show the version you intend to ship. The `<Version>` slot is authoritative - the publish workflow reads it to set the NuGet package version.
+
+5. **Confirm CI was green on the PR before it merged.** CI (the `build-and-test` job) runs only on `pull_request` events, **not** on `push` to `main`. So there is no CI run on the squash-merge commit itself, and that commit's combined status reads `pending` with zero checks - this is expected, not a failure, so do not go hunting for a push-to-main run, check-suites, or check-runs on the merge commit. The green gate is the merged PR's final CI run: `gh pr checks <pr-number>` (or `gh run list --branch <feature-branch> --limit 5`) must show the `build-and-test` run `completed/success`. Because a squash merge replays the already-reviewed tree onto `main`, that PR run is the authoritative signal that the commit you are tagging is green.
+
+6. **Tag each package independently.** The publish workflow's per-tag trigger globs fire on `push` events to a **single tag ref**. A bulk push (`git push origin tag1 tag2 tag3`) sends all the refs in one HTTP request and GitHub coalesces them into a single push event - so the publish workflow fires for **at most one** of the tags, and the trailing tags ship no NuGet packages and create no GitHub Release. Cut every tag from the release line branch (step 3), and push them **one at a time**:
 
    ```powershell
    git push origin <package>-v<X.Y.Z>
@@ -164,11 +227,11 @@ For historical compatibility, the `v<X.Y.Z>` family tag (e.g. `v3.2.0`) is reser
 
    **The `lattice-v<X.Y.Z>` core tag also triggers the `Docs` workflow**, which rebuilds the documentation site from that commit and deploys it to GitHub Pages. It is deliberately the *only* tag that does so: the family ships in coordinated waves anchored on the core package, and the site is a single whole-repository artifact, so triggering on every per-package tag would rebuild and redeploy the identical site once per package. Push the core tag when the wave's documentation is the state you want published.
 
-5. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
+7. **Verify each publish run** reaches `completed/success` before declaring the release done. Failed runs leave NuGet in an inconsistent state where some packages of a coordinated release have shipped and others have not.
 
    When the wave included the core `lattice-v<X.Y.Z>` tag, also confirm the `Docs` run for that tag reached `completed/success` (`gh run list --workflow Docs --limit 5`). Its build step fails closed on any broken relative link or in-page anchor in the corpus, so a red `Docs` run means the published documentation would have shipped a broken cross-reference. That does not affect the NuGet packages already pushed - fix the link and re-run the workflow (or dispatch it manually) to republish the site.
 
-6. **Bump the reference-architecture package pins as a post-release action.** The package version bump itself (the `<Version>` slot) belongs in the shipping chore PR alongside the changelog, per steps 1-2 - that is what tag-and-publish releases to NuGet. The `reference-architecture/` hosts, by contrast, consume the family through `PackageReference` to **published** NuGet packages (never `ProjectReference` into `src/`), and the `build-and-test` reference-architecture job restores those versions from nuget.org. So a pin bump to a version that has not shipped yet fails restore with `NU1102: Unable to find package ... with version (>= X.Y.Z)`. Never bump a reference-architecture pin in the same PR that ships the package - that PR cannot go green until the very package it is publishing exists. Instead, the order is: **(a)** the chore PR bumps `<Version>` + folds the changelog and merges; **(b)** the tag publishes the package (steps 4-5); **(c)** raise a **separate follow-up PR** that advances the affected `reference-architecture/**/*.csproj` pins to the just-published version(s). **You do not need to pre-verify that the new version is indexed on nuget.org.** That follow-up PR's own `build-and-test` reference-architecture lane builds every kit csproj, and because the kit consumes the family by `PackageReference` the build restores each pinned package from nuget.org - so the restore *is* the published-and-restorable gate, and a green lane is positive proof the pins resolve. If NuGet indexing has not caught up yet (it lags the publish run's `completed/success` by a few minutes) the lane fails with `NU1102` and you simply re-run it once indexing lands. The same restore runs a second time server-side at deploy time, when `az acr build` builds the three host images from `reference-architecture/`, so an unrestorable pin cannot reach a deployed environment. Only reference-architecture hosts that actually consume a bumped package need updating; leave the others untouched.
+8. **Bump the reference-architecture package pins as a post-release action.** The package version bump itself (the `<Version>` slot) belongs in the shipping chore PR alongside the changelog, per steps 1 and 4 - that is what tag-and-publish releases to NuGet. The `reference-architecture/` hosts, by contrast, consume the family through `PackageReference` to **published** NuGet packages (never `ProjectReference` into `src/`), and the `build-and-test` reference-architecture job restores those versions from nuget.org. So a pin bump to a version that has not shipped yet fails restore with `NU1102: Unable to find package ... with version (>= X.Y.Z)`. Never bump a reference-architecture pin in the same PR that ships the package - that PR cannot go green until the very package it is publishing exists. Instead, the order is: **(a)** the chore PR bumps `<Version>` + folds the changelog and merges; **(b)** the tag publishes the package (steps 6-7); **(c)** raise a **separate follow-up PR** that advances the affected `reference-architecture/**/*.csproj` pins to the just-published version(s). **You do not need to pre-verify that the new version is indexed on nuget.org.** That follow-up PR's own `build-and-test` reference-architecture lane builds every kit csproj, and because the kit consumes the family by `PackageReference` the build restores each pinned package from nuget.org - so the restore *is* the published-and-restorable gate, and a green lane is positive proof the pins resolve. If NuGet indexing has not caught up yet (it lags the publish run's `completed/success` by a few minutes) the lane fails with `NU1102` and you simply re-run it once indexing lands. The same restore runs a second time server-side at deploy time, when `az acr build` builds the three host images from `reference-architecture/`, so an unrestorable pin cannot reach a deployed environment. Only reference-architecture hosts that actually consume a bumped package need updating; leave the others untouched.
 
 ## Recovery for an accidental bulk push
 
@@ -182,7 +245,7 @@ If multiple tags were pushed in a single `git push origin tag1 tag2 ...` operati
    ```
 
    Local tags can stay in place; only the remote refs need the delete-and-re-push.
-3. Re-push each missed tag individually (step 4 above), polling for the matching publish run between each push.
+3. Re-push each missed tag individually (step 6 above), polling for the matching publish run between each push.
 
 ## Updating `CHANGELOG.md`
 
@@ -193,7 +256,7 @@ Every release folds the working tree's `## Unreleased` section into a dated `## 
 - Every bullet names the exact package version(s) that carried it (e.g. `` (`Orleans.Lattice.Replication` 8.0.4) ``), so the granular per-package history survives the consolidation.
 - A coordinated lockstep release uses the same date header; its opening paragraph states the single family version every package advanced to.
 
-The ship commit that merges the changelog edit is the commit the tag(s) point at.
+The ship commit that merges the changelog edit is the commit the family anchor tag and the release line branch are cut from, and therefore the commit every per-package tag in the wave points at.
 
 ### Section titles and compare links
 

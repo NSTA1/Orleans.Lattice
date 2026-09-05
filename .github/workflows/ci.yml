@@ -40,6 +40,77 @@ jobs:
           # would not have the base commit available.
           fetch-depth: 0
 
+      # Fail fast on the two repository conventions that are cheap to check and
+      # expensive to undo once merged: the branch naming scheme, and commit
+      # trailers. Both are unfixable after a squash merge without a history
+      # rewrite, so they are gated here rather than reviewed by eye. This runs
+      # before restore/build so a violation costs seconds, not a full CI cycle.
+      #
+      # .github/copilot-instructions.md is the single source of truth for both
+      # rules, including the enumerated branch prefixes. The two lists below
+      # mirror it; change them together.
+      - name: Guard - branch name and commit trailers
+        env:
+          BRANCH: ${{ github.head_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          # -- Branch name -------------------------------------------------
+          # A type prefix, then a description. The set below is the one the
+          # repository actually uses; extend it here rather than working around
+          # it with an off-convention branch.
+          prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
+
+          if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
+            echo "::error::Branch '${BRANCH}' does not follow the naming convention (see .github/copilot-instructions.md). Use '<type>/<kebab-case-description>' where <type> is one of: ${prefixes//|/, }. Rename with the rename_branch tool (agents) or 'git branch -m' plus a re-push, then update this PR."
+            failed=1
+          fi
+
+          # Never a username. Checked against the PR author's actual login
+          # rather than a heuristic, so this cannot misfire on ordinary words.
+          if [ -n "${AUTHOR}" ] && [ "${#AUTHOR}" -ge 4 ]; then
+            if printf '%s' "${BRANCH}" | grep -qiF "${AUTHOR}"; then
+              echo "::error::Branch '${BRANCH}' contains the author's username ('${AUTHOR}'). Branch names describe the change, never who made it."
+              failed=1
+            fi
+          fi
+
+          # -- Commit trailers ---------------------------------------------
+          # Attribution trailers are not used in this repository. Add a new
+          # banned trailer to this alternation, one per line, when needed.
+          trailers='Co-authored-by|Copilot-Session'
+
+          # The PR's own commits. Use the event SHAs rather than HEAD, because
+          # on a pull_request event HEAD is the synthetic merge commit. Checkout
+          # above uses fetch-depth: 0, so both ends are normally present; fall
+          # back to a targeted fetch rather than silently scanning nothing.
+          if ! commits="$(git rev-list "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null)"; then
+            git fetch --no-tags --quiet origin "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true
+            commits="$(git rev-list "${BASE_SHA}..${HEAD_SHA}")"
+          fi
+
+          offenders=""
+          for sha in ${commits}; do
+            if git log -1 --format='%B' "${sha}" | grep -Eqi "^[[:space:]]*(${trailers})[[:space:]]*:"; then
+              offenders="${offenders}  ${sha}  $(git log -1 --format='%s' "${sha}")"$'\n'
+            fi
+          done
+
+          if [ -n "${offenders}" ]; then
+            echo "::error::Commits carry a banned trailer (${trailers//|/, }). This repository does not use attribution trailers (see .github/copilot-instructions.md), even when a tool adds one by default. Strip them with an interactive rebase or 'git commit --amend', then force-push."
+            printf 'Offending commits:\n%s' "${offenders}"
+            failed=1
+          fi
+
+          if [ "${failed}" -ne 0 ]; then
+            exit 1
+          fi
+          echo "OK: branch name and commit trailers are compliant."
+
       # Classify what changed so we can skip expensive steps when the PR only
       # touches docs, or run a lightweight samples-only build when nothing
       # outside samples/ (plus docs) changed.

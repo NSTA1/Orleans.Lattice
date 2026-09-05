@@ -13,8 +13,8 @@ name: Docs
 #                     released commit. Hanging this off every per-package tag
 #                     would rebuild and redeploy the whole site up to 39 times
 #                     for a single wave, and would still publish the other
-#                     packages' unreleased docs, since a package tag points at
-#                     main at that moment.
+#                     packages' unreleased docs, since every tag in a wave points
+#                     at the same release-line commit (see docs/RELEASING.md).
 #   workflow_dispatch Manual deploy, so a docs-only fix does not have to wait for
 #                     a release.
 

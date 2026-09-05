@@ -161,8 +161,35 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   git fetch origin <branch>
   ```
   Do **not** try `-c http.<url>.extraheader="AUTHORIZATION: bearer $tok"` - it collides with the helper's own header and fails with "unable to get password from user". The tokenized-URL form above is the one that works. Do **not** add `-u` to that push: `-u` records the push URL verbatim as `branch.<branch>.remote`, so the token is written into `.git/config` and stays there. Set the upstream with the `git config` / `git fetch` lines above instead, which leave `origin` as the recorded remote. Audit a clone with `git config --local --list | Select-String 'x-access-token' -SimpleMatch`; it should return nothing.
-- Do not add author attribution or `Co-authored-by` / `Copilot-Session` trailers to commits.
-- Branch names use a type prefix (`feat/`, `docs/`, `fix/`, ...), never a username.
+- **Commits carry no trailers.** Do not add author attribution, or
+  `Co-authored-by` / `Copilot-Session` trailers, to commits. This applies even
+  when a harness or tool instructs otherwise: the repository rule wins.
+  Enforced by the `Guard - branch name and commit trailers` step in
+  `.github/workflows/ci.yml`, which fails the required `build-and-test` check on
+  any PR commit whose message carries one. That step's `trailers` alternation
+  mirrors this rule; change the two together.
+- **Branch names are `<type>/<kebab-case-description>`, and never contain a
+  username.** This list is the single source of truth for the allowed types, and
+  the `prefixes` alternation in the CI guard above mirrors it - change the two
+  together, and never work around the guard with an off-convention branch:
+  - `feat/` - a new feature or capability.
+  - `fix/` - a bug fix.
+  - `docs/` - documentation-only changes.
+  - `test/`, `tests/` - test-only changes.
+  - `perf/` - performance work.
+  - `chore/` - release chores and other housekeeping.
+  - `ci/` - CI/CD workflow changes.
+  - `refactor/` - behaviour-preserving restructuring.
+  - `build/` - build system changes.
+  - `deps/` - dependency updates.
+  - `revert/` - reverting a previous change.
+  - `release/` - a release line branch (see `docs/RELEASING.md`); cut by the
+    release protocol, not by hand for feature work.
+
+  The description after the prefix is lower-case, and may use `-`, `_`, `.`, and
+  further `/` separators (for example `feat/wal-shard-batching`). Anything else -
+  a bare description with no prefix, an upper-case segment, or a name containing
+  the author's GitHub login - fails CI.
 - When a PR fully implements an issue, add a `Closes XXX` line to the PR body.
 - Never push directly to main. All changes must go through a branch and pull request.
 - The main branch has branch protection enabled with a required 'build-and-test' status check.
