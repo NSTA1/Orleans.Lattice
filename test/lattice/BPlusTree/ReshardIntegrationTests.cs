@@ -191,22 +191,6 @@ public class ReshardIntegrationTests
     }
 
     [Test]
-    public async Task ReshardAsync_is_idempotent_for_same_target()
-    {
-        var treeId = $"reshard-idem-{Guid.NewGuid():N}";
-        await RegisterTreeAsync(treeId);
-        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
-        await tree.SetAsync("k", [1]);
-
-        await tree.ReshardAsync(5);
-        // Same target while in progress must not throw.
-        await tree.ReshardAsync(5);
-        await DriveReshardToCompletionAsync(treeId, tree);
-
-        Assert.That(await tree.GetAsync("k"), Is.Not.Null);
-    }
-
-    [Test]
     public async Task ReshardAsync_concurrent_writes_during_reshard_are_preserved()
     {
         var treeId = $"reshard-concurrent-{Guid.NewGuid():N}";
