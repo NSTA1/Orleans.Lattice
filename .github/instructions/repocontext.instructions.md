@@ -988,9 +988,13 @@ The computation:
    [Entry gating](#entry-gating---mirror-first-admit-by-label)). This is checked
    *after* the `blockedBy` narrowing, so it costs one issue read per survivor
    rather than one per item in the topic.
-5. Sort by `(priority, createdAt, id)`, then pick with **jitter** from the top
-   three to five. Pure determinism makes every worker choose the same item,
-   which without compare-and-swap maximises collisions.
+5. Sort by `(priority, createdAt, id)`, then pick from the top three to five.
+   Ordering deterministically is fine and is not a defect: `repocontext_claim` is
+   real mutual exclusion, so two workers converging on the same item resolve to
+   exactly one proceeding and the other observing a clean refusal it can act on
+   immediately. Jitter is a cheap way to spread the fan-out across candidates and
+   avoid spending a round on a refusal, so it remains worth applying - but it is an
+   optimisation, and no worker may rely on it for correctness.
 6. Prefer a candidate whose blast radius - its `anchoredTo` anchors plus
    `repocontext_related` on them - is disjoint from the radii of in-flight
    items.

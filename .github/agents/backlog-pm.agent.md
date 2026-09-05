@@ -548,9 +548,27 @@ and whenever the human asks for a sweep:
    or park it. Do not let a worker spend a run on a specification whose ground
    moved: that is the poison-item failure with extra steps.
 2. **Park and unpark poison items.** Attempts are **derived** by counting the
-   mirrored issue's claim-comment trail, never from a counter on the item. Park at
-   three failed attempts unless the epic sets a different threshold, by applying the
-   existing `stale` label, and say in a comment what failed each time. Unparking is
+   mirrored issue's claim-comment trail, never from a counter on the item. The
+   marker format is a contract with `backlog-worker.agent.md`, so count it the way
+   that file specifies rather than by eye: the claim comment's **first line** is
+   `<!-- backlog-worker: claim item=... owner=... region=... fence=... at=... -->`,
+   and matching is `startswith`, never `contains`, so quoting a marker in prose
+   cannot inflate the count.
+
+   ```bash
+   gh issue view <n> --json comments \
+     --jq '[.comments[] | select(.body | startswith("<!-- backlog-worker: claim "))] | length'
+   ```
+
+   Count `claim` markers only. The closing `outcome` marker uses a distinct verb
+   precisely so it cannot be counted as an attempt, and a superseded or killed
+   worker writes no outcome at all - so a claim with no outcome beside it is a
+   died attempt and **still counts**, which is what makes killed runs tally
+   correctly with no reaper. Park at three failed attempts unless the epic sets a
+   different threshold, by applying the existing `stale` label, and say in a
+   comment what failed each time. A worker parks on the run whose failure crosses
+   the threshold; your sweep is the backstop for one that died before it could, and
+   parking is idempotent, so acting on both is safe. Unparking is
    a **human** act: propose it with the respecification that would make the next
    attempt different, and let them re-admit.
 3. **Promote durable findings when a workstream closes.** Scan the workstream topic
