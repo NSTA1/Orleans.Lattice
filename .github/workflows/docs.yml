@@ -15,8 +15,17 @@ name: Docs
 #                     for a single wave, and would still publish the other
 #                     packages' unreleased docs, since every tag in a wave points
 #                     at the same release-line commit (see docs/RELEASING.md).
+#                     The glob also matches a core hotfix on an OLDER line, so a
+#                     newest-line guard below decides whether the deploy runs.
 #   workflow_dispatch Manual deploy, so a docs-only fix does not have to wait for
-#                     a release.
+#                     the next wave. Dispatch it on a `release/<X.Y>` line branch,
+#                     never on `main`: the site documents what users can actually
+#                     install, and `main` carries unreleased work. Cherry-pick the
+#                     fix onto the line first, exactly as a package hotfix is
+#                     cherry-picked (see docs/RELEASING.md). The `github-pages`
+#                     environment enforces this - its deployment branch policy
+#                     admits the tag `lattice-v*` and the branch `release/*`, and
+#                     deliberately does not admit `main`.
 
 on:
   pull_request:
@@ -46,8 +55,79 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      publishable: ${{ steps.line.outputs.publishable }}
     steps:
       - uses: actions/checkout@v5
+
+      # GitHub Pages serves ONE site, and every deploy replaces it wholesale, so
+      # without this guard the site is simply "whichever deploy ran last". That
+      # is not the same as "the newest release": a core hotfix on an older line
+      # pushes a tag that also matches the lattice-v* trigger above (the family
+      # has cut lattice-v9.4.1, 9.4.2, 9.4.3 and 9.5.1 exactly this way), so
+      # patching an old line after a newer minor has shipped would silently
+      # regress the public documentation to the older version. The same applies
+      # to a dispatch on an older release/<X.Y> line.
+      #
+      # So publishing is allowed only from the newest released line. An older
+      # line is SKIPPED, not failed: the packages it publishes are legitimate,
+      # it is only the site that must not move.
+      - name: Guard - only the newest release line may publish the site
+        id: line
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF_NAME}"
+
+          case "${GITHUB_EVENT_NAME}" in
+            push)
+              # A tag matching lattice-v*, e.g. lattice-v9.6.0.
+              version="${ref#lattice-v}"
+              ;;
+            workflow_dispatch)
+              case "$ref" in
+                release/*) version="${ref#release/}" ;;
+                *)
+                  echo "SKIP: refusing to publish the site from '$ref'."
+                  echo "Dispatch the Docs workflow on a release/<X.Y> line branch instead;"
+                  echo "see the 'Documentation fixes between waves' section of docs/RELEASING.md."
+                  echo "publishable=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                  ;;
+              esac
+              ;;
+            *)
+              echo "SKIP: unexpected event '${GITHUB_EVENT_NAME}'."
+              echo "publishable=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          line="$(printf '%s' "$version" | cut -d. -f1,2)"
+
+          # Server-side tag listing, so this works on a shallow checkout.
+          newest_version="$(git ls-remote --tags origin 'refs/tags/lattice-v*' \
+            | sed -e 's#.*refs/tags/lattice-v##' -e 's/\^{}$//' \
+            | sort -V | tail -1)"
+          newest_line="$(printf '%s' "$newest_version" | cut -d. -f1,2)"
+
+          echo "this run:   $ref (line $line)"
+          echo "newest tag: lattice-v$newest_version (line $newest_line)"
+
+          if [ -z "$newest_line" ]; then
+            echo "SKIP: could not determine the newest released line; failing closed."
+            echo "publishable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$line" = "$newest_line" ]; then
+            echo "publishable=true" >> "$GITHUB_OUTPUT"
+            echo "OK: $line is the newest released line; the site will be published."
+          else
+            echo "publishable=false" >> "$GITHUB_OUTPUT"
+            echo "SKIP: line $line is older than the newest released line $newest_line."
+            echo "Publishing would regress the public site to an older version of the docs."
+          fi
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -63,13 +143,13 @@ jobs:
         run: pwsh -File docs-site/build.ps1 -MaxWarnings 0
 
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.line.outputs.publishable == 'true'
         uses: actions/upload-pages-artifact@v5
         with:
           path: docs-site/_site
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && needs.build.outputs.publishable == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:
