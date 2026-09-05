@@ -161,6 +161,55 @@ public sealed class AddRepoContextToolsTests
         Assert.That(guard.IsEnforcing, Is.True);
     }
 
+    /// <summary>
+    /// Workspace mode without a workspace root leaves the guard unable to enforce
+    /// any boundary, so <c>repocontext_add_repo</c> - whose contract promises the
+    /// path is "resolved against the workspace boundary" - must not be advertised
+    /// at all. Critically the group must not substitute
+    /// <c>repocontext_bootstrap</c> either: bootstrap accepts an equally unbounded
+    /// caller-supplied path, so falling back to it would reopen the same
+    /// arbitrary-filesystem-read hole under a different name.
+    /// </summary>
+    [Test]
+    public void AddRepoContextTools_workspace_mode_without_a_root_withholds_add_repo_and_bootstrap()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools(enableWrites: true, workspaceMode: true);
+
+        using var provider = services.BuildServiceProvider();
+        var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+        var names = group.Tools.Select(t => t.ProtocolTool.Name).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(provider.GetRequiredService<RepoContextWorkspaceGuard>().IsEnforcing, Is.False);
+            Assert.That(names, Does.Not.Contain("repocontext_add_repo"));
+            Assert.That(names, Does.Not.Contain("repocontext_bootstrap"));
+
+            // The path-free workspace tools stay: remove_repo takes a repository
+            // id and never touches the working tree, and list_repos is read-only.
+            Assert.That(names, Does.Contain("repocontext_remove_repo"));
+            Assert.That(names, Does.Contain("repocontext_list_repos"));
+        });
+    }
+
+    /// <summary>
+    /// The withholding is scoped to the unguarded case: supplying a workspace root
+    /// restores <c>repocontext_add_repo</c>, so the fix is a fail-closed refinement
+    /// rather than a blanket removal of the workspace onboarding tool.
+    /// </summary>
+    [Test]
+    public void AddRepoContextTools_workspace_mode_with_a_root_still_offers_add_repo()
+    {
+        var services = new ServiceCollection();
+        services.AddRepoContextTools(enableWrites: true, workspaceMode: true, workspaceRoot: "/workspace");
+
+        using var provider = services.BuildServiceProvider();
+        var group = (RepoContextToolGroup)provider.GetServices(ToolGroupInterface).Single()!;
+
+        Assert.That(group.Tools.Select(t => t.ProtocolTool.Name), Does.Contain("repocontext_add_repo"));
+    }
+
     [Test]
     public void AddRepoContextTools_registers_a_disabled_guard_by_default()
     {
