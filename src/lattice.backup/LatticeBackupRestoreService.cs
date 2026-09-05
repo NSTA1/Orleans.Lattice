@@ -36,6 +36,15 @@ internal sealed class LatticeBackupRestoreService(
     ILogger<LatticeBackupRestoreService> logger)
     : ILatticeBackupRestoreService, ILatticeCoordinatedRestoreEngine
 {
+    /// <summary>
+    /// Upper bound on the capacity hint given to a per-shard merge batch. The
+    /// batch is flushed at <c>applyBatchSize</c> entries, so that is an exact
+    /// bound on its final size and the ideal hint - but the value is caller
+    /// configured, so it is capped here rather than trusted to size an
+    /// allocation. Above the cap the dictionary simply grows as before.
+    /// </summary>
+    private const int MergeBatchPresizeLimit = 4096;
+
     /// <inheritdoc />
     public async Task<LatticeRestoreResult> RestoreAsync(
         LatticeRestoreRequest request,
@@ -857,7 +866,14 @@ internal sealed class LatticeBackupRestoreService(
     {
         // Entries stream in ascending key order within each manifest, so grouping
         // by shard preserves the per-shard ascending order BulkLoadRawAsync needs.
-        var perShard = new Dictionary<int, List<LwwEntry>>();
+        // The grouping key is a physical shard index - a small dense domain, one
+        // entry per shard root - so the accumulator is shard-indexed rather than
+        // hashed: a restore streams every record in the backup through this loop,
+        // and the prior form hashed that index twice per record (probe, then
+        // store) into an unsized dictionary. ShardSlots keeps the hashed form as
+        // a fallback for a hand-built map with a negative or pathologically
+        // large physical index, so no input regresses.
+        var perShard = new ShardSlots<List<LwwEntry>>(routing.Map.GetPhysicalShardIndices());
         long total = 0;
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
             .ConfigureAwait(false))
@@ -871,10 +887,11 @@ internal sealed class LatticeBackupRestoreService(
             }
 
             var shardIndex = routing.Map.Resolve(entry.Key);
-            if (!perShard.TryGetValue(shardIndex, out var list))
+            var list = perShard.Get(shardIndex);
+            if (list is null)
             {
                 list = [];
-                perShard[shardIndex] = list;
+                perShard.Set(shardIndex, list);
             }
 
             list.Add(entry);
@@ -903,7 +920,15 @@ internal sealed class LatticeBackupRestoreService(
         IBackupRestoreAdmission? admission,
         CancellationToken cancellationToken)
     {
-        var perShard = new Dictionary<int, Dictionary<string, LwwValue<byte[]>>>();
+        // Same shard-indexed accumulator as the bulk-load path above: a merge
+        // restore streams every record in the chain through this loop, so the
+        // prior form's probe-then-store pair per record hashed the tiny dense
+        // physical shard index twice per record. The per-shard batch dictionary
+        // is presized to the flush threshold so it does not grow from empty
+        // through the whole rehash chain on its way to applyBatchSize entries.
+        var perShard = new ShardSlots<Dictionary<string, LwwValue<byte[]>>>(
+            routing.Map.GetPhysicalShardIndices());
+        var batchCapacity = Math.Clamp(applyBatchSize, 0, MergeBatchPresizeLimit);
         long total = 0;
 
         await foreach (var entry in StreamChainEntriesAsync(chain, rangeStart, rangeEnd, cancellationToken)
@@ -918,10 +943,11 @@ internal sealed class LatticeBackupRestoreService(
             }
 
             var shardIndex = routing.Map.Resolve(entry.Key);
-            if (!perShard.TryGetValue(shardIndex, out var batch))
+            var batch = perShard.Get(shardIndex);
+            if (batch is null)
             {
-                batch = new Dictionary<string, LwwValue<byte[]>>();
-                perShard[shardIndex] = batch;
+                batch = new Dictionary<string, LwwValue<byte[]>>(batchCapacity);
+                perShard.Set(shardIndex, batch);
             }
 
             batch[entry.Key] = entry.ToLwwValue();
@@ -930,7 +956,7 @@ internal sealed class LatticeBackupRestoreService(
             if (batch.Count >= applyBatchSize)
             {
                 await MergeShardBatchAsync(routing, shardIndex, batch, cancellationToken).ConfigureAwait(false);
-                perShard[shardIndex] = new Dictionary<string, LwwValue<byte[]>>();
+                perShard.Set(shardIndex, new Dictionary<string, LwwValue<byte[]>>(batchCapacity));
             }
         }
 

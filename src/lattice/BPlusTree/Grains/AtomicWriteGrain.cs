@@ -829,18 +829,13 @@ internal sealed class AtomicWriteGrain(
         // by index with its input keys, so the scatter back into PreValues
         // tracks (key -> original entry index) explicitly.
         var preValuesArray = new AtomicPreValue[entries.Count];
-        var shardBuckets = new Dictionary<int, List<(string Key, int Index)>>();
-        for (int i = 0; i < entries.Count; i++)
-        {
-            var key = entries[i].Key;
-            var shardIndex = routing.Map.Resolve(key);
-            if (!shardBuckets.TryGetValue(shardIndex, out var bucket))
-            {
-                bucket = new List<(string, int)>();
-                shardBuckets[shardIndex] = bucket;
-            }
-            bucket.Add((key, i));
-        }
+        var physicalShards = routing.Map.GetPhysicalShardIndices();
+        var shardBuckets = ShardFanout.BucketIndices(
+            entries,
+            static e => e.Key,
+            routing.Map,
+            physicalShards,
+            ShardFanout.BucketCapacity(entries.Count, physicalShards.Count));
 
         // Derive the sorted distinct touched-shard set directly from the
         // bucket keys computed above rather than resolving every key a
@@ -848,14 +843,19 @@ internal sealed class AtomicWriteGrain(
         // already are the distinct touched shards. Saves one HashSet<int>
         // allocation plus a full second Map.Resolve pass over the batch on
         // every saga prepare.
-        var touchedSorted = new List<int>(shardBuckets.Keys);
+        var touchedSorted = new List<int>(shardBuckets.Count);
+        foreach (var (shardIndex, _) in shardBuckets)
+            touchedSorted.Add(shardIndex);
+        // The dense fan-out already emits ascending shard indices; the sort
+        // only does work on the hashed fallback, and the list is one entry
+        // per physical shard either way.
         touchedSorted.Sort();
         state.State.TouchedShards = touchedSorted;
 
         var capturePending = new List<Task>(shardBuckets.Count);
         foreach (var (shardIndex, bucket) in shardBuckets)
         {
-            capturePending.Add(CaptureShardAsync(lattice, routing, shardIndex, bucket, preValuesArray, nowTicks));
+            capturePending.Add(CaptureShardAsync(lattice, routing, shardIndex, entries, bucket, preValuesArray, nowTicks));
         }
         // Mutate the routing snapshot reference inside the per-shard
         // helper is unnecessary: GetRoutingAsync inside the helper
@@ -1006,7 +1006,8 @@ internal sealed class AtomicWriteGrain(
         ILattice lattice,
         RoutingInfo initialRouting,
         int shardIndex,
-        List<(string Key, int Index)> bucket,
+        List<KeyValuePair<string, byte[]>> entries,
+        List<int> bucket,
         AtomicPreValue[] preValues,
         long nowTicks)
     {
@@ -1024,7 +1025,7 @@ internal sealed class AtomicWriteGrain(
         while (true)
         {
             var keys = new List<string>(bucket.Count);
-            foreach (var (key, _) in bucket) keys.Add(key);
+            foreach (var index in bucket) keys.Add(entries[index].Key);
 
             List<LwwEntry?>? raws = null;
             try
@@ -1061,13 +1062,13 @@ internal sealed class AtomicWriteGrain(
 #endif
                 if (DateTime.UtcNow >= deadline) throw;
                 routing = await lattice.GetRoutingAsync(forceRefresh: true);
-                var rebucketed = new Dictionary<int, List<(string Key, int Index)>>();
-                foreach (var entry in bucket)
+                var rebucketed = new Dictionary<int, List<int>>();
+                foreach (var index in bucket)
                 {
-                    var newOwner = routing.Map.Resolve(entry.Key);
+                    var newOwner = routing.Map.Resolve(entries[index].Key);
                     if (!rebucketed.TryGetValue(newOwner, out var list))
-                        rebucketed[newOwner] = list = new List<(string, int)>();
-                    list.Add(entry);
+                        rebucketed[newOwner] = list = new List<int>();
+                    list.Add(index);
                 }
                 // Fast path: every key still routes to the same shard
                 // we just queried (so the throw came from an alias
@@ -1082,7 +1083,7 @@ internal sealed class AtomicWriteGrain(
                 // converge in O(splits) per affected key.
                 var pending = new List<Task>(rebucketed.Count);
                 foreach (var (newShardIdx, subBucket) in rebucketed)
-                    pending.Add(CaptureShardAsync(lattice, routing, newShardIdx, subBucket, preValues, nowTicks));
+                    pending.Add(CaptureShardAsync(lattice, routing, newShardIdx, entries, subBucket, preValues, nowTicks));
                 await Task.WhenAll(pending);
                 return;
             }
@@ -1112,9 +1113,9 @@ internal sealed class AtomicWriteGrain(
                 var existed = raw is not null
                     && !raw.Value.IsTombstone
                     && !raw.Value.ToLwwValue().IsExpired(nowTicks);
-                preValues[bucket[i].Index] = new AtomicPreValue
+                preValues[bucket[i]] = new AtomicPreValue
                 {
-                    Key = bucket[i].Key,
+                    Key = entries[bucket[i]].Key,
                     Value = existed ? raw!.Value.Value : null,
                     Existed = existed,
                     ExpiresAtTicks = existed ? raw!.Value.ExpiresAtTicks : 0,
