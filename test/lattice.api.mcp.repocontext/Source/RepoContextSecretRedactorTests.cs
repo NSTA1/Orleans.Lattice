@@ -104,4 +104,40 @@ public sealed class RepoContextSecretRedactorTests
 
         Assert.That(RepoContextSecretRedactor.RedactUrls(text), Does.EndWith("/path, and more prose"));
     }
+
+    [TestCase("user:p,ss", "p,ss", TestName = "RedactUrls_redacts_userinfo_containing_a_comma")]
+    [TestCase("user:p;ss", "p;ss", TestName = "RedactUrls_redacts_userinfo_containing_a_semicolon")]
+    [TestCase("user:p(ss", "p(ss", TestName = "RedactUrls_redacts_userinfo_containing_an_open_paren")]
+    [TestCase("user:p)ss", "p)ss", TestName = "RedactUrls_redacts_userinfo_containing_a_close_paren")]
+    [TestCase("user:p'ss", "p'ss", TestName = "RedactUrls_redacts_userinfo_containing_an_apostrophe")]
+    public void RedactUrls_redacts_userinfo_containing_a_sub_delim(string userinfo, string secret)
+    {
+        var text = "failed to fetch " + Url(userinfo, "host.invalid/repo.git");
+
+        var scrubbed = RepoContextSecretRedactor.RedactUrls(text);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scrubbed, Does.Not.Contain(secret));
+            Assert.That(scrubbed, Does.Not.Contain(userinfo));
+            Assert.That(scrubbed, Does.Contain("host.invalid/repo.git"));
+            Assert.That(scrubbed, Does.Contain(RepoContextSecretRedactor.Placeholder));
+        });
+    }
+
+    [Test]
+    public void RedactUrls_redacts_both_urls_when_separated_by_a_comma()
+    {
+        var text = Url("a:1", "one.invalid") + "," + Url("b:2", "two.invalid");
+
+        var scrubbed = RepoContextSecretRedactor.RedactUrls(text);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scrubbed, Does.Not.Contain("a:1"));
+            Assert.That(scrubbed, Does.Not.Contain("b:2"));
+            Assert.That(scrubbed, Does.Contain("one.invalid"));
+            Assert.That(scrubbed, Does.Contain("two.invalid"));
+        });
+    }
 }
