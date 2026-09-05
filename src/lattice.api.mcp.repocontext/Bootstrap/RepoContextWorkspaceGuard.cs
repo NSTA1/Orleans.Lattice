@@ -18,6 +18,16 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// always configures the mounted workspace root, so the product is fail-closed.
 /// </para>
 /// <para>
+/// <b>The inert guard is scoped to the single-repository surface.</b> It is the
+/// opt-out for <c>repocontext_bootstrap</c>, whose path is host configuration.
+/// It is <i>not</i> a shape <c>repocontext_add_repo</c> may run under: that
+/// tool's path arrives from the wire, so an inert guard would turn a
+/// caller-supplied string into an arbitrary local filesystem read. The add-repo
+/// handler therefore checks <see cref="IsEnforcing"/> and refuses before
+/// resolving anything, so the boundary its own tool description promises can
+/// never be silently absent.
+/// </para>
+/// <para>
 /// <b>Allocation.</b> Every allowed root is canonicalised once in the constructor;
 /// the inert path returns after a single <see cref="Path.GetFullPath(string)"/>.
 /// The enforcing path canonicalises the request and performs an ordinal prefix

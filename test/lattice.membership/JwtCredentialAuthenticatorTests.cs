@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Membership.Tests;
 /// in-test with a self-signed symmetric key: no live identity provider and no
 /// network are involved.
 /// </summary>
-public class JwtCredentialAuthenticatorTests
+public partial class JwtCredentialAuthenticatorTests
 {
     private const string Issuer = "https://issuer.example/";
     private const string Audience = "lattice-audience";

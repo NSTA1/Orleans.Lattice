@@ -56,12 +56,22 @@ public sealed class JwtAuthenticatorOptions
     /// <summary>
     /// The token signature algorithms this authenticator accepts, pinned via
     /// <see cref="TokenValidationParameters.ValidAlgorithms"/> (the JWT header
-    /// <c>alg</c>, for example <c>RS256</c> or <c>HS256</c>). When empty (the
-    /// default) no algorithm allow-list is enforced and any algorithm the trusted
-    /// signing keys can satisfy is accepted; populate it to restrict acceptance to
-    /// a specific set as a defense-in-depth measure against algorithm-confusion
-    /// attacks (CWE-347). Populate the collection in place.
+    /// <c>alg</c>, for example <c>RS256</c> or <c>HS256</c>). Populate it to
+    /// restrict acceptance to a specific set as a defense-in-depth measure against
+    /// algorithm-confusion attacks (CWE-347). Populate the collection in place; an
+    /// explicit pin is always authoritative and is never widened.
     /// </summary>
+    /// <remarks>
+    /// When empty (the default) the allow-list is derived from the families of the
+    /// configured <see cref="SigningKeys"/>: an RSA-only or EC-only key set accepts
+    /// only that family's algorithms, and a symmetric-only key set accepts only the
+    /// HMAC algorithms, so a deployment can never be talked into verifying a token
+    /// against a key of the wrong family. The allow-list is left unrestricted only
+    /// when no family can be established - an empty key set, a key set that mixes
+    /// symmetric and asymmetric material, or one containing a key type the
+    /// derivation does not recognise. Pin explicitly, or supply
+    /// <see cref="ValidationParameters"/>, to restrict those cases.
+    /// </remarks>
     public IList<string> Algorithms { get; } = new List<string>();
 
     /// <summary>Whether to validate the token audience. Defaults to <c>true</c>.</summary>

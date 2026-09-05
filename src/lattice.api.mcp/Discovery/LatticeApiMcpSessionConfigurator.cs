@@ -247,6 +247,20 @@ internal sealed class LatticeApiMcpSessionConfigurator
                 var tool = groupTools[j];
                 var toolName = tool.ProtocolTool.Name;
 
+                // Per-tool minimum inside an already-permitted group. The coarse
+                // group mask admits on ANY intersecting operation, so for a
+                // data-plane group a bare Read grant reaches the mutating tools
+                // too. Withhold those unless the caller actually holds a matching
+                // operation. Withheld here means unreachable at tools/call as
+                // well, because the session's tool collection serves both. A
+                // resolver that supplies no operation detail keeps the historical
+                // group-level-only filtering.
+                if (access.CarriesOperationDetail
+                    && (access.GrantedOperations & group.RequiredOperationsFor(toolName)) == LatticeOperation.None)
+                {
+                    continue;
+                }
+
                 // Defer (omit) any tool the topology reports unsupported so a
                 // listed tool is never one that hard-errors on invoke. Under the
                 // in-silo topology no source is registered, so nothing is deferred.

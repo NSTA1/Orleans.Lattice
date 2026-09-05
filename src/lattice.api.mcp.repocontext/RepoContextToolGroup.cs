@@ -58,11 +58,24 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
     /// contributed.</param>
     /// <param name="workspaceMode">Whether the dynamic multi-repository workspace
     /// tools replace the single-repository onboarding tool.</param>
-    public RepoContextToolGroup(bool enableWrites = false, bool workspaceMode = false)
+    /// <param name="workspaceGuarded">Whether an enforcing workspace path guard is
+    /// registered. When <see langword="false"/> in workspace mode the
+    /// <c>repocontext_add_repo</c> tool is not contributed at all, because its
+    /// contract promises a workspace boundary an unconfigured guard cannot enforce.
+    /// The group deliberately does <b>not</b> fall back to
+    /// <c>repocontext_bootstrap</c> here: that tool accepts an equally unbounded
+    /// caller-supplied path, so substituting it would reopen the same hole under a
+    /// different name. <c>repocontext_remove_repo</c> is unaffected - it takes a
+    /// repository id, never a path, and never touches the working tree.</param>
+    public RepoContextToolGroup(
+        bool enableWrites = false,
+        bool workspaceMode = false,
+        bool workspaceGuarded = true)
     {
+        var offerAddRepo = workspaceMode && workspaceGuarded;
         var capacity = 12
             + (workspaceMode ? 1 : 0)
-            + (enableWrites ? (workspaceMode ? 5 : 4) : 0);
+            + (enableWrites ? (workspaceMode ? (offerAddRepo ? 5 : 4) : 4) : 0);
         var tools = new List<McpServerTool>(capacity)
         {
             McpServerTool.Create(
@@ -103,7 +116,11 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
         {
             if (workspaceMode)
             {
-                tools.Add(BuildAddRepoTool());
+                if (offerAddRepo)
+                {
+                    tools.Add(BuildAddRepoTool());
+                }
+
                 tools.Add(BuildRemoveRepoTool());
             }
             else
@@ -129,6 +146,39 @@ internal sealed class RepoContextToolGroup : ILatticeApiMcpToolGroup
 
     /// <inheritdoc />
     public LatticeApiMcpGroup Group => LatticeApiMcpGroup.RepoContext;
+
+    /// <summary>
+    /// The mutating repository-context tools. Each writes to, removes from, or
+    /// drives an ingest that writes to the store, so a caller holding only a read
+    /// grant must neither see nor reach them. The group's coarse capability mask
+    /// admits the whole group on any data-plane operation - deliberately wide, so
+    /// discovery stays cheap - which without this refinement would advertise the
+    /// destructive tools to a read-only caller.
+    /// </summary>
+    private static readonly HashSet<string> MutatingTools = new(StringComparer.Ordinal)
+    {
+        "repocontext_remember",
+        "repocontext_update",
+        "repocontext_forget",
+        "repocontext_add_repo",
+        "repocontext_remove_repo",
+        "repocontext_bootstrap",
+    };
+
+    /// <summary>The operations that make a mutating repository-context tool reachable.</summary>
+    private const LatticeOperation MutatingOperations =
+        LatticeOperation.Write
+        | LatticeOperation.Delete
+        | LatticeOperation.RangeDelete
+        | LatticeOperation.CrdtApply
+        | LatticeOperation.AtomicWrite
+        | LatticeOperation.BulkLoad;
+
+    /// <inheritdoc />
+    public LatticeOperation RequiredOperationsFor(string toolName)
+        => toolName is not null && MutatingTools.Contains(toolName)
+            ? MutatingOperations
+            : LatticeApiMcpGroupCapabilityMap.RequiredOperations(Group);
 
     /// <inheritdoc />
     public IReadOnlyList<McpServerTool> Tools { get; }
