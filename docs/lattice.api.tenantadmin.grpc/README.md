@@ -47,10 +47,15 @@ auth-scheme advertisement RPC so a client can discover how to authenticate.
 
 ## Service and RPCs
 
+The gRPC service name is `orleans.lattice.api.tenantadmin`, so each method's full
+path is `/orleans.lattice.api.tenantadmin/<Rpc>`.
+
 The service surfaces the `ILatticeTenantAdmin` lifecycle operations, the
-`ILatticeTenantRegionAdmin` region-residency operations, the read-only
-`ILatticeTenantSelfService` operations, and the auth-scheme advertisement. Each row
-below is one bound RPC:
+`ILatticeTenantRegionAdmin` region-residency operations, the
+`ILatticeTenantQuotaUsage` usage read, the `ILatticeTenantAccessAdmin`
+tenant-admin subject operations, the `ILatticeTenantGrantAdmin` cross-tenant
+grant operations, the read-only `ILatticeTenantSelfService` operations, and the
+auth-scheme advertisement. Each row below is one bound RPC:
 
 | RPC | Facade method |
 |---|---|
@@ -59,9 +64,18 @@ below is one bound RPC:
 | `ResumeTenant` | `ResumeTenantAsync` |
 | `DeleteTenant` | `DeleteTenantAsync` |
 | `SetTenantQuotas` | `SetTenantQuotasAsync` |
+| `GetTenantQuotaUsage` | `ILatticeTenantQuotaUsage.GetQuotaUsageAsync` |
 | `AuthorizeAllowedRegions` | `ILatticeTenantRegionAdmin.AuthorizeAllowedRegionsAsync` (operator-only) |
 | `SetTenantResidency` | `ILatticeTenantRegionAdmin.SetResidencyAsync` (operator or tenant admin) |
 | `GetTenantRegionStatus` | `ILatticeTenantRegionAdmin.GetTenantRegionStatusAsync` (operator or tenant admin) |
+| `ListTenantAdminSubjects` | `ILatticeTenantAccessAdmin.ListAdminSubjectsAsync` |
+| `AddTenantAdminSubject` | `ILatticeTenantAccessAdmin.AddAdminSubjectAsync` |
+| `RemoveTenantAdminSubject` | `ILatticeTenantAccessAdmin.RemoveAdminSubjectAsync` |
+| `ListCrossTenantGrants` | `ILatticeTenantGrantAdmin.ListGrantsAsync` |
+| `OfferCrossTenantGrant` | `ILatticeTenantGrantAdmin.OfferGrantAsync` |
+| `ApproveCrossTenantGrant` | `ILatticeTenantGrantAdmin.ApproveGrantAsync` |
+| `RejectCrossTenantGrant` | `ILatticeTenantGrantAdmin.RejectGrantAsync` |
+| `RevokeCrossTenantGrant` | `ILatticeTenantGrantAdmin.RevokeGrantAsync` |
 | `GetCurrentTenant` | `ILatticeTenantSelfService.GetCurrentTenantAsync` (self-service; exempt from default-deny) |
 | `ListAccessibleTenants` | `ILatticeTenantSelfService.ListAccessibleTenantsAsync` (self-service; exempt from default-deny) |
 | `GetTenant` | `ILatticeTenantSelfService.GetTenantAsync` (self-service; exempt from default-deny) |
@@ -130,6 +144,15 @@ opaque `Internal`.
 | `SetTenantResidencyAsync` | `Task<TenantResidencyChangeResult> SetTenantResidencyAsync(string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)` |
 | `GetTenantRegionStatusAsync` | `Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(string tenantId, CancellationToken cancellationToken = default)` |
 | `GetAuthSchemeAsync` | `Task<IReadOnlyList<AuthSchemeDescriptor>> GetAuthSchemeAsync(CancellationToken cancellationToken = default)` |
+| `GetTenantQuotaUsageAsync` | `Task<TenantQuotaUsageReport> GetTenantQuotaUsageAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `ListTenantAdminSubjectsAsync` | `Task<TenantAdminSubjectReport> ListTenantAdminSubjectsAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `AddTenantAdminSubjectAsync` | `Task<TenantAdminSubjectChangeResult> AddTenantAdminSubjectAsync(string tenantId, string subjectId, CancellationToken cancellationToken = default)` |
+| `RemoveTenantAdminSubjectAsync` | `Task<TenantAdminSubjectChangeResult> RemoveTenantAdminSubjectAsync(string tenantId, string subjectId, CancellationToken cancellationToken = default)` |
+| `ListCrossTenantGrantsAsync` | `Task<TenantGrantReport> ListCrossTenantGrantsAsync(string tenantId, CancellationToken cancellationToken = default)` |
+| `OfferCrossTenantGrantAsync` | `Task<TenantGrantChangeResult> OfferCrossTenantGrantAsync(string granterTenantId, string granteeTenantId, string scope, TenantGrantAccess operations, CancellationToken cancellationToken = default)` |
+| `ApproveCrossTenantGrantAsync` | `Task<TenantGrantChangeResult> ApproveCrossTenantGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
+| `RejectCrossTenantGrantAsync` | `Task<TenantGrantChangeResult> RejectCrossTenantGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
+| `RevokeCrossTenantGrantAsync` | `Task<TenantGrantChangeResult> RevokeCrossTenantGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
 
 `LatticeTenantSelfServiceApiGrpcClient` (read-only; construct with
 `LatticeTenantSelfServiceApiGrpcClient.Create(CallInvoker callInvoker, IServiceProvider serializerProvider)`):
