@@ -172,6 +172,8 @@ This is what keeps a patch a patch. Tagging `main` instead would publish everyth
 
 Reconcile `main` afterwards with a small separate PR carrying the changelog entry and the `<Version>` bump, so trunk's history records the patch.
 
+If the patch is on a line that is no longer the newest, expect its `Docs` run to be green with a **skipped** `deploy` job - see [Only the newest release line publishes the site](#only-the-newest-release-line-publishes-the-site). That is the guard working, not a failure to investigate.
+
 ### Held-back packages
 
 A package can be deliberately withheld from a wave (see [PACKAGES.md](../PACKAGES.md), the ship/no-ship authority). It then sits on an **older** line than the rest of the family while `main` moves on beneath it, so `main` is not a valid base for patching it. Hence the invariant:
@@ -201,6 +203,20 @@ That contract is what makes `main` the wrong ref for an out-of-band docs fix. Di
 No tag is involved: the site is a whole-repository artifact with no version of its own, so republishing it does not constitute a release and needs no `<Version>` bump or changelog entry.
 
 This is enforced rather than merely documented. The `github-pages` environment's deployment branch policy admits the tag pattern `lattice-v*` and the branch pattern `release/*`, and deliberately does **not** admit `main` - a dispatch on trunk is refused by the environment. `docs.yml` has no push trigger for `main`, so nothing legitimate needs it. A refusal presents as the zero-step `deploy` failure described in step 7 below.
+
+### Only the newest release line publishes the site
+
+GitHub Pages serves one site, and every deploy replaces it wholesale, so the published site is whichever deploy ran **last** - which is not the same thing as the newest release. That distinction matters because the `lattice-v*` trigger also matches a **core hotfix on an older line**. The family has cut exactly such tags before (`lattice-v9.4.1`, `lattice-v9.4.2`, `lattice-v9.4.3`, `lattice-v9.5.1`), so patching the core package on `release/9.5` after `9.6.0` has shipped would, unguarded, silently regress the public documentation to the older version. A dispatch on an older `release/<X.Y>` branch would do the same.
+
+`docs.yml` therefore carries a **newest-line guard**. It resolves the line the run would publish (from the tag for a push, from the branch for a dispatch), compares it against the highest `lattice-v*` tag in the repository, and allows the deploy only when the two lines match.
+
+An older line is **skipped, not failed**. The packages that hotfix publishes are perfectly legitimate; it is only the site that must not move. So the `Docs` run for an old-line hotfix is green with a skipped `deploy` job, and the guard's log says which line it saw and which line is newest. Do not "fix" that by re-running it or dispatching the site by hand - a green run with a skipped deploy is the guard working.
+
+The practical consequences are worth stating plainly:
+
+- The site always describes the newest released minor line, and no older-line activity can move it.
+- A documentation fix that must appear on the site has to reach the **newest** line. Cherry-picking it only onto an older line updates that line's sources but will never publish.
+- Once a line stops being the newest, its documentation is frozen as far as the site is concerned. There is no per-version docs archive; see the limitation below.
 
 One known limitation: the site is a single artifact built from one commit, so while a package is held back its documentation is published from the wave's commit rather than from the older line it actually shipped from. While the Explorer family sits at `9.4.x` and the rest ships `9.6.0`, the site therefore describes Explorer slightly ahead of its released surface. Versioning the site is the only real fix; the hold-back is expected to be temporary, so this is accepted for now.
 
