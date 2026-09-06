@@ -178,3 +178,6 @@ otherwise fail repeatedly against a spec the code has outgrown.
   primitive the claim surface wraps.
 - [Agent backlog sample](../../samples/AgentBacklog/README.md) - a runnable
   walkthrough of claiming, fencing, and release.
+- [Adopting the backlog](../../samples/AgentBacklog/template/README.md) - the
+  copyable base protocol and agent definitions, plus the GitHub-side setup no
+  file copy can do. This repository consumes that template unmodified.

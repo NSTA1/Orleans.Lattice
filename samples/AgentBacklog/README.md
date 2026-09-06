@@ -17,6 +17,10 @@ standing up a second one.
 Background on the design is in
 [The agent-operated backlog](../../docs/lattice.api.mcp.repocontext/backlog.md).
 
+To adopt the backlog in your own repository, the copyable base protocol and
+agent definitions are in [`template/`](template/README.md). This repository
+consumes them unmodified, through two small binding overrides.
+
 ## What you will observe
 
 1. A claim is granted with a **fencing token** and a bounded lease.
@@ -163,6 +167,7 @@ it needs a multi-region deployment; see
 
 ## See also
 
+- [Adopting the agent-operated backlog](template/README.md)
 - [The agent-operated backlog](../../docs/lattice.api.mcp.repocontext/backlog.md)
 - [Tools](../../docs/lattice.api.mcp.repocontext/tools.md)
 - [Distributed lock](../../docs/lattice/distributed-lock.md)
