@@ -439,7 +439,30 @@ internal sealed partial class BPlusLeafGrain
         // exactly as before.
         var partitionsAbsorbed = 0;
 
-        for (var partition = 0; partition < partitionCount; partition++)
+        // Pass-1 sweep order (issue #2089). Pass 1 can only drain a deferred
+        // terminal in place for the partition it absorbs LAST, because only
+        // then are every other partition's prepares and range-delete targets
+        // already in the cache. Every other partition must defer its terminals
+        // to pass 2 - so an unresolved saga prepare pins its incremental flush
+        // ceiling at (prepare - 1) for the whole of pass 1, and an activation
+        // torn down before pass 2 completes banks nothing at all and replays
+        // the identical range on the next activation.
+        //
+        // Sweeping in fixed index order hands that single drain-eligible slot
+        // to partition N-1 regardless of where the backlog actually is.
+        // Ordering the sweep by backlog ascending gives it instead to the
+        // partition with the MOST to replay: the one least likely to finish
+        // inside the activation window, and therefore the one that gains most
+        // from banking progress incrementally as it scans.
+        //
+        // This NARROWS the livelock, it does not remove it - the other N-1
+        // partitions still cannot drain in pass 1. Removing it needs a durable
+        // record of unresolved deferred work so a resumed replay need not
+        // re-read it; see issue #2089.
+        var sweep = await BuildPassOneSweepOrderAsync(
+            treeId, partitionCount, checkpointOverride, cancellationToken);
+
+        foreach (var (partition, probedHead) in sweep)
         {
             // Per-partition checkpoint: a leaf whose persisted state
             // pre-dates the per-partition slot falls back to the
@@ -662,7 +685,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, cancellationToken);
+            var (advanced, maxApplied) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayShardMap, resolvedOptions.WalReplayMaxRecordsPerTurn, probedHead, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -1075,6 +1098,171 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Builds the order in which pass 1 absorbs the WAL partitions, together
+    /// with the head offset probed for each.
+    /// <para>
+    /// Only the partition absorbed LAST is drain-eligible (its cross-partition
+    /// dependencies are all present by then), so which partition occupies that
+    /// slot decides which one can resolve its own saga prepares during pass 1
+    /// and keep banking durable progress. Ordering by backlog ascending awards
+    /// the slot to the partition with the most to replay - see issue #2089.
+    /// </para>
+    /// <para>
+    /// The head probe is the same call <see cref="ReplayPartitionAsync"/>
+    /// already makes, hoisted so it can inform the ordering and then handed
+    /// back down, so ordering costs no additional grain calls. A probe fault
+    /// is caught PER PARTITION: the partitions that did probe still inform the
+    /// order, the ones that did not keep their natural position and are handed
+    /// back with a <c>null</c> head so <see cref="ReplayPartitionAsync"/>
+    /// re-probes and surfaces the real fault in its own turn - which is exactly
+    /// today's failure behaviour, after the partitions ahead of it have banked.
+    /// The fault is logged at Warning naming the partitions, so a degraded
+    /// ordering is never silent; see issues #2082 and #2089.
+    /// </para>
+    /// <para>
+    /// A partition sitting at the "nothing applied" sentinel is likewise never
+    /// awarded the drain slot: its apparent gap is the whole shard partition's
+    /// WAL length rather than this leaf's own pending work, so it is not a
+    /// comparable backlog. See the comment on the sentinel test below.
+    /// </para>
+    /// </summary>
+    private async Task<List<(int Partition, long? ProbedHead)>> BuildPassOneSweepOrderAsync(
+        string treeId,
+        int partitionCount,
+        long? checkpointOverride,
+        CancellationToken cancellationToken)
+    {
+        var order = new List<(int Partition, long? ProbedHead)>(partitionCount);
+
+        // A single-partition tree is drain-eligible throughout; there is
+        // nothing to order and no reason to spend a probe.
+        if (partitionCount <= 1)
+        {
+            order.Add((0, null));
+            return order;
+        }
+
+        var heads = new long[partitionCount];
+        var backlogs = new long[partitionCount];
+        var probed = new bool[partitionCount];
+        var comparable = new bool[partitionCount];
+        List<int>? unprobed = null;
+        Exception? firstProbeFault = null;
+
+        for (var p = 0; p < partitionCount; p++)
+        {
+            try
+            {
+                var head = await grainFactory
+                    .GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{p}")
+                    .GetHeadOffsetAsync(cancellationToken);
+
+                var checkpoint = checkpointOverride ?? GetPersistedCheckpointForPartition(p);
+                heads[p] = head;
+                probed[p] = true;
+
+                // A partition at the "nothing applied" sentinel (-1) has no
+                // backlog COMPARABLE WITH one that holds a real checkpoint.
+                // Its apparent gap is head + 1, which measures the whole shard
+                // partition's WAL rather than this leaf's own pending work:
+                // the materialiser's per-leaf range filter drops every entry
+                // outside this leaf's key range on iteration, so the real cost
+                // is bounded by the leaf's range, not by the head. Ranking a
+                // MIXED set on that number awards the single drain-eligible
+                // slot to the partition with the LEAST applied - and on legacy
+                // state, where every non-zero partition reads -1, it would do
+                // so systematically. LatticeFallOffLogDetector guards its own
+                // budget trigger with the same `checkpointOffset >= 0` test
+                // and for the same reason (the c2-vi split-sibling incident).
+                //
+                // This is about COMPARABILITY, not about the sentinel being
+                // unrankable in itself - see the all-sentinel case below.
+                comparable[p] = checkpoint >= 0;
+                backlogs[p] = comparable[p] && head > checkpoint ? head - checkpoint : 0L;
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Fail soft, per partition. Aborting the whole sweep here would
+                // be strictly worse than today: nothing has been banked yet, so
+                // a transient probe fault would cost every partition's progress
+                // rather than only its own. Swallowing it silently would be the
+                // fault-masking shape issue #2082 closed on the trimmed-prefix
+                // probe. So: degrade this partition's ordering only, keep its
+                // natural position, and log it.
+                (unprobed ??= []).Add(p);
+                firstProbeFault ??= ex;
+            }
+        }
+
+        if (unprobed is not null)
+        {
+            context.ActivationServices?
+                .GetService<ILoggerFactory>()?
+                .CreateLogger<BPlusLeafGrain>()?
+                .LogWarning(
+                    firstProbeFault,
+                    "Replay sweep-order head probe failed for tree {Tree} partition(s) {Partitions} on leaf {GrainId}; those partitions keep their natural sweep position and will be re-probed during replay. Pass-1 drain eligibility may be awarded to a smaller backlog than intended.",
+                    treeId,
+                    string.Join(",", unprobed),
+                    context.GrainId);
+        }
+
+        // ALL-SENTINEL CASE. When no partition holds a real checkpoint, every
+        // partition shares the SAME baseline, so head + 1 is a valid relative
+        // measure of the work each has to read and the comparability objection
+        // above does not apply - it concerns mixing two different baselines,
+        // not the sentinel itself. This is the dominant case in practice: the
+        // cold-start cache-empty override (step 0.5 of OnActivateAsync) drives
+        // checkpointOverride to -1 for every partition, which is precisely the
+        // activation with the most to replay and therefore the one this
+        // ordering exists to help. Excluding sentinel partitions wholesale
+        // would collapse the sweep to index order there and make issue #2089's
+        // ordering inert in the only case that matters - while still passing a
+        // mixed-baseline test. (Legacy state, where partition 0 reads the
+        // scalar slot and the rest read -1, is MIXED, so it keeps the strict
+        // guard above and the sentinel partitions never take the drain slot.)
+        var anyComparable = false;
+        for (var p = 0; p < partitionCount; p++)
+            anyComparable |= comparable[p];
+
+        if (!anyComparable)
+        {
+            for (var p = 0; p < partitionCount; p++)
+            {
+                if (!probed[p])
+                    continue;
+                comparable[p] = true;
+                backlogs[p] = heads[p];
+            }
+        }
+
+        var indices = new int[partitionCount];
+        for (var p = 0; p < partitionCount; p++)
+            indices[p] = p;
+
+        // Ascending by backlog, partition index as the tie-break so the order
+        // is deterministic and an evenly spread backlog keeps index order.
+        // A partition whose backlog is not KNOWN sorts strictly first - either
+        // because its head probe faulted, or because it sits at the "nothing
+        // applied" sentinel and has no comparable gap. Neither is ever awarded
+        // the single drain-eligible slot on the strength of a backlog we do
+        // not actually know.
+        Array.Sort(indices, (a, b) =>
+        {
+            if (comparable[a] != comparable[b])
+                return comparable[a] ? 1 : -1;
+
+            var byBacklog = backlogs[a].CompareTo(backlogs[b]);
+            return byBacklog != 0 ? byBacklog : a.CompareTo(b);
+        });
+
+        foreach (var p in indices)
+            order.Add((p, probed[p] ? heads[p] : null));
+
+        return order;
+    }
+
+    /// <summary>
     /// Per-partition replay inner loop extracted from
     /// <see cref="ReplayWalSinceCheckpointAsync"/>. Reads WAL slices
     /// from <paramref name="partition"/>'s coordinator strictly past
@@ -1112,12 +1300,17 @@ internal sealed partial class BPlusLeafGrain
         bool drainDeferredInline,
         ShardMap? replayShardMap,
         int maxRecordsPerTurn,
+        long? probedHead,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
             $"{treeId}/{partition}");
 
-        var head = await coordinator.GetHeadOffsetAsync(cancellationToken);
+        // Reuse the head the sweep-order pre-pass already probed when it has
+        // one, so ordering the sweep costs no extra grain call. A head probed
+        // moments ago can only be behind the true head, which simply leaves
+        // the newest entries for the materialiser or the next replay.
+        var head = probedHead ?? await coordinator.GetHeadOffsetAsync(cancellationToken);
         if (head <= checkpoint)
             return (false, checkpoint);
 
