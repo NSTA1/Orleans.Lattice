@@ -651,7 +651,11 @@ internal sealed partial class BPlusLeafGrain
                         // only field-visible evidence of the condition in issue
                         // #2098. Only repeats are ever withheld, and the count
                         // withheld is reported as a summary line, so the cap is
-                        // never silent.
+                        // not silent while the tree keeps replaying. That
+                        // summary is carried by a LATER occurrence on the tree,
+                        // so a tree's final withheld tally goes unreported and
+                        // the metric is the exact census for that case; see
+                        // FlushClosedOverBudgetWindow.
                         //
                         // The leaf id is load-bearing in both the key and the
                         // message (issue #2023). `partition` is the WAL
@@ -1097,7 +1101,10 @@ internal sealed partial class BPlusLeafGrain
     /// carry, and this warning is currently the only field-visible evidence of
     /// the condition in issue #2098. Only <i>repeats</i> are ever withheld by
     /// the cap, and when they are, the count is reported as a summary line, so
-    /// capping is never silent.
+    /// capping is not silent while the tree keeps replaying. That summary is
+    /// carried by a later occurrence, so a tree's final withheld tally goes
+    /// unreported; see <see cref="FlushClosedOverBudgetWindow"/>. The metric
+    /// remains the exact census.
     /// </para>
     /// </summary>
     /// <param name="treeId">The tree the leaf belongs to.</param>
@@ -1201,6 +1208,22 @@ internal sealed partial class BPlusLeafGrain
     /// Deliberately does not create a window: a tree whose occurrences are all
     /// withheld by the per-key throttle owes nothing, and creating an entry for
     /// it would grow the map without changing what is logged.
+    /// </para>
+    /// <para>
+    /// <b>The flush is occurrence-driven, and that is a real limitation.</b>
+    /// This path and the window roll are both reached only from a later
+    /// occurrence on the same tree, so a tree that withholds repeats and then
+    /// falls quiet - the condition resolves, the leaf deactivates, or the
+    /// replay completes - never emits that last tally, and its window is
+    /// retained rather than pruned precisely because it still owes one. So
+    /// "capping is never silent" holds while a tree keeps replaying and does
+    /// NOT hold for a tree's final window, which is the condition-resolved case
+    /// a reader looking back through the log most wants. The metric is the
+    /// exact census there. Closing the gap would need a timer or a background
+    /// flush on a path that deliberately has neither, and a leaf deactivating
+    /// is not the event to hang one on: the window is per TREE, so one leaf
+    /// going away while its siblings still replay would roll the window early
+    /// rather than close it.
     /// </para>
     /// </summary>
     /// <param name="treeId">The tree to flush.</param>

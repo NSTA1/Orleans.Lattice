@@ -444,9 +444,12 @@ the first is fatal:
 > rate - which is how this warning reached 46% of one deployment's container
 > log, rolling away the older entries that were the evidence needed to
 > diagnose it (issue #2100). Any repeats the cap withholds are reported as a
-> summary line, so the cap is never silent, and a leaf partition reporting
-> over budget for the FIRST time is exempt from it, so a newly appearing
-> condition still surfaces promptly. The
+> summary line, so the cap is not silent while that tree keeps replaying, and
+> a leaf partition reporting over budget for the FIRST time is exempt from it,
+> so a newly appearing condition still surfaces promptly. That summary is
+> carried by a later occurrence on the tree, so a tree's final withheld tally
+> goes unreported once the condition resolves or the leaf deactivates; the
+> counter below is the exact census for that case. The
 > `orleans.lattice.leaf.activation_replays_over_budget` counter is tagged
 > `tree` and `partition` only - leaf count is unbounded, so it cannot be a
 > metric dimension - which means the counter measures the rate and the log
