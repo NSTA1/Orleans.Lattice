@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Orleans.Lattice;
 using Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
 namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
@@ -97,6 +99,54 @@ public sealed class RepoContextHostBuilderAmbientConfigurationTests
             // The environment-driven path must apply the same data-root contract
             // as the explicit-configuration path: durable state lands on the mount.
             Assert.That(Directory.Exists(_dataRoot), Is.True);
+        }
+        finally
+        {
+            await app.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// Asserts the claim-lease ceiling is actually wired into the built host, by
+    /// reading it back off the resolved <see cref="LatticeOptions"/> rather than
+    /// off the extension method that sets it.
+    /// </summary>
+    /// <remarks>
+    /// This exists because every other test of the ceiling calls
+    /// <c>ConfigureRepoContextClaimLeases</c> directly, so all of them would keep
+    /// passing if the single call site in <see cref="RepoContextHostBuilder"/>
+    /// were deleted - the option would simply revert to the library's five-minute
+    /// maximum and backlog claims would silently start lapsing mid-build again.
+    /// Resolving the option from the host is the only assertion that fails when
+    /// the wiring is removed rather than when the resolver is.
+    /// <para>
+    /// It reads the <b>unnamed</b> options instance deliberately:
+    /// <c>LatticeLockGrain.ResolveLeaseTicks</c> uses
+    /// <c>IOptionsMonitor&lt;LatticeOptions&gt;.CurrentValue</c>, not
+    /// <c>Get(treeName)</c>, so a per-tree configuration would not reach the lock
+    /// grain and this test would pass while the deployment stayed broken.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task Build_from_ambient_configuration_raises_the_claim_lease_ceiling()
+    {
+        var app = RepoContextHostBuilder.Build([]);
+
+        try
+        {
+            var options = app.Services.GetRequiredService<IOptionsMonitor<LatticeOptions>>().CurrentValue;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    options.MaxLockLeaseDuration,
+                    Is.EqualTo(TimeSpan.FromSeconds(RepoContextClaimLeases.DefaultMaxLockLeaseSeconds)),
+                    "The host must raise the lease ceiling; without it a backlog claim cannot outlive a build.");
+                Assert.That(
+                    options.MaxLockLeaseDuration,
+                    Is.GreaterThan(LatticeOptions.MaxLockLeaseDurationValue),
+                    "The wiring is only meaningful if it exceeds the library ceiling it exists to raise.");
+            });
         }
         finally
         {

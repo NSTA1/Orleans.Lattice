@@ -91,8 +91,9 @@ attribute expressed this way is filterable without reading bodies. Arbitrary
 | `backlog` | Plain marker tag. Every item carries it. |
 | `priority:P0` .. `priority:P3` | Ordering priority. |
 | `phase:research` \| `phase:implementation` \| `phase:integration` | Which phase of its grouping the item belongs to. Set at authoring, never changed by a worker. |
-| `homeRegion:<region>` | The region in which claims for this item are taken. A claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped. |
+| `homeRegion:<region>` | The region in which claims for this item are taken. **Verify this is enforced before relying on it.** The intent is that a claim attempted from any other region fails closed, because the underlying lock is cluster-wide and therefore region-scoped - but that is a property of the deployment, not of the tag. On a single-region deployment `lattice_list_regions` reports only `current`, claims report region `local`, and a geographic value such as `uksouth` is **not enforced at all**: a claim from anywhere succeeds. Treat a value the cluster does not route as a **defect in the binding**, and note the failure is worse than a no-op - an unenforced safety assumption that the protocol documents as enforced is more dangerous than an absent one, because it is relied upon. |
 | `baseBranch:<branch>` | The branch this item's pull request targets. For an item in a grouping this is the **epic branch**, never `main`. |
+| `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. |
 
 **Exactly one tag per prefix.** Two `priority:` tags on one item means two
 authors wrote concurrently. Add-wins is what makes that visible rather than
@@ -258,6 +259,29 @@ emits is an implementation grouping. Research is also not the default - where
 the shape of the work is already understood, a research phase is pure
 critical-path depth.
 
+**A `phase:research` item's deliverable is a durable memory entry plus an issue
+comment - not a branch, and not a pull request.** State this when dispatching
+one, because the default assumption of a worker built to ship code is that it
+must produce a diff. Three consequences follow:
+
+- **It does not need a branch at all**, which sidesteps the branch-naming rules
+  above entirely. A session whose workspace was auto-provisioned with a
+  generated branch name - frequently one carrying a username and no `<type>/`
+  prefix, both of which many repositories forbid outright - simply never pushes
+  it, and the non-conforming name never reaches the remote.
+- **A well-evidenced negative is a completed item, not a failed one.** Say so at
+  dispatch. A research item exists to be capable of killing the work that would
+  otherwise follow it, and a worker that believes a negative reflects on it will
+  reach for an encouraging maybe. The cheapest possible outcome of a research
+  phase is discovering early that the implementation phase must not be built.
+- **It must not touch the implementation surface.** A research item that edits
+  `src/` has silently become an implementation item without being admitted as
+  one, and its changes bypass the grouping its findings were meant to shape.
+
+If a research item genuinely must produce a file, that is a signal it was
+mis-scoped as research - and the file needs a conforming branch arranged
+deliberately, rather than an auto-generated one pushed by default.
+
 ### The integration item
 
 Every grouping terminates in exactly one designated integration item, which is
@@ -296,9 +320,57 @@ integration item passes. Concretely:
 
 - the epic record carries `baseBranch:<type>/epic/<epic-slug>`;
 - every sub-item inherits that value as its own `baseBranch:` tag;
-- sub-item branches nest under it as `<type>/epic/<epic-slug>/<item-slug>`;
+- sub-item branches are named `<type>/epic/<epic-slug>-<item-slug>`;
 - an item that is `partOf` an epic and carries `baseBranch:main` is reported as
   a defect.
+
+**The final separator is a hyphen, not a slash, and this is forced by git rather
+than chosen.** An earlier revision of this document prescribed nesting sub-items
+as `<type>/epic/<epic-slug>/<item-slug>`. That form is **unimplementable**
+whenever the epic branch is parked on the bare slug - which the first rule above
+also mandates - because git stores a branch as a file at `refs/heads/<name>`, so
+`refs/heads/X` and `refs/heads/X/anything` cannot coexist. The remote refuses it:
+
+```text
+cannot lock ref 'refs/heads/fix/epic/my-epic/my-item':
+'refs/heads/fix/epic/my-epic' exists
+```
+
+This is a directory/file ref conflict, not a policy or permissions failure, and
+no naming choice on the sub-item's side avoids it. It was found by a worker
+attempting the push, having been reviewed twice in prose without either reader
+noticing - reading a ref name does not tell you git will refuse it.
+
+Note the corollary, because it is the part that gives false assurance: **a CI
+branch-name guard will happily accept the nested form**, since it is a
+well-formed lower-case name under an allowed prefix. A guard that validates a
+string the underlying system then rejects is worse than no guard on that
+dimension, because it converts "unverified" into "verified" without adding
+verification.
+
+The alternative - parking the epic on `<type>/epic/<epic-slug>/integration` and
+leaving the namespace free for true nesting - does work, and is the better shape
+for a grouping created from scratch. It is not adopted as the default because it
+costs a rename of the epic branch and a rebase of every in-flight sub-item if
+adopted mid-grouping. Choose it at epic-creation time or not at all.
+
+**Two invariants matter more than the name, and are what a reviewer should
+actually check.** The name is a convenience; these are correctness:
+
+1. the sub-item branch is descended from the epic branch -
+   `git merge-base --is-ancestor origin/<epic-branch> HEAD` exits `0`;
+2. the sub-item's pull request **targets the epic branch, never `main`**.
+
+A sub-item that satisfies both under an off-convention name is fine and is
+reported as a naming nit. A sub-item that satisfies neither under a perfectly
+conventional name has silently bypassed the epic, and its work will not be
+collected by the integration item.
+
+**Do not use a workspace `rename_branch` affordance to satisfy this rule without
+checking its output.** In at least one environment it applies a configured
+prefix that injects a username and omits the `<type>/` prefix entirely,
+producing a name this repository forbids outright and which fails the CI guard.
+Rename the branch directly and verify the resulting name.
 
 ## Computing the ready set
 
@@ -320,22 +392,48 @@ The computation:
 1. `repocontext_scan` scope `MemoryTopic`, topic `backlog`, paging on the
    continuation token, to enumerate every live item.
 2. Drop items already complete, parked, or held under a live fenced claim.
-3. For each remaining candidate, one depth-1 `repocontext_neighbors` on
+3. **Drop grouping records.** A grouping (an epic, or any item that other items
+   declare themselves `partOf`) is a container, not a unit of work. It is
+   completed by its integration item, never claimed directly. Omitting this step
+   lets a worker claim the epic itself and duplicate the entire fan-out that the
+   decomposition just created.
+
+   Build the exclusion set **during the step-1 scan**, at no extra cost: collect
+   the target of every `partOf` edge you encounter as you page through the topic.
+   Do **not** attempt this as a reverse lookup - "who is `partOf` me?" is exactly
+   the reverse-index query this surface cannot serve, which is why the check has
+   to be a by-product of the enumeration rather than a per-candidate probe.
+
+   The same conclusion can be reached from the data alone, and belt-and-braces is
+   cheap here: a grouping should also carry `blockedBy` its own integration item,
+   which drops it at step 4 anyway. Author both. The redundancy is one-way safe -
+   it can only ever remove a container from the ready set, never admit one.
+4. For each remaining candidate, one depth-1 `repocontext_neighbors` on
    `blockedBy`. A candidate survives when every target it names is complete.
-4. Drop survivors whose mirrored issue is not admitted (see
+5. Drop survivors whose mirrored issue is not admitted (see
    [Entry gating](#entry-gating---mirror-first-admit-by-label)). This is checked
    *after* the `blockedBy` narrowing, so it costs one issue read per survivor
    rather than one per item in the topic.
-5. Sort by `(priority, createdAt, id)`, then pick from the top three to five.
+6. Sort by `(priority, createdAt, id)`, then pick from the top three to five.
    Ordering deterministically is fine and is not a defect: `repocontext_claim` is
    real mutual exclusion, so two workers converging on the same item resolve to
    exactly one proceeding and the other observing a clean refusal it can act on
    immediately. Jitter is a cheap way to spread the fan-out across candidates and
    avoid spending a round on a refusal, so it remains worth applying - but it is an
    optimisation, and no worker may rely on it for correctness.
-6. Prefer a candidate whose blast radius - its `anchoredTo` anchors plus
+7. Prefer a candidate whose blast radius - its `anchoredTo` anchors plus
    `repocontext_related` on them - is disjoint from the radii of in-flight
    items.
+8. **Exclude, rather than merely deprioritise, a candidate whose `resource:`
+   tags collide with an in-flight item's.** Step 7 is a *preference* computed
+   over `anchoredTo` **files**, so a scarce non-file resource is invisible to it:
+   an item whose real constraint is "needs exclusive use of the shared test box"
+   may have an empty code radius and will therefore look maximally disjoint and
+   sort to the front. That is the exact inversion of the truth. Resource
+   collision is a hard exclusion, not a tie-break, because the failure it
+   prevents - two agents recreating the same container under one another - is
+   not a merge conflict that surfaces loudly but a corrupted experiment that
+   reports a plausible wrong answer.
 
 A `scan` is a bulk read and therefore does **not** evaluate TTL or link
 staleness: `stale` and `staleLinks` come back `null` there, meaning "not
@@ -383,6 +481,148 @@ stateDiagram-v2
 `Claimed --> Ready` on lease expiry is the normal path, not an exception. Stale
 claims are the common case, so a claim is always lease-bounded and reclaimed on
 expiry rather than held by a flag that a killed session leaves set forever.
+
+### The lease is shorter than the work - renew before, never after
+
+**The cluster clamps a claim lease to a maximum of 300 seconds, and defaults to
+30 seconds when `leaseSeconds` is omitted.** A build-and-test cycle on a
+non-trivial repository exceeds both. The consequence is not hypothetical and was
+observed on the first live run of this protocol: two independent workers each
+had a claim lapse mid-build, while actively working the item.
+
+Both recovered correctly - `repocontext_claim_status` showed no other holder and
+no queue, and the re-claim returned a fencing token incremented by exactly one -
+so the mechanism behaved as designed. **The gap is that the lease duration is
+shorter than the shortest useful unit of work**, which turns a safety property
+into a routine occurrence.
+
+Why that matters more than a retry: during the lapse the item is, to any other
+worker computing the ready set, simply **unclaimed**. Step 2 drops items "held
+under a live fenced claim" and there is no live claim, so there is no state
+distinguishable from never-started. A sibling recomputing in that window would
+have found the item available and begun duplicate work on an item another worker
+was mid-build on. Nothing prevented that. Only the timing did.
+
+Rules, in force for every worker:
+
+- **Always pass `leaseSeconds` explicitly.** The 30-second default is shorter
+  than almost any real operation and will lapse under a single test run.
+- **Renew immediately BEFORE any long operation, never after it.** Treat a
+  build, a test run, or anything expected to exceed roughly two minutes as
+  requiring a renewal first. Renewing afterwards is renewing during the window
+  you needed to be covered for.
+- **On discovering a lapsed claim, re-claim and then CHECK THE FENCING TOKEN.**
+  If it incremented as expected and the holder is you, that is a clean re-claim;
+  proceed, and report it. If the holder is not you, or the token did not move as
+  expected, **stop and report** - somebody else has been working the item, and
+  continuing would produce two divergent attempts at one unit of work.
+- **Never write anything under a token you know to be stale.**
+
+Fixes worth making to the surface itself, in preference order: raise the clamp
+above a realistic build time, or make it per-phase, since a research item and a
+build item have very different natural durations; auto-renew on a timer for the
+lifetime of a long child process rather than asking a worker to predict its
+duration; and distinguish "lease expired while work was in progress" from "never
+claimed" in the ready set, so a lapse degrades to a warning rather than to
+availability.
+
+This was surfaced only because a worker volunteered an unflattering detail it
+had already recovered from. A protocol that discourages that reporting would
+have shipped this gap silently.
+
+### Detecting and picking up a dropped lease
+
+Raising the lease only makes a lapse rarer. It does not say what a lapse *means*
+or who may act on it, and that is the part that has to be specified, because the
+store cannot answer the only question that matters.
+
+**The central difficulty: a lapse has two causes and the surface cannot tell
+them apart.** An expired lease means either
+
+1. the holder is **gone** - crashed, killed, context-exhausted, session ended -
+   and the item genuinely needs picking up; or
+2. the holder is **alive and working**, and merely failed to renew in time.
+
+Both present identically: no live claim. Nothing in the lock, the item record, or
+the ready set distinguishes them, and there is no liveness signal independent of
+the renewal itself. Treating every lapse as case 1 duplicates live work; treating
+every lapse as case 2 leaks items permanently to dead agents. Neither default is
+safe, so the protocol makes the distinction *unnecessary* rather than pretending
+to resolve it.
+
+**Detection is pull, not push. Renewal IS the liveness probe.** A worker is never
+notified that its lease expired; it finds out only by attempting a renew (or a
+fenced write) and being refused. There is no callback and no interrupt. A worker
+that never renews never learns it was evicted, and will keep working - which is
+precisely case 2 seen from the inside. This is why renewal is mandatory before
+long operations rather than merely advisable: it is the only mechanism by which a
+worker discovers it has lost the item.
+
+**What fencing does and does not protect, which is the load-bearing point.** The
+monotonic fencing token makes *store* writes safe: a superseded worker's write is
+rejected, so two workers can never both mutate the item record. It protects
+nothing else. **Git, GitHub, the filesystem and any deployed environment are
+outside the fence.** A superseded worker can still push a branch, open a pull
+request, comment on an issue, or recreate a container, and none of those will be
+refused on account of a stale token.
+
+Therefore:
+
+- **Renew immediately before every externally-visible side effect, and verify the
+  token, not merely that the call succeeded.** Push, pull-request creation, issue
+  comments, and any environment mutation are all gated on a fresh, verified
+  renewal. A renewal that *returns* is not enough; the token it reports must be
+  the one you hold.
+- **On refusal, abort without side effects.** Do not push "just this branch", do
+  not open the pull request, do not comment. Report and stop.
+- **Never destroy your own work on discovering you were superseded.** The branch
+  and commits from an evicted attempt are the takeover's most useful input. Leave
+  them, and say in your report exactly where they are. Deleting them converts a
+  recoverable handover into a restart.
+
+**A lapsed item is quarantined before it becomes claimable.** It does not
+re-enter the ready set the instant the lease expires. It becomes eligible only
+after a quarantine interval that comfortably exceeds the longest plausible
+renewal gap - one full lease is the working default. This is what buys the
+distinction the store cannot make: an alive-but-late holder reclaims its own item
+inside the quarantine and continues (its fence increments, nothing else changes),
+whereas a genuinely dead holder never does, and the item is released to others
+only after that window closes. The cost is bounded latency on genuine failures;
+the benefit is that the common case stops being a race.
+
+**Taking over is an explicit, evidenced act.** A worker claiming an item whose
+previous claim lapsed must:
+
+1. **Read the resume block first** (`lastLocation`, `resumeNote`) and treat it as
+   **advisory**. An abandoned run leaves its branch behind but not the reasoning
+   that produced it, and the resume note was written before whatever ended the
+   run - so it describes an intent, not a verified state. Re-derive.
+2. **Verify the recorded branch against the remote** rather than trusting
+   `lastLocation`. It may not have been pushed at all - the most common shape,
+   since eviction tends to happen mid-build, before any push.
+3. **Never force-push or rewrite the prior attempt's branch.** Build on it or
+   start beside it; do not destroy the only record of what the previous holder
+   did.
+4. **Post a takeover marker on the mirrored issue** naming the prior owner, the
+   prior fencing token, and the new one. This is what makes `attempts`
+   countable - it is derived from the claim-comment trail, not stored - and it is
+   the only human-visible trace that an item changed hands.
+5. **Check for a contradicting marker before doing any work.** If the prior owner
+   posted activity *after* the takeover marker, it was case 2 and is still alive:
+   stop, report the collision, and let a human adjudicate. Two agents silently
+   working one item is the failure this whole section exists to prevent.
+
+**A takeover counts as an attempt.** It is not a free retry. Repeated takeovers
+on one item drive it toward the poison threshold and into `Parked`, which is
+correct: an item that keeps evicting its holders is either mis-specified or too
+large, and both need a human rather than another attempt.
+
+**Reporting a clean re-claim is mandatory, not optional.** A worker that lapses
+and successfully re-claims its own item inside the quarantine has had a
+near-miss, not a non-event. Report it. Both instances of this on the protocol's
+first run were reported voluntarily by workers that had already recovered, and
+that is the only reason the gap was found at all - had they stayed silent, the
+protocol would have shipped with a race nobody had observed.
 
 ## Mirroring to GitHub
 
