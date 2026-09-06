@@ -1119,6 +1119,12 @@ internal sealed partial class BPlusLeafGrain
     /// The fault is logged at Warning naming the partitions, so a degraded
     /// ordering is never silent; see issues #2082 and #2089.
     /// </para>
+    /// <para>
+    /// A partition sitting at the "nothing applied" sentinel is likewise never
+    /// awarded the drain slot: its apparent gap is the whole shard partition's
+    /// WAL length rather than this leaf's own pending work, so it is not a
+    /// comparable backlog. See the comment on the sentinel test below.
+    /// </para>
     /// </summary>
     private async Task<List<(int Partition, long? ProbedHead)>> BuildPassOneSweepOrderAsync(
         string treeId,
@@ -1139,6 +1145,7 @@ internal sealed partial class BPlusLeafGrain
         var heads = new long[partitionCount];
         var backlogs = new long[partitionCount];
         var probed = new bool[partitionCount];
+        var comparable = new bool[partitionCount];
         List<int>? unprobed = null;
         Exception? firstProbeFault = null;
 
@@ -1152,8 +1159,26 @@ internal sealed partial class BPlusLeafGrain
 
                 var checkpoint = checkpointOverride ?? GetPersistedCheckpointForPartition(p);
                 heads[p] = head;
-                backlogs[p] = head > checkpoint ? head - checkpoint : 0L;
                 probed[p] = true;
+
+                // A partition at the "nothing applied" sentinel (-1) has no
+                // backlog COMPARABLE WITH one that holds a real checkpoint.
+                // Its apparent gap is head + 1, which measures the whole shard
+                // partition's WAL rather than this leaf's own pending work:
+                // the materialiser's per-leaf range filter drops every entry
+                // outside this leaf's key range on iteration, so the real cost
+                // is bounded by the leaf's range, not by the head. Ranking a
+                // MIXED set on that number awards the single drain-eligible
+                // slot to the partition with the LEAST applied - and on legacy
+                // state, where every non-zero partition reads -1, it would do
+                // so systematically. LatticeFallOffLogDetector guards its own
+                // budget trigger with the same `checkpointOffset >= 0` test
+                // and for the same reason (the c2-vi split-sibling incident).
+                //
+                // This is about COMPARABILITY, not about the sentinel being
+                // unrankable in itself - see the all-sentinel case below.
+                comparable[p] = checkpoint >= 0;
+                backlogs[p] = comparable[p] && head > checkpoint ? head - checkpoint : 0L;
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -1182,19 +1207,50 @@ internal sealed partial class BPlusLeafGrain
                     context.GrainId);
         }
 
+        // ALL-SENTINEL CASE. When no partition holds a real checkpoint, every
+        // partition shares the SAME baseline, so head + 1 is a valid relative
+        // measure of the work each has to read and the comparability objection
+        // above does not apply - it concerns mixing two different baselines,
+        // not the sentinel itself. This is the dominant case in practice: the
+        // cold-start cache-empty override (step 0.5 of OnActivateAsync) drives
+        // checkpointOverride to -1 for every partition, which is precisely the
+        // activation with the most to replay and therefore the one this
+        // ordering exists to help. Excluding sentinel partitions wholesale
+        // would collapse the sweep to index order there and make issue #2089's
+        // ordering inert in the only case that matters - while still passing a
+        // mixed-baseline test. (Legacy state, where partition 0 reads the
+        // scalar slot and the rest read -1, is MIXED, so it keeps the strict
+        // guard above and the sentinel partitions never take the drain slot.)
+        var anyComparable = false;
+        for (var p = 0; p < partitionCount; p++)
+            anyComparable |= comparable[p];
+
+        if (!anyComparable)
+        {
+            for (var p = 0; p < partitionCount; p++)
+            {
+                if (!probed[p])
+                    continue;
+                comparable[p] = true;
+                backlogs[p] = heads[p];
+            }
+        }
+
         var indices = new int[partitionCount];
         for (var p = 0; p < partitionCount; p++)
             indices[p] = p;
 
         // Ascending by backlog, partition index as the tie-break so the order
         // is deterministic and an evenly spread backlog keeps index order.
-        // A partition we could not probe sorts strictly first: it is never
-        // awarded the single drain-eligible slot on the strength of a backlog
-        // we do not actually know.
+        // A partition whose backlog is not KNOWN sorts strictly first - either
+        // because its head probe faulted, or because it sits at the "nothing
+        // applied" sentinel and has no comparable gap. Neither is ever awarded
+        // the single drain-eligible slot on the strength of a backlog we do
+        // not actually know.
         Array.Sort(indices, (a, b) =>
         {
-            if (probed[a] != probed[b])
-                return probed[a] ? 1 : -1;
+            if (comparable[a] != comparable[b])
+                return comparable[a] ? 1 : -1;
 
             var byBacklog = backlogs[a].CompareTo(backlogs[b]);
             return byBacklog != 0 ? byBacklog : a.CompareTo(b);

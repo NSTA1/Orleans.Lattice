@@ -623,6 +623,66 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task All_partitions_at_the_sentinel_are_still_ranked_by_head_so_ordering_survives_a_cold_start()
+    {
+        // The pass-1 sweep ranks partitions by backlog and awards the single
+        // drain-eligible slot (absorbed LAST) to the largest (issue #2089).
+        //
+        // A partition at the "nothing applied" sentinel (-1) is NOT comparable
+        // with one holding a real checkpoint, because head - -1 measures the
+        // whole shard partition's WAL rather than this leaf's pending work.
+        // But that objection is about MIXING two baselines. When EVERY
+        // partition is at the sentinel they share one baseline, so head is a
+        // valid relative measure and the ordering must still apply.
+        //
+        // This is the dominant case, not a corner: the cold-start cache-empty
+        // override drives checkpointOverride to -1 for every partition, which
+        // is exactly the activation with the most to replay and therefore the
+        // one #2089's ordering exists to help. Excluding sentinel partitions
+        // wholesale would silently collapse the sweep to index order here and
+        // make (b) inert on every cold start - a fix that does nothing in the
+        // only case that matters, while still passing a mixed-baseline test.
+        var readOrder = new List<int>();
+
+        var p0 = BuildObservableCoordinator(
+            head: 4,
+            sliceSize: 8,
+            tail: 0,
+            onRead: _ => { if (!readOrder.Contains(0)) readOrder.Add(0); },
+            FlushSet(1, "a1"),
+            FlushSet(2, "a2"),
+            FlushSet(3, "a3"),
+            FlushSet(4, "a4"));
+
+        // An order of magnitude more to read, so index order and backlog order
+        // disagree and the assertion discriminates between them.
+        var p1 = BuildObservableCoordinator(
+            head: 100,
+            sliceSize: 8,
+            tail: 0,
+            onRead: _ => { if (!readOrder.Contains(1)) readOrder.Add(1); },
+            FlushSet(1, "b1"),
+            FlushSet(2, "b2"));
+
+        var state = NewFlushCeilingState();
+        var store = new InMemorySnapshotStore();
+        var grain = BuildFlushCeilingLeaf(state, [p0, p1], store.Stub);
+
+        await ((IGrainBase)grain).OnActivateAsync(CancellationToken.None);
+
+        Assert.That(readOrder, Has.Count.EqualTo(2), "Both partitions must be swept.");
+        Assert.That(readOrder[^1], Is.EqualTo(1),
+            "With every partition on the same (sentinel) baseline, the partition with the "
+            + "largest head has the most to replay and must be absorbed last to take the "
+            + "drain slot. Collapsing to index order here would make issue #2089's ordering "
+            + "inert on exactly the cold-start activation it exists to help.");
+
+        // Ordering must never skip: both partitions still replay in full.
+        Assert.That(await grain.GetAsync("a4"), Is.Not.Null);
+        Assert.That(await grain.GetAsync("b2"), Is.Not.Null);
+    }
+
+    [Test]
     public async Task Unresolved_prepare_holds_the_ceiling_even_when_a_terminal_drains_in_place()
     {
         // A range delete at offset 3 drains in place (single partition), but
