@@ -434,9 +434,22 @@ the first is fatal:
 > consecutive lines were one-per-minute samples of arbitrary different
 > leaves, and their checkpoints appearing to repeat or move backwards was an
 > artifact of that sampling rather than a stalled replay. The log is
-> throttled to one line per (tree, leaf, partition) per minute, so a leaf
-> that is genuinely stuck reports about once a minute with an unchanging
-> checkpoint. The
+> throttled per (tree, leaf, partition), starting at one line a minute and
+> doubling to a ceiling of one an hour the longer that leaf keeps reporting,
+> so a leaf that is genuinely stuck still reports an unchanging checkpoint but
+> at a decaying rate: compare consecutive lines naming that leaf, rather than
+> expecting a fixed cadence. A per-tree cap additionally bounds how many
+> *repeat* lines one tree may emit in a window, because a tree with L leaves
+> and P partitions has L x P throttle keys and so L x P times the per-key
+> rate - which is how this warning reached 46% of one deployment's container
+> log, rolling away the older entries that were the evidence needed to
+> diagnose it (issue #2100). Any repeats the cap withholds are reported as a
+> summary line, so the cap is not silent while that tree keeps replaying, and
+> a leaf partition reporting over budget for the FIRST time is exempt from it,
+> so a newly appearing condition still surfaces promptly. That summary is
+> carried by a later occurrence on the tree, so a tree's final withheld tally
+> goes unreported once the condition resolves or the leaf deactivates; the
+> counter below is the exact census for that case. The
 > `orleans.lattice.leaf.activation_replays_over_budget` counter is tagged
 > `tree` and `partition` only - leaf count is unbounded, so it cannot be a
 > metric dimension - which means the counter measures the rate and the log
