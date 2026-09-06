@@ -113,6 +113,32 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
     /// </summary>
     private readonly ConcurrentDictionary<string, SymbolGapScanBackoff> _symbolGapScanBackoff = new();
 
+    /// <summary>
+    /// The source keys the previous pass's gap back-fill embedded AND recorded as
+    /// landed, kept per repository so the next pass can tell whether its own
+    /// selection is new work or the same work over again.
+    /// <para>
+    /// This is the arm's real loop detector, and it exists because the obvious one
+    /// does not fire. <see cref="MaxConsecutiveBatchFailures"/> watches for batches
+    /// that FAIL, but the re-embed loop is built entirely out of batches that
+    /// SUCCEED: the embed completes, the vectors store, the membership write
+    /// returns, the source is reported landed - and the next pass's probe still
+    /// cannot see the flag, because the membership tree is so far beyond its WAL
+    /// replay budget that the write is not observable by the time the next pass
+    /// asks. Nothing on the failure path ever trips, so the arm re-selects the same
+    /// sources forever while believing every pass succeeded (issues #2071, #2078).
+    /// </para>
+    /// <para>
+    /// Re-selecting a source this pass that the LAST pass already landed is
+    /// therefore the signature to watch: it means the flag write did not stick, and
+    /// no amount of repeating it will help. Backing off then is what breaks the
+    /// cycle, because the re-embeds are themselves the write load keeping the tree
+    /// from draining - stopping lets replay catch up, which is what makes the flags
+    /// observable again.
+    /// </para>
+    /// </summary>
+    private readonly ConcurrentDictionary<string, IReadOnlySet<string>> _lastGapLanded = new();
+
     /// <summary>Creates the embedding vector ingestor.</summary>
     /// <param name="writer">The writer that persists vectors onto the reserved trees. Must not be <see langword="null"/>.</param>
     /// <param name="grainFactory">The grain factory used to enumerate the symbol tree for symbol embedding. Must not be <see langword="null"/>.</param>
@@ -376,6 +402,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         var prefix = RepoContextKeys.SymbolsPrefix(repoId);
         var sources = new List<EmbeddingSource>();
 
+        // The sources this pass selected because their flag was missing, as opposed
+        // to because the reconcile changed them. Only these can evidence the loop:
+        // a changed symbol is legitimately re-embedded every time it changes.
+        var gapSelected = new HashSet<string>(StringComparer.Ordinal);
+
         string? token = null;
         var probeFailures = 0;
         Exception? firstProbeFailure = null;
@@ -434,7 +465,8 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 }
 
                 var sourceKey = record.Key;
-                if (!changed.Contains(sourceKey)
+                var selectedByGapScan = !changed.Contains(sourceKey);
+                if (selectedByGapScan
                     && (skipGapScan || embeddedMembers.Contains(VectorCodec.SourceId(sourceKey))))
                 {
                     continue;
@@ -444,6 +476,11 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     continue;
+                }
+
+                if (selectedByGapScan)
+                {
+                    gapSelected.Add(sourceKey);
                 }
 
                 sources.Add(new EmbeddingSource(sourceKey, new[] { text }));
@@ -470,7 +507,29 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         var symbolsEmbedded = outcome.Landed.Count;
-        RecordSymbolGapScanOutcome(repoId, outcome.Saturated, skipGapScan);
+
+        // A pass whose gap selection repeats what the last pass already landed is
+        // the re-embed loop, however successful each individual batch looked.
+        var repeated = DetectStalledGapProgress(repoId, gapSelected, skipGapScan);
+        RecordSymbolGapScanOutcome(repoId, outcome.Saturated || repeated, skipGapScan);
+
+        // Remember only what THIS pass both selected via the gap scan and landed, so
+        // the next pass compares against work that genuinely reported success. A
+        // skipped pass ran no gap scan and must not overwrite the record, or the
+        // evidence of the loop would be erased by the backoff that detected it.
+        if (!skipGapScan)
+        {
+            var landedFromGap = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var sourceKey in outcome.Landed)
+            {
+                if (gapSelected.Contains(sourceKey))
+                {
+                    landedFromGap.Add(sourceKey);
+                }
+            }
+
+            _lastGapLanded[repoId] = landedFromGap;
+        }
 
         // Same rule as the batch boundary: a pass that achieved nothing at all
         // still has to surface its fault, but one that made progress counts as
@@ -486,6 +545,65 @@ internal sealed class EmbeddingRepoContextVectorIngestor : IRepoContextVectorIng
         }
 
         return symbolsEmbedded;
+    }
+
+    /// <summary>
+    /// Reports whether this pass's gap selection repeats work the previous pass
+    /// already landed, which is the signature of the re-embed loop.
+    /// <para>
+    /// A source the last pass embedded, stored, and recorded membership for should
+    /// not appear in this pass's gap selection at all - its flag is supposed to be
+    /// visible now. When a substantial share of them reappear, the membership
+    /// writes are not becoming observable and repeating them cannot help, so the
+    /// arm treats it exactly like saturation and stands down for a few passes.
+    /// </para>
+    /// <para>
+    /// The threshold is a majority rather than any single repeat, because a handful
+    /// of legitimate stragglers (a write that raced this pass's probe, a source
+    /// re-changed in between) must not be mistaken for the loop. The loop shows up
+    /// as nearly the whole set returning, pass after pass.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository whose pass is being judged.</param>
+    /// <param name="gapSelected">The source keys this pass selected because their flag was missing.</param>
+    /// <param name="skippedGapScan">Whether this pass skipped its gap scan, in which case it carries no evidence.</param>
+    /// <returns><see langword="true"/> when the selection repeats the previous pass's landed work.</returns>
+    private bool DetectStalledGapProgress(
+        string repoId, HashSet<string> gapSelected, bool skippedGapScan)
+    {
+        // A skipped pass never ran the selection, so an empty set is an artefact of
+        // the backoff rather than evidence about the plane.
+        if (skippedGapScan
+            || gapSelected.Count == 0
+            || !_lastGapLanded.TryGetValue(repoId, out var previouslyLanded)
+            || previouslyLanded.Count == 0)
+        {
+            return false;
+        }
+
+        var repeats = 0;
+        foreach (var sourceKey in previouslyLanded)
+        {
+            if (gapSelected.Contains(sourceKey))
+            {
+                repeats++;
+            }
+        }
+
+        if (repeats * 2 < previouslyLanded.Count)
+        {
+            return false;
+        }
+
+        _logger.LogWarning(
+            "Repo {RepoId}: {Repeats} of the {Landed} symbol(s) the previous pass embedded AND recorded are being "
+            + "selected again, so the membership writes are not becoming observable and re-embedding them cannot "
+            + "help. Treating this as a saturated plane and standing the gap back-fill down.",
+            repoId,
+            repeats,
+            previouslyLanded.Count);
+
+        return true;
     }
 
     /// <summary>
