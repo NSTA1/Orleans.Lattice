@@ -782,9 +782,29 @@ internal sealed partial class BPlusLeafGrain
     /// copy of a trimmed prefix (rehydrate) or redundant against an intact
     /// WAL (decline). Mirrors the #945 fall-off guard's coordinator
     /// resolution (<c>{treeId}/{partition}</c>, <c>GetTailOffsetAsync</c>).
-    /// A transient coordinator failure is swallowed and treated as "not
-    /// trimmed": the caller then declines the at/behind snapshot and the
-    /// normal WAL replay (plus the #945 guard) still protects against loss.
+    /// A coordinator failure is swallowed and treated as "not trimmed" for
+    /// that partition: the caller then declines the at/behind snapshot and
+    /// the normal WAL replay (plus the #945 guard) still protects against
+    /// loss.
+    /// <para>
+    /// Each partition is probed independently (issue #2082). A single
+    /// faulting coordinator previously aborted the whole probe, so one slow
+    /// partition reported the entire tree as untrimmed even when later
+    /// partitions had advanced tails - and because this probe is itself a
+    /// grain call into the tree being replayed, it is most likely to fault
+    /// on exactly the saturated tree where declining costs a full replay
+    /// from offset zero. That made the decline self-reinforcing. Faults are
+    /// now confined to the partition that raised them.
+    /// </para>
+    /// <para>
+    /// The decline itself is deliberately unchanged: "could not probe" and
+    /// "probed everything, all genuinely zero" both return
+    /// <see langword="false"/>, because a probe that could not prove a
+    /// prefix was trimmed must never be read as proof that it was. The
+    /// distinction is surfaced in the log rather than in the return value,
+    /// so durability semantics are identical and only the diagnosis
+    /// improves.
+    /// </para>
     /// </summary>
     private async Task<bool> AnyPartitionWalPrefixTrimmedAsync(CancellationToken cancellationToken)
     {
@@ -792,11 +812,31 @@ internal sealed partial class BPlusLeafGrain
         if (string.IsNullOrEmpty(treeId))
             return false;
 
+        int partitionCount;
         try
         {
             var resolved = await GetOptionsAsync();
-            var partitionCount = Math.Max(1, resolved.WalPartitions);
-            for (var partition = 0; partition < partitionCount; partition++)
+            partitionCount = Math.Max(1, resolved.WalPartitions);
+        }
+        catch (Exception ex)
+        {
+            // Without the partition count there is nothing to probe, so this
+            // one genuinely ends the probe rather than a single partition.
+            ResolveLogger()?.LogWarning(
+                ex,
+                "Leaf {GrainId}: could not resolve the WAL partition count for tree '{TreeId}', so the "
+                + "prefix-trimmed probe could not run and the snapshot rehydrate declines. If this repeats, "
+                + "the leaf is replaying its whole WAL window on every activation.",
+                context.GrainId,
+                treeId);
+            return false;
+        }
+
+        var unprobed = 0;
+        Exception? firstFault = null;
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            try
             {
                 var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                     $"{treeId}/{partition}");
@@ -804,10 +844,35 @@ internal sealed partial class BPlusLeafGrain
                 if (tail > 0)
                     return true;
             }
+            catch (OperationCanceledException)
+            {
+                // The activation is going away; further probes cannot help.
+                return false;
+            }
+            catch (Exception ex)
+            {
+                // Confine the fault to this partition and keep probing: a
+                // later partition may well have a trimmed prefix, and missing
+                // it costs a full replay.
+                unprobed++;
+                firstFault ??= ex;
+            }
         }
-        catch
+
+        if (unprobed > 0)
         {
-            return false;
+            ResolveLogger()?.LogWarning(
+                firstFault,
+                "Leaf {GrainId}: {Unprobed} of {Partitions} WAL partition(s) of tree '{TreeId}' could not be "
+                + "probed for a trimmed prefix, and no probed partition reported one, so the snapshot "
+                + "rehydrate declines and this activation replays from the oldest readable offset. This is a "
+                + "safe outcome but an expensive one, and it is NOT evidence that no prefix was trimmed - the "
+                + "unprobed partitions are simply unknown. Repeats on a saturated tree are self-reinforcing, "
+                + "because the probe is itself a call into the tree being replayed.",
+                context.GrainId,
+                unprobed,
+                partitionCount,
+                treeId);
         }
 
         return false;
