@@ -265,9 +265,12 @@ internal static class PolicyEvaluator
     /// <summary>
     /// <c>true</c> when <paramref name="subject"/> can read at least one key of
     /// <paramref name="treeId"/> under <paramref name="operation"/> - the
-    /// structural "any grant" signal that existence-hiding needs. A non-anonymous
-    /// subject reads by default when the tree's default effect is allow; otherwise
-    /// it needs at least one allow rule whose effective decision at its own scope
+    /// structural "any grant" signal that existence-hiding needs. Under default
+    /// allow a subject reads every tree it is not explicitly denied on - unless a
+    /// whole-tree deny with no allow carve-out removes the entire keyspace, which
+    /// enforcement resolves as a deny for every key, so the probe hides the tree
+    /// too rather than out-reaching the enforcement decision. Otherwise the subject
+    /// needs at least one allow rule whose effective decision at its own scope
     /// resolves to allow (see <see cref="CompiledTree.HasAnyResolvedAllow"/>). This
     /// distinguishes a partial (prefix) grant - which must keep the tree visible -
     /// from no grant at all, which a plain collection decision cannot do (that is
@@ -282,8 +285,24 @@ internal static class PolicyEvaluator
     {
         if (options.DefaultEffect == LatticeEffect.Allow)
         {
-            // Default-allow: a non-anonymous subject can read every tree it is not
-            // explicitly denied on, so it can always read at least one key.
+            // Default-allow: a subject reads every tree it is not explicitly denied
+            // on. But a whole-tree deny with no allow carve-out removes the entire
+            // keyspace - enforcement resolves that tree-wide deny for every key, so
+            // the subject can read nothing. An existence probe must never out-reach
+            // that enforcement decision (see PolicyAccessGate), so hide such a tree
+            // rather than reporting a grant the subject does not have.
+            if (policy.TryGetTree(treeId, out var deniedTree) && deniedTree is not null)
+            {
+                var treeWide = deniedTree.ResolvePoint(
+                    subject, operation, key: null, options.UserRuleBeatsGroupRuleAtEqualScope);
+                if (treeWide.Matched
+                    && treeWide.Effect == LatticeEffect.Deny
+                    && !deniedTree.HasAnyResolvedAllow(subject, operation, options.UserRuleBeatsGroupRuleAtEqualScope))
+                {
+                    return false;
+                }
+            }
+
             return true;
         }
 

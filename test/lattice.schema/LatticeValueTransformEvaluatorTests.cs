@@ -64,6 +64,20 @@ public sealed partial class LatticeValueTransformEvaluatorTests
     }
 
     [Test]
+    public void Member_read_matches_the_input_property_case_insensitively()
+    {
+        // The documented contract for a member read is ordinal, case-insensitive
+        // (LatticeValueTransform.Member), mirroring the predicate evaluator, so a
+        // read of "Name" must resolve the input document's "name" member.
+        var transform = LatticeValueTransform.Passthrough(
+            LatticeValueTransform.SetMember("copy", LatticeValueTransform.Member("Name")));
+
+        var root = Evaluate("{\"name\":\"alice\"}", transform);
+
+        Assert.That(root.GetProperty("copy").GetString(), Is.EqualTo("alice"));
+    }
+
+    [Test]
     public void SetMember_reads_original_input_not_prior_overwrite()
     {
         // Reads resolve against the input document, so overwriting "a" first does

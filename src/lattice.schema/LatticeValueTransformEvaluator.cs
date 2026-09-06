@@ -46,7 +46,9 @@ internal static class LatticeValueTransformEvaluator
         JsonNode? input;
         try
         {
-            input = JsonNode.Parse(value);
+            input = JsonNode.Parse(
+                value,
+                nodeOptions: new JsonNodeOptions { PropertyNameCaseInsensitive = true });
         }
         catch (JsonException ex)
         {
