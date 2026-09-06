@@ -116,10 +116,20 @@ public sealed class TenantWalPlacementClusterFixture
     /// itself uses). The WAL routing and partition-provider machinery is identical to
     /// the public path, so this observes exactly the placement the resolver pinned.
     /// </summary>
+    /// <remarks>
+    /// Resolved from the <b>silo's own</b> grain factory rather than the external
+    /// test client. <see cref="ISystemLattice"/> asserts internal origin (issue
+    /// #2062), and this fixture's silo registers the auth add-on, so the
+    /// capability-stripping filter strips the internal-origin marker from a call
+    /// arriving over the external client and the surface correctly refuses it. The
+    /// silo's hosted client is inside the trust boundary, which is the origin the
+    /// production caller of this surface - the registry, running in-silo - actually
+    /// has, so this addresses the tree exactly as production does.
+    /// </remarks>
     internal ISystemLattice SystemTree(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
-        return Cluster.Client.GetGrain<ISystemLattice>(treeId);
+        return SiloServices.GetRequiredService<IGrainFactory>().GetGrain<ISystemLattice>(treeId);
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator
