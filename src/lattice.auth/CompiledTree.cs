@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Runtime.InteropServices;
 
 namespace Orleans.Lattice.Auth;
 
@@ -278,8 +279,15 @@ internal sealed class CompiledTree
     /// <returns>The compiled tree index.</returns>
     public static CompiledTree Build(IReadOnlyList<LatticeAuthorizationRule> rules)
     {
-        Dictionary<string, List<CompiledRule>>? exactBuilder = null;
-        Dictionary<string, List<CompiledRule>>? prefixBuilder = null;
+        // Buckets are held as arrays rather than List<CompiledRule> because the
+        // overwhelmingly common scope carries exactly one rule. A list bucket
+        // cost three allocations per scope key - the List, the four-slot backing
+        // array its first Add grows, and the ToArray copy at freeze time - where
+        // an array bucket costs exactly one. Appending to an array is O(k) per
+        // rule, but k is the number of rules sharing one exact key or prefix,
+        // which is one or two in any real policy.
+        Dictionary<string, CompiledRule[]>? exactBuilder = null;
+        Dictionary<string, CompiledRule[]>? prefixBuilder = null;
         List<CompiledRule>? treeBuilder = null;
 
         foreach (var rule in rules)
@@ -288,11 +296,11 @@ internal sealed class CompiledTree
             switch (rule.Scope.Kind)
             {
                 case LatticeScopeKind.Key:
-                    exactBuilder ??= new Dictionary<string, List<CompiledRule>>(StringComparer.Ordinal);
+                    exactBuilder ??= new Dictionary<string, CompiledRule[]>(StringComparer.Ordinal);
                     Append(exactBuilder, rule.Scope.KeyOrPrefix!, compiled);
                     break;
                 case LatticeScopeKind.Prefix:
-                    prefixBuilder ??= new Dictionary<string, List<CompiledRule>>(StringComparer.Ordinal);
+                    prefixBuilder ??= new Dictionary<string, CompiledRule[]>(StringComparer.Ordinal);
                     Append(prefixBuilder, rule.Scope.KeyOrPrefix!, compiled);
                     break;
                 default:
@@ -313,44 +321,56 @@ internal sealed class CompiledTree
         }
         else
         {
-            prefixes = prefixBuilder.Keys.ToArray();
-            Array.Sort(prefixes, StringComparer.Ordinal);
+            // Materialise the prefix key and its rule array in the same pass and
+            // sort the two arrays together. The previous shape sorted the keys
+            // alone and then hashed every one of them back through the builder
+            // to fetch its bucket - a full dictionary lookup per prefix that the
+            // enumeration had already handed us for free.
+            prefixes = new string[prefixBuilder.Count];
             prefixRules = new CompiledRule[prefixes.Length][];
-            for (var i = 0; i < prefixes.Length; i++)
+            var next = 0;
+            foreach (var (prefix, bucket) in prefixBuilder)
             {
-                prefixRules[i] = prefixBuilder[prefixes[i]].ToArray();
+                prefixes[next] = prefix;
+                prefixRules[next] = bucket;
+                next++;
             }
+
+            // Keys are unique, so the ordinal ordering the longest-prefix binary
+            // search depends on is total and the paired sort is deterministic.
+            Array.Sort(prefixes, prefixRules, StringComparer.Ordinal);
         }
 
         var treeRules = treeBuilder is null ? Array.Empty<CompiledRule>() : treeBuilder.ToArray();
         return new CompiledTree(exact, prefixes, prefixRules, treeRules);
     }
 
-    private static void Append(Dictionary<string, List<CompiledRule>> builder, string key, CompiledRule rule)
+    private static void Append(Dictionary<string, CompiledRule[]> builder, string key, CompiledRule rule)
     {
-        if (!builder.TryGetValue(key, out var list))
+        // One hash per rule instead of two: `GetValueRefOrAddDefault` hands back
+        // the slot it just probed, so the miss branch fills that slot directly
+        // rather than re-hashing the key through the indexer. Nothing mutates
+        // `builder` while the ref is live, so the ref stays valid.
+        ref var bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(builder, key, out var existed);
+        if (!existed)
         {
-            list = new List<CompiledRule>();
-            builder[key] = list;
+            bucket = [rule];
+            return;
         }
 
-        list.Add(rule);
+        // Append order is the rule declaration order the previous list bucket
+        // preserved, which decides ties in TryBestInBucket.
+        Array.Resize(ref bucket, bucket!.Length + 1);
+        bucket[^1] = rule;
     }
 
-    private static FrozenDictionary<string, CompiledRule[]> Freeze(Dictionary<string, List<CompiledRule>>? builder)
+    private static FrozenDictionary<string, CompiledRule[]> Freeze(Dictionary<string, CompiledRule[]>? builder)
     {
-        if (builder is null)
-        {
-            return EmptyExact;
-        }
-
-        var frozen = new Dictionary<string, CompiledRule[]>(builder.Count, StringComparer.Ordinal);
-        foreach (var (key, list) in builder)
-        {
-            frozen[key] = list.ToArray();
-        }
-
-        return frozen.ToFrozenDictionary(StringComparer.Ordinal);
+        // Buckets are already in their final array form, so the frozen map is
+        // built straight from the builder. That both skips the per-bucket
+        // ToArray copy this used to make and takes the Dictionary-source fast
+        // path, where the selector overload would have re-projected every entry.
+        return builder is null ? EmptyExact : builder.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
     private static readonly FrozenDictionary<string, CompiledRule[]> EmptyExact =
