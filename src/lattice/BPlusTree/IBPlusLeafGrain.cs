@@ -268,6 +268,63 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetPrevSiblingAsync(GrainId? siblingId);
 
     /// <summary>
+    /// Returns, in one round trip, everything the shard root needs to decide
+    /// whether this leaf may be folded out of the leaf chain: its live row
+    /// count, its chain linkage, its owned key range, and whether it carries
+    /// state that forbids reclaim however empty it looks.
+    /// <para>
+    /// A reclaim pass walks the whole chain, so gathering these as separate
+    /// accessor calls would multiply the walk by the number of accessors.
+    /// </para>
+    /// </summary>
+    Task<LeafReclaimProbe> GetReclaimProbeAsync();
+
+    /// <summary>
+    /// Atomically points this leaf past <paramref name="expectedNext"/> and
+    /// widens its owned range to cover what that successor gave up, and
+    /// returns whether it did.
+    /// <para>
+    /// The compare half is what makes empty-leaf reclaim safe against a
+    /// concurrent split. Reclaim is a multi-grain sequence while the split
+    /// gate is per-grain, so a split of this leaf can land between a caller
+    /// reading the sibling pointer and writing it; that split inserts a new
+    /// leaf between this one and the successor being removed, and a blind
+    /// write would point past it, orphaning a leaf holding the rows the split
+    /// had just moved into it. When <see cref="GetNextSiblingAsync"/> would no
+    /// longer return <paramref name="expectedNext"/>, this declines and
+    /// changes nothing.
+    /// </para>
+    /// <para>
+    /// The unlink and the widen share one persist deliberately. Performed as
+    /// two writes there is a window in which this leaf has taken over routing
+    /// for the vacated range while still declaring the narrower span the WAL
+    /// materialiser filters by, so a write landing in that window survives in
+    /// cache and vanishes on the next projection rebuild. The widen is
+    /// monotonic, so a re-driven reclaim converges.
+    /// </para>
+    /// </summary>
+    Task<bool> TryUnlinkSuccessorAsync(
+        GrainId expectedNext,
+        GrainId? newNext,
+        string? absorbHighKeyExclusive);
+
+    /// <summary>
+    /// Extends this leaf's exclusive high bound to cover the range vacated by
+    /// a successor that is being reclaimed from the chain, passing
+    /// <see langword="null"/> when that successor was the chain tail.
+    /// <para>
+    /// The operation widens only and never narrows, which makes it idempotent:
+    /// a reclaim re-driven after a crash converges rather than walking the
+    /// bound back over a range this leaf has since been given. It is the
+    /// counterpart of the donor's bound narrowing in
+    /// <see cref="Grains.BPlusLeafGrain"/>'s split completion, and it must run
+    /// before the successor leaves the routing table so that no key is
+    /// momentarily owned by nobody.
+    /// </para>
+    /// </summary>
+    Task AbsorbSuccessorRangeAsync(string? highKeyExclusive);
+
+    /// <summary>
     /// Associates this leaf with a tree, enabling named options resolution.
     /// Called once by the shard root after creating the grain. Idempotent.
     /// </summary>
