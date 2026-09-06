@@ -1,7 +1,9 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Lattice.Api.Mcp.RepoContext.Tests.Harness;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Serialization;
@@ -414,8 +416,20 @@ public sealed partial class RepoContextBootstrapServicePassTests
         private readonly Serializer<FileNode> _fileNodes =
             SerializerServices.GetRequiredService<Serializer<FileNode>>();
 
+        // The service is always given a capturing logger so a test can assert on the
+        // diagnostic lines a pass emits. It is passive (records only) and changes no
+        // behaviour, so every existing test that ignores logs is unaffected.
+        private readonly CapturingLoggerProvider _logProvider = new();
+        private readonly ILoggerFactory _loggerFactory;
+
         internal BootstrapHarness(TimeProvider? timeProvider = null, RepoContextIndexingOptions? options = null)
         {
+            _loggerFactory = LoggerFactory.Create(builder =>
+            {
+                builder.SetMinimumLevel(LogLevel.Trace);
+                builder.AddProvider(_logProvider);
+            });
+
             RepoRoot = Path.Combine(Path.GetTempPath(), "lattice-rcbootstrap-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(RepoRoot);
 
@@ -505,7 +519,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
                 new RepoContextWorkspaceGuard([]),
                 timeProvider ?? TimeProvider.System,
                 options ?? new RepoContextIndexingOptions(),
-                NullLogger<RepoContextBootstrapService>.Instance);
+                _loggerFactory.CreateLogger<RepoContextBootstrapService>());
         }
 
         internal string RepoRoot { get; }
@@ -521,6 +535,9 @@ public sealed partial class RepoContextBootstrapServicePassTests
         internal IRepoContextVectorIngestor VectorIngestor { get; }
 
         internal RepoContextBootstrapService Service { get; }
+
+        /// <summary>Every diagnostic line the service emitted, in log order.</summary>
+        internal IReadOnlyCollection<CapturedLogEntry> LogEntries => _logProvider.Entries;
 
         internal RecordingSink Progress { get; } = new();
 
@@ -615,6 +632,7 @@ public sealed partial class RepoContextBootstrapServicePassTests
 
         public void Dispose()
         {
+            _loggerFactory.Dispose();
             try
             {
                 Directory.Delete(RepoRoot, recursive: true);
