@@ -27,7 +27,14 @@ name: UI Tests
 # silently degrade to '*.md' and fail to match nested files.
 on:
   pull_request:
-    branches: [main]
+    # Branch list mirrors ci.yml; the rationale for the '*/epic/**' pattern is
+    # documented there and in .github/copilot-instructions.md, and is not
+    # restated here. Without it an epic sub-PR that touches the Explorer UI
+    # would get no browser-driven signal at all. The paths filter below is
+    # unchanged, so unrelated sub-PRs still never provision a browser, and the
+    # pending-forever concern noted above cannot arise on an epic branch
+    # because epic branches deliberately carry no required checks.
+    branches: [main, '*/epic/**']
     paths:
       - 'src/lattice.explorer/**'
       - '!src/lattice.explorer/**/*.md'

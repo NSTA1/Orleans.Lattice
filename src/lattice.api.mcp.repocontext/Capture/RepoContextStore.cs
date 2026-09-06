@@ -24,7 +24,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// re-writes the entry with a short time-to-live so it lapses on its own.
 /// </para>
 /// </summary>
-internal sealed class RepoContextStore
+internal sealed partial class RepoContextStore
 {
     private const int MaxPageSize = 500;
     private const int DefaultPageSize = 100;
@@ -466,7 +466,7 @@ internal sealed class RepoContextStore
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The write outcome.</returns>
     /// <exception cref="McpException">A required argument is empty, the TTL is not positive, or a link target is malformed.</exception>
-    public async Task<RepoContextRememberResult> RememberAsync(
+    public Task<RepoContextRememberResult> RememberAsync(
         string repoId,
         string topic,
         string? id,
@@ -480,6 +480,53 @@ internal sealed class RepoContextStore
         IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         long? ttlSeconds,
         CancellationToken cancellationToken)
+        => RememberAsync(
+            repoId, topic, id, kind, title, body, author, provenance,
+            tags, addLinks, removeLinks, ttlSeconds, fencingToken: null, cancellationToken);
+
+    /// <summary>
+    /// Creates or merges a memory entry, presenting <paramref name="fencingToken"/>
+    /// as proof of the caller's claim on the entry.
+    /// <para>
+    /// The fencing check is applied to the stored record before the merge, so a
+    /// caller whose claim has been superseded is refused here rather than winning a
+    /// silent last-writer-wins race. A record nothing has claimed admits the write
+    /// whether or not a token is presented, which is what leaves every unclaimed
+    /// entry behaving exactly as it did before claims existed.
+    /// </para>
+    /// </summary>
+    /// <param name="repoId">The repository identifier. Must be non-empty.</param>
+    /// <param name="topic">The topic bucket. Must be non-empty.</param>
+    /// <param name="id">The per-topic id, or <see langword="null"/> to generate one.</param>
+    /// <param name="kind">The memory kind applied on creation.</param>
+    /// <param name="title">An optional last-writer-wins title.</param>
+    /// <param name="body">An optional last-writer-wins body.</param>
+    /// <param name="author">An optional last-writer-wins author.</param>
+    /// <param name="provenance">An optional last-writer-wins provenance descriptor.</param>
+    /// <param name="tags">Optional tags to add to the entry's set.</param>
+    /// <param name="addLinks">Optional knowledge-linking edges to add (relation to target keys).</param>
+    /// <param name="removeLinks">Optional knowledge-linking edges to remove (relation to target keys).</param>
+    /// <param name="ttlSeconds">An explicit time-to-live in seconds, or <see langword="null"/>.</param>
+    /// <param name="fencingToken">The fencing token from <c>repocontext_claim</c>, or <see langword="null"/> to write unfenced.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The write outcome.</returns>
+    /// <exception cref="McpException">A required argument is empty, the TTL is not positive, or a link target is malformed.</exception>
+    /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
+    public async Task<RepoContextRememberResult> RememberAsync(
+        string repoId,
+        string topic,
+        string? id,
+        MemoryKind kind,
+        string? title,
+        string? body,
+        string? author,
+        string? provenance,
+        IReadOnlyList<string>? tags,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
+        long? ttlSeconds,
+        long? fencingToken,
+        CancellationToken cancellationToken)
     {
         RequireNonEmpty(repoId, "repoId");
         RequireNonEmpty(topic, "topic");
@@ -492,6 +539,7 @@ internal sealed class RepoContextStore
 
         var existing = RepoContextMemoryCodec.Fold(
             await tree.GetAsync(key, cancellationToken).ConfigureAwait(false), _serializer);
+        EnforceFence(key, existing, fencingToken);
         var created = existing is null;
 
         var delta = new MemoryRecord
@@ -599,7 +647,7 @@ internal sealed class RepoContextStore
     /// <param name="cancellationToken">Cancels the read-merge-write.</param>
     /// <returns>The patch outcome.</returns>
     /// <exception cref="McpException">The key is malformed, no record exists at it, a field is invalid, or a link target is malformed.</exception>
-    public async Task<RepoContextUpdateResult> UpdateAsync(
+    public Task<RepoContextUpdateResult> UpdateAsync(
         string key,
         IReadOnlyDictionary<string, string>? fields,
         IReadOnlyList<string>? addTags,
@@ -607,8 +655,42 @@ internal sealed class RepoContextStore
         IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
         CancellationToken cancellationToken)
+        => UpdateAsync(key, fields, addTags, removeTags, addLinks, removeLinks, fencingToken: null, cancellationToken);
+
+    /// <summary>
+    /// Patches a record while presenting <paramref name="fencingToken"/> as proof of
+    /// the caller's claim on it.
+    /// <para>
+    /// This is the seam that makes a claim load-bearing rather than advisory: the
+    /// stored record is checked against the presented token before the patch is
+    /// merged, so a superseded holder is refused at the point of write. Only memory
+    /// records can be claimed, so presenting a token for any other family is an
+    /// error rather than a silently ignored argument.
+    /// </para>
+    /// </summary>
+    /// <param name="key">The full repository-context key. Must address an existing record.</param>
+    /// <param name="fields">The scalar field patches (field name to value), or <see langword="null"/>.</param>
+    /// <param name="addTags">Tags to add, or <see langword="null"/>.</param>
+    /// <param name="removeTags">Tags to remove, or <see langword="null"/>.</param>
+    /// <param name="addLinks">Knowledge-linking edges to add (relation to target keys), or <see langword="null"/>. Memory records only.</param>
+    /// <param name="removeLinks">Knowledge-linking edges to remove (relation to target keys), or <see langword="null"/>. Memory records only.</param>
+    /// <param name="fencingToken">The fencing token from <c>repocontext_claim</c>, or <see langword="null"/> to write unfenced.</param>
+    /// <param name="cancellationToken">Cancels the read-merge-write.</param>
+    /// <returns>The patch outcome.</returns>
+    /// <exception cref="McpException">The key is malformed, no record exists at it, a field is invalid, a link target is malformed, or a token was presented for a non-memory record.</exception>
+    /// <exception cref="RepoContextClaimConflictException">The record is claimed and the presented token does not entitle this write.</exception>
+    public async Task<RepoContextUpdateResult> UpdateAsync(
+        string key,
+        IReadOnlyDictionary<string, string>? fields,
+        IReadOnlyList<string>? addTags,
+        IReadOnlyList<string>? removeTags,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? addLinks,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? removeLinks,
+        long? fencingToken,
+        CancellationToken cancellationToken)
     {
         var parsed = ParseKey(key);
+        RejectFenceOnNonMemory(key, parsed.Kind, fencingToken);
         var tree = Tree(RepoContextTrees.ForKind(parsed.Kind));
 
         var versioned = await tree.GetWithVersionAsync(key, cancellationToken).ConfigureAwait(false);
@@ -625,9 +707,19 @@ internal sealed class RepoContextStore
         // values are serialized MemoryRecords; fold them to a single record and hand
         // the re-serialized bytes to the patcher, which expects one record. Every
         // other family stores a single whole record, so its bytes patch directly.
-        var patchInput = parsed.Kind == RepoContextRecordKind.Memory
-            ? _serializer.SerializeToArray(RepoContextMemoryCodec.Fold(existing, _serializer)!)
-            : existing;
+        // The fold is also what the fencing check reads, so a claimed record is
+        // judged against the same value the patch is about to merge into.
+        byte[] patchInput;
+        if (parsed.Kind == RepoContextRecordKind.Memory)
+        {
+            var folded = RepoContextMemoryCodec.Fold(existing, _serializer)!;
+            EnforceFence(key, folded, fencingToken);
+            patchInput = _serializer.SerializeToArray(folded);
+        }
+        else
+        {
+            patchInput = existing;
+        }
 
         var patch = RepoContextRecordEditor.Patch(
             parsed, patchInput, fields, addTags, removeTags, addLinks, removeLinks, clock, _serializer, capturedDigests);
@@ -680,14 +772,46 @@ internal sealed class RepoContextStore
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The forget outcome.</returns>
     /// <exception cref="McpException">The key is malformed, or the lapse window is not positive.</exception>
-    public async Task<RepoContextForgetResult> ForgetAsync(
+    public Task<RepoContextForgetResult> ForgetAsync(
         string key,
         bool lapse,
         long? lapseSeconds,
         CancellationToken cancellationToken)
+        => ForgetAsync(key, lapse, lapseSeconds, fencingToken: null, cancellationToken);
+
+    /// <summary>
+    /// Forgets the entry at <paramref name="key"/> while presenting
+    /// <paramref name="fencingToken"/> as proof of the caller's claim on it. A
+    /// forget is the most destructive write on the surface, so it is fenced exactly
+    /// as a patch is: a claimed entry cannot be removed by a caller whose claim has
+    /// been superseded, nor by one holding no claim at all.
+    /// </summary>
+    /// <param name="key">The full repository-context key. Must be well-formed.</param>
+    /// <param name="lapse">When <see langword="true"/> soft-lapse; otherwise hard delete.</param>
+    /// <param name="lapseSeconds">The lapse window in seconds, or <see langword="null"/> for the default.</param>
+    /// <param name="fencingToken">The fencing token from <c>repocontext_claim</c>, or <see langword="null"/> to write unfenced.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The forget outcome.</returns>
+    /// <exception cref="McpException">The key is malformed, the lapse window is not positive, or a token was presented for a non-memory record.</exception>
+    /// <exception cref="RepoContextClaimConflictException">The entry is claimed and the presented token does not entitle this write.</exception>
+    public async Task<RepoContextForgetResult> ForgetAsync(
+        string key,
+        bool lapse,
+        long? lapseSeconds,
+        long? fencingToken,
+        CancellationToken cancellationToken)
     {
         var parsed = ParseKey(key);
+        RejectFenceOnNonMemory(key, parsed.Kind, fencingToken);
         var tree = Tree(RepoContextTrees.ForKind(parsed.Kind));
+
+        if (parsed.Kind == RepoContextRecordKind.Memory)
+        {
+            EnforceFence(
+                key,
+                await ReadMemoryAsync(tree, key, cancellationToken).ConfigureAwait(false),
+                fencingToken);
+        }
 
         if (!lapse)
         {

@@ -564,6 +564,9 @@ synonyms (`decision` vs `decisions`):
 - `conventions` - a project norm not obvious from a single file.
 - `glossary` - a domain term.
 - `todo` - a cross-session follow-up.
+- `backlog` - an agent-operated work item. Has its own schema, relation
+  vocabulary, and gating rules; see
+  [The agent-operated backlog](#the-agent-operated-backlog).
 - or a stable component/feature name (e.g. `wal`, `replication`).
 
 ### What to capture (and what not)
@@ -675,7 +678,11 @@ with `neighbors` instead of guessing search terms.
   - `related` - a non-hierarchical association.
   - `partOf` - the target is a whole this entry is a component of.
   Author one direction and let the reader infer the inverse; do not write both
-  `broader` and `narrower` for the same pair.
+  `broader` and `narrower` for the same pair. The
+  [backlog](#the-agent-operated-backlog) extends this set with five further
+  relations (`blockedBy`, `anchoredTo`, `claims`, `integrates`, `informs`)
+  under the same discipline. Extend it there, in one documented place, so an
+  audit of memory does not prune a relation it does not recognise.
 - **What to link.** Connect durable concept/glossary entries into a navigable
   graph (e.g. `Orleans.Lattice` --`narrower`--> `WAL`, `CRDT`, `Shard`). Do not
   link transient notes or use links as a second tag system - a link asserts a
@@ -686,6 +693,44 @@ with `neighbors` instead of guessing search terms.
 - `remember(topic: "glossary", id: "wal", title: "Write-ahead log", body: "...")`
 - `remember(topic: "glossary", id: "tree", title: "B+ tree", body: "...", addLinks: { "related": ["repo/{repoId}/mem/glossary/wal"] })`
 - later: `neighbors(key: "repo/{repoId}/mem/glossary/tree", relation: "related")` returns the WAL entry.
+
+## The agent-operated backlog
+
+The `backlog` topic is a specialisation of everything above: ordinary memory
+entries, an extended relation vocabulary, and rules that make the graph safe for
+**several agents to drain concurrently**.
+
+**The protocol itself lives in
+[`samples/AgentBacklog/template/backlog-protocol.md`](../../samples/AgentBacklog/template/backlog-protocol.md)** -
+the item schema, the grouping model, the ready-set computation, mirroring, and
+entry gating. Read it before authoring, claiming, or completing a backlog item.
+It is deliberately kept out of this always-applied file for two reasons: it is
+reference material that most sessions never need, and it is repository-neutral,
+so an adopting repository takes it unchanged. This repository's own backlog
+agents consume that same document, so it cannot rot into a stale copy.
+
+Two rules stay here, because they bind **every** agent that touches memory, not
+only the ones running the backlog. An agent auditing or tidying memory will not
+have read the protocol.
+
+### Backlog relations - never prune these
+
+`blockedBy`, `anchoredTo`, `claims`, `integrates`, and `informs` extend the
+[knowledge-linking vocabulary](#knowledge-linking---typed-edges-between-memory-entries)
+above, alongside `partOf` and `related` used unchanged. They are listed here so
+that tooling which audits memory - the daily Memory Accuracy automation in
+particular - recognises them and **does not prune them as unknown relations**.
+Pruning a `blockedBy` edge silently releases work that was deliberately gated;
+pruning an `anchoredTo` edge silently disables staleness detection on an item.
+
+### Never set a TTL on a backlog item
+
+Expiry is silent and unlogged, so a lapsed item that other items declare
+`blockedBy` starves its dependents invisibly, with no event anywhere to explain
+it. Retire an item deliberately with `forget`. This is a hard exception to the
+"coordination state is time-boxed" rule in
+[Coordination](#coordination---memory-as-a-cross-session-bus): a backlog item is
+a ledger entry, not a handoff.
 
 ## Write-tool safety
 
