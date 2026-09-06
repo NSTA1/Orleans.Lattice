@@ -39,4 +39,47 @@ public sealed record CrdtWriteRequest
 
     /// <summary>The zero-based index for sequence verbs; ignored otherwise.</summary>
     [Id(7)] public int Index { get; init; }
+
+    /// <summary>
+    /// Compares two requests by value, with <see cref="Element"/> compared by
+    /// content. The compiler-generated record equality compares the
+    /// <see cref="byte"/> array with <see cref="EqualityComparer{T}.Default"/>
+    /// (reference equality), so two structurally identical requests - and, in
+    /// particular, a request and its post-serialization self - would otherwise
+    /// never compare equal.
+    /// </summary>
+    /// <param name="other">The request to compare against.</param>
+    public bool Equals(CrdtWriteRequest? other) =>
+        other is not null
+        && string.Equals(TreeId, other.TreeId, StringComparison.Ordinal)
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && Op == other.Op
+        && string.Equals(ReplicaId, other.ReplicaId, StringComparison.Ordinal)
+        && Amount == other.Amount
+        && string.Equals(Field, other.Field, StringComparison.Ordinal)
+        && Index == other.Index
+        && BytesEqual(Element, other.Element);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(TreeId, StringComparer.Ordinal);
+        hash.Add(Key, StringComparer.Ordinal);
+        hash.Add(Op);
+        hash.Add(ReplicaId, StringComparer.Ordinal);
+        hash.Add(Amount);
+        hash.Add(Field, StringComparer.Ordinal);
+        hash.Add(Index);
+        if (Element is { } element)
+        {
+            hash.AddBytes(element);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    private static bool BytesEqual(byte[]? left, byte[]? right) =>
+        ReferenceEquals(left, right)
+        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
