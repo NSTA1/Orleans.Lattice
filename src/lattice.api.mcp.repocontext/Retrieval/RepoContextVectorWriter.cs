@@ -778,6 +778,12 @@ internal sealed class RepoContextVectorWriter
             : new HashSet<string>(resumed.Keys, StringComparer.Ordinal);
         var token = resumed?.ContinuationToken;
 
+        // How many calls this particular walk of the range has taken, counting this
+        // one. It is reported so a caller can log "the range was exhausted after N
+        // pass(es)", which is the signal that distinguishes a scan that is
+        // converging from one that is simply never reached.
+        var passes = (resumed?.Passes ?? 0) + 1;
+
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -797,8 +803,8 @@ internal sealed class RepoContextVectorWriter
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _memoryKeyScans[repoId] = new MemoryKeyMarkerCursor(keys, token);
-                return new RepoContextMemoryKeyMarkers(keys, Complete: false, Fault: ex);
+                _memoryKeyScans[repoId] = new MemoryKeyMarkerCursor(keys, token, passes);
+                return new RepoContextMemoryKeyMarkers(keys, Complete: false, Passes: passes, Fault: ex);
             }
 
             foreach (var record in page.Records)
@@ -825,7 +831,7 @@ internal sealed class RepoContextVectorWriter
                 // The range is walked. Drop the cursor so the next call starts a
                 // fresh full walk and observes markers added or disabled since.
                 _memoryKeyScans.TryRemove(repoId, out _);
-                return new RepoContextMemoryKeyMarkers(keys, Complete: true, Fault: null);
+                return new RepoContextMemoryKeyMarkers(keys, Complete: true, Passes: passes, Fault: null);
             }
 
             token = page.ContinuationToken;
@@ -839,7 +845,8 @@ internal sealed class RepoContextVectorWriter
     /// </summary>
     /// <param name="Keys">The marker keys observed by the pages already walked.</param>
     /// <param name="ContinuationToken">The token to resume the walk from, or <see langword="null"/> to start at the range head.</param>
-    private sealed record MemoryKeyMarkerCursor(IReadOnlySet<string> Keys, string? ContinuationToken);
+    /// <param name="Passes">How many calls this walk of the range has already taken.</param>
+    private sealed record MemoryKeyMarkerCursor(IReadOnlySet<string> Keys, string? ContinuationToken, int Passes);
 
     private Task RemoveMemberAsync(string repoId, string sourceId, CancellationToken cancellationToken)
         => GuardMembershipAsync(async () =>        {

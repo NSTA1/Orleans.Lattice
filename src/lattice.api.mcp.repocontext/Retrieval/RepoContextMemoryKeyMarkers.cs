@@ -44,6 +44,12 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 /// when a page read failed and the walk will resume from its continuation token
 /// on the next call.
 /// </param>
+/// <param name="Passes">
+/// How many calls the current walk of the range has taken, counting the one that
+/// produced this result. A completed scan reporting more than one pass is direct
+/// evidence that banked progress was resumed rather than discarded, which is the
+/// behaviour issue #2071 turns on.
+/// </param>
 /// <param name="Fault">
 /// The fault that stopped an incomplete scan, so the caller can log the real
 /// cause rather than a bare "incomplete"; <see langword="null"/> when the scan
@@ -52,4 +58,5 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext;
 internal sealed record RepoContextMemoryKeyMarkers(
     IReadOnlySet<string> Keys,
     bool Complete,
+    int Passes,
     Exception? Fault);
