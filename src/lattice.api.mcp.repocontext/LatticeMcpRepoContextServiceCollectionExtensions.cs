@@ -190,6 +190,14 @@ public static class LatticeMcpRepoContextServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, RepoContextAnnIndexSweepService>());
 
+        // Surface the derived indexing cadence once at startup. The wall-clock knobs
+        // are converted to pass counts against the reconcile spacing, so they are a
+        // matched set and raising the reconcile interval silently re-denominates the
+        // other two - which can switch directory-mtime pruning off with no error and
+        // nothing in the log. See issue #2075.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, RepoContextIndexingCadenceReporter>());
+
         services.TryAddSingleton<IRepoContextSemanticIndex>(sp =>
         {
             var exact = sp.GetRequiredService<ExactKnnSemanticIndex>();
