@@ -202,10 +202,10 @@ public class ReplicationHighWaterMarkGrainTests
         await grain.TryAdvanceAsync(OriginA, Hlc(10), CancellationToken.None);
         await grain.TryAdvanceAsync(OriginB, Hlc(3), CancellationToken.None);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(grain.GetAsync(OriginA, CancellationToken.None).Result, Is.EqualTo(Hlc(10)));
-            Assert.That(grain.GetAsync(OriginB, CancellationToken.None).Result, Is.EqualTo(Hlc(3)));
+            Assert.That(await grain.GetAsync(OriginA, CancellationToken.None), Is.EqualTo(Hlc(10)));
+            Assert.That(await grain.GetAsync(OriginB, CancellationToken.None), Is.EqualTo(Hlc(3)));
         });
     }
 
@@ -419,10 +419,10 @@ public class ReplicationHighWaterMarkGrainTests
 
         await grain.PinSnapshotAsync(HybridLogicalClock.Zero, frontier, CancellationToken.None);
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(grain.GetAsync(OriginA, CancellationToken.None).Result, Is.EqualTo(Hlc(500)));
-            Assert.That(grain.GetAsync(OriginB, CancellationToken.None).Result, Is.EqualTo(Hlc(900)));
+            Assert.That(await grain.GetAsync(OriginA, CancellationToken.None), Is.EqualTo(Hlc(500)));
+            Assert.That(await grain.GetAsync(OriginB, CancellationToken.None), Is.EqualTo(Hlc(900)));
         });
     }
 }

@@ -58,9 +58,9 @@ public sealed class LatticeBackupRestoreTagIndexReconcileTests
         // already gone without waiting for the scheduled sweep.
         var live = _fixture.GrainFactory.GetGrain<ILattice>(target);
         var after = await RedKeysAsync(index);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(live.GetAsync("gone").Result, Is.Null, "The restored subject must not contain 'gone'.");
+            Assert.That(await live.GetAsync("gone"), Is.Null, "The restored subject must not contain 'gone'.");
             Assert.That(after, Is.EquivalentTo(new[] { "keep" }),
                 "The reconcile fired by the restore must drop membership for the key the restore removed.");
         });

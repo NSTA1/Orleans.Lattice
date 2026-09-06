@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -593,9 +594,9 @@ public class WalSaturationSamplerTests
         // window to produce its earliest observable evidence - a
         // classification landing on the signal - rather than sampling
         // once after a fixed, arbitrary sleep.
-        var classified = await WaitUntilAsync(
+        var classified = await TestPoll.TryUntilAsync(
             () => signal.GetCurrentState(_treeId) != WalSaturationState.Healthy,
-            timeoutMs: 400);
+            TimeSpan.FromMilliseconds(400));
 
         Assert.That(classified, Is.False,
             "disabled sampler must not classify any tree, regardless of underlying tracker depth");
@@ -636,10 +637,10 @@ public class WalSaturationSamplerTests
 
         await sampler.StartAsync(CancellationToken.None);
 
-        Assert.That(
-            await WaitUntilAsync(() => signal.GetCurrentState(_treeId) == WalSaturationState.Saturated),
-            Is.True,
-            "the background loop must tick at least once after StartAsync, otherwise the shutdown path under test is never exercised");
+        await TestPoll.UntilAsync(
+            () => signal.GetCurrentState(_treeId) == WalSaturationState.Saturated,
+            "the background loop must tick at least once after StartAsync, otherwise the shutdown path under test is never exercised",
+            TimeSpan.FromSeconds(5));
 
         // The contract under test is that StopAsync settles the
         // background task without leaking a never-completing
@@ -655,9 +656,9 @@ public class WalSaturationSamplerTests
         // saturated after StopAsync returned must never be classified.
         var afterStopTreeId = $"{_treeId}-after-stop";
         SeedPartition(afterStopTreeId, partition: 1, depth: 16, cap: 16);
-        var classifiedAfterStop = await WaitUntilAsync(
+        var classifiedAfterStop = await TestPoll.TryUntilAsync(
             () => signal.GetCurrentState(afterStopTreeId) != WalSaturationState.Healthy,
-            timeoutMs: 400);
+            TimeSpan.FromMilliseconds(400));
         Assert.That(classifiedAfterStop, Is.False,
             "no further sampling ticks may run once StopAsync has returned");
     }
@@ -673,28 +674,6 @@ public class WalSaturationSamplerTests
             "Dispose must remain idempotent - the host may dispose a never-started sampler more than once.");
     }
 
-    /// <summary>
-    /// Polls <paramref name="condition"/> until it holds or the timeout
-    /// expires, returning whether it was ever observed to hold. Used in
-    /// place of a fixed sleep so a positive assertion waits only as long
-    /// as it must, and a negative assertion is expressed as "this
-    /// evidence never appeared within a generous window".
-    /// </summary>
-    private static async Task<bool> WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
-    {
-        var deadline = Environment.TickCount64 + timeoutMs;
-        while (Environment.TickCount64 < deadline)
-        {
-            if (condition())
-            {
-                return true;
-            }
-
-            await Task.Delay(10);
-        }
-
-        return condition();
-    }
 
     // ---- Recovery-window classifier upgrades --------------------
 

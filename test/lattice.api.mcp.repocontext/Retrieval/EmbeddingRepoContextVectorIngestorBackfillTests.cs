@@ -91,11 +91,11 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var embedded = (await ingestor.IngestAsync(
             RepoId, root, new[] { a, b }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(embedded, Is.EqualTo(2), "Both changed files are embedded.");
-            Assert.That(IsEmbeddedAsync(harness, "a.cs", Ct).Result, Is.True);
-            Assert.That(IsEmbeddedAsync(harness, "b.cs", Ct).Result, Is.True);
+            Assert.That(await IsEmbeddedAsync(harness, "a.cs", Ct), Is.True);
+            Assert.That(await IsEmbeddedAsync(harness, "b.cs", Ct), Is.True);
         });
     }
 
@@ -138,11 +138,11 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var backfilled = (await ingestor.IngestAsync(
             RepoId, root, Array.Empty<RepoFileEntry>(), new[] { a, b }, onProgress: null, Ct)).FilesEmbedded;
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(backfilled, Is.EqualTo(1), "Only B (the file with no live embedding) is back-filled.");
-            Assert.That(IsEmbeddedAsync(harness, "a.cs", Ct).Result, Is.True);
-            Assert.That(IsEmbeddedAsync(harness, "b.cs", Ct).Result, Is.True, "The gap is now closed.");
+            Assert.That(await IsEmbeddedAsync(harness, "a.cs", Ct), Is.True);
+            Assert.That(await IsEmbeddedAsync(harness, "b.cs", Ct), Is.True, "The gap is now closed.");
         });
     }
 
@@ -159,10 +159,10 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var embedded = (await ingestor.IngestAsync(
             RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(embedded, Is.EqualTo(0), "With no embedding provider the ingestor fails closed and records nothing.");
-            Assert.That(IsEmbeddedAsync(harness, "a.cs", Ct).Result, Is.False);
+            Assert.That(await IsEmbeddedAsync(harness, "a.cs", Ct), Is.False);
         });
     }
 
@@ -201,11 +201,11 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var embedded = (await ingestor.IngestAsync(
             RepoId, root, new[] { real, empty }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct)).FilesEmbedded;
 
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(embedded, Is.EqualTo(1), "The contentless file is skipped; the real file still embeds.");
-            Assert.That(IsEmbeddedAsync(harness, "a.cs", Ct).Result, Is.True);
-            Assert.That(IsEmbeddedAsync(harness, "empty.cs", Ct).Result, Is.False);
+            Assert.That(await IsEmbeddedAsync(harness, "a.cs", Ct), Is.True);
+            Assert.That(await IsEmbeddedAsync(harness, "empty.cs", Ct), Is.False);
         });
     }
 
@@ -220,11 +220,11 @@ public sealed class EmbeddingRepoContextVectorIngestorBackfillTests
         var ingestor = Ingestor(harness, new FakeEmbeddingProvider());
 
         await ingestor.IngestAsync(RepoId, root, new[] { a }, Array.Empty<RepoFileEntry>(), onProgress: null, Ct);
-        Assert.That(IsEmbeddedAsync(harness, "a.cs", Ct).Result, Is.True, "Precondition: the file is embedded.");
+        Assert.That(await IsEmbeddedAsync(harness, "a.cs", Ct), Is.True, "Precondition: the file is embedded.");
 
         await ingestor.RetireAsync(RepoId, new[] { "a.cs" }, Ct);
 
-        Assert.That(IsEmbeddedAsync(harness, "a.cs", Ct).Result, Is.False,
+        Assert.That(await IsEmbeddedAsync(harness, "a.cs", Ct), Is.False,
             "Deleting the file retires its embedding so the membership tally stays honest.");
     }
 

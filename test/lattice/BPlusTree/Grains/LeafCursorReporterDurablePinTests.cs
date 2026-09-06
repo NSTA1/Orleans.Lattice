@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -29,18 +30,6 @@ public sealed class LeafCursorReporterDurablePinTests
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>
         new() { WallClockTicks = ticks, Counter = counter };
 
-    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 2000)
-    {
-        var deadline = Environment.TickCount64 + timeoutMs;
-        while (Environment.TickCount64 < deadline)
-        {
-            if (condition())
-            {
-                return;
-            }
-            await Task.Delay(10);
-        }
-    }
 
     private static (LeafCursorReporter reporter, IWalCursorRegistry registry, RecordingPinGrain pin) Create()
     {
@@ -60,7 +49,9 @@ public sealed class LeafCursorReporterDurablePinTests
 
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
 
-        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 1,
+            "the coalesced durable-pin mirror must forward at least one report",
+            TimeSpan.FromSeconds(2));
         Assert.That(pin.Reports.ToArray(), Does.Contain((Consumer, Hlc(100))));
     }
 
@@ -70,7 +61,9 @@ public sealed class LeafCursorReporterDurablePinTests
         var (reporter, _, pin) = Create();
 
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
-        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 1,
+            "the coalesced durable-pin mirror must forward at least one report",
+            TimeSpan.FromSeconds(2));
 
         // A lower report within the debounce window must be dropped.
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(50), 50);
@@ -87,12 +80,16 @@ public sealed class LeafCursorReporterDurablePinTests
 
         // Activation seeds a Zero block pin...
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, HybridLogicalClock.Zero, -1);
-        await WaitUntilAsync(() => pin.Reports.Count >= 1);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 1,
+            "the coalesced durable-pin mirror must forward at least one report",
+            TimeSpan.FromSeconds(2));
 
         // ...and the first real checkpoint frontier must write through promptly
         // even inside the debounce window, leaving the Zero block behind.
         reporter.NoteDurableMaterialiserFrontier(Tree, Consumer, Hlc(100), 100);
-        await WaitUntilAsync(() => pin.Reports.Count >= 2);
+        await TestPoll.UntilAsync(() => pin.Reports.Count >= 2,
+            "the second frontier must be forwarded as its own report",
+            TimeSpan.FromSeconds(2));
 
         var reports = pin.Reports.ToArray();
         Assert.Multiple(() =>

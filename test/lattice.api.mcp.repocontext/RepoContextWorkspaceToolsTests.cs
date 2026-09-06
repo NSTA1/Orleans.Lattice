@@ -155,7 +155,7 @@ public sealed class RepoContextWorkspaceToolsTests
         });
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        Assert.That(tree.GetAsync(RepoContextKeys.Repo("my-repo"), Ct).Result, Is.Not.Null);
+        Assert.That(await tree.GetAsync(RepoContextKeys.Repo("my-repo"), Ct), Is.Not.Null);
     }
 
     [Test]
@@ -218,7 +218,7 @@ public sealed class RepoContextWorkspaceToolsTests
         Assert.That(list.GetProperty("count").GetInt32(), Is.EqualTo(0));
 
         var tree = harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Structural);
-        Assert.That(tree.GetAsync(RepoContextKeys.Repo("gone"), Ct).Result, Is.Null);
+        Assert.That(await tree.GetAsync(RepoContextKeys.Repo("gone"), Ct), Is.Null);
     }
 
     [Test]

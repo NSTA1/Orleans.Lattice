@@ -66,14 +66,14 @@ public sealed class CrossClusterColdRestoreIntegrationTests
 
         // Values restore byte-for-byte into B, and the deleted key stays absent.
         var restoredB = _fixture.GrainFactoryB.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.EntriesApplied, Is.EqualTo(3));
             Assert.That(result.TargetTreeId, Is.EqualTo(target));
-            Assert.That(restoredB.GetAsync("k1").Result, Is.EqualTo(Bytes("v1")));
-            Assert.That(restoredB.GetAsync("k2").Result, Is.EqualTo(Bytes("v2")));
-            Assert.That(restoredB.GetAsync("k3").Result, Is.EqualTo(Bytes("v3")));
-            Assert.That(restoredB.GetAsync("gone").Result, Is.Null, "the tombstoned key is not resurrected");
+            Assert.That(await restoredB.GetAsync("k1"), Is.EqualTo(Bytes("v1")));
+            Assert.That(await restoredB.GetAsync("k2"), Is.EqualTo(Bytes("v2")));
+            Assert.That(await restoredB.GetAsync("k3"), Is.EqualTo(Bytes("v3")));
+            Assert.That(await restoredB.GetAsync("gone"), Is.Null, "the tombstoned key is not resurrected");
         });
 
         // Re-capture the restored tree on B and decode it: every live key carries
@@ -151,10 +151,10 @@ public sealed class CrossClusterColdRestoreIntegrationTests
         Assert.That(increment.Manifest.Kind, Is.EqualTo(BackupKind.Incremental));
 
         // Cluster B is fresh: neither the base nor the increment is catalogued there.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.CatalogB.GetAsync(baseBackup.BackupId).Result, Is.Null);
-            Assert.That(_fixture.CatalogB.GetAsync(increment.BackupId).Result, Is.Null);
+            Assert.That(await _fixture.CatalogB.GetAsync(baseBackup.BackupId), Is.Null);
+            Assert.That(await _fixture.CatalogB.GetAsync(increment.BackupId), Is.Null);
         });
 
         const string target = "orders-dr-chain";
@@ -165,13 +165,13 @@ public sealed class CrossClusterColdRestoreIntegrationTests
         // top: overwrite, delete, and new key all applied; the untouched base entry
         // survives.
         var restoredB = _fixture.GrainFactoryB.GetGrain<ILattice>(target);
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
             Assert.That(result.ManifestChain, Has.Count.EqualTo(2), "base + increment walked from the sink on the cold cluster");
-            Assert.That(restoredB.GetAsync("k1").Result, Is.EqualTo(Bytes("v1-updated")), "overwrite folded");
-            Assert.That(restoredB.GetAsync("k2").Result, Is.Null, "delete folded");
-            Assert.That(restoredB.GetAsync("k3").Result, Is.EqualTo(Bytes("v3")), "untouched base entry survives");
-            Assert.That(restoredB.GetAsync("k4").Result, Is.EqualTo(Bytes("v4")), "new key folded");
+            Assert.That(await restoredB.GetAsync("k1"), Is.EqualTo(Bytes("v1-updated")), "overwrite folded");
+            Assert.That(await restoredB.GetAsync("k2"), Is.Null, "delete folded");
+            Assert.That(await restoredB.GetAsync("k3"), Is.EqualTo(Bytes("v3")), "untouched base entry survives");
+            Assert.That(await restoredB.GetAsync("k4"), Is.EqualTo(Bytes("v4")), "new key folded");
         });
 
         // The merged result on B equals A's final state, structurally: same
@@ -185,10 +185,10 @@ public sealed class CrossClusterColdRestoreIntegrationTests
         });
 
         // Both links of the chain are re-catalogued from the sink on B.
-        Assert.Multiple(() =>
+        await Assert.MultipleAsync(async () =>
         {
-            Assert.That(_fixture.CatalogB.GetAsync(baseBackup.BackupId).Result, Is.Not.Null);
-            Assert.That(_fixture.CatalogB.GetAsync(increment.BackupId).Result, Is.Not.Null);
+            Assert.That(await _fixture.CatalogB.GetAsync(baseBackup.BackupId), Is.Not.Null);
+            Assert.That(await _fixture.CatalogB.GetAsync(increment.BackupId), Is.Not.Null);
         });
     }
 
